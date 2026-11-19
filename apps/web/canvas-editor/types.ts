@@ -316,3 +316,97 @@ export function textDownloadFilename(
     : fallbackTitle || "未命名画布";
   return base + ".txt";
 }
+
+export function shouldRedirectRunsError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("status" in error)) {
+    return false;
+  }
+  const status = (error as { status?: unknown }).status;
+  return status === 401 || status === 403 || status === 404;
+}
+
+export function formatRunsError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  return "加载生成历史失败，请重试";
+}
+
+export type HistoryModalState =
+  | { kind: "list"; items: Job[]; error: string }
+  | { kind: "error"; items: []; error: string }
+  | { kind: "loading"; items: []; error: "" }
+  | { kind: "empty"; items: []; error: "" };
+
+export function resolveHistoryModalState(input: {
+  runs: readonly Job[];
+  loading: boolean;
+  loaded: boolean;
+  error: string;
+}): HistoryModalState {
+  const items = input.runs.filter((j) => j.kind !== "audio");
+  const error = input.error.trim();
+  if (items.length > 0) {
+    return { kind: "list", items, error };
+  }
+  if (error) {
+    return { kind: "error", items: [], error };
+  }
+  if (input.loading || !input.loaded) {
+    return { kind: "loading", items: [], error: "" };
+  }
+  return { kind: "empty", items: [], error: "" };
+}
+
+export function resolveFocusTargets(
+  nodes: readonly Pick<CanvasNode, "id">[],
+  ids: readonly string[],
+): string[] {
+  if (!ids.length) return [];
+  const existing = new Set(nodes.map((n) => n.id));
+  const targets: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (existing.has(id) && !seen.has(id)) {
+      seen.add(id);
+      targets.push(id);
+    }
+  }
+  return targets;
+}
+
+export type ViewportFocusShortcut = "fit-all" | "fit-selected" | null;
+
+export function matchViewportFocusShortcut(event: {
+  shiftKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  code?: string;
+  key: string;
+}): ViewportFocusShortcut {
+  if (!event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) {
+    return null;
+  }
+  if (event.code === "Digit1") return "fit-all";
+  if (event.code === "Digit2") return "fit-selected";
+  if (event.key === "!") return "fit-all";
+  if (event.key === "@") return "fit-selected";
+  return null;
+}
+
+export function isCanvasComposerOpen(
+  single: Pick<CanvasNode, "type"> | null,
+  editing: string | null,
+): boolean {
+  return Boolean(
+    single && !editing && ["image", "video", "text"].includes(single.type),
+  );
+}
+
+export function hasCanvasSelectionToolbar(
+  single: Pick<CanvasNode, "id"> | null,
+  editing: string | null,
+): boolean {
+  return Boolean(single && !editing);
+}

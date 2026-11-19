@@ -1,0 +1,107 @@
+/* Canvas editor style overrides (baseline/production/static/canvas.css is immutable). */
+
+.run-list-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--cv-muted);
+}
+
+.run-list-state p {
+  margin: 0;
+}
+
+.run-list-error {
+  color: var(--cv-danger);
+}
+
+.run-list-error-title {
+  font-weight: 500;
+}
+
+.run-list-detail {
+  color: var(--cv-muted);
+  font-size: 13px;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.run-list-state .secondary {
+  margin-top: 6px;
+  color: var(--cv-text);
+}
+
+.run-list-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border: 1px solid var(--cv-line);
+  border-radius: 10px;
+  background: var(--cv-hover);
+  color: var(--cv-danger);
+  font-size: 13px;
+}
+
+.run-list-error-banner > span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.run-list-error-banner .secondary {
+  min-height: 32px;
+  padding: 6px 12px;
+  color: var(--cv-text);
+  background: var(--cv-surface);
+  flex: none;
+}
+
+@media (max-width: 760px) {
+  /* #110: Move left insert toolbar to the top safe area when the bottom composer is open. */
+  .canvas-workspace[data-composer-open="true"] .insert-toolbar {
+    top: 64px;
+    transform: none;
+    max-height: calc(100dvh - 46dvh - 140px);
+    overflow-y: auto;
+  }
+
+  /* #110: Reposition mobile minimap to the upper-right free area so the bottom composer never covers it. */
+  .canvas-workspace[data-composer-open="true"]
+    .react-flow__panel.react-flow__minimap {
+    top: 64px !important;
+    right: 12px !important;
+    bottom: auto !important;
+    left: auto !important;
+    margin: 0 !important;
+    width: 136px;
+    height: 92px;
+    z-index: 16;
+  }
+
+  .canvas-workspace[data-composer-open="true"][data-selection-toolbar="true"]
+    .react-flow__panel.react-flow__minimap {
+    top: 118px !important;
+  }
+
+  .canvas-workspace[data-composer-open="true"]
+    .react-flow__panel.react-flow__minimap
+    .react-flow__minimap-svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* #111: Anchor color menu to the right edge of the mobile selection toolbar to prevent viewport clipping. */
+  .canvas-workspace .selection-toolbar .color-menu {
+    left: auto;
+    right: 0;
+    max-width: calc(100vw - 24px);
+  }
+}

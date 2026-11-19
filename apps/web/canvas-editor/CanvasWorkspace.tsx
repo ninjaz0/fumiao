@@ -84,6 +84,13 @@ import {
   collectDownloadTargets,
   hasDownloadableNodes,
   textDownloadFilename,
+  shouldRedirectRunsError,
+  formatRunsError,
+  resolveHistoryModalState,
+  resolveFocusTargets,
+  matchViewportFocusShortcut,
+  isCanvasComposerOpen,
+  hasCanvasSelectionToolbar,
   type CanvasClipboard,
   type CanvasNode,
   type Kind,
@@ -460,8 +467,15 @@ export function CanvasWorkspace({
   const doc = useDocument(project, initial.me.id),
     [studio, setStudio] = useState(initial),
     [runs, setRuns] = useState<Job[]>([]),
+    [runsLoaded, setRunsLoaded] = useState(false),
+    [runsLoading, setRunsLoading] = useState(true),
+    [runsError, setRunsError] = useState(""),
     [selected, setSelected] = useState<string[]>([]),
     [selectedEdges, setSelectedEdges] = useState<string[]>([]);
+  const aliveRef = useRef(true),
+    runsLoadedRef = useRef(false),
+    runsInFlightRef = useRef(false),
+    runsReqSeqRef = useRef(0);
   const [editing, setEditing] = useState<string | null>(null),
     [hand, setHand] = useState(false),
     [minimap, setMinimap] = useState(false),
@@ -619,37 +633,65 @@ export function CanvasWorkspace({
     const timer = setTimeout(() => setToast(""), 4500);
     return () => clearTimeout(timer);
   }, [toast]);
-  const fetchRuns = useCallback(async () => {
-    const [data,state] = await Promise.all([api<{ runs: Job[] }>(`/api/canvases/${project.id}/runs`),api<Studio>("/api/state")]);
-    setRuns(data.runs);setStudio(state);
-    return data.runs;
-  }, [project.id]);
-  useEffect(() => {
-    let alive = true;
-    const update = async () => {
+  const loadRuns = useCallback(
+    async (options: { showLoading?: boolean; silent?: boolean } = {}) => {
+      const seq = ++runsReqSeqRef.current;
+      runsInFlightRef.current = true;
+      if (options.showLoading) setRunsLoading(true);
       try {
-        const [r, s] = await Promise.all([
+        const [data, state] = await Promise.all([
           api<{ runs: Job[] }>(`/api/canvases/${project.id}/runs`),
           api<Studio>("/api/state"),
         ]);
-        if (alive) {
-          setRuns(r.runs);
-          setStudio(s);
-        }
+        if (!aliveRef.current || seq !== runsReqSeqRef.current) return data.runs;
+        runsLoadedRef.current = true;
+        setRuns(data.runs);
+        setStudio(state);
+        setRunsLoaded(true);
+        setRunsError("");
+        return data.runs;
       } catch (e) {
-        if (alive && e instanceof ApiError && [401,403,404].includes(e.status))
-          location.assign("/studio");
+        if (aliveRef.current && seq === runsReqSeqRef.current) {
+          if (shouldRedirectRunsError(e)) {
+            location.assign("/studio");
+          } else {
+            setRunsError(formatRunsError(e));
+          }
+        }
+        if (options.silent) return [];
+        throw e;
+      } finally {
+        if (seq === runsReqSeqRef.current) {
+          runsInFlightRef.current = false;
+          if (aliveRef.current) setRunsLoading(false);
+        }
       }
+    },
+    [project.id],
+  );
+  const fetchRuns = useCallback(
+    () => loadRuns({ showLoading: true }),
+    [loadRuns],
+  );
+  useEffect(() => {
+    aliveRef.current = true;
+    runsLoadedRef.current = false;
+    runsInFlightRef.current = false;
+    const update = () => {
+      if (runsInFlightRef.current) return;
+      void loadRuns({ showLoading: !runsLoadedRef.current, silent: true });
     };
-    void update();
+    update();
     const timer = setInterval(() => {
-      if (!document.hidden) void update();
+      if (!document.hidden) update();
     }, 5000);
     return () => {
-      alive = false;
+      aliveRef.current = false;
+      runsInFlightRef.current = false;
+      runsReqSeqRef.current++;
       clearInterval(timer);
     };
-  }, [project.id]);
+  }, [loadRuns]);
   useEffect(() => {
     const resize = () => setWindowSize({ w: innerWidth, h: innerHeight });
     window.addEventListener("resize", resize);
@@ -891,10 +933,19 @@ export function CanvasWorkspace({
     setContext(null);
   };
   const focusNodes = (ids: string[]) => {
-    const node=ids.length===1?doc.ref.current.document.nodes.find(n=>n.id===ids[0]):null;
-    if(node?.type==='text'&&windowSize.w>760){revealText(node,true);return}
+    if (!ids.length) return;
+    const targets = resolveFocusTargets(doc.ref.current.document.nodes, ids);
+    if (!targets.length) return;
+    const node =
+      targets.length === 1
+        ? doc.ref.current.document.nodes.find((n) => n.id === targets[0])
+        : null;
+    if (node?.type === "text" && windowSize.w > 760) {
+      revealText(node, true);
+      return;
+    }
     void flow.fitView({
-      nodes: ids.map((id) => ({ id })),
+      nodes: targets.map((id) => ({ id })),
       padding: 0.5,
       maxZoom: 1,
       duration: matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -1226,12 +1277,13 @@ export function CanvasWorkspace({
   useEffect(() => {
     const keydown = (e: KeyboardEvent) => {
       if (
-        (e.target as HTMLElement).closest(
+        (e.target as HTMLElement | null)?.closest?.(
           'input,textarea,[contenteditable="true"],dialog',
         )
       )
         return;
       const mod = e.metaKey || e.ctrlKey;
+      const viewportShortcut = matchViewportFocusShortcut(e);
       if (e.key === "Escape") {
         setMenu(null);
         setContext(null);
@@ -1258,12 +1310,12 @@ export function CanvasWorkspace({
       } else if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         removeSelected();
-      } else if (e.shiftKey && e.key === "!") {
+      } else if (viewportShortcut === "fit-all") {
         e.preventDefault();
         focusNodes(doc.ref.current.document.nodes.map((n) => n.id));
-      } else if (e.shiftKey && e.key === "@") {
+      } else if (viewportShortcut === "fit-selected") {
         e.preventDefault();
-        focusNodes(selected);
+        if (selected.length) focusNodes(selected);
       } else if (mod && e.key === "1") {
         e.preventDefault();
         void flow.zoomTo(1);
@@ -1278,7 +1330,7 @@ export function CanvasWorkspace({
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [selected, selectedEdges, runs, studio.jobs]);
+  }, [selected, selectedEdges, runs, studio.jobs, windowSize.w]);
   useEffect(() => {
     const click = (e: PointerEvent) => {
       if (!(e.target as HTMLElement).closest(".cv-menu,.menu-trigger")) {
@@ -1564,6 +1616,19 @@ export function CanvasWorkspace({
     : null;
   const showComposer =
     single && ["image", "video"].includes(single.type) && !editing;
+  const composerOpen = isCanvasComposerOpen(single, editing);
+  const selectionToolbarOpen = hasCanvasSelectionToolbar(single, editing);
+  const mobileMiniMap = windowSize.w <= 760 && composerOpen;
+  const historyState = useMemo(
+    () =>
+      resolveHistoryModalState({
+        runs,
+        loading: runsLoading,
+        loaded: runsLoaded,
+        error: runsError,
+      }),
+    [runs, runsLoading, runsLoaded, runsError],
+  );
   const panelHeight = single?.type === "text" ? textPanelHeight : mediaPanelHeight;
   const toolbarBelow = Boolean(nodeRect && nodeRect.y < 150);
   const gridGap = 24 * viewport.zoom * 2 ** Math.max(0, Math.ceil(Math.log2(16 / (24 * viewport.zoom))));
@@ -1649,6 +1714,8 @@ export function CanvasWorkspace({
   return (
     <div
       className="canvas-workspace"
+      data-composer-open={composerOpen ? "true" : "false"}
+      data-selection-toolbar={selectionToolbarOpen ? "true" : "false"}
       tabIndex={-1}
       onKeyDown={(e) => {
         const pop = (e.target as HTMLElement).closest(".cv-menu");
@@ -1792,10 +1859,14 @@ export function CanvasWorkspace({
             <MiniMap
               pannable
               zoomable
-              position="bottom-left"
+              position={mobileMiniMap ? "top-right" : "bottom-left"}
               nodeColor="var(--cv-map-node)"
               maskColor="var(--cv-map-mask)"
-              style={{ bottom: 64, left: 12 }}
+              style={
+                mobileMiniMap
+                  ? { width: 136, height: 92 }
+                  : { bottom: 64, left: 12 }
+              }
             />
           )}
         </ReactFlow>
@@ -1866,7 +1937,12 @@ export function CanvasWorkspace({
           <IconButton
             icon={Clock}
             label="生成历史"
-            onClick={() => setPanel("history")}
+            onClick={() => {
+              setPanel("history");
+              if (runsError && !runsLoading) {
+                void fetchRuns().catch(() => {});
+              }
+            }}
           />
           <IconButton icon={FileText} label="AI 分镜" onClick={() => setAiStoryboard(true)} />
           <IconButton
@@ -2878,44 +2954,90 @@ export function CanvasWorkspace({
       {panel === "history" && (
         <Modal title="生成历史" onClose={() => setPanel(null)}>
           <div className="run-list">
-            {runs.filter(j=>j.kind!=="audio").map((j) => (
-              <button
-                key={j.id}
-                onClick={() => {
-                  if (
-                    doc.value.document.nodes.some((n) => n.id === j.canvas_node)
-                  ) {
-                    selectOne(j.canvas_node!);
-                    focusNodes([j.canvas_node!]);
-                    setPanel(null);
-                  } else notify("该节点已移除，作品仍可在资产中查看");
-                }}
-              >
-                {j.result ? (
-                  j.kind === "image" ? (
-                    <img src={mediaURL(j.result)} alt="" />
-                  ) : (
-                    <video
-                      src={mediaURL(j.result) + "#t=0.05"}
-                      preload="metadata"
-                      muted
-                    />
-                  )
-                ) : (
-                  React.createElement(j.kind === "image" ? ImageIcon : Film, {
-                    size: 22,
-                  })
+            {historyState.kind === "error" ? (
+              <div className="run-list-state run-list-error" role="alert">
+                <AlertCircle size={22} />
+                <p className="run-list-error-title">无法加载生成历史</p>
+                <p className="run-list-detail">{historyState.error}</p>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={runsLoading}
+                  onClick={() => void fetchRuns().catch(() => {})}
+                >
+                  <RefreshCw
+                    size={14}
+                    className={runsLoading ? "spin" : undefined}
+                  />
+                  {runsLoading ? "正在重试…" : "重试"}
+                </button>
+              </div>
+            ) : historyState.kind === "loading" ? (
+              <div className="run-list-state" role="status">
+                <LoaderCircle size={20} className="spin" />
+                <p>正在加载生成历史…</p>
+              </div>
+            ) : historyState.kind === "empty" ? (
+              <p className="empty">暂无生成记录</p>
+            ) : (
+              <>
+                {historyState.error && (
+                  <div className="run-list-error-banner" role="alert">
+                    <span>生成历史刷新失败：{historyState.error}</span>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={runsLoading}
+                      onClick={() => void fetchRuns().catch(() => {})}
+                    >
+                      {runsLoading ? "重试中…" : "重试"}
+                    </button>
+                  </div>
                 )}
-                <span>
-                  <strong>{j.prompt.slice(0, 60)}</strong>
-                  <small>
-                    #{j.id} · {labels[j.status]} ·{" "}
-                    {new Date(j.created * 1000).toLocaleString()}
-                  </small>
-                </span>
-              </button>
-            ))}
-            {!runs.length && <p className="empty">暂无生成记录</p>}
+                {historyState.items.map((j) => (
+                  <button
+                    key={j.id}
+                    onClick={() => {
+                      if (
+                        doc.value.document.nodes.some(
+                          (n) => n.id === j.canvas_node,
+                        )
+                      ) {
+                        selectOne(j.canvas_node!);
+                        focusNodes([j.canvas_node!]);
+                        setPanel(null);
+                      } else notify("该节点已移除，作品仍可在资产中查看");
+                    }}
+                  >
+                    {j.result ? (
+                      j.kind === "image" ? (
+                        <img src={mediaURL(j.result)} alt="" />
+                      ) : (
+                        <video
+                          src={mediaURL(j.result) + "#t=0.05"}
+                          preload="metadata"
+                          muted
+                        />
+                      )
+                    ) : (
+                      React.createElement(
+                        j.kind === "image" ? ImageIcon : Film,
+                        {
+                          size: 22,
+                        },
+                      )
+                    )}
+                    <span>
+                      <strong>{j.prompt.slice(0, 60)}</strong>
+                      <small>
+                        #{j.id} · {labels[j.status]} ·{" "}
+                        {new Date(j.created * 1000).toLocaleString()}
+                      </small>
+                    </span>
+                  </button>
+                ))}
+              </>
+            )}
           </div>
         </Modal>
       )}
@@ -2949,7 +3071,9 @@ export function CanvasWorkspace({
               const node=doc.value.document.nodes.find(n=>n.id===shot.id)!;
               const price=studio.pricing.items.find(p=>p.key==='breeze-tts-2|standard')?.amount??null;
               return <Narration node={node} runs={runs} cost={price} unavailableReason={!availableModel('breeze-tts-2')?'当前空间未开放语音模型':price===null?'语音生成尚未定价':studio.credits.available<price?'当前空间积分不足':''}
-                onChange={patch=>edit(shot.id,patch)} onGenerate={async()=>{
+                onEditStart={doc.begin}
+                onEditEnd={doc.end}
+                onChange={(patch,history)=>edit(shot.id,patch,history)} onGenerate={async()=>{
                   const rev=await doc.flush();const key=`fm-canvas-voice-${studio.me.id}-${project.id}-${shot.id}`;
                   let pending;try{pending=JSON.parse(localStorage.getItem(key)||'null')}catch{}
                   if(!pending){pending={uid:crypto.randomUUID(),expected_revision:rev,price_revision:studio.pricing.revision};localStorage.setItem(key,JSON.stringify(pending));}
