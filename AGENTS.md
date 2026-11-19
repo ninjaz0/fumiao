@@ -44,7 +44,12 @@ python3 scripts/worktree.py down
 - 测试配置及管理员口令按项目保存在 `${XDG_STATE_HOME:-$HOME/.local/state}/fumiao/` 下。用合成用户、私有测试媒体和模拟提供方复现。日志、截图与 PR 只保留诊断所需信息，隐去 Cookie、密钥、商户参数和用户内容。
 - Next 开发服务加载 Web 改动；Studio API、v2 API 和 Worker 通过 Node watch 重载已导入的源码。修改依赖、原生解码器或 SQL 迁移后重新运行 `up`。Linux 容器使用镜像内的依赖，Next 缓存属于本任务。
 - `logs [服务名]` 读取当前项目最近的日志，`status` 列出服务。需要查测试库时，在 status 输出中确认 PG 容器名，再用 `docker exec -it <本任务的postgres容器> psql -U fumiao -d fumiao`。检查任务 ID、账本、画布版本等最小数据。
-- `down` 只停止并移除本项目容器和网络，保留数据。移除 worktree 前先执行 `down`。若需要永久丢弃环境，先核对项目名和卷清单，再按本次任务的明确授权清理；独立存储的密钥应与对应数据一起管理。
+
+### 任务结束时清理 Docker 环境
+
+- 启动过快反环境的开发 Agent 负责收尾。完成本地验证后，在交付前从本任务的 worktree 执行 `python3 scripts/worktree.py down`，再用 `python3 scripts/worktree.py status` 确认容器列表为空。任务取消或提前终止时也按此收尾，清理应在移除 worktree 前完成。
+- 若负责人明确要求保留在线预览，交付时写明预览地址和保留原因，验收结束后由该任务的开发 Agent 执行同一清理步骤。清理失败时如实报告剩余容器及原因。
+- 清理范围仅限当前 worktree 对应的 `fumiao-wt-*` 项目。固定验收实例 `fumiao-acceptance` 和其他任务由各自负责人管理。`down` 移除容器和网络，保留数据卷及配套密钥，方便后续复测。永久删除数据须另行取得明确授权并核对项目名和卷清单。
 
 ## 修改与验证
 
