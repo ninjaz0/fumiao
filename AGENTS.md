@@ -40,7 +40,7 @@ python3 scripts/worktree.py down
 ```
 
 - `up` 从当前 checkout 构建开发镜像、创建专属网络与 PG / Redis / 媒体卷、执行迁移。新库自动创建合成管理员 `admin`。末尾输出本任务的 `/studio` 地址和本机密码文件位置。再次运行会复用本任务的数据与密钥。
-- 项目名由 checkout 的绝对路径生成。每个项目使用独立的回环端口及 `*.localhost` 主机名，浏览器会话也按主机隔离。使用脚本打印的完整地址。任务可以并行；`http://localhost:3000/studio` 专用于负责人验收选定版本。
+- 项目名由 checkout 的绝对路径生成。每个项目使用独立的回环端口及 `*.localhost` 主机名，浏览器会话也按主机隔离。使用脚本打印的完整地址。`http://localhost:3000/studio` 供负责人在提 PR 前验收任务分支的修复。
 - 测试配置及管理员口令按项目保存在 `${XDG_STATE_HOME:-$HOME/.local/state}/fumiao/` 下。用合成用户、私有测试媒体和模拟提供方复现。日志、截图与 PR 只保留诊断所需信息，隐去 Cookie、密钥、商户参数和用户内容。
 - Next 开发服务加载 Web 改动；Studio API、v2 API 和 Worker 通过 Node watch 重载已导入的源码。修改依赖、原生解码器或 SQL 迁移后重新运行 `up`。Linux 容器使用镜像内的依赖，Next 缓存属于本任务。
 - `logs [服务名]` 读取当前项目最近的日志，`status` 列出服务。需要查测试库时，在 status 输出中确认 PG 容器名，再用 `docker exec -it <本任务的postgres容器> psql -U fumiao -d fumiao`。检查任务 ID、账本、画布版本等最小数据。
@@ -64,9 +64,13 @@ python3 scripts/worktree.py down
 | 浏览器、网关、Worker 或任务链路变更 | 构建后运行 `pnpm exec playwright install chromium`、`pnpm test:studio` | 正式入口登录、生成、支付回跳、媒体、画布、任务结算、进程重启、路由响应。套件自行启动临时 PG/Redis 和回环模拟服务，需要 `initdb`、`postgres`、`redis-server`、FFmpeg。 |
 | 涉及 advanced、恢复、多副本或 HTTPS | 按改动选择 `pnpm test:web`、`pnpm test:studio:restore`、`pnpm test:studio:replicas` 或 `pnpm test:studio:https` | `test:web` 走 advanced 模式。专门套件的附加依赖与演练步骤在运维手册中。 |
 
-## PR、CI 和本机验收
+## 从问题到合并
 
-1. PR 面向 `main`，说明用户能看到的变化、复现或验收步骤、实际执行的检查以及尚未验证的部分。UI 改动给出任务预览的具体路由与视口，必要时附截图；本机地址只在运行该环境的电脑上有效。
-2. GitHub Actions 的 **verify** 运行 PG 18 / Redis 8 平台测试、生产构建、advanced 冒烟、Chromium 正式入口验收和 Docker 镜像构建。失败时先定位失败阶段，复现并修复后在同一 PR 复查。预期发生变化时说明对应产品决定。
-3. 负责人验收的固定实例使用基础 `compose.yaml` 和指定提交构建，本机 3000 展示的版本应可追溯。切换该实例前，在独立端口用测试账号验证登录、工作区和目标操作。日常开发只启动当前任务的快反环境。
-4. 生产发布由负责人单独批准。涉及数据库、任务格式、钱包或媒体存储的 PR 写明兼容性、在途任务影响及恢复方法。部署与恢复使用对应版本的运维手册。
+1. **收到问题。** 开发 Agent 按负责人给出的角色、工作区和操作路径复现问题，确认预期结果。
+2. **解决问题。** 在任务 worktree 修复并运行相关检查，在独立环境复测原操作，通过后提交改动并记录提交 SHA。
+3. **更新验收实例。** 从该 SHA 的干净 checkout 构建本机固定 Docker 实例 `fumiao-acceptance`。沿用该实例已有的环境配置和数据卷，执行 `docker compose -p fumiao-acceptance -f compose.yaml up -d --build --wait`。确认迁移成功、服务就绪，用测试账号在 `http://localhost:3000/studio` 复测后，把地址、提交 SHA 和验收步骤交给负责人。
+4. **负责人验收。** 负责人在固定实例检查本次修复。验收期间保持该版本在线。负责人提出问题时，回到第 2 步修复并更新实例，交给负责人复验。
+5. **提 PR。** 收到负责人验收通过的确认后，用已验收的提交向 `main` 提 PR。说明用户能看到的变化、验收步骤、实际执行的检查及尚未验证的部分。UI 改动注明路由与视口，必要时附截图。
+6. **合并。** GitHub Actions 的 **verify** 运行平台测试、生产构建、advanced 冒烟、Chromium 正式入口验收和 Docker 镜像构建。检查通过后合入 `main`。检查失败时在同一 PR 修复并复查，若修复改变已验收的行为，合并前更新固定实例并请负责人复验。
+
+生产发布由负责人单独批准。涉及数据库、任务格式、钱包或媒体存储的 PR 写明兼容性、在途任务影响及恢复方法。部署与恢复使用对应版本的运维手册。
