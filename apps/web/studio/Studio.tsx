@@ -19,11 +19,7 @@ import {
   type DialogContent,
 } from "./AssetDialog";
 import { Library, isOwner, useLibrary, type LibraryFilter } from "./Library";
-import type {
-  AdminOpen,
-  AdminRequest,
-  SettingsDialogPresentation,
-} from "./settings-admin";
+import type { AdminRequest } from "./settings-admin";
 import { api } from "./api";
 import {
   Composer,
@@ -514,14 +510,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     body: ReactNode,
     opener: HTMLElement | null,
     adminOnly = false,
-    presentation?: SettingsDialogPresentation,
   ) {
     if (leaving.current || !active.current) return;
     closeMenu();
     setMenuHidden(true);
     const version = ++settingsDialogVersion.current;
     setDialog((current) => ({
-      content: { kind: "settings", body, version, presentation },
+      content: { kind: "settings", body, version },
       opener: current ? current.opener : opener,
       adminOnly,
     }));
@@ -551,10 +546,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     [refresh],
   );
 
-  const openAdminDialog: AdminOpen = (body, opener, presentation) => {
+  function openAdminDialog(body: ReactNode, opener: HTMLElement) {
     if (active.current?.me.role === "admin")
-      openSettingsDialog(body, opener, true, presentation);
-  };
+      openSettingsDialog(body, opener, true);
+  }
 
   function showWorkspace(opener: HTMLButtonElement, space?: Space) {
     const current = active.current;
@@ -1229,7 +1224,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   const composer = state && session && (
     <Composer
-      managePlugins={() => {setSettingsTab("plugins");setPage("settings");}}
       state={state}
       session={session}
       estimate={estimate}

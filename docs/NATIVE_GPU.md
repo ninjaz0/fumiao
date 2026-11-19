@@ -1,8 +1,4 @@
-# GPU 原生输入与成片验收
-
-GPU 插件 `1.5.0` 为 Advanced 任务引擎增加 H3 首尾帧、9 张普通参考图、12 个混合参考以及 Breeze 成片验收。规则属于版本化插件，NestJS 核心只负责授权、事务、任务租约、存储和积分。安装不会自动激活新版本，已接受任务继续使用原版本。
-
-这是插件与执行器迁移。后续 GPU `1.6.0` 已在独立 Nest 应用适配原 `/api/jobs` 和 `/api/audio-jobs` 提交、公开编号、父任务继承及原 UID 语义，见 [原生成提交契约](ORIGINAL_GENERATION.md)。任务状态及画布契约尚未完成，默认 `/studio` 仍使用原兼容后端；工作台和画布仍待 React / TypeScript 迁移。没有更改原站 DOM、CSS、文案、资源或固定基线，也没有连接真实 GPU、提供方或支付服务进行验收。
+# GPU 节点与生成参数
 
 ## 输入冻结
 
@@ -45,19 +41,3 @@ worker 使用 `/agent/v2`，按授权路径下载素材。桥接器将图片转�
 ```
 
 worker 自动生成本次运行的 `runtime_id` 并报告忙闲状态。当前为串行执行端，不提供完整多通道资源计划、自动模型装卸、桌面安装器、Colab 调度或原节点收益协议；这些仍需后续迁移和真实运行环境验证。
-
-## 验证
-
-```sh
-pnpm test
-pnpm test:native
-pnpm test:timing
-pnpm test:media
-pnpm build
-pnpm test:web
-pnpm test:studio
-```
-
-`test:native` 调用不可变原版实现，比较 107 个输入/几何/错误场景、594 个回传报告、22 个真实编码文件及 264 个 worker 时钟快照。报告写入 `.runtime-advanced/native-parity/report.json`。
-
-平台测试使用隔离 PostgreSQL（未提供 `TEST_DATABASE_URL` 时用 PGlite），覆盖授权、输入冻结、幂等、拒绝客户端伪造、并发回传、过期租约、回滚和计时。真实 Python worker、桥接器和 Nest HTTP 配合本地模拟渲染器走完私有输入到成片结算，不调用真实模型。原媒体 HTTP 150 项对照、计时 320 项对照、生产构建及两条 Web 集成路径也均通过；这些验证不代表完整原生成接口或 UI 已经切换。

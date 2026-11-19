@@ -1,5 +1,4 @@
 import { stat } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Request, Response } from "express";
@@ -81,14 +80,7 @@ export class OriginalMedia {
     );
     const ui = originalUI(),
       data = await ui.file("avatars/" + filename);
-    const overlay = join(
-        ui.root,
-        "baseline/production/static/avatars",
-        filename,
-      ),
-      path = existsSync(overlay)
-        ? overlay
-        : join(ui.root, "legacy/pure/static/avatars", filename);
+    const path = join(ui.root, "baseline/production/static/avatars", filename);
     const info = await stat(path, { bigint: true });
     return sendFile(req, res, {
       size: data.length,

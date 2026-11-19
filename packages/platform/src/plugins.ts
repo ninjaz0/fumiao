@@ -70,17 +70,6 @@ import {
 import type { Database, Sql } from "./db.js";
 import { one } from "./db.js";
 import { DomainError, requireValue } from "./security.js";
-import { studioPluginProfile } from "./studio-plugin-profile.js";
-
-// Published Studio adapter versions. Older versions stay resolvable for accepted jobs.
-const studioReleases = [
-  [museStudio, museText, "Muse2API"],
-  [flowStudio, flowText, "Flow2API"],
-  [gpuStudio, gpuText, "本地实例接入"],
-  [imagesStudio, imagesText, "OpenAI 兼容图片"],
-  [chatStudio, chatStreaming, "兼容对话"],
-] as const;
-
 export class PluginRegistry {
   private builtins = new Map<string, ProviderPlugin>();
   constructor(
@@ -157,41 +146,6 @@ export class PluginRegistry {
       (protocol) => protocol.provider === provider,
     );
   }
-  async initializeStudio(db: Database, importing: boolean) {
-    await db.transaction(async (sql) => {
-      await sql.query(
-        "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",
-      );
-      if (await studioPluginProfile(sql)) return;
-      const existing = await one(
-        sql,
-        `SELECT EXISTS (SELECT 1 FROM studio_catalog)
-        OR EXISTS (SELECT 1 FROM users) OR EXISTS (SELECT 1 FROM connections) AS present`,
-      );
-      const compatible = importing || existing.present;
-      if (compatible) {
-        await this.installBuiltinsOn(sql);
-        await this.prepareOriginalStudio(sql);
-      }
-      await sql.query("INSERT INTO studio_plugin_profile(mode) VALUES($1)", [
-        compatible ? "compatible" : "explicit",
-      ]);
-    });
-  }
-  studioPackages() {
-    return studioReleases.map(([, plugin, label]) => ({
-      manifest: plugin.manifest,
-      label,
-    }));
-  }
-  async installStudioPackage(sql: Sql, id: string, version: string) {
-    const release = this.studioPackages().find(
-      (p) => p.manifest.id === id && p.manifest.version === version,
-    );
-    requireValue(release, 404, "工作台插件版本不存在");
-    await sql.query("SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))");
-    return this.installOn(sql, release.manifest, undefined, true);
-  }
   async installBuiltins(db: Database, originalStudio = false) {
     await db.transaction(async (sql) => {
       await this.installBuiltinsOn(sql);
@@ -207,7 +161,13 @@ export class PluginRegistry {
   private async prepareOriginalStudio(sql: Sql) {
     // Move the original seed catalog to the supported adapters without
     // changing any user-visible metadata, amounts, policy or pricing revision.
-    for (const [seed, original] of studioReleases) {
+    for (const [seed, original] of [
+      [museStudio, museText],
+      [flowStudio, flowText],
+      [gpuStudio, gpuText],
+      [imagesStudio, imagesText],
+      [chatStudio, chatStreaming],
+    ]) {
       const from = seed.manifest,
         to = original.manifest;
       const studio = (manifest: Manifest) =>

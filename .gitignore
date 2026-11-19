@@ -61,10 +61,6 @@ session.json
 .DS_Store
 ._*
 
-# Rebuildable companion bundles; the platform's pinned source/runtime archives stay tracked
-/legacy/pure/fmWorker/resources/agent.tgz
-/legacy/pure/fmWorker/resources/flow2api.tar.gz
-
 # Advanced runtime
 .next/
 **/.next/

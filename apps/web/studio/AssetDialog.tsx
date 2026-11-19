@@ -7,8 +7,8 @@ import {
 } from "react";
 import { ReferenceMedia } from "./AssetMedia";
 import { Icon } from "./Icon";
-import type { SettingsDialogPresentation } from "./settings-admin";
-import { AssetPacks } from "../../../legacy/pure/canvas/src/AssetPacks";
+import "./asset-packs.css";
+import { AssetPacks } from "../canvas-editor/AssetPacks";
 import {
   packReferences,
   type Asset,
@@ -25,12 +25,7 @@ export type DialogContent =
       removePack: (id: string) => Promise<void>;
     }
   | { kind: "preview"; id: string; mediaKind: Asset["kind"] }
-  | {
-      kind: "settings";
-      body: ReactNode;
-      version: number;
-      presentation?: SettingsDialogPresentation;
-    }
+  | { kind: "settings"; body: ReactNode; version: number }
   | {
       kind: "confirm";
       title: string;
@@ -109,11 +104,6 @@ export function AssetDialog({
   return (
     <dialog
       id="modal"
-      className={
-        content?.kind === "settings" && content.presentation === "invite-sheet"
-          ? "ledger-invite-sheet"
-          : undefined
-      }
       ref={ref}
       onClose={() => {
         closeFrame.current = requestAnimationFrame(() => {

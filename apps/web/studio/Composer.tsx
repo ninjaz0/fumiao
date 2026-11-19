@@ -19,7 +19,7 @@ import {
   readPrompt,
   rememberSelection,
 } from "./prompt";
-import { label as modelLabel } from "../../../legacy/pure/canvas/src/flowPicker";
+import { label as modelLabel } from "../canvas-editor/flowPicker";
 import {
   estimateBody,
   activeReferences,
@@ -128,7 +128,7 @@ export type FlowSourceDisplay = {
 };
 
 export function Composer({
-  state, managePlugins,
+  state,
   session,
   estimate,
   submitting,
@@ -163,7 +163,6 @@ export function Composer({
   seenMenus: ReadonlySet<ComposerMenu>;
   referenceContents: RefObject<ReferenceDisplay | null>;
   flowSourceContents: RefObject<FlowSourceDisplay | null>;
-  managePlugins: () => void;
 }) {
   const { draft, refs } = session;
   const box = useRef<HTMLElement>(null);
@@ -612,11 +611,6 @@ export function Composer({
             <span>{creation}</span>
             <Chevron />
           </button>
-          {state.studio_plugins && !Object.keys(state.model_catalog).length && (
-            state.me.role === "admin"
-              ? <button className="parameter-button" onClick={managePlugins}>前往安装插件</button>
-              : <span>暂无模型，请联系管理员安装插件</span>
-          )}
           <button
             className={`model-name parameter-button${available ? "" : " model-unavailable"}`}
             data-menu="image-model"

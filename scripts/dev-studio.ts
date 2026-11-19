@@ -1,4 +1,4 @@
-/** Start the original Studio UI and its selected API on loopback. */
+/** Start the Studio web app, API and worker on loopback. */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -10,22 +10,19 @@ import { studioConfiguration } from "../packages/platform/src/studio-runtime.js"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 process.chdir(root);
-const backend = process.env.STUDIO_BACKEND ?? "nest";
-if (backend !== "python" && backend !== "nest")
-  throw new Error("STUDIO_BACKEND must be python or nest");
-if (backend === "nest") {
-  const profile = process.env.STUDIO_ENV_FILE;
-  if (profile || existsSync(".env")) {
-    try {
-      process.loadEnvFile(profile || ".env");
-    } catch {
-      throw new Error(
-        "Cannot load the Studio environment file. Check STUDIO_ENV_FILE and file permissions",
-      );
-    }
+if (process.env.STUDIO_BACKEND && process.env.STUDIO_BACKEND !== "nest")
+  throw new Error("Studio requires the Nest backend");
+const profile = process.env.STUDIO_ENV_FILE;
+if (profile || existsSync(".env")) {
+  try {
+    process.loadEnvFile(profile || ".env");
+  } catch {
+    throw new Error(
+      "Cannot load the Studio environment file. Check STUDIO_ENV_FILE and file permissions",
+    );
   }
-  studioConfiguration(process.env);
 }
+studioConfiguration(process.env);
 const runtime = resolve(
   process.env.STUDIO_RUNTIME_DIRECTORY || ".runtime-advanced",
 );
@@ -33,7 +30,7 @@ const port = Number(process.env.STUDIO_PORT || 3000);
 const apiPort = Number(process.env.LEGACY_API_PORT || 4101);
 const configuredOrigin =
   process.env.STUDIO_PUBLIC_URL ||
-  (backend === "nest" ? process.env.PUBLIC_URL : undefined) ||
+  process.env.PUBLIC_URL ||
   `http://localhost:${port}`;
 let publicUrl: string;
 try {
@@ -50,13 +47,6 @@ try {
   );
 }
 const apiOrigin = `http://127.0.0.1:${apiPort}`;
-const python =
-  process.env.STUDIO_PYTHON ||
-  join(root, ".runtime-advanced/original/.venv/bin/python");
-if (backend === "python" && !existsSync(python))
-  throw new Error(
-    "Prepare the original Python environment as described in baseline/README.md",
-  );
 if (
   ![port, apiPort].every((p) => Number.isInteger(p) && p > 0 && p < 65536) ||
   port === apiPort
@@ -143,40 +133,17 @@ function launchTypeScript(script: string, oneShot = false) {
   return launch(process.execPath, ["--import", "tsx", script], apiEnv, oneShot);
 }
 try {
-  if (backend === "nest") {
-    const migration = launchTypeScript("scripts/migrate.ts", true);
-    const code = await new Promise((resolve) =>
-      migration.once("exit", resolve),
+  const migration = launchTypeScript("scripts/migrate.ts", true);
+  const code = await new Promise((resolve) =>
+    migration.once("exit", resolve),
+  );
+  if (code !== 0 || stopping)
+    throw new Error(
+      "Nest Studio migration failed. Check DATABASE_URL, PostgreSQL availability, and migration permissions",
     );
-    if (code !== 0 || stopping)
-      throw new Error(
-        "Nest Studio migration failed. Check DATABASE_URL, PostgreSQL availability, and migration permissions",
-      );
-  }
-  const api =
-    backend === "nest"
-      ? launchTypeScript("apps/api/src/main.ts")
-      : launch(
-          python,
-          [
-            "scripts/preview-studio-compat.py",
-            "--port",
-            String(apiPort),
-            "--public-url",
-            publicUrl,
-            "--runtime-directory",
-            join(runtime, "original"),
-            ...(process.env.STUDIO_RUNTIME_DIRECTORY
-              ? ["--no-reuse-local-credentials"]
-              : []),
-          ],
-          process.env,
-        );
-  await waitForHealth(apiOrigin, `Original ${backend} API`, 15000);
-  const worker =
-    backend === "nest"
-      ? launchTypeScript("apps/worker/src/main.ts")
-      : undefined;
+  const api = launchTypeScript("apps/api/src/main.ts");
+  await waitForHealth(apiOrigin, "Studio API", 15000);
+  const worker = launchTypeScript("apps/worker/src/main.ts");
   const web = launch(
     process.execPath,
     [
@@ -205,8 +172,8 @@ try {
         supervisor: process.pid,
         api: api.pid,
         web: web.pid,
-        worker: worker?.pid,
-        backend,
+        worker: worker.pid,
+        backend: "nest",
         port,
         apiPort,
       },
@@ -214,7 +181,7 @@ try {
       2,
     ),
   );
-  console.log(`Original Studio on Next.js (${backend}): ${publicUrl}/studio`);
+  console.log(`Studio on Next.js: ${publicUrl}/studio`);
 } catch (error) {
   console.error((error as Error).message);
   await stop(1);

@@ -24,17 +24,14 @@ import { Invites } from "./SettingsInvites";
 import { GpuSettings } from "./SettingsGpu";
 import { Members } from "./SettingsMembers";
 import { ModelSettings, type ModelSettingsPreferences } from "./SettingsModels";
-import { PluginSettings } from "./SettingsPlugins";
 import { PriceSettings } from "./SettingsPrices";
 import { ChatSettings, OpenAISettings } from "./SettingsServices";
-import { SettingsShell } from "./SettingsShell";
 import { StorageSettings } from "./SettingsStorage";
 import { Workspaces } from "./SettingsWorkspaces";
 import type { Member, Space, StudioState } from "./state";
 import type { SettingsTab } from "./settings-tabs";
 
 const adminTabs = [
-  ["plugins", "插件", "link"],
   ["models", "模型管理", "model"],
   ["prices", "生成定价", "sliders"],
   ["creditAdmin", "积分管理", "drive"],
@@ -212,164 +209,149 @@ export function Settings({
     ["profile", "个人资料", "account"],
     ["general", "常规", "settings"],
     ["credits", "积分", "drive"],
-    ...(!state.studio_plugins || Object.keys(state.gpu_models || {}).length
-      ? [
-          [
-            "gpu",
-            state.studio_plugins ? "实例接入" : admin ? "GPU 实例" : "GPU 接入",
-            "gpu",
-          ] as const,
-        ]
-      : []),
-    ...(admin
-      ? adminTabs.filter(([key]) =>
-          key === "plugins"
-            ? state.studio_plugins
-            : key === "openai"
-              ? !state.studio_plugins ||
-                Boolean(state.model_catalog["gpt-image-2.6-sunburst"])
-              : key === "chatService"
-                ? !state.studio_plugins ||
-                  Object.values(state.model_groups).some(
-                    (g) => g.kind === "chat",
-                  )
-                : true,
-        )
-      : []),
+    ["gpu", admin ? "GPU 实例" : "GPU 接入", "gpu"],
+    ...(admin ? adminTabs : []),
   ] as const;
   return (
-    <SettingsShell
-      state={state}
-      tab={tab}
-      sections={sections}
-      navigate={(key) => {
-        ++request.current;
-        navigate(key);
-      }}
-    >
-      <div className="settings-content" key={visit}>
-        {tab === "profile" && (
-          <Profile
-            state={state}
-            draft={draft}
-            avatar={(button) =>
-              open(
-                <AvatarPicker state={state} saved={saved} notify={notify} />,
-                button,
-              )
-            }
-            password={(button) =>
-              open(
-                <PasswordDialog
-                  request={(path, body) => api(String(workspace), path, body)}
-                  notify={notify}
-                />,
-                button,
-              )
-            }
-            saved={saved}
-            notify={notify}
-          />
-        )}
-        {tab === "general" && <General />}
-        {tab === "credits" && (
-          <Credits
-            key={JSON.stringify([
-              creditState.credits,
-              creditState.credit_history,
-            ])}
-            state={creditState}
-            recharge={(button) => void openRecharge("recharge", button)}
-            history={(button) => void openRecharge("history", button)}
-            notify={notify}
-          />
-        )}
-        {tab === "gpu" && (
-          <GpuSettings
-            key={`${state.me.id}:${workspace}`}
-            state={state}
-            open={open}
-            confirm={confirmAdmin}
-            manage={adminRequest}
-            notify={notify}
-          />
-        )}
-        {admin && tab === "plugins" && (
-          <PluginSettings
-            key={workspace}
-            workspace={workspace}
-            refresh={refresh}
-            navigate={navigate}
-          />
-        )}
-        {admin && tab === "models" && (
-          <ModelSettings
-            state={state}
-            preferences={modelPreferences}
-            request={adminRequest}
-            refresh={refresh}
-            notify={notify}
-          />
-        )}
-        {admin && tab === "prices" && (
-          <PriceSettings
-            state={state}
-            request={adminRequest}
-            refresh={refresh}
-            notify={notify}
-          />
-        )}
-        {admin && tab === "creditAdmin" && state.credit_accounts && (
-          <CreditAdmin
-            accounts={state.credit_accounts}
-            dialogOpen={dialogOpen}
-            open={openAdmin}
-            request={adminRequest}
-            refresh={refresh}
-            notify={notify}
-          />
-        )}
-        {admin && tab === "openai" && (
-          <OpenAISettings
-            key={JSON.stringify(state.images)}
-            configured={state.images.configured}
-            request={adminRequest}
-          />
-        )}
-        {admin && tab === "chatService" && (
-          <ChatSettings request={adminRequest} notify={notify} />
-        )}
-        {admin && tab === "workspaces" && (
-          <Workspaces
-            state={state}
-            show={showWorkspace}
-            select={selectWorkspace}
-          />
-        )}
-        {admin && tab === "team" && (
-          <Members
-            state={state}
-            open={openAdmin}
-            confirm={confirmAdmin}
-            request={adminRequest}
-            refresh={refresh}
-            notify={notify}
-          />
-        )}
-        {admin && tab === "invites" && (
-          <Invites
-            state={state}
-            open={openAdmin}
-            confirm={confirmAdmin}
-            request={adminRequest}
-            refresh={refresh}
-            notify={notify}
-          />
-        )}
-        {admin && tab === "storage" && (
-          <StorageSettings state={state} viewLibrary={viewLibrary} />
-        )}
+    <div className="settings-page" key={visit}>
+      <header className="settings-title">
+        <h1>设置</h1>
+      </header>
+      <div className="settings-layout">
+        <nav className="settings-navigation" aria-label="设置分类">
+          {sections.map(([key, label, icon]) => (
+            <button
+              key={key}
+              data-act="settings-tab"
+              data-value={key}
+              className={tab === key ? "active" : ""}
+              aria-current={tab === key ? "page" : "false"}
+              onClick={() => {
+                ++request.current;
+                navigate(key);
+              }}
+            >
+              <Icon name={icon} />
+              {label}
+            </button>
+          ))}
+        </nav>
+        <div className="settings-content">
+          {tab === "profile" && (
+            <Profile
+              state={state}
+              draft={draft}
+              avatar={(button) =>
+                open(
+                  <AvatarPicker state={state} saved={saved} notify={notify} />,
+                  button,
+                )
+              }
+              password={(button) =>
+                open(
+                  <PasswordDialog
+                    request={(path, body) => api(String(workspace), path, body)}
+                    notify={notify}
+                  />,
+                  button,
+                )
+              }
+              saved={saved}
+              notify={notify}
+            />
+          )}
+          {tab === "general" && <General />}
+          {tab === "credits" && (
+            <Credits
+              key={JSON.stringify([
+                creditState.credits,
+                creditState.credit_history,
+              ])}
+              state={creditState}
+              recharge={(button) => void openRecharge("recharge", button)}
+              history={(button) => void openRecharge("history", button)}
+              notify={notify}
+            />
+          )}
+          {tab === "gpu" && (
+            <GpuSettings
+              key={`${state.me.id}:${workspace}`}
+              state={state}
+              open={open}
+              confirm={confirmAdmin}
+              manage={adminRequest}
+              notify={notify}
+            />
+          )}
+          {admin && tab === "models" && (
+            <ModelSettings
+              state={state}
+              preferences={modelPreferences}
+              request={adminRequest}
+              refresh={refresh}
+              notify={notify}
+            />
+          )}
+          {admin && tab === "prices" && (
+            <PriceSettings
+              state={state}
+              request={adminRequest}
+              refresh={refresh}
+              notify={notify}
+            />
+          )}
+          {admin && tab === "creditAdmin" && state.credit_accounts && (
+            <CreditAdmin
+              accounts={state.credit_accounts}
+              dialogOpen={dialogOpen}
+              open={openAdmin}
+              request={adminRequest}
+              refresh={refresh}
+              notify={notify}
+            />
+          )}
+          {admin && tab === "openai" && (
+            <OpenAISettings
+              key={JSON.stringify(state.images)}
+              configured={state.images.configured}
+              request={adminRequest}
+            />
+          )}
+          {admin && tab === "chatService" && (
+            <ChatSettings request={adminRequest} notify={notify} />
+          )}
+          {admin && tab === "workspaces" && (
+            <Workspaces
+              state={state}
+              show={showWorkspace}
+              select={selectWorkspace}
+            />
+          )}
+          {admin && tab === "team" && (
+            <Members
+              state={state}
+              open={openAdmin}
+              confirm={confirmAdmin}
+              request={adminRequest}
+              refresh={refresh}
+              notify={notify}
+            />
+          )}
+          {admin && tab === "invites" && (
+            <Invites
+              state={state}
+              open={openAdmin}
+              confirm={confirmAdmin}
+              request={adminRequest}
+              refresh={refresh}
+              notify={notify}
+            />
+          )}
+          {admin && tab === "storage" && (
+            <StorageSettings state={state} viewLibrary={viewLibrary} />
+          )}
+        </div>
       </div>
-    </SettingsShell>
+    </div>
   );
 }

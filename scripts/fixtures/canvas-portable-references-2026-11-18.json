@@ -1,9 +1,0 @@
-{
-  "captured": "2026-11-18",
-  "pinnedSha256": "f8d0f6c0ee07526093c0b3ae7cc9d914988bddc9c558ea1b276fe67e1a3ce201",
-  "publicSha256": "94cbb5f6f0967c1d360c7aacdd4e1b699eb2ec63943b36d8779c177a5cdbba60",
-  "publicSize": 947749,
-  "anchor": "  A.useEffect(() => {\n    Rn && K && !K.params.h3",
-  "transform": "function portableReferences(document,targetId,assets,resolve){\n const target=document.nodes.find(n=>n.id===targetId);\n if(!target||!target.params.model||target.params.model==='MiniMax H3')return document;\n const p=target.params;\n const ids=[...new Set([...(p.h3_refs||[]),...(p.h3?.mode==='frames'?[p.h3.first_frame,p.h3.last_frame]:[])].filter(Boolean))];\n const images=ids.filter(id=>assets.some(a=>a.id===id&&a.kind==='ref'));\n if(!images.length)return document;\n const nodes=[...document.nodes],edges=[...document.edges];\n for(const id of images){\n  let source=nodes.find(n=>n.id!==targetId&&n.type==='image'&&resolve(n)===id);\n  if(!source){source={...target,id:crypto.randomUUID(),type:'image',title:'参考图片',prompt:'',media_id:id,active_job:null,asset_packs:[],params:{...p,model:'muse-image',h3:null,h3_refs:[]},x:target.x-300,y:target.y+images.indexOf(id)*80};nodes.push(source);}\n  if(!edges.some(e=>e.target===targetId&&e.source===source.id))edges.push({id:crypto.randomUUID(),source:source.id,target:targetId});\n }\n return {...document,edges,nodes:nodes.map(n=>n.id===targetId?{...n,params:{...p,h3_refs:(p.h3_refs||[]).filter(id=>!images.includes(id)),h3:p.h3?{...p.h3,first_frame:images.includes(p.h3.first_frame)?null:p.h3.first_frame,last_frame:images.includes(p.h3.last_frame)?null:p.h3.last_frame}:null}}:n)};\n}\n\n",
-  "effect": "  A.useEffect(() => {\n    if (!K || Rn) return;\n    s.change(current => {const next=portableReferences(current.document,K.id,r.assets,n=>Oi(n,f).media);return next===current.document?current:{...current,document:next};});\n  }, [K?.id, Rn, K?.params.model, r.assets]);\n"
-}

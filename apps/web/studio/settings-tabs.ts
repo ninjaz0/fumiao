@@ -1,5 +1,4 @@
 export const adminSettingsTabs = [
-  "plugins",
   "models",
   "prices",
   "creditAdmin",
