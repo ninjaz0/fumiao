@@ -1,14 +1,29 @@
 import { portablePlugin } from "./portable-plugin.js";
 import { officialAdapter } from "./distribution/official-adapter.js";
-import { manifestSchema } from "../../plugin-sdk/src/index.js";
+import {
+  manifestSchema,
+  type ProviderPlugin,
+} from "../../plugin-sdk/src/index.js";
+import {
+  contributesSchema,
+  contributionProblems,
+  packageContributions,
+  settingsScopes,
+  type PageAction,
+  type PageScope,
+  type ResolvedContributions,
+  type SettingsScope,
+} from "../../plugin-sdk/src/contributions.js";
+import { PluginSettingsStore } from "./plugin-settings.js";
 import { remotePlugin } from "../../../plugins/remote/src/index.js";
 import { loadProgram } from "./plugin-program.js";
 import { z } from "zod";
+import { Ajv } from "ajv";
 import { StudioCatalog } from "./catalog.js";
 import { one, type Sql } from "./db.js";
 import { canonical, connectionModels, validator } from "./plugins.js";
 import type { Platform, Actor } from "./platform.js";
-import { requireValue } from "./security.js";
+import { DomainError, requireValue } from "./security.js";
 
 export const releaseVersion = z
   .string()
@@ -54,6 +69,7 @@ export const packageFile = z
       .min(1)
       .max(256 * 1024)
       .optional(),
+    contributes: contributesSchema.optional(),
     settingsPage: z
       .object({
         title: z.string().min(1).max(60),
@@ -78,11 +94,198 @@ export const packageFile = z
       [f.manifest, f.adapterModule, f.remote].filter(Boolean).length === 1 &&
       (!f.manifest || !!f.program),
     "插件必须声明一种执行方式",
+  )
+  .refine(
+    (file) =>
+      file?.settingsPage === undefined || file?.contributes === undefined,
+    {
+      message: "contributes 与旧版 settingsPage 不能同时声明",
+      when: () => true,
+    },
   );
 export const upgradeFields = z
   .record(z.string().uuid(), z.record(z.string().max(120), z.unknown()))
   .default({});
 export type PackageFile = z.infer<typeof packageFile>;
+export function parsePackageFile(value: unknown): PackageFile {
+  const result = packageFile.safeParse(value);
+  if (!result.success) {
+    const problem = result.error.issues.find(
+      (issue) => issue.code === "custom" && issue.path.length === 0,
+    );
+    throw new DomainError(400, problem?.message ?? "插件包格式无效");
+  }
+  return result.data;
+}
+
+async function inspectPackage(file: PackageFile) {
+  const binding = file.adapterModule
+    ? await officialAdapter(file.id, file.adapterVersion, file.adapterModule)
+    : undefined;
+  const manifest =
+    binding?.adapter.manifest ??
+    manifestSchema.parse(file.manifest ?? file.remote?.manifest);
+  requireValue(
+    manifest.id === file.id && manifest.version === file.adapterVersion,
+    400,
+    "插件标识或版本不一致",
+  );
+  const contributions = packageContributions(file);
+  const problems = contributionProblems(contributions, {
+    mode: manifest.mode,
+    hasProgram: !!file.program,
+  });
+  requireValue(!problems.length, 400, problems.join("；"));
+  if (contributions.settings) {
+    // Check schemas before activation, including scopes which have no stored rows.
+    // Previewing a release must not register its schema IDs in the shared validator.
+    const check = new Ajv({
+      strict: false,
+      useDefaults: true,
+      addUsedSchema: false,
+    });
+    for (const scope of settingsScopes) {
+      const schema = contributions.settings[scope];
+      if (!schema) continue;
+      let compiled;
+      try {
+        compiled = check.compile(schema);
+      } catch {
+        throw new DomainError(
+          400,
+          settingsLabels[scope] + "设置的 JSON Schema 无效",
+        );
+      }
+      requireValue(
+        !("$async" in compiled),
+        400,
+        "插件设置仅支持同步 JSON Schema",
+      );
+    }
+  }
+  if (contributions.hostCapabilities.includes("nodes"))
+    requireValue(
+      binding?.NodeManagement,
+      400,
+      "节点能力需要适配器导出 NodeManagement",
+    );
+  if (file.nodeClient)
+    requireValue(
+      manifest.mode === "pull" && file.program,
+      400,
+      "节点客户端需要节点程序",
+    );
+  const adapter =
+    binding?.adapter ??
+    (file.remote
+      ? remotePlugin(manifest, file.remote.endpoint)
+      : portablePlugin(manifest));
+  return { adapter, contributions };
+}
+
+// The v1 settings store calls the shared Ajv compiler with these exact schema
+// objects. Prime its object cache without publishing package-local resource IDs.
+// Keep this synchronous so concurrent requests always see the original option.
+function prepareNamedSettingsSchemas(
+  declaration: ResolvedContributions["settings"],
+) {
+  if (!declaration) return;
+  const addUsedSchema = validator.opts.addUsedSchema;
+  try {
+    validator.opts.addUsedSchema = false;
+    for (const scope of settingsScopes) {
+      const schema = declaration[scope];
+      if (schema?.$id) validator.compile(schema);
+    }
+  } catch {
+    throw new DomainError(400, "插件设置迁移失败，无法编译目标版本的设置声明");
+  } finally {
+    validator.opts.addUsedSchema = addUsedSchema;
+  }
+}
+
+const scopeLabels: Record<PageScope, string> = {
+  plugin: "插件信息",
+  models: "插件模型",
+  services: "服务连接",
+  jobs: "任务记录",
+  settings: "插件设置",
+  nodes: "节点状态",
+};
+const settingsLabels = { global: "全站", workspace: "工作区" };
+const operationLabels = {
+  "nodes.suggestName": "建议节点名称",
+  "nodes.pair": "配对节点",
+  "nodes.drain": "排空节点",
+  "nodes.stop": "停止节点",
+  "nodes.resume": "恢复节点",
+  "nodes.remove": "移除节点",
+};
+function actionLabel(action: PageAction) {
+  if (action.kind === "host") return operationLabels[action.operation];
+  if (action.kind === "settings")
+    return "保存" + settingsLabels[action.scope] + "设置";
+  return "运行页面程序（可写已声明的设置）";
+}
+
+function permissionSummary(
+  next: ResolvedContributions,
+  prior?: ResolvedContributions,
+) {
+  const added = (label: string, isNew: boolean) =>
+    label + (prior && isNew ? "（新增）" : "");
+  const lines: string[] = [];
+  for (const page of next.settingsPages) {
+    const old = prior?.settingsPages.find((p) => p.id === page.id);
+    const broaderAudience =
+      old?.audience === "admin" && page.audience === "member";
+    const broaderVisibility =
+      old?.visibleWhen === "enabled" && page.visibleWhen === "installed";
+    const reads = page.scopes.map((scope) =>
+      added(scopeLabels[scope], !old?.scopes.includes(scope)),
+    );
+    const actions = page.actions.map((action) =>
+      added(
+        action.id + " · " + actionLabel(action),
+        !old?.actions.some((a) => canonical(a) === canonical(action)),
+      ),
+    );
+    lines.push(
+      [
+        "设置页「" +
+          page.title +
+          "」(" +
+          page.id +
+          ")" +
+          (prior && !old ? "（新增）" : ""),
+        "受众：" +
+          (page.audience === "admin" ? "管理员" : "成员") +
+          (broaderAudience ? "（扩大）" : ""),
+        (page.visibleWhen === "enabled" ? "启用时可见" : "安装后可见") +
+          (broaderVisibility ? "（扩大）" : ""),
+        "读取：" + (reads.join("、") || "无"),
+        "操作：" + (actions.join("、") || "无"),
+      ].join("；"),
+    );
+  }
+  if (next.hostCapabilities.includes("nodes"))
+    lines.push(
+      "宿主能力：" +
+        added("节点管理", !prior?.hostCapabilities.includes("nodes")),
+    );
+  const settings = settingsScopes.filter((scope) => next.settings?.[scope]);
+  if (settings.length)
+    lines.push(
+      "设置范围：" +
+        settings
+          .map((scope) =>
+            added(settingsLabels[scope], !prior?.settings?.[scope]),
+          )
+          .join("、"),
+    );
+  return lines.length ? ["扩展权限", ...lines] : ["扩展权限：无"];
+}
+
 export function newer(a: string, b: string) {
   const x = a.split(".").map(Number),
     y = b.split(".").map(Number);
@@ -90,26 +293,13 @@ export function newer(a: string, b: string) {
 }
 
 export class StudioPackages {
+  private readonly settings = new PluginSettingsStore();
   constructor(readonly p: Platform) {}
   async preview(actor: Actor, value: unknown) {
     this.p.admin(actor);
-    const f = packageFile.parse(value),
-      m = f.manifest
-        ? manifestSchema.parse(f.manifest)
-        : f.remote
-          ? manifestSchema.parse(f.remote.manifest)
-          : (
-              await officialAdapter(
-                f.id,
-                f.adapterVersion,
-                f.adapterModule || "",
-              )
-            ).adapter.manifest;
-    requireValue(
-      m.id === f.id && m.version === f.adapterVersion,
-      400,
-      "插件标识不一致",
-    );
+    const f = parsePackageFile(value);
+    const { adapter, contributions } = await inspectPackage(f);
+    const m = adapter.manifest;
     const prior = await one(
       this.p.db,
       `SELECT r.package,v.manifest FROM studio_packages p JOIN studio_package_releases r USING(id,version)
@@ -133,12 +323,6 @@ export class StudioPackages {
     if (f.equivalentModels?.length)
       changes.push("共用模型：" + f.equivalentModels.join("、"));
     if (f.program && !prior?.package.program) changes.push("新增隔离后台程序");
-    if (f.settingsPage && !prior?.package.settingsPage)
-      changes.push(
-        "新增管理员设置：" +
-          f.settingsPage.title +
-          "（读取节点状态、执行配对和管理）",
-      );
     if (
       f.nodeClient &&
       canonical(f.nodeClient) !== canonical(prior?.package.nodeClient)
@@ -176,8 +360,15 @@ export class StudioPackages {
       missing,
       endpoint: f.remote?.endpoint,
       fields: Object.keys(m.configSchema.properties || {}),
-      nodes: m.mode === "pull",
-      changes,
+      // Existing Studio clients use this flag for the legacy GPU panel hint.
+      nodes: !!f.settingsPage,
+      changes: [
+        ...changes,
+        ...permissionSummary(
+          contributions,
+          prior && packageContributions(prior.package),
+        ),
+      ],
     };
   }
   private async upgradeConfig(
@@ -207,6 +398,7 @@ export class StudioPackages {
   }
   private async probe(
     file: PackageFile,
+    adapter: ProviderPlugin,
     supplements: z.infer<typeof upgradeFields>,
     revision: number | undefined,
     rollback: boolean,
@@ -235,20 +427,6 @@ export class StudioPackages {
       409,
       "不能向新的服务地址转发已有密钥",
     );
-    const adapter = file.manifest
-      ? portablePlugin(manifestSchema.parse(file.manifest))
-      : file.remote
-        ? remotePlugin(
-            manifestSchema.parse(file.remote.manifest),
-            file.remote.endpoint,
-          )
-        : (
-            await officialAdapter(
-              file.id,
-              file.adapterVersion,
-              file.adapterModule || "",
-            )
-          ).adapter;
     const services = (
       await this.p.db.query<{ id: string; config: string; revision: number }>(
         "SELECT id,config,revision FROM connections WHERE plugin_id=$1 AND NOT removed AND NOT fmworker_resource_driver",
@@ -357,8 +535,15 @@ export class StudioPackages {
     supplements: z.infer<typeof upgradeFields> = {},
   ) {
     this.p.admin(actor);
-    const file = packageFile.parse(value);
-    const probed = await this.probe(file, supplements, revision, rollback);
+    const file = parsePackageFile(value);
+    const { adapter, contributions } = await inspectPackage(file);
+    const probed = await this.probe(
+      file,
+      adapter,
+      supplements,
+      revision,
+      rollback,
+    );
     return this.p.db.transaction(async (sql) => {
       await sql.query(
         "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",
@@ -422,18 +607,7 @@ export class StudioPackages {
           file.id,
         ])
       ).rows;
-      const incoming = file.manifest
-        ? manifestSchema.parse(file.manifest)
-        : file.remote
-          ? manifestSchema.parse(file.remote.manifest)
-          : (
-              await officialAdapter(
-                file.id,
-                file.adapterVersion,
-                file.adapterModule!,
-              )
-            ).adapter.manifest;
-      for (const m of incoming.models.filter((m) => m.studio)) {
+      for (const m of adapter.manifest.models.filter((m) => m.studio)) {
         const peers = await sql.query(
           `SELECT v.id,v.manifest FROM studio_catalog c JOIN plugin_versions v ON (v.id,v.version)=(c.plugin_id,c.plugin_version) WHERE c.id=$1 AND c.plugin_id<>$2
           UNION SELECT p.id,v.manifest FROM studio_shared_models s JOIN studio_packages p ON p.id=s.plugin_id AND p.installed JOIN studio_package_releases r ON (r.id,r.version)=(p.id,p.version)
@@ -543,13 +717,24 @@ export class StudioPackages {
             ],
           );
       }
-      requireValue(
-        !(file.settingsPage || file.nodeClient) ||
-          (manifest.mode === "pull" && !!file.program),
-        400,
-        "节点设置需要节点程序",
-      );
       if (current?.installed) {
+        prepareNamedSettingsSchemas(contributions.settings);
+        if (rollback)
+          await this.rollbackSettings(
+            sql,
+            actor,
+            file,
+            current.version,
+            contributions.settings,
+          );
+        else
+          await this.settings.migrate(
+            sql,
+            file.id,
+            current.version,
+            file.version,
+            contributions.settings,
+          );
         const added = Object.fromEntries(
           manifest.models
             .filter((m) => m.studio && !before.some((r) => r.id === m.id))
@@ -586,6 +771,70 @@ export class StudioPackages {
       await this.p.audit(sql, actor, "plugin.install", file.id);
       return { id: file.id, version: file.version };
     });
+  }
+  private async rollbackSettings(
+    sql: Sql,
+    actor: Actor,
+    file: PackageFile,
+    from: string,
+    declaration: ResolvedContributions["settings"],
+  ) {
+    if (!(await this.settings.restore(sql, file.id, file.version))) {
+      await this.settings.migrate(
+        sql,
+        file.id,
+        from,
+        file.version,
+        declaration,
+      );
+      return;
+    }
+    // A workspace may have saved settings for the first time after the upgrade.
+    // Only those rows still need migration; restored snapshots must be left intact.
+    const remaining = await sql.query<{
+      scope: SettingsScope;
+      workspace_id: string | null;
+      values: unknown;
+      revision: number;
+    }>(
+      `SELECT scope,workspace_id,"values",revision FROM studio_plugin_settings
+       WHERE plugin_id=$1 AND package_version<>$2 FOR UPDATE`,
+      [file.id, file.version],
+    );
+    if (!remaining.rows.length) return;
+    const run = declaration?.migrate
+      ? await loadProgram("({migrate:" + declaration.migrate + "\n})")
+      : null;
+    for (const row of remaining.rows) {
+      await sql.query(
+        `UPDATE studio_plugin_settings SET previous_values="values",previous_version=package_version,package_version=$2
+         WHERE plugin_id=$1 AND scope=$3 AND workspace_id IS NOT DISTINCT FROM $4`,
+        [file.id, file.version, row.scope, row.workspace_id],
+      );
+      if (!declaration?.[row.scope]) continue;
+      let values = row.values;
+      if (run) {
+        try {
+          values = run("migrate", values, {
+            scope: row.scope,
+            from,
+            to: file.version,
+          });
+        } catch {
+          throw new DomainError(400, "插件设置迁移失败");
+        }
+      }
+      await this.settings.write(sql, {
+        pluginId: file.id,
+        scope: row.scope,
+        workspaceId: row.workspace_id,
+        declaration,
+        packageVersion: file.version,
+        values,
+        revision: row.revision,
+        actorId: actor.id,
+      });
+    }
   }
   async list(actor: Actor) {
     this.p.admin(actor);
@@ -649,6 +898,7 @@ export class StudioPackages {
       )
     )
       return;
+    await this.settings.purge(sql, id);
     await sql.query(
       "DELETE FROM studio_model_service WHERE connection_id IN (SELECT id FROM connections WHERE plugin_id=$1)",
       [id],
