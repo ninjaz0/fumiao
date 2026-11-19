@@ -1,4 +1,5 @@
 import type { Platform } from "./platform.js";
+import { studioPluginProfile } from "./studio-plugin-profile.js";
 import { one, type Sql } from "./db.js";
 import { requireValue } from "./security.js";
 import { validator } from "./plugins.js";
@@ -22,6 +23,8 @@ export class ChatProviders {
       WHERE v.manifest->'chat' IS NOT NULL ORDER BY v.id,v.version`)
     ).rows;
     const result = new Map<string, ChatConnection>();
+    if (!versions.length && (await studioPluginProfile(sql)) === "explicit")
+      return result;
     requireValue(versions.length, 503, "原对话插件尚未完整启用");
     for (const v of versions) {
       const plugin = await this.p.registry.resolve(sql, v.id, v.version);

@@ -452,7 +452,7 @@ export class Platform {
       )
     ).rows;
   }
-  async createConnection(user: Actor, value: unknown) {
+  async createConnection(user: Actor, value: unknown, studio = false) {
     this.admin(user);
     const input = z
       .object({
@@ -464,7 +464,7 @@ export class Platform {
       })
       .parse(value);
     return this.db.transaction((sql) =>
-      this.createConnectionOn(sql, user, input),
+      this.createConnectionOn(sql, user, input, studio),
     );
   }
   /** Shared transactional creation for versioned original settings adapters. */
@@ -478,8 +478,13 @@ export class Platform {
       config: Record<string, unknown>;
       concurrency: number;
     },
+    studio = false,
   ) {
     this.admin(user);
+    if (studio)
+      await sql.query(
+        "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",
+      );
     const plugin = await this.registry.resolve(
       sql,
       input.pluginId,
@@ -495,6 +500,23 @@ export class Platform {
       400,
       "连接配置不符合插件要求",
     );
+    if (studio && (plugin.originalState || plugin.manifest.chat)) {
+      await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        "studio-connection:" + input.pluginId,
+      ]);
+      const { rows } = await sql.query(
+        "SELECT config FROM connections WHERE plugin_id=$1 AND plugin_version=$2 AND NOT fmworker_resource_driver",
+        [input.pluginId, input.version],
+      );
+      const conflict = plugin.manifest.chat
+        ? rows.some(
+            (row) =>
+              plugin.chatProvider!(this.vault.open(row.config)) ===
+              plugin.chatProvider!(input.config),
+          )
+        : rows.length > 0;
+      requireValue(!conflict, 409, "已有该提供方连接，请编辑现有连接");
+    }
     const id = randomUUID();
     await sql.query(
       "INSERT INTO connections(id,name,plugin_id,plugin_version,config,concurrency) VALUES($1,$2,$3,$4,$5,$6)",

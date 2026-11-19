@@ -22,6 +22,8 @@ docker compose up -d --wait
 
 打开 `http://localhost:3000/studio`，新实例的默认管理员用户名为 `admin`。Compose 将 Web 绑定在本机 3000 端口。对外服务通过 HTTPS 反向代理接入，`PUBLIC_URL` 应与浏览器地址一致。[部署、备份与恢复](docs/OPERATIONS.md)
 
+全新安装后，管理员可在工作台的「设置 → 插件」按需安装内置模型包或远程插件，配置并启用连接，再设置模型权限和生成定价。升级已有实例会保留当前模型目录和定价。
+
 ## 本地开发
 
 使用 Node.js 24、pnpm 10.32.1、PostgreSQL、Redis 和 FFmpeg。图片解码构建需要 CMake 3.20+、Ninja 和 C++ 编译器。先安装依赖，再按[本地工作台配置](docs/STUDIO.md)准备数据库、私有存储和管理员。
@@ -55,4 +57,4 @@ pnpm test:studio
 
 `test:studio` 从正式版入口验证登录、生成、支付回跳、画布、私有媒体、任务结算、服务重启和路由响应。需要可执行的 `initdb`、`postgres` 和 `redis-server`，可通过 `PG_BINDIR` 和 `REDIS_SERVER` 指定路径。GPU 和数据导出工具使用 Python 3；工作台只运行新版服务。
 
-GitHub Actions 的配置保存在 [ci/github-actions.yml](ci/github-actions.yml)。需要启用自动检查时，由有工作流写入权限的维护者将它移动到 `.github/workflows/ci.yml`。
+向 `main` 提 PR 或推送到 `main` 时，[Studio PR checks](.github/workflows/ci.yml) 使用 PG 18 和 Redis 8、构建生产前端、验证正式入口并构建 Docker 镜像。

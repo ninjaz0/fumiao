@@ -885,6 +885,8 @@ async function start() {
     (await one(p.db, "SELECT count(*)::int AS count FROM connections")).count,
     0,
   );
+  // The existing workflow fixtures use built-in models. Plugin installation starts empty.
+  if (!remoteProvider) await p.registry.installBuiltins(p.db, true);
   await run(node, [...typescript, "scripts/bootstrap.ts"], {
     ...env,
     ADMIN_NAME: user.name,
