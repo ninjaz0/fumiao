@@ -8,7 +8,8 @@ import {
 import { ReferenceMedia } from "./AssetMedia";
 import { Icon } from "./Icon";
 import type { SettingsDialogPresentation } from "./settings-admin";
-import { AssetPacks } from "../../../legacy/pure/canvas/src/AssetPacks";
+import "./asset-packs.css";
+import { AssetPacks } from "../canvas-editor/AssetPacks";
 import {
   packReferences,
   type Asset,

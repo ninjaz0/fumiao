@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { one, transactionCommitted, type Database, type Sql } from "./db.js";
+import { one, type Database, type Sql } from "./db.js";
 import {
   DomainError,
   requireValue,
@@ -19,7 +19,7 @@ import {
 import { StudioCatalog } from "./catalog.js";
 import { inspectMedia } from "./media.js";
 import type { Storage } from "./storage.js";
-import { capacity, isCapacityRejection } from "./capacity.js";
+import { capacity } from "./capacity.js";
 import { ReferencePacks } from "./packs.js";
 import { JobTiming } from "./timing.js";
 import { acceptTask } from "./accept.js";
@@ -968,36 +968,26 @@ export class Platform {
     mime = metadata.mime;
     const id = randomUUID();
     await capacity(this.db, this.storage, data.length);
-    let publicationXid: string | undefined;
     try {
       await this.storage.put(id, data, mime);
-      await this.db.transaction(async (sql) => {
-        const publication = await sql.query<{ xid: string }>(
-          "INSERT INTO assets(id,workspace_id,owner_id,object_key,mime,size,state,metadata,original_kind) VALUES($1,$2,$3,$4,$5,$6,'ready',$7,$8) RETURNING pg_current_xact_id()::text AS xid",
-          [
-            id,
-            wid,
-            user.id,
-            id,
-            mime,
-            data.length,
-            JSON.stringify(metadata),
-            mime.startsWith("video/")
-              ? "ref_video"
-              : mime.startsWith("audio/")
-                ? "ref_audio"
-                : "ref",
-          ],
-        );
-        publicationXid = publication.rows[0].xid;
-      });
+      await this.db.query(
+        "INSERT INTO assets(id,workspace_id,owner_id,object_key,mime,size,state,metadata,original_kind) VALUES($1,$2,$3,$4,$5,$6,'ready',$7,$8)",
+        [
+          id,
+          wid,
+          user.id,
+          id,
+          mime,
+          data.length,
+          JSON.stringify(metadata),
+          mime.startsWith("video/")
+            ? "ref_video"
+            : mime.startsWith("audio/")
+              ? "ref_audio"
+              : "ref",
+        ],
+      );
     } catch (error) {
-      if (
-        publicationXid &&
-        !isCapacityRejection(error) &&
-        (await transactionCommitted(this.db, publicationXid, error))
-      )
-        return { id };
       await this.storage.remove(id);
       throw error;
     }

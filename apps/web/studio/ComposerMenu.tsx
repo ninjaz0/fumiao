@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import * as FlowPicker from "../../../legacy/pure/canvas/src/flowPicker";
+import * as FlowPicker from "../canvas-editor/flowPicker";
 import { ReferenceMedia } from "./AssetMedia";
 import { Icon } from "./Icon";
 import {

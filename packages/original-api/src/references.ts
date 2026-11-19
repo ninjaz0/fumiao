@@ -5,28 +5,15 @@ import { tmpdir } from "node:os";
 import type { Request, Response } from "express";
 import type { Actor, Platform } from "../../platform/src/platform.js";
 import { DomainError, requireValue } from "../../platform/src/security.js";
-import {
-  capacity,
-  capacityMessage,
-  isCapacityRejection,
-} from "../../platform/src/capacity.js";
+import { capacity } from "../../platform/src/capacity.js";
 import {
   ReferenceImportError,
   ReferenceImportBusyError,
   referenceResultSchema,
   type ReferenceKind,
-  type ReferenceResult,
 } from "../../plugin-sdk/src/references.js";
 import { OriginalIdentity } from "./identity.js";
 import { receive } from "./uploads.js";
-import { transactionCommitted } from "../../platform/src/db.js";
-
-type UploadedReference = Omit<ReferenceResult, "fps"> & {
-  id: string;
-  kind: `ref_${ReferenceKind}`;
-  name: string;
-  owner: number;
-};
 
 export class OriginalReferences {
   constructor(readonly p: Platform) {}
@@ -51,7 +38,6 @@ export class OriginalReferences {
     req.once("aborted", abort);
     res.once("close", abort);
     let object: string | undefined;
-    let publication: { xid: string; result: UploadedReference } | undefined;
     try {
       const input = await receive(req, directory, capability.maxBytes),
         output = join(
@@ -98,8 +84,7 @@ export class OriginalReferences {
         .slice(0, 120)
         .join("");
       const stored = await this.p.storage.stat(id);
-      const originalKind = `ref_${kind}` as const;
-      return await this.p.db.transaction(async (sql) => {
+      const result = await this.p.db.transaction(async (sql) => {
         const workspace = await identity.activeWorkspace(sql, user, selected);
         await sql.query(
           "INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,metadata,original_kind,object_modified) VALUES($1,$2,$3,$4,$10,$5,$6,'ready',$7,$8,$9)",
@@ -111,7 +96,7 @@ export class OriginalReferences {
             info.mime,
             info.size,
             JSON.stringify({ width: info.w, height: info.h }),
-            originalKind,
+            "ref_" + kind,
             stored.modified ?? Date.now() / 1000,
             id,
           ],
@@ -129,15 +114,13 @@ export class OriginalReferences {
           ],
         );
         controller.signal.throwIfAborted();
-        const {
-          rows: [owner],
-        } = await sql.query<{ public_id: string; xid: string }>(
-          "SELECT public_id, pg_current_xact_id()::text AS xid FROM users WHERE id=$1",
+        const owner = await sql.query(
+          "SELECT public_id FROM users WHERE id=$1",
           [user.id],
         );
-        const result: UploadedReference = {
+        return {
           id: key,
-          kind: originalKind,
+          kind: "ref_" + kind,
           mime: info.mime,
           w: info.w,
           h: info.h,
@@ -145,25 +128,19 @@ export class OriginalReferences {
           seconds: info.seconds,
           has_audio: info.has_audio,
           name,
-          owner: Number(owner.public_id),
+          owner: Number(owner.rows[0].public_id),
         };
-        publication = { xid: owner.xid, result };
-        return result;
       });
+      object = undefined;
+      return result;
     } catch (error) {
-      const quotaRejected = isCapacityRejection(error);
-      if (
-        publication &&
-        !quotaRejected &&
-        (await transactionCommitted(this.p.db, publication.xid, error))
-      )
-        return publication.result;
       if (object) await this.p.storage.remove(object);
       if (error instanceof ReferenceImportError)
         throw new DomainError(400, error.message);
       if (error instanceof ReferenceImportBusyError)
         throw new DomainError(503, "请求处理失败");
-      if (quotaRejected) throw new DomainError(507, capacityMessage);
+      if (["P1001", "P1002"].includes((error as any).code))
+        throw new DomainError(507, "空间不足，请先清理素材或作品");
       throw error;
     } finally {
       req.off("aborted", abort);

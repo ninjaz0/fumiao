@@ -179,7 +179,7 @@ export class OriginalNodesController {
     );
     res.type("application/octet-stream");
     return new Promise<void>((done, reject) => {
-      res.sendFile(file, { root: resolve("legacy/pure/agent") }, (error) =>
+      res.sendFile(file, { root: resolve("plugins/gpu/distribution") }, (error) =>
         error ? reject(error) : done(),
       );
     });

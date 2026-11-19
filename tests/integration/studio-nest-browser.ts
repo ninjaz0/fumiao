@@ -1,0 +1,361 @@
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { chromium, expect } from "@playwright/test";
+import sharp from "sharp";
+import type { StudioState } from "../../apps/web/studio/state.js";
+import { one } from "../../packages/platform/src/db.js";
+import type { Actor, Platform } from "../../packages/platform/src/platform.js";
+import { originalUI } from "../../packages/web-compat/src/ui.js";
+import { imagesText } from "../../plugins/images/src/text.js";
+import type { studioPayment } from "./studio-nest-payment.js";
+import {
+  assertStudio,
+  open,
+  request,
+  settings,
+  setTab,
+} from "./studio-settings-browser.js";
+
+const imagePrompt = "隔离工作台生成图片";
+const draft = "重启后恢复创作草稿";
+const chatDraft = "重启后恢复未发对话";
+const chatReply = "隔离验收回复";
+const canvasTitle = "隔离工作台画布";
+const apiTimeout = 20_000;
+
+export async function studioBrowser(
+  platform: Platform,
+  web: string,
+  user: { name: string; password: string },
+  payment: Awaited<ReturnType<typeof studioPayment>>,
+  mediaOrigin?: string,
+) {
+  const bytes = await sharp({
+    create: { width: 24, height: 24, channels: 3, background: "#3672a1" },
+  })
+    .png()
+    .toBuffer();
+  const providerPrompts: string[] = [];
+  const providerErrors: unknown[] = [];
+  const key = "sk-studio-browser-fixture";
+  const provider = createServer(async (req, res) => {
+    try {
+      assert.equal(req.method, "POST");
+      assert.equal(req.url, "/v1/images/generations");
+      assert.equal(req.headers.authorization, "Bearer " + key);
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      providerPrompts.push(body.prompt);
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({ data: [{ b64_json: bytes.toString("base64") }] }),
+      );
+    } catch (error) {
+      providerErrors.push(error);
+      res.writeHead(500).end();
+    }
+  }).listen(0, "127.0.0.1");
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  const close = async () => {
+    try {
+      await browser?.close();
+    } finally {
+      provider.closeAllConnections();
+      await new Promise<void>((done) => provider.close(() => done()));
+    }
+  };
+  try {
+    await once(provider, "listening");
+    const {
+      rows: [admin],
+    } = await platform.db.query<Actor>(
+      "SELECT id,name,nickname,role FROM users WHERE name=$1",
+      [user.name],
+    );
+    assert.ok(admin);
+    const { id } = await platform.createConnection(admin, {
+      name: "Loopback Studio image fixture",
+      pluginId: imagesText.manifest.id,
+      version: imagesText.manifest.version,
+      config: {
+        baseUrl: "http://127.0.0.1:" + (provider.address() as AddressInfo).port,
+        apiKey: key,
+      },
+    });
+    await platform.updateConnection(admin, id, {
+      revision: 1,
+      enabled: true,
+      concurrency: 1,
+    });
+    await payment.configure(platform, admin);
+    browser = await chromium.launch();
+    const context = await browser.newContext({
+      baseURL: web,
+      ignoreHTTPSErrors: true,
+    });
+    await context.route("**/*", (route) => {
+      const { origin } = new URL(route.request().url());
+      return origin === web ||
+        origin === mediaOrigin ||
+        origin === payment.origin
+        ? route.continue()
+        : route.abort();
+    });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto("/studio");
+    await assertStudio(page, true);
+    await page.locator('[name="user"]').fill(user.name);
+    await page.locator('[name="pw"]').fill(user.password);
+    const login = await request(page, "/api/login", "POST", () =>
+      page.locator('.auth-form [type="submit"]').click(),
+    );
+    assert.equal(login.status(), 200);
+    await expect(page.locator(".shell")).toBeVisible();
+    assert.equal(page.url(), web + "/studio");
+    await assertStudio(page, true);
+    const original = await context.request.get("/studio?studio_ui=legacy");
+    assert.equal(await original.text(), await originalUI().html("index.html"));
+    const session = (await context.cookies()).find(
+      ({ name }) => name === "fm_session",
+    );
+    assert.ok(session);
+
+    async function read<T>(path: string, workspace?: number): Promise<T> {
+      const headers = workspace
+        ? { "X-Workspace-Id": String(workspace) }
+        : undefined;
+      const response = await context.request.get(path, { headers });
+      assert.equal(response.status(), 200, await response.text());
+      return response.json();
+    }
+    const { workspace_id: workspace } = await read<StudioState>("/api/state");
+    const state = () => read<StudioState>("/api/state", workspace);
+    const studio = `/studio?workspace=${workspace}`;
+    const nav = (name: string) =>
+      page.locator(`nav [data-nav="${name}"]`).click();
+    const available = (await state()).credits.available;
+    await settings(page);
+    await setTab(page, "credits");
+    await page.locator('[data-act="recharge"]').click();
+    await page.locator('#recharge-form input[name="yuan"]').fill("1");
+    const createOrder = await request(
+      page,
+      "/api/recharge/orders",
+      "POST",
+      () => page.locator('#recharge-form [type="submit"]').click(),
+    );
+    assert.equal(createOrder.status(), 200, await createOrder.text());
+    const order = await createOrder.json();
+    assert.equal(order.workspace, workspace);
+    assert.equal(order.state, "pending");
+    const checkout = page.locator("#recharge-pay");
+    await expect(checkout).toBeVisible();
+    const paymentPage = await checkout.getAttribute("href");
+    assert.equal(paymentPage, order.payment_url);
+    await page.goto(paymentPage!);
+    await expect(page.locator(".recharge-status")).toHaveText("已到账");
+    await expect(page.locator(".recharge-order-id")).toHaveText(order.id);
+    await expect(page.locator(".settings-content h2").first()).toHaveText(
+      "积分",
+    );
+    await expect(page).toHaveURL(web + "/studio");
+    await assertStudio(page, true);
+    await payment.verifyCallback(order.id);
+    const recharged = await state();
+    assert.equal(recharged.credits.available, available + 10);
+    assert.deepEqual(
+      recharged.credit_history
+        .filter((entry) => entry.action === "recharge")
+        .map((entry) => entry.amount),
+      [10],
+    );
+    await open(page, "/payments/return", true);
+    await expect(page.locator("#modal h2")).toHaveText("充值记录");
+
+    await open(page, "/studio", true, workspace);
+    await settings(page);
+    await setTab(page, "prices");
+    await page
+      .locator('[data-price="gpt-image-2.6-sunburst|1K|medium"]')
+      .fill("7");
+    const pricing = await request(page, "/api/settings/prices", "PUT", () =>
+      page.locator("#price-form button").click(),
+    );
+    assert.equal(pricing.status(), 200, await pricing.text());
+    const { revision: priceRevision } = await pricing.json();
+    assert.ok(Number.isSafeInteger(priceRevision));
+    await expect(page.locator("#toast")).toHaveText("价格已保存");
+    await nav("home");
+    await page.locator('.composer [data-menu="creation"]').click();
+    await page
+      .locator('#popover [data-act="creation"][data-value="image"]')
+      .click();
+    await page.locator("#prompt").fill(imagePrompt);
+    await expect(page.locator(".composer-credit")).toHaveAttribute(
+      "aria-label",
+      "7 积分",
+    );
+    await expect(page.locator(".generate-button")).toBeEnabled();
+    const submission = await request(page, "/api/image-jobs", "POST", () =>
+      page.locator(".generate-button").click(),
+    );
+    assert.equal(submission.status(), 200, await submission.text());
+    assert.equal(
+      submission.request().postDataJSON().price_revision,
+      priceRevision,
+    );
+    const { id: jobId } = await submission.json();
+    assert.ok(Number.isSafeInteger(jobId) && jobId > 0);
+    await expect
+      .poll(
+        async () =>
+          (await state()).jobs.find((job) => job.id === jobId)?.status,
+        {
+          timeout: apiTimeout,
+        },
+      )
+      .toBe("done");
+    const job = (await state()).jobs.find((job) => job.id === jobId);
+    const result = job?.result;
+    assert.ok(result);
+    const jobVersion = (platform: Platform) =>
+      one(
+        platform.db,
+        "SELECT plugin_id, plugin_version FROM jobs WHERE public_id=$1",
+        [jobId],
+      );
+    const expectedVersion = {
+      plugin_id: imagesText.manifest.id,
+      plugin_version: imagesText.manifest.version,
+    };
+    assert.deepEqual(await jobVersion(platform), expectedVersion);
+    const media = await context.request.get("/media/" + result);
+    assert.equal(media.status(), 200);
+    assert.deepEqual(await media.body(), bytes);
+    assert.deepEqual(providerErrors, []);
+    assert.deepEqual(providerPrompts, [imagePrompt]);
+    await page
+      .locator(`#job-${jobId} .asset-preview`)
+      .click({ timeout: apiTimeout });
+    const image = page.locator(".detail-image");
+    await expect(image).toHaveAttribute("src", "/media/" + result);
+    await expect(image).toHaveJSProperty("naturalWidth", 24);
+    await page.locator('.edit-actions [data-act="edit"]').click();
+    await expect(page.locator(".detail-view.editing #prompt")).toHaveText(
+      imagePrompt,
+    );
+    await nav("home");
+    await page.locator("#prompt").fill(draft);
+
+    const canvas = await context.request.post("/api/canvases", {
+      headers: { Origin: web, "X-Workspace-Id": String(workspace) },
+      data: { title: canvasTitle },
+    });
+    assert.equal(canvas.status(), 200, await canvas.text());
+    const { id: canvasId } = await canvas.json();
+    const canvasPath = "/api/canvases/" + canvasId;
+    const document = () =>
+      read<{ document: { nodes: { text?: string }[] } }>(canvasPath, workspace);
+    await nav("chat");
+    const edit = page.getByRole("textbox", { name: "发送消息" });
+    await edit.fill("把本地回复放入画布");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    const assistant = page.locator(".fm-chat-message.assistant").last();
+    await expect(assistant.locator(".fm-chat-prose")).toHaveText(chatReply, {
+      timeout: apiTimeout,
+    });
+    await edit.fill(chatDraft);
+    await assistant.getByRole("button", { name: "放入画布" }).click();
+    const picker = page.getByRole("region", { name: "放入画布" });
+    await picker.getByLabel("选择画布").selectOption(canvasId);
+    await picker.getByRole("button", { name: "添加文本节点" }).click();
+    await expect
+      .poll(async () =>
+        (await document()).document.nodes.map((item) => item.text),
+      )
+      .toEqual([chatReply]);
+    await assistant.getByRole("link", { name: "打开画布" }).click();
+    await expect(page).toHaveURL(
+      web + `/canvas/${canvasId}?workspace=${workspace}`,
+    );
+    await expect(page.getByRole("textbox", { name: "画布名称" })).toHaveValue(
+      canvasTitle,
+    );
+    await page.getByRole("link", { name: "返回工作台" }).click();
+    await expect(page).toHaveURL(web + studio);
+    await expect(page.locator("#prompt")).toHaveText(draft);
+    await assertStudio(page, true);
+    await settings(page);
+    for (const [tab, title] of [
+      ["models", "模型管理"],
+      ["prices", "生成定价"],
+      ["creditAdmin", "积分管理"],
+      ["openai", "OpenAI"],
+      ["chatService", "对话服务"],
+      ["storage", "存储空间"],
+    ]) {
+      await setTab(page, tab);
+      await expect(page.locator(".settings-content h2")).toHaveText(title);
+      await expect(page).toHaveURL(web + studio);
+    }
+    const savedCanvas = await document();
+    const before = await state();
+    const jobEntries = before.credit_history.filter(
+      (entry) => entry.job === jobId,
+    );
+    assert.deepEqual(
+      jobEntries.map((entry) => entry.action),
+      ["spend", "reserve"],
+    );
+    assert.deepEqual(
+      jobEntries.map((entry) => entry.amount),
+      [7, 7],
+    );
+    assert.equal(before.credits.reserved, 0);
+    assert.deepEqual(errors, []);
+    console.log(
+      "Verified Chromium default login, React payment return and one recharge, generation, asset backfill, chat-to-canvas, settings and ledger through the normal launcher",
+    );
+    return {
+      close,
+      async verifyRestarted(platform: Platform) {
+        await page.reload();
+        await expect(page.locator("#prompt")).toHaveText(draft);
+        await nav("chat");
+        await expect(edit).toHaveValue(chatDraft);
+        await expect(assistant.locator(".fm-chat-prose")).toHaveText(chatReply);
+        const after = await state();
+        assert.deepEqual(after.credits, before.credits);
+        assert.deepEqual(after.credit_history, before.credit_history);
+        assert.deepEqual(await document(), savedCanvas);
+        assert.deepEqual(
+          after.jobs.find((item) => item.id === jobId),
+          job,
+        );
+        assert.deepEqual(await jobVersion(platform), expectedVersion);
+        assert.deepEqual(
+          await (await context.request.get("/media/" + result)).body(),
+          bytes,
+        );
+        assert.deepEqual(
+          (await context.cookies()).find(({ name }) => name === "fm_session"),
+          session,
+        );
+        assert.deepEqual(providerPrompts, [imagePrompt]);
+        assert.deepEqual(providerErrors, []);
+        assert.deepEqual(errors, []);
+        console.log(
+          "Verified Chromium session, both drafts, chat, canvas, generated asset and ledger after PostgreSQL, Redis and launcher restart",
+        );
+      },
+    };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}

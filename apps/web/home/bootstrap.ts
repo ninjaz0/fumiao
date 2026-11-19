@@ -31,7 +31,8 @@ export function initializeHomepage({
     if (e.key === storageKey || e.key === null) apply(e.newValue);
   });
   if (!homepage) return;
-  const forward = (hash: string) => {
+  const forward = () => {
+    const hash = location.hash;
     if (
       hash === "#login" ||
       hash === "#register" ||
@@ -39,15 +40,8 @@ export function initializeHomepage({
     )
       location.replace("/studio" + location.search + hash);
   };
-  forward(location.hash);
-  window.addEventListener("hashchange", ({ newURL }) => {
-    // Hydration can restore the fragment-free URL before this event arrives.
-    if (!location.hash && newURL.startsWith(location.href + "#")) {
-      forward(new URL(newURL).hash);
-    } else {
-      forward(location.hash);
-    }
-  });
+  forward();
+  window.addEventListener("hashchange", forward);
 }
 
 declare global {

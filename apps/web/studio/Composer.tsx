@@ -19,7 +19,7 @@ import {
   readPrompt,
   rememberSelection,
 } from "./prompt";
-import { label as modelLabel } from "../../../legacy/pure/canvas/src/flowPicker";
+import { label as modelLabel } from "../canvas-editor/flowPicker";
 import {
   estimateBody,
   activeReferences,

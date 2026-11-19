@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
 import { OriginalState } from "../../packages/original-api/src/state.js";
+import { StudioCatalog } from "../../packages/platform/src/catalog.js";
+import { migrate } from "../../packages/platform/src/db.js";
+import { studioPluginProfile } from "../../packages/platform/src/studio-plugin-profile.js";
 import { databaseFixture } from "../helpers/database.js";
 
 for (const id of ["muse", "flow"]) {
@@ -70,3 +73,29 @@ for (const id of ["muse", "flow"]) {
     },
   );
 }
+
+test("upgrading an existing Fumiao catalog retains its model entries, prices and revision", async () => {
+  const f = await databaseFixture("032_quarantine_retired_flow_sources.sql");
+  try {
+    const { registry } = f.p;
+    await registry.installBuiltins(f.db, true);
+    const catalog = new StudioCatalog(f.db);
+    const models = await catalog.catalog(f.db);
+    const initial = await catalog.prices();
+    const values = Object.fromEntries(
+      initial.items.map(({ key, amount }) => [key, amount]),
+    );
+    values[initial.items[0].key] = 734;
+    const prices = await f.db.transaction((sql) =>
+      catalog.savePrices(sql, values, initial.revision),
+    );
+
+    await migrate(f.db);
+    await registry.initializeStudio(f.db, false);
+    assert.equal(await studioPluginProfile(f.db), "compatible");
+    assert.deepEqual(await catalog.catalog(f.db), models);
+    assert.deepEqual(await catalog.prices(), prices);
+  } finally {
+    await f.cleanup();
+  }
+});

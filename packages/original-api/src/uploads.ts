@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Request, Response } from "express";
 import type { Actor, Platform } from "../../platform/src/platform.js";
-import { one, transactionCommitted, type Sql } from "../../platform/src/db.js";
+import { one, type Sql } from "../../platform/src/db.js";
 import { DomainError, requireValue } from "../../platform/src/security.js";
 import {
   imageImporter,
@@ -13,11 +13,7 @@ import {
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
 import { OriginalMedia } from "./media.js";
 import { discardAvatar } from "./avatar-storage.js";
-import {
-  capacity,
-  capacityMessage,
-  isCapacityRejection,
-} from "../../platform/src/capacity.js";
+import { capacity } from "../../platform/src/capacity.js";
 
 export async function receive(req: Request, directory: string, limit: number) {
   const length = req.headers["content-length"] || "";
@@ -142,10 +138,8 @@ export class OriginalUploads {
       requireValue(
         Number(disk.bavail) * Number(disk.bsize) >= info.size + (1 << 30),
         507,
-        capacityMessage,
+        "空间不足，请先清理素材或作品",
       );
-      const result = { id: key, ...info };
-      let publicationXid: string | undefined;
       try {
         await this.p.storage.put(id, await readFile(file), info.mime);
         await this.p.db.transaction(async (sql) => {
@@ -155,8 +149,8 @@ export class OriginalUploads {
             req,
           );
           const stored = await this.p.storage.stat(id);
-          const publication = await sql.query<{ xid: string }>(
-            "INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,metadata,original_kind,object_modified) VALUES($1,$2,$3,$4,$9,$5,$6,'ready',$7,'ref',$8) RETURNING pg_current_xact_id()::text AS xid",
+          await sql.query(
+            "INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,metadata,original_kind,object_modified) VALUES($1,$2,$3,$4,$9,$5,$6,'ready',$7,'ref',$8)",
             [
               id,
               key,
@@ -178,22 +172,14 @@ export class OriginalUploads {
               "INSERT INTO asset_provenance(asset_id,source_id,source_public_id,frame_seconds) VALUES($1,$2,$3,$4)",
               [id, provenance.id, provenance.key, provenance.seconds],
             );
-          // From here the driver can send COMMIT even if its reply never arrives.
-          publicationXid = publication.rows[0].xid;
         });
       } catch (error) {
-        const quotaRejected = isCapacityRejection(error);
-        if (
-          publicationXid &&
-          !quotaRejected &&
-          (await transactionCommitted(this.p.db, publicationXid, error))
-        )
-          return result;
         await this.p.storage.remove(id);
-        if (quotaRejected) throw new DomainError(507, capacityMessage);
+        if (["P1001", "P1002"].includes((error as any).code))
+          throw new DomainError(507, "空间不足，请先清理素材或作品");
         throw error;
       }
-      return result;
+      return { id: key, ...info };
     });
   }
   async avatar(user: Actor, req: Request, res: Response) {
@@ -201,24 +187,19 @@ export class OriginalUploads {
       const key = randomUUID().replaceAll("-", ""),
         object = "avatar-" + randomUUID(),
         bytes = await readFile(file);
-      let publication:
-        | {
-            xid: string;
-            previous: string;
-            profile: ReturnType<OriginalIdentity["profile"]>;
-          }
-        | undefined;
-      let saved;
+      let previous = "",
+        result;
       try {
         await this.p.storage.put(object, bytes, "image/webp");
         const stored = await this.p.storage.stat(object);
-        saved = await this.p.db.transaction(async (sql) => {
+        result = await this.p.db.transaction(async (sql) => {
           const row = await one(
             sql,
             "SELECT * FROM users WHERE id=$1 AND active=true AND deleted_at IS NULL FOR UPDATE",
             [user.id],
           );
           requireValue(row, 401, "请重新登录");
+          previous = row.avatar;
           await sql.query(
             "INSERT INTO avatar_objects(public_id,object_key,size,modified,sha256) VALUES($1,$2,$3,$4,$5)",
             [
@@ -229,30 +210,21 @@ export class OriginalUploads {
               createHash("sha256").update(bytes).digest("hex"),
             ],
           );
-          const avatar = "upload:" + key;
-          const updated = await sql.query<{ xid: string }>(
-            "UPDATE users SET avatar=$2 WHERE id=$1 RETURNING pg_current_xact_id()::text AS xid",
-            [user.id, avatar],
-          );
-          publication = {
-            xid: updated.rows[0].xid,
-            previous: row.avatar,
-            profile: this.identity.profile({ ...row, avatar } as OriginalActor),
-          };
-          return publication;
+          await sql.query("UPDATE users SET avatar=$2 WHERE id=$1", [
+            user.id,
+            "upload:" + key,
+          ]);
+          return this.identity.profile({
+            ...row,
+            avatar: "upload:" + key,
+          } as OriginalActor);
         });
       } catch (error) {
-        if (
-          !publication ||
-          !(await transactionCommitted(this.p.db, publication.xid, error))
-        ) {
-          await this.p.storage.remove(object);
-          throw error;
-        }
-        saved = publication;
+        await this.p.storage.remove(object);
+        throw error;
       }
-      await discardAvatar(this.p, saved.previous);
-      return saved.profile;
+      await discardAvatar(this.p, previous);
+      return result;
     });
   }
 }

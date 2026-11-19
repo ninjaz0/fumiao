@@ -19,7 +19,7 @@ python3 plugins/gpu/worker/worker.py \
 
 使用 `1.3.0` 及以上队列能力时，另加 `--capabilities /path/to/verified-capabilities.json`，声明该机器实际支持的模型、工作流和采样步数。原生 H3 要求 `h3-v6-native-inputs-turbo4`；文件结构见 [能力声明](../../docs/NATIVE_GPU.md#激活与节点声明)。未声明就绪能力的节点不会领取这些版本的任务。
 
-`render-local.py` 连接已经完成模型安装和推理服务配置的运行时。设置 `FUMIAO_GPU_RUNTIME=/absolute/path/to/agent`，其中需有 `render.py`、`breeze_adapter.py`、`engine/` 及固定模型资产。可以沿用旧节点的已安装运行时；源码归档在 `legacy/pure/agent/`，不等同于已经下载好模型的运行环境。视频进程的 Python 可通过 `H3_PYTHON` 指定。
+`render-local.py` 连接已经完成模型安装和推理服务配置的运行时。设置 `FUMIAO_GPU_RUNTIME=/absolute/path/to/agent`，其中需有 `render.py`、`breeze_adapter.py`、`engine/` 及固定模型资产。可以沿用旧节点的已安装运行时；普通配对使用 `plugins/gpu/distribution/` 的固定安装包，模型权重需另行配置。视频进程的 Python 可通过 `H3_PYTHON` 指定。
 
 Breeze 运行时需要其既有隔离环境和固定资产。此桥接器不负责自动下载数十 GB 模型、安装驱动或恢复桌面客户端的安装界面。
 
@@ -44,4 +44,4 @@ Breeze 运行时需要其既有隔离环境和固定资产。此桥接器不负�
 
 结果必须位于任务目录内。执行器本地上限为 128 MiB；插件 `1.5.0` 的服务端成片上限为 64 MiB，并严格验证原生输入指纹、采样报告、摘要、编码、尺寸和完整解码，再完成任务和积分结算。运行器退出异常或节点断线时保留执行记录，平台转为待核对，避免盲目重复生成。
 
-插件 `1.5.0` 与当前桥接器覆盖 H3 文生视频、普通参考图、首尾帧、视频/音频原生参考及 Breeze 文生语音。原生成 HTTP、状态、原节点收益、桌面/Colab 和并行资源调度仍待迁移；默认工作台未切换。能力声明、回执与验收范围见 [原生 GPU 迁移](../../docs/NATIVE_GPU.md)。
+插件 `1.5.0` 与当前桥接器覆盖 H3 文生视频、普通参考图、首尾帧、视频/音频原生参考及 Breeze 文生语音。节点能力与回执要求见 [GPU 节点与生成参数](../../docs/NATIVE_GPU.md)。
