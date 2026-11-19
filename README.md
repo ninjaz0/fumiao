@@ -24,6 +24,8 @@ docker compose up -d --wait
 
 ## 本地开发
 
+每个任务可在独立 Git worktree 运行 `python3 scripts/worktree.py up`。脚本创建专属端口、测试账号、数据库、队列和媒体卷，输出本任务的 Studio 地址。运行 `python3 scripts/worktree.py down` 可停止任务环境并保留数据。固定的本机 3000 端口供选定版本验收。分支约定、日志和验收命令见 [AGENTS.md](AGENTS.md)。
+
 使用 Node.js 24、pnpm 10.32.1、PostgreSQL、Redis 和 FFmpeg。图片解码构建需要 CMake 3.20+、Ninja 和 C++ 编译器。先安装依赖，再按[本地工作台配置](docs/STUDIO.md)准备数据库、私有存储和管理员。
 
 ```sh

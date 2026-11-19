@@ -13,6 +13,11 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
 RUN pnpm install --frozen-lockfile
 
+FROM dependencies AS development
+COPY --from=codecs /app/packages/image-import/native/build packages/image-import/native/build
+RUN mkdir -p /app/media /app/apps/web/.next && chmod 700 /app/media && chown -R node:node /app/media /app/apps/web
+USER node
+
 FROM dependencies AS build
 COPY tsconfig.json ./
 COPY apps apps
