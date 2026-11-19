@@ -14,14 +14,27 @@ export async function studioPluginProfile(
   )?.mode;
 }
 
+/** Public model lists exclude removed packages and unconfigured seeds left by
+ * legacy upgrades. Explicit catalogs contain only registered models. */
+export async function listedStudioCatalog(sql: Sql) {
+  if (!(await hasStudioPackages(sql))) return "studio_catalog";
+  return `(SELECT c.* FROM studio_catalog c
+    LEFT JOIN studio_packages p ON p.id=c.plugin_id
+    WHERE COALESCE(p.installed,
+      NOT EXISTS (SELECT 1 FROM studio_plugin_profile WHERE mode='compatible')
+      OR EXISTS (SELECT 1 FROM connections s WHERE s.plugin_id=c.plugin_id
+        AND NOT s.removed AND NOT s.fmworker_resource_driver)
+      OR EXISTS (SELECT 1 FROM plugin_versions v WHERE (v.id,v.version)=(c.plugin_id,c.plugin_version)
+        AND v.endpoint IS NOT NULL)))`;
+}
+
 export async function pairedPluginAvailable(sql: Sql) {
   if (!(await hasStudioPackages(sql))) return true;
   const adapter = await one(
     sql,
-    `SELECT 1 FROM studio_catalog c JOIN plugin_versions v
+    `SELECT 1 FROM ${await listedStudioCatalog(sql)} c JOIN plugin_versions v
     ON (v.id,v.version)=(c.plugin_id,c.plugin_version)
-    LEFT JOIN studio_packages p ON p.id=c.plugin_id
-    WHERE COALESCE(p.installed,true) AND v.manifest->>'mode'='pull' AND v.manifest->'originalState'->'fields' ? 'gpu_models' LIMIT 1`,
+    WHERE v.manifest->>'mode'='pull' AND v.manifest->'originalState'->'fields' ? 'gpu_models' LIMIT 1`,
   );
   return Boolean(adapter) || !(await studioPluginProfile(sql));
 }

@@ -1,4 +1,7 @@
-import { hasStudioPackages } from "./studio-plugin-profile.js";
+import {
+  hasStudioPackages,
+  listedStudioCatalog,
+} from "./studio-plugin-profile.js";
 import type { Database, Sql } from "./db.js";
 import { one } from "./db.js";
 import { requireValue } from "./security.js";
@@ -205,7 +208,7 @@ export class StudioCatalog {
   ): Promise<Record<string, StudioModel["descriptor"] & { hidden: boolean }>> {
     const rows = (
       await sql.query(
-        `SELECT c.* FROM studio_catalog c ${(await hasStudioPackages(sql)) ? "WHERE NOT EXISTS(SELECT 1 FROM studio_packages p WHERE p.id=c.plugin_id AND NOT p.installed)" : ""} ORDER BY position,id`,
+        `SELECT c.* FROM ${await listedStudioCatalog(sql)} c ORDER BY position,id`,
       )
     ).rows;
     return Object.fromEntries(
@@ -271,7 +274,7 @@ export class StudioCatalog {
     return Object.fromEntries(
       (
         await sql.query(
-          `SELECT id,${(await hasStudioPackages(sql)) ? "studio_plugin_accepts(plugin_id) AND" : ""} studio_model_allowed(id,$1) AS enabled FROM studio_catalog ORDER BY position,id`,
+          `SELECT id,${(await hasStudioPackages(sql)) ? "studio_plugin_accepts(plugin_id) AND" : ""} studio_model_allowed(id,$1) AS enabled FROM ${await listedStudioCatalog(sql)} c ORDER BY position,id`,
           [wid],
         )
       ).rows.map((r) => [r.id, r.enabled]),
@@ -281,7 +284,9 @@ export class StudioCatalog {
     // A single statement keeps the amount list and revision in the same snapshot.
     const rows = (
       await sql.query(
-        "SELECT p.*,c.descriptor,g.price_revision FROM studio_policy g LEFT JOIN studio_prices p ON true LEFT JOIN studio_catalog c ON c.id=p.model_id ORDER BY c.price_position,p.position,p.key",
+        `SELECT p.*,c.descriptor,g.price_revision FROM studio_policy g
+         LEFT JOIN (studio_prices p JOIN ${await listedStudioCatalog(sql)} c ON c.id=p.model_id) ON true
+         ORDER BY c.price_position,p.position,p.key`,
       )
     ).rows;
     return {
@@ -312,9 +317,7 @@ export class StudioCatalog {
       409,
       "价格已更新，请刷新后重试",
     );
-    const keys = (await sql.query("SELECT key FROM studio_prices")).rows.map(
-      (r) => r.key,
-    );
+    const keys = (await this.prices(sql)).items.map((price) => price.key);
     requireValue(
       keys.length === Object.keys(values).length &&
         keys.every((key) => Object.hasOwn(values, key)),

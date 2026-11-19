@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import type { Platform } from "../../platform/src/platform.js";
 import { one, type Sql } from "../../platform/src/db.js";
 import { requireValue } from "../../platform/src/security.js";
-import { studioPluginProfile, pairedPluginAvailable } from "../../platform/src/studio-plugin-profile.js";
+import { studioPluginProfile, pairedPluginAvailable, listedStudioCatalog } from "../../platform/src/studio-plugin-profile.js";
 import { StudioCatalog } from "../../platform/src/catalog.js";
 import { QueueForecasts } from "../../platform/src/queue-snapshot.js";
 import { elapsedDetail, type Run } from "../../platform/src/timing-math.js";
@@ -78,6 +78,10 @@ export class OriginalState {
               stamp,
               settings.image_enabled,
             );
+          const listedPolicy = (policy: { revision: number; enabled: Record<string, boolean> }) => ({
+            revision: policy.revision,
+            enabled: Object.fromEntries(Object.entries(policy.enabled).filter(([id]) => Object.hasOwn(models, id))),
+          });
           const nodePage = actor.role === "admin" ? await one(sql,`SELECT p.id,p.version,p.enabled,(SELECT count(*)::int FROM jobs j WHERE j.plugin_id=p.id AND j.state NOT IN ('completed','failed','cancelled')) AS pending,r.package->'settingsPage'->>'title' AS title FROM studio_packages p JOIN studio_package_releases r USING(id,version)
             JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
             WHERE p.installed AND v.manifest->>'mode'='pull' AND r.package ? 'settingsPage' LIMIT 1`) : null;
@@ -119,13 +123,13 @@ export class OriginalState {
             model_forms: Object.fromEntries(
               (
                 await sql.query(
-                  `SELECT c.id, f.forms->c.id AS form FROM studio_catalog c
+                  `SELECT c.id, f.forms->c.id AS form FROM ${await listedStudioCatalog(sql)} c
                JOIN plugin_model_forms f ON f.plugin_id=c.plugin_id AND f.plugin_version=c.plugin_version`,
                 )
               ).rows.map((r) => [r.id, r.form]),
             ),
             model_groups: await catalog.groups(sql),
-            model_policy: await catalog.policy(sql),
+            model_policy: listedPolicy(await catalog.policy(sql)),
             model_access: await catalog.effective(sql, workspace.id),
             credits: await credits.wallet(sql, Number(workspace.public_id)),
             credit_history: await credits.history(
@@ -153,7 +157,7 @@ export class OriginalState {
                 "SELECT id FROM workspaces WHERE public_id=$1",
                 [s.id],
               );
-              policies[String(s.id)] = await catalog.teamPolicy(sql, team.id);
+              policies[String(s.id)] = listedPolicy(await catalog.teamPolicy(sql, team.id));
             }
             Object.assign(out, {
               used: Number(capacity.used),
@@ -188,7 +192,7 @@ export class OriginalState {
   ) {
     const rows = (
       await sql.query(
-        `SELECT DISTINCT v.id,v.version,v.manifest FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE v.manifest->'originalState' IS NOT NULL AND NOT EXISTS(SELECT 1 FROM studio_packages p WHERE p.id=v.id AND NOT p.installed)`,
+        `SELECT DISTINCT v.id,v.version,v.manifest FROM ${await listedStudioCatalog(sql)} c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE v.manifest->'originalState' IS NOT NULL`,
       )
     ).rows;
     const fields: Record<string, unknown> = {},
@@ -242,7 +246,7 @@ export class OriginalState {
     const profile = await studioPluginProfile(sql);
     // The original wire format requires these sections even when their package is absent.
     // Validate each installed adapter above before projecting the empty sections.
-    if (profile === "explicit") {
+    if (profile) {
       const images = Object.entries(catalog).filter(
         ([, m]) => m.kind === "image" && !m.hidden,
       );
