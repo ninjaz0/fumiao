@@ -40,3 +40,22 @@ API_PROTOCOL=original node --env-file=.env.studio-nest --import tsx scripts/boot
 回环复跑使用 `pnpm exec playwright install firefox`、`pnpm build` 和 `pnpm test:studio:https`。需要 `openssl`、NSS `certutil`、PostgreSQL 和 Redis，可用 `STUDIO_CERTUTIL`、`PG_BINDIR`、`REDIS_SERVER` 指定路径。脚本创建临时 Firefox profile，只在该 profile 中导入本次生成的 CA，使用临时私有磁盘和模拟聊天 provider。
 
 同一实例由多处受信任入口访问时，将 `PUBLIC_URL` 设为用户访问的主 HTTPS 源地址，支付回跳使用这个地址。其他入口可在 API 的 `STUDIO_ADDITIONAL_ORIGINS` 中显式指定，例如 `http://localhost:3000`。多个源用逗号分隔，每项包括协议、主机和实际使用的端口。只添加由本实例控制的页面来源。
+
+### 插件注册设置页
+
+可导入的 `.fmplugin.json` 包可选声明 `settingsPages`。管理员确认安装后，这些页面出现在「设置 → 插件设置」。每页使用包 ID 和页 ID 标识，字段值使用字段 ID 保存。升级时保留这三个 ID 即可修改标题或字段标签。已有 GPU 包继续使用 `settingsPage` 声明节点管理面板。只提供模型的包沿用模型目录和定价入口。
+
+以下为包清单中的字段片段：
+
+```json
+{
+  "settingsPages": [{
+    "id": "defaults",
+    "title": "默认导出格式",
+    "view": "fields",
+    "fields": [{ "id": "format", "label": "字幕格式", "options": ["SRT", "WebVTT"] }]
+  }]
+}
+```
+
+字段取值限于声明的选项，首次打开或旧值已不在选项中时使用第一项。设置按已安装插件全站保存，适用于管理员可读的非敏感选项。服务密钥继续通过服务配置保存。插件停用后仍可配置，等待移除期间只读；完成移除时清除该包的页面设置。保存包含包修订号，遇到并发更新时保留本地草稿并提示重新载入。

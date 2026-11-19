@@ -254,10 +254,7 @@ export async function verifyRemoteProvider(
     await call("/api/canvases", { data: { title: "零插件画布" } });
     await page.getByRole("button", { name: "去导入插件" }).click();
     await expect(page.locator(".settings-section h2")).toHaveText("插件");
-    const search = page.getByRole("searchbox", { name: "搜索设置" });
-    await search.fill("插件");
-    await expect(page.locator(".settings-navigation [data-value]")).toHaveText(["插件"]);
-    await search.clear();
+    await expect(page.getByRole("searchbox", { name: "搜索设置" })).toHaveCount(0);
     await expect(
       page.locator('.settings-navigation [data-value="gpu"]'),
     ).toHaveCount(0);

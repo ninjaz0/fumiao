@@ -19,10 +19,22 @@ export function Members({
   open: AdminOpen;
   confirm: AdminConfirm;
 }) {
+  const [query, setQuery] = useState("");
+  const users = state.users ?? [];
+  const term = query.trim().toLowerCase();
+  const visible = users.filter((member) =>
+    (displayName(member) + " " + member.name).toLowerCase().includes(term),
+  );
   return (
     <div className="management-view">
       <div className="page-heading">
-        <h2>成员管理</h2>
+        <div>
+          <h2>成员管理</h2>
+          <small className="muted">
+            共 {users.length} 位成员 · {users.filter((m) => !m.active).length}{" "}
+            位已停用
+          </small>
+        </div>
         <div className="team-add-actions">
           <button
             className="primary"
@@ -43,58 +55,82 @@ export function Members({
           </button>
         </div>
       </div>
-      <div className="list-surface">
-        {state.users?.map((member) => (
+      <input
+        className="member-search"
+        type="search"
+        aria-label="搜索成员"
+        placeholder="搜索昵称或用户名"
+        value={query}
+        onChange={(e) => setQuery(e.currentTarget.value)}
+      />
+      <div className="list-surface members-list">
+        <div className="members-head" aria-hidden="true">
+          <span>成员</span>
+          <span>角色</span>
+          <span>状态</span>
+          <span />
+        </div>
+        {visible.map((member) => (
           <div key={member.id} className="member-row">
             <Avatar member={member} current={false} />
             <div className="member-identity">
               <span className="member-name">{displayName(member)}</span>
-              <small>{member.name + (member.active ? "" : "　已停用")}</small>
+              <small>{member.name}</small>
             </div>
+            <span className="member-role">
+              {member.role === "admin" ? "管理员" : "成员"}
+            </span>
+            <span className="member-state">
+              {member.active ? "启用" : "停用"}
+            </span>
             {member.role === "member" && (
-              <div className="member-actions">
-                <button
-                  className="quiet-button"
-                  data-act="member-password"
-                  data-id={member.id}
-                  onClick={(event) =>
-                    open(
-                      <PasswordDialog
-                        member={member}
-                        request={request}
-                        notify={notify}
-                      />,
-                      event.currentTarget,
-                    )
-                  }
-                >
-                  修改密码
-                </button>
-                <button
-                  className="quiet-button danger"
-                  data-act="delete-member"
-                  data-id={member.id}
-                  onClick={(event) =>
-                    confirm(
-                      "删除 " + displayName(member) + "？",
-                      "该成员无法再登录，作品保留。其接入实例会断开，受影响任务重新排队。",
-                      async () => {
-                        await request(
-                          "/api/users/" + member.id,
-                          undefined,
-                          "DELETE",
-                        );
-                      },
-                      event.currentTarget,
-                    )
-                  }
-                >
-                  删除
-                </button>
-              </div>
+              <details className="member-actions">
+                <summary aria-label={displayName(member) + "的操作"}>⋯</summary>
+                <div className="member-action-list">
+                  <button
+                    className="quiet-button"
+                    data-act="member-password"
+                    data-id={member.id}
+                    onClick={(event) =>
+                      open(
+                        <PasswordDialog
+                          member={member}
+                          request={request}
+                          notify={notify}
+                        />,
+                        event.currentTarget,
+                      )
+                    }
+                  >
+                    修改密码
+                  </button>
+                  <button
+                    className="quiet-button danger"
+                    data-act="delete-member"
+                    data-id={member.id}
+                    onClick={(event) =>
+                      confirm(
+                        "删除 " + displayName(member) + "？",
+                        "该成员无法再登录，作品保留。其接入实例会断开，受影响任务重新排队。",
+                        async () => {
+                          await request(
+                            "/api/users/" + member.id,
+                            undefined,
+                            "DELETE",
+                          );
+                        },
+                        event.currentTarget,
+                      )
+                    }
+                  >
+                    删除
+                  </button>
+                </div>
+              </details>
             )}
           </div>
         ))}
+        {!visible.length && <p className="muted">没有匹配的成员</p>}
       </div>
     </div>
   );
