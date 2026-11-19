@@ -1,10 +1,4 @@
-import {
-  Fragment,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type FormEvent,
-} from "react";
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { openDialogFor } from "./AssetDialog";
 import { CreditLedger } from "./SettingsCredits";
 import type { AdminOpen, AdminSave } from "./settings-admin";
@@ -62,7 +56,7 @@ export function CreditAdmin({
     <section className="settings-section credit-admin">
       <h2>积分管理</h2>
       {accountKinds.map(([kind, label]) => (
-        <Fragment key={kind}>
+        <section className="ledger-card" key={kind}>
           <h3 className="credit-heading">{label}</h3>
           {visibleAccounts
             .filter((account) => account.kind === kind)
@@ -106,7 +100,7 @@ export function CreditAdmin({
                 </button>
               </div>
             ))}
-        </Fragment>
+        </section>
       ))}
     </section>
   );

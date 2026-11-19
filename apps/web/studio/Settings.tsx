@@ -9,7 +9,6 @@ import {
 import type { AdminRequest, AdminOpen, AdminConfirm } from "./settings-admin";
 import { api } from "./api";
 import { openDialogFor } from "./AssetDialog";
-import { Icon } from "./Icon";
 import {
   Credits,
   readOrder,
@@ -62,7 +61,7 @@ function General() {
   return (
     <div className="settings-section">
       <h2>常规</h2>
-      <div className="setting-row">
+      <div className="ledger-card ledger-appearance">
         <div className="setting-label">外观</div>
         <div className="theme-choices" role="radiogroup" aria-label="外观">
           {(["light", "dark"] as const).map((theme) => {
@@ -77,7 +76,7 @@ function General() {
                 className={selected ? "selected" : ""}
                 onClick={() => window.setFumiaoTheme?.(theme)}
               >
-                <Icon name={theme === "dark" ? "moon" : "sun"} />
+                <span className="ledger-theme-swatch" aria-hidden="true" />
                 {theme === "dark" ? "深色" : "浅色"}
               </button>
             );

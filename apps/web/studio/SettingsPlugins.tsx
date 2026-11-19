@@ -382,7 +382,7 @@ export function PluginSettings({
     <section className="settings-section studio-plugins">
       <h2>插件</h2>
       <fieldset disabled={busy}>
-        <details>
+        <details className="ledger-card">
           <summary>安装远程插件</summary>
           <form className="plugin-form" onSubmit={install}>
             <label>
@@ -403,39 +403,41 @@ export function PluginSettings({
         </details>
         {data && plugin && (
           <>
-            <label>
-              模型提供方
-              <select
-                value={keyOf(plugin)}
-                onChange={(e) => {
-                  select(e.target.value);
-                  setEdit("");
-                  setError("");
-                  setMessage("");
-                }}
-              >
-                {data.plugins.map((p) => (
-                  <option key={keyOf(p)} value={keyOf(p)}>
-                    {p.label} · {p.version}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p>
-              {!plugin.installed
-                ? "待安装"
-                : plugin.active
-                  ? "已安装"
-                  : "已注册 · 待切换版本"}
-            </p>
-            <details key={keyOf(plugin)}>
-              <summary>模型目录（{plugin.models.length}）</summary>
-              <ul>
-                {plugin.models.map((name, i) => (
-                  <li key={i}>{name}</li>
-                ))}
-              </ul>
-            </details>
+            <section className="ledger-card plugin-overview">
+              <label>
+                模型提供方
+                <select
+                  value={keyOf(plugin)}
+                  onChange={(e) => {
+                    select(e.target.value);
+                    setEdit("");
+                    setError("");
+                    setMessage("");
+                  }}
+                >
+                  {data.plugins.map((p) => (
+                    <option key={keyOf(p)} value={keyOf(p)}>
+                      {p.label} · {p.version}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p>
+                {!plugin.installed
+                  ? "待安装"
+                  : plugin.active
+                    ? "已安装"
+                    : "已注册 · 待切换版本"}
+              </p>
+              <details key={keyOf(plugin)}>
+                <summary>模型目录（{plugin.models.length}）</summary>
+                <ul>
+                  {plugin.models.map((name, i) => (
+                    <li key={i}>{name}</li>
+                  ))}
+                </ul>
+              </details>
+            </section>
             {!plugin.installed ? (
               <button
                 onClick={() =>
@@ -478,51 +480,55 @@ export function PluginSettings({
                   </button>
                 </div>
                 <h3>提供方连接</h3>
-                {connections.map((c) => (
-                  <div className="plugin-connection" key={c.id}>
-                    <div>
-                      {c.name} · {c.enabled ? "已启用" : "已停用"}
-                    </div>
-                    <div className="plugin-actions">
-                      <button
-                        onClick={() => setEdit(edit === c.id ? "" : c.id)}
-                      >
-                        编辑连接
-                      </button>
-                      <button
-                        onClick={() =>
-                          void run(async () => {
-                            const res = await call<{ ready: boolean }>(
-                              "connections/" + c.id + "/health",
-                              {},
-                            );
-                            if (!res.ready)
-                              throw Error(
-                                "连接尚未就绪，请检查服务地址、凭据或节点状态",
-                              );
-                          }, "连接可用")
-                        }
-                      >
-                        测试连接
-                      </button>
-                    </div>
-                    {edit === c.id && (
-                      <ConnectionForm
-                        key={c.revision}
-                        plugin={plugin}
-                        connection={c}
-                        save={(body) =>
-                          run(async () => {
-                            await call("connections/" + c.id, body, "PUT");
-                            await load();
-                            await refresh();
-                            setEdit("");
-                          }, "连接已保存")
-                        }
-                      />
-                    )}
+                {connections.length > 0 && (
+                  <div className="plugin-connections">
+                    {connections.map((c) => (
+                      <div className="ledger-card plugin-connection" key={c.id}>
+                        <div>
+                          {c.name} · {c.enabled ? "已启用" : "已停用"}
+                        </div>
+                        <div className="plugin-actions">
+                          <button
+                            onClick={() => setEdit(edit === c.id ? "" : c.id)}
+                          >
+                            编辑连接
+                          </button>
+                          <button
+                            onClick={() =>
+                              void run(async () => {
+                                const res = await call<{ ready: boolean }>(
+                                  "connections/" + c.id + "/health",
+                                  {},
+                                );
+                                if (!res.ready)
+                                  throw Error(
+                                    "连接尚未就绪，请检查服务地址、凭据或节点状态",
+                                  );
+                              }, "连接可用")
+                            }
+                          >
+                            测试连接
+                          </button>
+                        </div>
+                        {edit === c.id && (
+                          <ConnectionForm
+                            key={c.revision}
+                            plugin={plugin}
+                            connection={c}
+                            save={(body) =>
+                              run(async () => {
+                                await call("connections/" + c.id, body, "PUT");
+                                await load();
+                                await refresh();
+                                setEdit("");
+                              }, "连接已保存")
+                            }
+                          />
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
                 {(!plugin.singleton || !connections.length) &&
                   (edit === "new" ? (
                     <ConnectionForm

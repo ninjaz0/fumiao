@@ -124,7 +124,7 @@ function PriceSection({
   rows: StudioState["pricing"]["items"];
 }) {
   return (
-    <>
+    <section className="ledger-card">
       <h3 className="credit-heading">{label}</h3>
       {rows.map((price) => (
         <label key={price.key} className="price-row">
@@ -144,6 +144,6 @@ function PriceSection({
           </span>
         </label>
       ))}
-    </>
+    </section>
   );
 }
