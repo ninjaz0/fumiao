@@ -67,6 +67,7 @@ import {
   originalRechargeRequest,
 } from "./original-recharge.js";
 import { OriginalChatController } from "./original-chat.js";
+import { OriginalPluginPagesController, isPluginPageAction } from "./original-plugin-pages.js";
 import { OriginalProviderController } from "./original-providers.js";
 import {
   OriginalNodesController,
@@ -671,6 +672,7 @@ export async function createOriginalApp(p: Platform) {
       OriginalApi,
       OriginalChatController,
       OriginalProviderController,
+      OriginalPluginPagesController,
       OriginalNodesController,
       OriginalAgentController,
       OriginalRechargeController,
@@ -789,6 +791,7 @@ export async function createOriginalApp(p: Platform) {
       return;
     }
     if (
+      isPluginPageAction(req) ||
       (req.method === "POST" &&
         ["/api/assets", "/api/h3/references"].includes(req.path)) ||
       (req.method === "PUT" && req.path === "/api/me/avatar") ||

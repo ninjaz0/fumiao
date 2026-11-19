@@ -10,7 +10,7 @@ import type { Platform, Actor } from "./platform.js";
 import { DomainError, requireValue } from "./security.js";
 import {
   newer,
-  packageFile,
+  parsePackageFile,
   releaseVersion,
   sourceURL,
   StudioPackages,
@@ -129,7 +129,7 @@ async function readSource(
       409,
       "插件包校验失败",
     );
-    const file = packageFile.parse(JSON.parse(raw.toString("utf8")));
+    const file = parsePackageFile(JSON.parse(raw.toString("utf8")));
     requireValue(
       file.id === info.id && file.version === info.version,
       409,

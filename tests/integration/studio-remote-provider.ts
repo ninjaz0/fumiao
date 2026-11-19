@@ -321,6 +321,9 @@ export async function verifyRemoteProvider(
       client: member.request,
     });
 
+    const { contributes } = JSON.parse(await readFile(
+      "plugins/example-extension/example-extension.fmplugin.json", "utf8",
+    ));
     const packageFor = (m: typeof manifest, path: string) => ({
       format: 1,
       id: m.id,
@@ -328,6 +331,7 @@ export async function verifyRemoteProvider(
       version: m.version,
       adapterVersion: m.version,
       remote: { endpoint: endpoint + path, manifest: m },
+      contributes,
       settingsPages: [{
         id: "export", title: "导出设置", view: "fields",
         fields: [{
@@ -538,6 +542,11 @@ export async function verifyRemoteProvider(
     const editor = await context.newPage();
     await editor.goto("/studio");
     await settings(editor);
+    await setTab(editor, `plugin:${manifest.id}:display`);
+    await editor.getByLabel("概览中显示").selectOption("id");
+    const savedDisplay = await request(editor, `/api/plugins/${manifest.id}/pages/display/actions/save`, "POST",
+      () => editor.getByRole("button", { name: "保存设置" }).click());
+    assert.equal(savedDisplay.status(), 200, await savedDisplay.text());
     await setTab(editor, `extension/${manifest.id}/export`);
     const format = editor.getByLabel("字幕格式");
     await format.selectOption("WebVTT");

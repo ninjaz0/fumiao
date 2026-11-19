@@ -9,6 +9,8 @@ import { api } from "./api";
 import { Icon } from "./Icon";
 import { openDialogFor } from "./AssetDialog";
 import type { AdminConfirm, AdminOpen, AdminRequest } from "./settings-admin";
+import type { ActionResult } from "../../../packages/plugin-sdk/src/contributions";
+import type { PluginPageClient } from "./PluginPage";
 import type { StudioState } from "./state";
 
 type Form = {
@@ -59,14 +61,21 @@ function PanelForm({
   form,
   workspace,
   name,
+  pair,
   notify,
 }: {
   form: Form;
   workspace: string;
   name: string;
+  pair?: (name: string, models: FormDataEntryValue[]) => Promise<ActionResult>;
   notify: (s: string) => void;
 }) {
-  const [result, setResult] = useState<{ name: string; command: string }>(),
+  const [result, setResult] = useState<{
+      heading: string;
+      command: string;
+      label?: string;
+      instructions: string;
+    }>(),
     [busy, setBusy] = useState(false);
   const pending = useRef(false),
     command = useRef<HTMLTextAreaElement>(null);
@@ -86,6 +95,21 @@ function PanelForm({
       data = new FormData(element),
       value = String(data.get("node") || "").trim();
     try {
+      if (pair) {
+        const { result } = await pair(
+          value === name ? "" : value,
+          data.getAll("models"),
+        );
+        if (!result) throw Error("插件未返回接入命令");
+        if (openDialogFor(element))
+          setResult({
+            heading: result.title,
+            label: result.label,
+            command: result.value,
+            instructions: result.instructions ?? form.instructions,
+          });
+        return;
+      }
       const reply = await api<{ name: string; command: string }>(
         workspace,
         allowedPath(form.path),
@@ -94,7 +118,12 @@ function PanelForm({
           [form.optionsField]: data.getAll("models"),
         },
       );
-      if (openDialogFor(element)) setResult(reply);
+      if (openDialogFor(element))
+        setResult({
+          heading: form.resultLabel + " · " + reply.name,
+          command: reply.command,
+          instructions: form.instructions,
+        });
     } catch (error) {
       notify((error as Error).message);
     } finally {
@@ -105,13 +134,12 @@ function PanelForm({
   if (result)
     return (
       <>
-        <h2 id="modal-heading">
-          {form.resultLabel} · {result.name}
-        </h2>
-        <p>{form.instructions}</p>
+        <h2 id="modal-heading">{result.heading}</h2>
+        <p>{result.instructions}</p>
         <label className="formlabel">
           <textarea
             className="mono"
+            aria-label={result.label}
             ref={command}
             rows={4}
             readOnly
@@ -167,34 +195,42 @@ export function PluginPanel({
   state,
   open,
   confirm,
+  client,
+  refresh,
   manage,
   notify,
 }: {
   state: StudioState;
   open: AdminOpen;
   confirm: AdminConfirm;
+  client?: PluginPageClient;
+  refresh?: () => Promise<void>;
   manage: AdminRequest;
   notify: (s: string) => void;
 }) {
   const [view, setView] = useState<Panel>(),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const [readVersion, setReadVersion] = useState(0);
   const workspace = String(state.workspace_id),
-    extension = state.gpu_node_settings!;
+    extension = state.gpu_node_settings;
   const input = JSON.stringify({
-    enabled: extension.enabled,
-    pending: extension.pending,
+    enabled: extension?.enabled,
+    pending: extension?.pending,
     nodes: state.nodes,
     models: state.gpu_models,
     jobs: state.jobs.map(({ id, status, node }) => ({ id, status, node })),
   });
   useEffect(() => {
     let active = true;
-    void api<Panel>(
-      workspace,
-      "/api/admin/plugins/" + extension.id + "/panel",
-      JSON.parse(input),
-    ).then(
+    const read = client
+      ? client.view<Panel>()
+      : api<Panel>(
+          workspace,
+          "/api/admin/plugins/" + extension!.id + "/panel",
+          JSON.parse(input),
+        );
+    void read.then(
       (v) => {
         if (active) {
           setError("");
@@ -208,21 +244,46 @@ export function PluginPanel({
     return () => {
       active = false;
     };
-  }, [workspace, extension.id, extension.version, input]);
+  }, [
+    workspace,
+    extension?.id,
+    extension?.version,
+    input,
+    client,
+    readVersion,
+  ]);
   if (error) return <p role="alert">{error}</p>;
   if (!view) return null;
+  async function suggestedName(form: Form) {
+    if (!client)
+      return (
+        await api<{ name: string }>(workspace, allowedPath(form.namePath))
+      ).name;
+    const reply = await client.action("suggest-name", { payload: {} });
+    if (typeof reply.value !== "string") throw Error("插件未返回实例名称");
+    if (reply.refresh) void refresh?.();
+    return reply.value;
+  }
   async function add(button: HTMLButtonElement, form: Form) {
     setBusy(true);
     try {
-      const { name } = await api<{ name: string }>(
-        workspace,
-        allowedPath(form.namePath),
-      );
+      const name = await suggestedName(form);
       if (button.isConnected)
         open(
           <PanelForm
             form={form}
             name={name}
+            pair={
+              client &&
+              (async (name, models) => {
+                const reply = await client.action("pair", {
+                  payload: { name, models },
+                });
+                setReadVersion((version) => version + 1);
+                if (reply.refresh) void refresh?.();
+                return reply;
+              })
+            }
             workspace={workspace}
             notify={notify}
           />,
@@ -279,7 +340,19 @@ export function PluginPanel({
                         a.label + "？",
                         a.summary,
                         async () => {
-                          await manage(allowedPath(a.path), {});
+                          if (client) {
+                            if (
+                              !["drain", "stop", "resume", "remove"].includes(
+                                a.op,
+                              )
+                            )
+                              throw Error("插件操作未授权");
+                            await client.action(a.op, {
+                              target: r.id,
+                              payload: {},
+                            });
+                            setReadVersion((version) => version + 1);
+                          } else await manage(allowedPath(a.path), {});
                         },
                         e.currentTarget,
                       )

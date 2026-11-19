@@ -1,3 +1,4 @@
+import type { PageGroup } from "../../../packages/plugin-sdk/src/contributions";
 import { ChevronDown, Ticket } from "lucide-react";
 import {
   useEffect,
@@ -13,17 +14,19 @@ import type { SettingsTab } from "./settings-tabs";
 import type { StudioState } from "./state";
 import "./settings-ledger.css";
 
-const groups = [
-  { name: "个人", tabs: ["profile", "general", "credits"] },
-  { name: "组织", tabs: ["team", "invites", "workspaces", "storage"] },
-  { name: "计费", tabs: ["creditAdmin", "prices"] },
-  { name: "生成服务", tabs: ["plugins", "models", "openai", "chatService"] },
-];
+const groups = {
+  account: "个人",
+  organization: "组织",
+  billing: "计费",
+  services: "生成服务",
+  extensions: "插件设置",
+} satisfies Record<PageGroup | "extensions", string>;
 
 type Section = readonly [
   SettingsTab,
   string,
   ComponentProps<typeof Icon>["name"],
+  keyof typeof groups,
 ];
 
 export function SettingsShell({
@@ -32,12 +35,14 @@ export function SettingsShell({
   sections,
   navigate,
   children,
+  legacyTab,
 }: {
   state: StudioState;
   tab: SettingsTab;
   sections: readonly Section[];
   navigate: (tab: SettingsTab) => void;
   children: ReactNode;
+  legacyTab?: SettingsTab;
 }) {
   const member = state.me.role !== "admin";
   const [expanded, setExpanded] = useState(false);
@@ -52,18 +57,10 @@ export function SettingsShell({
   const inviteCount = state.invite_codes?.filter(
     ({ enabled, expires }) => enabled && (expires === null || expires > now),
   ).length;
-  const grouped = [
-    ...groups.map(({ name, tabs }) => ({
-      name,
-      sections: tabs.flatMap((key) => sections.filter(([id]) => id === key)),
-    })),
-    {
-      name: "插件设置",
-      sections: sections.filter(
-        ([id]) => id === "gpu" || id.startsWith("extension/"),
-      ),
-    },
-  ];
+  const grouped = Object.entries(groups).map(([group, name]) => ({
+    name,
+    sections: sections.filter((section) => section[3] === group),
+  }));
   useEffect(() => {
     if (expanded)
       panel.current
@@ -115,7 +112,11 @@ export function SettingsShell({
   }
 
   return (
-    <div className="settings-page ledger-settings" data-member={member}>
+    <div
+      className="settings-page ledger-settings"
+      data-member={member}
+      data-plugin-page={tab.startsWith("plugin:") || undefined}
+    >
       <header className="settings-title">
         <h1>设置</h1>
         <span className="settings-space">{workspace?.name}</span>
@@ -161,7 +162,11 @@ export function SettingsShell({
                           ) : (
                             <Icon name={icon} />
                           )}
-                          <span>{label}</span>
+                          <span
+                            data-value={key === legacyTab ? "gpu" : undefined}
+                          >
+                            {label}
+                          </span>
                           {key === "invites" && !!inviteCount && (
                             <span className="ledger-count" aria-hidden="true">
                               {inviteCount}
