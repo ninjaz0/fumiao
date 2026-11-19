@@ -38,3 +38,5 @@ API_PROTOCOL=original node --env-file=.env.studio-nest --import tsx scripts/boot
 将 TLS 反向代理的上游指向 Next 的 HTTP 监听地址。保留公开的 `Host` 和浏览器发来的 `Origin`，由反向代理覆盖转发头，将 `X-Forwarded-Proto` 设为 `https`，并逐段转发 SSE 响应。Nest 的 `PUBLIC_URL` 必须与浏览器 origin 完全一致，包括 `https://` 和非默认端口。直接访问 HTTP 时使用相应的 HTTP origin。启动器会自动为 Next 设置 `LEGACY_API_INTERNAL_URL`。分开启动时，将该变量指向内网的原协议 Nest，Compose 默认使用 `http://api:4000`。
 
 回环复跑使用 `pnpm exec playwright install firefox`、`pnpm build` 和 `pnpm test:studio:https`。需要 `openssl`、NSS `certutil`、PostgreSQL 和 Redis，可用 `STUDIO_CERTUTIL`、`PG_BINDIR`、`REDIS_SERVER` 指定路径。脚本创建临时 Firefox profile，只在该 profile 中导入本次生成的 CA，使用临时私有磁盘和模拟聊天 provider。
+
+同一实例由多处受信任入口访问时，将 `PUBLIC_URL` 设为用户访问的主 HTTPS 源地址，支付回跳使用这个地址。其他入口可在 API 的 `STUDIO_ADDITIONAL_ORIGINS` 中显式指定，例如 `http://localhost:3000`。多个源用逗号分隔，每项包括协议、主机和实际使用的端口。只添加由本实例控制的页面来源。

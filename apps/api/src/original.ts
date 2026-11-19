@@ -1,3 +1,4 @@
+import { additionalBrowserOrigins } from "./browser-origins.js";
 /** Original HTTP contracts backed solely by PostgreSQL. Opt-in until all domains migrate. */
 import "reflect-metadata";
 import { unescape as decodePath } from "node:querystring";
@@ -663,6 +664,7 @@ class OriginalApi {
 export async function createOriginalApp(p: Platform) {
   const identity = new OriginalIdentity(p);
   const site = process.env.PUBLIC_URL || "http://localhost:3000";
+  const aliases = additionalBrowserOrigins();
   const recharge = new OriginalRecharge(identity, site);
   @Module({
     controllers: [
@@ -685,7 +687,12 @@ export async function createOriginalApp(p: Platform) {
   });
   app.use((req: Request, res: Response, next: () => void) => {
     const origin = req.headers.origin;
-    if (!["GET", "HEAD"].includes(req.method) && origin && origin !== site) {
+    if (
+      !["GET", "HEAD"].includes(req.method) &&
+      origin &&
+      origin !== site &&
+      !aliases.has(origin)
+    ) {
       originalJson(res, { detail: "来源无效" }, 403);
       return;
     }
