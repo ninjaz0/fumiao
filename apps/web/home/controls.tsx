@@ -27,7 +27,7 @@ export function useAppearance() {
     const meta = document.querySelector<HTMLMetaElement>(
       'meta[name="theme-color"]',
     );
-    if (meta) meta.content = dark ? "#171918" : "#f8f9fa";
+    if (meta) meta.content = dark ? "#111214" : "#ffffff";
   }, [dark]);
   return dark;
 }

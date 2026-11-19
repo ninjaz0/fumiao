@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAppearance } from "../home/controls";
+import "../theme/auth-console.css";
 
 type Mode = "login" | "register";
 const moon = "M20 14.4A8.4 8.4 0 019.6 4a8.5 8.5 0 1010.4 10.4z";

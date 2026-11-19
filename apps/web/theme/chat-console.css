@@ -1,0 +1,113 @@
+@import "./console-tokens.css";
+
+/* =========================================================================
+ * AI Chat Workspace (.fm-chat) & Asset Packs (.fm-packs)
+ * Shared across Studio (/studio) and Storyboard Canvas Editor (/canvas/:id)
+ * ========================================================================= */
+html:root body .fm-chat {
+  --chat-bg: var(--console-canvas);
+  --chat-surface: var(--console-card);
+  --chat-text: var(--console-text);
+  --chat-muted: var(--console-text-2);
+  --chat-line: var(--console-border);
+  --chat-hover: var(--console-hover);
+  --chat-selected: var(--console-active);
+  --chat-button: var(--console-primary);
+  --chat-on-button: var(--console-primary-fg);
+  --chat-focus: var(--console-accent);
+  font-family: var(--console-font-sans);
+}
+
+html:root body .fm-chat-history {
+  background: var(--console-sidebar);
+  border-right: 1px solid var(--console-border);
+}
+
+html:root body .fm-chat .fm-chat-new {
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
+  font-weight: 500;
+}
+
+html:root body .fm-chat .fm-chat-new:hover:not(:disabled) {
+  background: var(--console-hover);
+  border-color: var(--console-border-strong);
+}
+
+html:root body .fm-chat-header {
+  border-bottom: 1px solid var(--console-border);
+}
+
+html:root body .fm-chat-composer {
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-lg);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-md);
+}
+
+html:root body .fm-chat-composer:focus-within {
+  outline: none;
+  border-color: var(--console-border-strong);
+  box-shadow:
+    0 0 0 2px var(--console-ring),
+    var(--console-shadow-md);
+}
+
+html:root body .fm-chat-starters button {
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
+}
+
+html:root body .fm-chat-starters button:hover:not(:disabled) {
+  background: var(--console-hover);
+  border-color: var(--console-border-strong);
+}
+
+html:root body .fm-chat-model-menu,
+html:root body .fm-chat-context-menu,
+html:root body .fm-chat-canvas-picker {
+  border: 1px solid var(--console-border-strong);
+  border-radius: var(--console-radius);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-lg);
+}
+
+html:root body .fm-chat-bubble {
+  border: 1px solid var(--console-border);
+  border-radius: 14px;
+}
+
+html:root body .fm-chat-prose pre {
+  border: 1px solid var(--console-border);
+  background: var(--console-sidebar);
+}
+
+html:root body .fm-chat-cost {
+  font-family: var(--console-font-mono);
+}
+
+/* Asset Packs Modal (.fm-packs) — higher specificity than :root[data-theme=dark] .fm-packs */
+html:root body .fm-packs,
+html:root[data-theme="dark"] body .fm-packs {
+  --pack-bg: var(--console-card);
+  --pack-fg: var(--console-text);
+  --pack-sub: var(--console-text-2);
+  --pack-line: var(--console-border);
+  --pack-hover: var(--console-hover);
+  font-family: var(--console-font-sans);
+}
+
+html:root body .fm-packs :focus-visible {
+  outline: 2px solid var(--console-accent);
+  outline-offset: 2px;
+}
+
+html:root body .fm-packs .fm-pack-primary {
+  border-radius: var(--console-radius-sm);
+  background: var(--console-primary);
+  color: var(--console-primary-fg);
+}

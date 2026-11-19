@@ -1,0 +1,250 @@
+@import "./console-tokens.css";
+
+/* Public Homepage (/) — Modern Console aesthetic matching Fumiao Studio */
+body .top {
+  background: color-mix(in srgb, var(--console-canvas) 86%, transparent);
+  border-bottom: 1px solid transparent;
+}
+
+body .top.scrolled {
+  border-bottom-color: var(--console-border);
+}
+
+body .nav a,
+body .text-link {
+  border-radius: var(--console-radius-sm);
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+body .button {
+  border-radius: var(--console-radius-sm);
+  font-weight: 550;
+  font-size: 14px;
+  min-height: 40px;
+}
+
+body .button.small {
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+body .button.primary {
+  background: var(--console-primary);
+  color: var(--console-primary-fg);
+  border: 1px solid var(--console-primary);
+}
+
+body .button.primary:hover {
+  opacity: 1;
+  background: var(--console-primary-hover);
+  border-color: var(--console-primary-hover);
+}
+
+body .button.secondary {
+  background: var(--console-card);
+  color: var(--console-text);
+  border: 1px solid var(--console-border);
+  box-shadow: var(--console-shadow-sm);
+}
+
+body .button.secondary:hover {
+  background: var(--console-hover);
+  border-color: var(--console-border-strong);
+}
+
+body .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--console-border);
+  background: var(--console-sidebar);
+  color: var(--console-text-2);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+body .eyebrow::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--console-accent);
+  box-shadow: 0 0 0 3px var(--console-accent-soft);
+}
+
+/* Schematic Canvas Preview */
+body .stage {
+  border-radius: var(--console-radius-lg);
+  border: 1px solid var(--console-border);
+  box-shadow: var(--console-shadow-md);
+  background: var(--console-sidebar)
+    radial-gradient(circle, var(--dot) 1px, transparent 1.3px) 0 0 / 18px 18px;
+}
+
+body .stage-bar {
+  padding: 4px 10px;
+  border-radius: var(--console-radius-sm);
+  background: color-mix(in srgb, var(--console-card) 88%, transparent);
+  border: 1px solid var(--console-border);
+  backdrop-filter: blur(8px);
+}
+
+body .stage-bar .saved {
+  color: var(--console-accent-text);
+  font-weight: 500;
+}
+
+body .node-body {
+  border-radius: var(--console-radius);
+  border: 1px solid var(--console-border);
+  box-shadow: var(--console-shadow-sm);
+}
+
+body .node-image .node-body,
+body .node-video .node-body {
+  outline: none;
+}
+
+body .node-video .node-body {
+  border-color: var(--console-accent);
+  box-shadow:
+    0 0 0 1px var(--console-accent),
+    0 0 0 4px var(--console-accent-soft),
+    var(--console-shadow-md);
+}
+
+body .composer {
+  border-radius: var(--console-radius-lg);
+  border: 1px solid var(--console-border-strong);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-lg);
+}
+
+body .composer-params > span:first-child {
+  color: var(--console-accent-text);
+  background: var(--console-accent-soft);
+  font-weight: 550;
+}
+
+body .composer-params > span:nth-child(2) {
+  background: var(--console-muted);
+  border: 1px solid var(--console-border);
+}
+
+/* Feature Grid & Workflow Panels */
+body .section {
+  border-top: 1px solid var(--console-border);
+}
+
+body .features {
+  border-top: 1px solid var(--console-border);
+}
+
+body .features li {
+  border-right-color: var(--console-border);
+}
+
+body .feature-icon {
+  color: var(--console-accent-text);
+}
+
+body .features .tags {
+  font-family: var(--console-font-mono);
+  font-size: 11.5px;
+}
+
+body .extras,
+body .steps,
+body .steps li,
+body .rules,
+body .rules li,
+body .foot {
+  border-color: var(--console-border);
+}
+
+body .step-no {
+  font-family: var(--console-font-mono);
+  color: var(--console-accent-text);
+  font-weight: 600;
+}
+
+body .shots {
+  border-radius: var(--console-radius-lg);
+  border: 1px solid var(--console-border);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-md);
+}
+
+body .shot-list li,
+body .panel-foot {
+  border-top-color: var(--console-border);
+}
+
+body .shot-no {
+  font-family: var(--console-font-mono);
+}
+
+body .status {
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 550;
+  padding: 2px 9px;
+}
+
+body .status.done {
+  background: var(--console-accent-soft);
+  color: var(--console-accent-text);
+  box-shadow: none;
+}
+
+/* Team Switcher Mockup */
+body .switcher {
+  border-radius: var(--console-radius-lg);
+  border: 1px solid var(--console-border);
+  background: var(--console-sidebar);
+  box-shadow: none;
+}
+
+body .switch-trigger {
+  background: var(--console-card);
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  box-shadow: var(--console-shadow-sm);
+}
+
+body .switch-pop {
+  border-radius: var(--console-radius);
+  border: 1px solid var(--console-border-strong);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-lg);
+}
+
+body .ws-row.current {
+  background: var(--console-active);
+  box-shadow: none;
+}
+
+body .ws-row .tick {
+  color: var(--console-accent-text);
+}
+
+/* Closing CTA Banner */
+html body .closing-row::before,
+html[data-theme="dark"] body .closing-row::before {
+  border-radius: 16px;
+  border: 1px solid var(--console-border);
+  background: linear-gradient(
+    135deg,
+    var(--console-sidebar) 0%,
+    color-mix(in srgb, var(--console-accent-soft) 55%, var(--console-sidebar)) 100%
+  );
+}
+
+body .closing-ribbon {
+  opacity: 0.45;
+}

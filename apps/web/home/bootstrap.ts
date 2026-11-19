@@ -8,7 +8,7 @@ export function initializeHomepage({
   const apply = (value: string | null) => {
     const dark = value === "dark";
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    if (themeColor) themeColor.content = dark ? "#171918" : "#f8f9fa";
+    if (themeColor) themeColor.content = dark ? "#111214" : "#ffffff";
   };
   let saved: string | null = null;
   try {

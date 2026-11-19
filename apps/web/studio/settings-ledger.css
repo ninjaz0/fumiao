@@ -1,3 +1,5 @@
+@import "../theme/console-tokens.css";
+
 /* Modern Studio Console design system for Fumiao Settings & Invite Sheet.
  * Synthesizes Supabase Studio (dark carbon & rail precision), Dub (crisp light cards &
  * workspace switcher), LobeHub (status badges & clarity), Coolify (compact ops grids),
@@ -5,94 +7,11 @@
  */
 .ledger-settings,
 .ledger-invite-sheet {
-  --console-canvas: #ffffff;
-  --console-sidebar: #fafafa;
-  --console-card: #ffffff;
-  --console-card-foot: #fafafa;
-  --console-muted: #f4f4f5;
-  --console-hover: #f0f0f2;
-  --console-active: #ececef;
-  --console-border: #e4e4e7;
-  --console-border-strong: #d4d4d8;
-  --console-text: #09090b;
-  --console-text-2: #52525b;
-  --console-text-3: #71717a;
-  --console-primary: #18181b;
-  --console-primary-hover: #27272a;
-  --console-primary-fg: #fafafa;
-  --console-accent: #10b981;
-  --console-accent-soft: rgba(16, 185, 129, 0.12);
-  --console-accent-text: #047857;
-  --console-info: #3b82f6;
-  --console-info-soft: rgba(59, 130, 246, 0.1);
-  --console-info-text: #1d4ed8;
-  --console-warn: #f59e0b;
-  --console-warn-soft: rgba(245, 158, 11, 0.14);
-  --console-warn-text: #b45309;
-  --console-danger: #ef4444;
-  --console-danger-soft: rgba(239, 68, 68, 0.1);
-  --console-danger-text: #dc2626;
-  --console-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --console-shadow-lg: 0 18px 42px rgba(0, 0, 0, 0.14);
-  --console-ring: rgba(16, 185, 129, 0.28);
-  --console-radius: 10px;
-  --console-radius-sm: 7px;
-
-  /* Map legacy Studio variables inside settings so existing sub-components stay cohesive */
-  --bg: var(--console-canvas);
-  --surface: var(--console-card);
-  --field: var(--console-canvas);
-  --pop: var(--console-card);
-  --line: var(--console-border);
-  --text: var(--console-text);
-  --secondary: var(--console-text-2);
-  --muted: var(--console-text-3);
-  --hover: var(--console-hover);
-  --selected: var(--console-active);
-  --button: var(--console-primary);
-  --on-button: var(--console-primary-fg);
-  --danger: var(--console-danger-text);
   --ledger-rule: var(--console-border-strong);
-  --ledger-sans:
-    Inter, -apple-system, BlinkMacSystemFont, "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --ledger-serif: var(--ledger-sans);
-  --ledger-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --ledger-sans: var(--console-font-sans);
+  --ledger-serif: var(--console-font-sans);
+  --ledger-mono: var(--console-font-mono);
   --ledger-focus: 0 0 0 2px var(--console-canvas), 0 0 0 4px var(--console-accent);
-}
-
-:root[data-theme="dark"] .ledger-settings,
-:root[data-theme="dark"] .ledger-invite-sheet {
-  --console-canvas: #141619;
-  --console-sidebar: #111214;
-  --console-card: #181b1f;
-  --console-card-foot: #14161a;
-  --console-muted: #1f2329;
-  --console-hover: #22262d;
-  --console-active: #262b33;
-  --console-border: #262a31;
-  --console-border-strong: #353b45;
-  --console-text: #f4f5f7;
-  --console-text-2: #a1a8b3;
-  --console-text-3: #6e7684;
-  --console-primary: #f4f5f7;
-  --console-primary-hover: #e2e5ea;
-  --console-primary-fg: #0c0d0e;
-  --console-accent: #3ecf8e;
-  --console-accent-soft: rgba(62, 207, 142, 0.14);
-  --console-accent-text: #3ecf8e;
-  --console-info: #60a5fa;
-  --console-info-soft: rgba(96, 165, 250, 0.14);
-  --console-info-text: #60a5fa;
-  --console-warn: #fbbf24;
-  --console-warn-soft: rgba(251, 191, 36, 0.14);
-  --console-warn-text: #fbbf24;
-  --console-danger: #f87171;
-  --console-danger-soft: rgba(248, 113, 113, 0.14);
-  --console-danger-text: #f87171;
-  --console-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --console-shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.58);
-  --console-ring: rgba(62, 207, 142, 0.34);
 }
 
 .workspace:has(> #view > .ledger-settings) > .topbar {

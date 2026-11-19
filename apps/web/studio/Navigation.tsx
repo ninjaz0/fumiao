@@ -1,4 +1,5 @@
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
+import { Search } from "lucide-react";
 import { Chevron, Icon } from "./Icon";
 import {
   displayName,
@@ -186,6 +187,7 @@ export function MenuContents({
   settings: () => void;
   logout: () => void;
 }) {
+  const [query, setQuery] = useState("");
   const name = displayName(state.me);
   if (kind === "account")
     return (
@@ -210,6 +212,12 @@ export function MenuContents({
       </>
     );
   const teams = state.workspaces.filter((space) => space.kind === "team");
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleTeams = normalizedQuery
+    ? teams.filter((space) =>
+        space.name.toLowerCase().includes(normalizedQuery),
+      )
+    : teams;
   const option = (space: Space) => (
     <button
       key={space.id}
@@ -237,6 +245,18 @@ export function MenuContents({
   );
   return (
     <>
+      {teams.length >= 4 && (
+        <label className="studio-space-search">
+          <Search size={14} strokeWidth={1.9} aria-hidden="true" />
+          <input
+            type="search"
+            value={query}
+            placeholder="搜索团队空间…"
+            aria-label="搜索团队空间"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+      )}
       <div className="space-menu-label">个人空间</div>
       <div role="listbox" aria-label="个人空间">
         {state.workspaces
@@ -244,7 +264,11 @@ export function MenuContents({
           .map(option)}
       </div>
       <div className="space-menu-label space-team-label">
-        <span>团队空间</span>
+        <span>
+          {normalizedQuery
+            ? `团队空间 (${visibleTeams.length}/${teams.length})`
+            : "团队空间"}
+        </span>
         {state.me.role === "admin" && (
           <button
             className="space-create"
@@ -257,10 +281,12 @@ export function MenuContents({
         )}
       </div>
       <div className="space-team-options" role="listbox" aria-label="团队空间">
-        {teams.length ? (
-          teams.map(option)
+        {visibleTeams.length ? (
+          visibleTeams.map(option)
         ) : (
-          <p className="space-empty">尚未加入团队空间</p>
+          <p className="space-empty">
+            {teams.length ? "未找到匹配的团队空间" : "尚未加入团队空间"}
+          </p>
         )}
       </div>
     </>

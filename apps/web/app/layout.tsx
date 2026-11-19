@@ -11,7 +11,7 @@ export const viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#f8f9fa",
+  themeColor: "#ffffff",
 };
 export default async function Layout({
   children,
@@ -42,7 +42,7 @@ export default async function Layout({
         {syncThemeColor && (
           <noscript
             dangerouslySetInnerHTML={{
-              __html: `<meta name="theme-color" content="${canvasPage ? "#f5f5f5" : "#f8f9fa"}">`,
+              __html: `<meta name="theme-color" content="${canvasPage ? "#fafafa" : "#ffffff"}">`,
             }}
           />
         )}

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, workspaceURL, type Studio } from "./api";
 import ProjectList from "./ProjectList";
+import "../theme/canvas-console.css";
 
 export default function CanvasList({ loadingLogo }: { loadingLogo: string }) {
   const [studio, setStudio] = useState<Studio | null>(null);

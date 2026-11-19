@@ -5,6 +5,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { api, initializeWorkspace, setWorkspace, workspaceURL } from "./api";
 import { CanvasWorkspace } from "./CanvasWorkspace";
 import type { Project, Studio } from "./types";
+import "../theme/canvas-console.css";
 
 export default function CanvasEditor({ loadingLogo }: { loadingLogo: string }) {
   const [loaded, setLoaded] = useState<{ project: Project; studio: Studio }>();

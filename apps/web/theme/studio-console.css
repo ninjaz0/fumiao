@@ -1,0 +1,341 @@
+@import "./console-tokens.css";
+@import "./chat-console.css";
+
+/* =========================================================================
+ * Studio Shell, Left Rail, Creation Composer, Library, Queue, Detail & Chat
+ * Unified Modern Console style matching Settings Console
+ * ========================================================================= */
+
+/* 1. Left Studio Rail (Supabase Studio + Dub) */
+body .shell .side {
+  background: var(--console-sidebar);
+  border-right: 1px solid var(--console-border);
+}
+
+body .shell .workspace-switch {
+  min-height: 42px;
+  padding: 6px 8px;
+  border-radius: var(--console-radius-sm);
+  border: 1px solid var(--console-border);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+body .shell .workspace-switch:hover,
+body .shell .workspace-switch[aria-expanded="true"] {
+  background: var(--console-hover);
+  border-color: var(--console-border-strong);
+}
+
+body .shell .side nav {
+  gap: 2px;
+}
+
+body .shell .side nav button {
+  position: relative;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: var(--console-radius-sm);
+  font-size: 13.5px;
+  color: var(--console-text-2);
+  transition:
+    background 100ms ease,
+    color 100ms ease;
+}
+
+body .shell .side nav button:hover {
+  background: var(--console-hover);
+  color: var(--console-text);
+}
+
+body .shell .side nav button.active {
+  background: var(--console-active);
+  color: var(--console-text);
+  font-weight: 550;
+}
+
+body .shell .side nav button.active .icon {
+  color: var(--console-accent-text);
+}
+
+body .shell:not(.collapsed) .side nav button.active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--console-accent);
+}
+
+body .shell .side-bottom {
+  border-top: 1px solid var(--console-border);
+  padding-top: 10px;
+}
+
+body .shell .account {
+  border-radius: var(--console-radius-sm);
+  border: 1px solid transparent;
+}
+
+body .shell .account:hover,
+body .shell .account[aria-expanded="true"] {
+  background: var(--console-hover);
+  border-color: var(--console-border);
+}
+
+/* 2. Workspace Topbar & Live Capacity Indicators */
+body .workspace {
+  background: var(--console-canvas);
+}
+
+body .workspace > .topbar {
+  background: color-mix(in srgb, var(--console-canvas) 90%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--console-border);
+}
+
+body .workspace .status-dot.on {
+  background: var(--console-accent);
+  box-shadow: 0 0 0 3px var(--console-accent-soft);
+}
+
+body .workspace .capacity,
+body .workspace .node-summary {
+  font-family: var(--console-font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 3. Studio Creation Home & Composer (Dub + LobeHub) */
+body .home-view > h1 {
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+body .home-view:before {
+  opacity: 0.35;
+}
+
+html body .composer,
+html[data-theme="dark"] body .composer {
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-lg);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-md);
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+body .composer:focus-within {
+  border-color: var(--console-border-strong);
+  box-shadow:
+    0 0 0 2px var(--console-ring),
+    var(--console-shadow-md);
+}
+
+body .composer.dragging {
+  border-color: var(--console-accent);
+  box-shadow: 0 0 0 3px var(--console-accent-soft);
+}
+
+body .creation-type,
+body .model-name,
+body .parameter-button {
+  border-radius: var(--console-radius-sm);
+  border: 1px solid transparent;
+  font-size: 12.5px;
+  transition:
+    background 110ms ease,
+    border-color 110ms ease;
+}
+
+body .creation-type {
+  background: var(--console-accent-soft);
+  color: var(--console-accent-text);
+  font-weight: 550;
+}
+
+body .creation-type:hover,
+body .creation-type[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--console-accent) 20%, transparent);
+}
+
+body .model-name,
+body .parameter-button {
+  color: var(--console-text-2);
+}
+
+body .model-name:hover,
+body .parameter-button:hover,
+body .model-name[aria-expanded="true"],
+body .parameter-button[aria-expanded="true"] {
+  background: var(--console-hover);
+  border-color: var(--console-border);
+  color: var(--console-text);
+}
+
+body .composer-credit {
+  font-family: var(--console-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+body .generate-button {
+  background: var(--console-primary);
+  color: var(--console-primary-fg);
+  box-shadow: var(--console-shadow-sm);
+  transition:
+    background 120ms ease,
+    transform 100ms ease;
+}
+
+body .generate-button:not(:disabled):hover {
+  background: var(--console-primary-hover);
+  opacity: 1;
+}
+
+/* 4. Popovers, Menus & Searchable Workspace Menu */
+body .popover {
+  border: 1px solid var(--console-border-strong);
+  border-radius: var(--console-radius);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-lg);
+}
+
+body .popover.workspaces {
+  border: 1px solid var(--console-border-strong);
+  padding: 10px;
+}
+
+.studio-space-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 9px;
+  margin-bottom: 8px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-canvas);
+  color: var(--console-text-3);
+}
+
+.studio-space-search:focus-within {
+  border-color: var(--console-border-strong);
+  box-shadow: 0 0 0 2px var(--console-ring);
+}
+
+.studio-space-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--console-text);
+  font-size: 12.5px;
+}
+
+body .popover.workspaces .space-team-options {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+body .popover .menu-item,
+body .popover .space-option {
+  border-radius: var(--console-radius-sm);
+}
+
+body .popover .space-option {
+  min-height: 52px;
+  padding: 8px 10px;
+}
+
+body .popover .space-option .space-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 15px;
+}
+
+body .popover .menu-item:hover,
+body .popover .space-option:hover {
+  background: var(--console-hover);
+}
+
+body .popover .space-option[aria-selected="true"] {
+  background: var(--console-active);
+  box-shadow: inset 0 0 0 1px var(--console-border-strong);
+}
+
+body .popover .space-option[aria-selected="true"] .icon {
+  color: var(--console-accent-text);
+}
+
+/* 5. Library, History, Queue Cards & Asset Detail */
+body .section-head h2,
+body .library-head h1,
+body .queue-head h1 {
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+body .asset-card,
+body .history-card,
+body .queue-card,
+body .job-card {
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
+  transition: border-color 120ms ease;
+}
+
+body .asset-card:hover,
+body .history-card:hover,
+body .queue-card:hover,
+body .job-card:hover {
+  border-color: var(--console-border-strong);
+}
+
+body .library-scopes button,
+body .filter-bar button {
+  border-radius: var(--console-radius-sm);
+}
+
+body .detail-info {
+  background: var(--console-sidebar);
+  border-left: 1px solid var(--console-border);
+}
+
+body .detail-back,
+body .detail-actions button,
+body .detail-paging button {
+  border-radius: var(--console-radius-sm);
+}
+
+/* 6. Modals & Toasts */
+body #modal:not(.ledger-invite-sheet) {
+  border: 1px solid var(--console-border-strong);
+  border-radius: var(--console-radius-lg);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-lg);
+}
+
+body #modal::backdrop {
+  background: rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(2px);
+}
+
+body #toast {
+  border-radius: var(--console-radius-sm);
+  background: var(--console-primary);
+  color: var(--console-primary-fg);
+  border: 1px solid var(--console-border-strong);
+  box-shadow: var(--console-shadow-lg);
+  font-weight: 500;
+}

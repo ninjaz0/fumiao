@@ -1,0 +1,215 @@
+@import "./console-tokens.css";
+@import "./chat-console.css";
+
+/* =========================================================================
+ * Canvas Project List (/canvas) & Storyboard Canvas Editor (/canvas/:id)
+ * Unified Modern Console style (Supabase carbon dark + Dub crisp light)
+ * ========================================================================= */
+html:root {
+  --cv-bg: var(--console-sidebar);
+  --cv-surface: var(--console-card);
+  --cv-text: var(--console-text);
+  --cv-muted: var(--console-text-2);
+  --cv-line: var(--console-border);
+  --cv-hover: var(--console-hover);
+  --cv-selected: var(--console-active);
+  --cv-edge: #64748b;
+  --cv-focus: var(--console-accent);
+  --cv-button: var(--console-primary);
+  --cv-on-button: var(--console-primary-fg);
+  --cv-dot: #d4d4d8;
+  --cv-map-node: #d4d4d8;
+  --cv-map-mask: rgba(250, 250, 250, 0.76);
+  --cv-danger: var(--console-danger-text);
+  --cv-shadow: var(--console-shadow-lg);
+  font-family: var(--console-font-sans);
+}
+
+html:root[data-theme="dark"] {
+  --cv-bg: var(--console-sidebar);
+  --cv-surface: var(--console-card);
+  --cv-text: var(--console-text);
+  --cv-muted: var(--console-text-2);
+  --cv-line: var(--console-border);
+  --cv-hover: var(--console-hover);
+  --cv-selected: var(--console-active);
+  --cv-edge: #64748b;
+  --cv-focus: var(--console-accent);
+  --cv-button: var(--console-primary);
+  --cv-on-button: var(--console-primary-fg);
+  --cv-dot: #262a31;
+  --cv-map-node: #353b45;
+  --cv-map-mask: rgba(17, 18, 20, 0.78);
+  --cv-danger: var(--console-danger-text);
+  --cv-shadow: var(--console-shadow-lg);
+}
+
+/* 1. Canvas Project List (/canvas) */
+body .list-header {
+  background: color-mix(in srgb, var(--console-canvas) 90%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--console-border);
+  height: 58px;
+}
+
+body .project-list-body {
+  max-width: 1200px;
+}
+
+body .project-list-heading h1 {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+body .list-search {
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
+  height: 36px;
+  padding: 0 11px;
+}
+
+body .list-search:focus-within {
+  outline: none;
+  border-color: var(--console-border-strong);
+  box-shadow: 0 0 0 2px var(--console-ring);
+}
+
+body .project-card {
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
+  overflow: hidden;
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease,
+    box-shadow 120ms ease;
+}
+
+body .project-card:hover {
+  border-color: var(--console-border-strong);
+  box-shadow: var(--console-shadow-md);
+  transform: translateY(-1px);
+}
+
+body .project-cover {
+  border-radius: 0;
+  border-bottom: 1px solid var(--console-border);
+  background: var(--console-muted);
+}
+
+body .project-card-info {
+  padding: 12px 14px;
+}
+
+body .project-card-info strong {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+body .project-card-info span {
+  font-family: var(--console-font-mono);
+  font-size: 11.5px;
+}
+
+body .primary {
+  border-radius: var(--console-radius-sm);
+  font-weight: 550;
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+body .secondary {
+  border-radius: var(--console-radius-sm);
+  border: 1px solid var(--console-border);
+  background: var(--console-card);
+  color: var(--console-text);
+  min-height: 34px;
+  padding: 0 13px;
+  font-size: 13px;
+}
+
+body .secondary:hover:not(:disabled) {
+  background: var(--console-hover);
+  border-color: var(--console-border-strong);
+}
+
+/* 2. Storyboard Canvas Editor (/canvas/:id) */
+body .global-tools,
+body .insert-toolbar,
+body .viewport-dock,
+body .selection-toolbar,
+body .multi-toolbar,
+body .save-banner {
+  border: 1px solid var(--console-border);
+  background: color-mix(in srgb, var(--console-card) 94%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--console-shadow-md);
+}
+
+body .node-composer {
+  border: 1px solid var(--console-border-strong);
+  border-radius: var(--console-radius-lg);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-lg);
+}
+
+body .content-node .node-content {
+  border: 1px solid var(--console-border);
+  box-shadow: var(--console-shadow-sm);
+}
+
+body .content-node.selected .node-content {
+  border-color: var(--console-accent);
+  box-shadow:
+    0 0 0 3px var(--console-accent-soft),
+    var(--console-shadow-md);
+}
+
+body .cv-menu {
+  border: 1px solid var(--console-border-strong);
+  border-radius: var(--console-radius);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-lg);
+}
+
+body .cv-dialog {
+  border: 1px solid var(--console-border-strong);
+  border-radius: var(--console-radius-lg);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-lg);
+}
+
+body .cv-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+}
+
+body .node-count,
+body .canvas-credit,
+body .zoom-button {
+  font-family: var(--console-font-mono);
+}
+
+body .react-flow__minimap {
+  border: 1px solid var(--console-border);
+}
+
+body .canvas-empty button {
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+body .canvas-empty button:hover {
+  background: var(--console-hover);
+  border-color: var(--console-border-strong);
+}

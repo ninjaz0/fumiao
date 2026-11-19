@@ -50,6 +50,7 @@ import {
 import { Settings } from "./Settings";
 import { WorkspaceDialog } from "./SettingsWorkspaces";
 import { adminSettingsTabs, type SettingsTab } from "./settings-tabs";
+import "../theme/studio-console.css";
 import {
   addImages,
   assignFrame,
