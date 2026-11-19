@@ -1,3 +1,4 @@
+import type { PluginPageEntry } from "../../../packages/plugin-sdk/src/contributions";
 import { resolve as resolveFlow } from "../canvas-editor/flowPicker";
 import {
   formError,
@@ -134,6 +135,7 @@ export type Job = {
 };
 export type StudioState = {
   studio_plugins?: boolean;
+  plugin_pages?: PluginPageEntry[];
   gpu_node_settings?: {id:string;version:string;title:string;enabled:boolean;pending:number}|null;
   model_forms: Record<string, ModelForm>;
   me: Member;
