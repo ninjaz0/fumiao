@@ -8,11 +8,19 @@
   --ledger-focus: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus);
 }
 
+.workspace:has(> #view > .ledger-settings) > .topbar {
+  display: none;
+}
+
 .settings-page.ledger-settings {
+  --settings-gutter: clamp(8px, 1.5vw, 20px);
+  display: flex;
+  flex-direction: column;
   container: settings-ledger / inline-size;
-  width: calc(100% - 40px);
-  max-width: 1440px;
-  margin: 8px auto 36px;
+  width: calc(100% - 2 * var(--settings-gutter));
+  max-width: none;
+  min-height: calc(100dvh - 2 * var(--settings-gutter));
+  margin: var(--settings-gutter) auto;
   padding: 0;
   color: var(--text);
   background: var(--bg);
@@ -93,6 +101,7 @@
 }
 
 .ledger-settings .settings-layout {
+  flex: 1;
   grid-template-columns: clamp(178px, 22cqi, 236px) minmax(0, 1fr);
   gap: 0;
 }
@@ -818,6 +827,7 @@
   }
   .ledger-settings .settings-layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
   }
   .ledger-settings .settings-content {
     padding: 17px 14px 24px;
@@ -910,13 +920,6 @@
   }
   .ledger-guide li::before {
     grid-row: span 2;
-  }
-}
-
-@media (max-width: 760px) {
-  .settings-page.ledger-settings {
-    width: calc(100% - 16px);
-    margin: 4px auto 24px;
   }
 }
 
