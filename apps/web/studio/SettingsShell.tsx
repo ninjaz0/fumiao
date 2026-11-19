@@ -1,3 +1,4 @@
+import type { PageGroup } from "../../../packages/plugin-sdk/src/contributions";
 import { ChevronDown, Search, Ticket } from "lucide-react";
 import {
   useEffect,
@@ -14,17 +15,18 @@ import type { SettingsTab } from "./settings-tabs";
 import { displayName, type StudioState } from "./state";
 import "./settings-ledger.css";
 
-const groups = [
-  { name: "账户", tabs: ["profile", "general", "credits", "gpu"] },
-  { name: "生成服务", tabs: ["plugins", "models", "openai", "chatService"] },
-  { name: "计费", tabs: ["prices", "creditAdmin"] },
-  { name: "组织", tabs: ["workspaces", "team", "invites", "storage"] },
-];
+const groups = {
+  account: "账户",
+  services: "生成服务",
+  billing: "计费",
+  organization: "组织",
+} satisfies Record<PageGroup, string>;
 
 type Section = readonly [
   SettingsTab,
   string,
   ComponentProps<typeof Icon>["name"],
+  PageGroup,
 ];
 
 export function SettingsShell({
@@ -33,12 +35,14 @@ export function SettingsShell({
   sections,
   navigate,
   children,
+  legacyTab,
 }: {
   state: StudioState;
   tab: SettingsTab;
   sections: readonly Section[];
   navigate: (tab: SettingsTab) => void;
   children: ReactNode;
+  legacyTab?: SettingsTab;
 }) {
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -47,7 +51,6 @@ export function SettingsShell({
   const toggle = useRef<HTMLButtonElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const active = sections.find(([key]) => key === tab);
-  const activeGroup = groups.find(({ tabs }) => tabs.includes(tab));
   const workspace = state.workspaces.find(
     ({ id }) => id === state.workspace_id,
   );
@@ -56,11 +59,11 @@ export function SettingsShell({
     ({ enabled, expires }) => enabled && (expires === null || expires > now),
   ).length;
   const normalized = query.trim().toLowerCase();
-  const filtered = groups.map(({ name, tabs }) => ({
+  const filtered = Object.entries(groups).map(([id, name]) => ({
     name,
     sections: sections.filter(
-      ([key, label]) =>
-        tabs.includes(key) && label.toLowerCase().includes(normalized),
+      ([, label, , group]) =>
+        id === group && label.toLowerCase().includes(normalized),
     ),
   }));
 
@@ -141,13 +144,16 @@ export function SettingsShell({
   }
 
   return (
-    <div className="settings-page ledger-settings">
+    <div
+      className="settings-page ledger-settings"
+      data-plugin-page={tab.startsWith("plugin:") || undefined}
+    >
       <header className="settings-title">
         <div>
           <h1>设置</h1>
           {active && (
             <p className="ledger-breadcrumb">
-              {activeGroup?.name} / <strong>{active[1]}</strong>
+              {groups[active[3]]} / <strong>{active[1]}</strong>
             </p>
           )}
         </div>
@@ -216,7 +222,11 @@ export function SettingsShell({
                           ) : (
                             <Icon name={icon} />
                           )}
-                          <span>{label}</span>
+                          <span
+                            data-value={key === legacyTab ? "gpu" : undefined}
+                          >
+                            {label}
+                          </span>
                           {key === "invites" && !!inviteCount && (
                             <span className="ledger-count" aria-hidden="true">
                               {inviteCount}

@@ -1,0 +1,136 @@
+.plugin-page,
+.plugin-page-dialog,
+.settings-navigation button[data-value^="plugin:"],
+.ledger-settings[data-plugin-page]
+  :is(.ledger-breadcrumb, .ledger-navigation-toggle) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ledger-settings[data-plugin-page] .settings-title > div:first-child {
+  min-width: 0;
+}
+.plugin-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+.plugin-page .page-heading,
+.plugin-page .node-heading,
+.plugin-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.settings-content .plugin-page .page-heading,
+.plugin-page .page-heading h2,
+.plugin-page .ledger-card,
+.plugin-page .plugin-stats {
+  margin: 0;
+}
+.plugin-page h3,
+.plugin-page-form h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+.plugin-page .node-heading h4 {
+  flex: 1 1 8em;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+}
+.plugin-text,
+.plugin-notice,
+.plugin-page .install-detail {
+  white-space: pre-wrap;
+}
+.plugin-page [data-tone="info"] {
+  --tone: var(--blue);
+}
+.plugin-page [data-tone="success"] {
+  --tone: light-dark(#317448, #92cfa4);
+}
+.plugin-page [data-tone="warning"] {
+  --tone: light-dark(#825b19, #e1bd80);
+}
+.plugin-page [data-tone="danger"] {
+  --tone: var(--danger);
+}
+.plugin-page .plugin-notice {
+  padding: 10px 14px;
+  border-inline-start: 3px solid var(--tone, var(--line));
+  border-radius: 4px;
+  background: var(--surface);
+}
+.plugin-page .node-state,
+.plugin-page .ledger-button:not(.ledger-primary) {
+  color: var(--tone, inherit);
+}
+.plugin-page .ledger-primary[data-tone]:not([data-tone="default"]) {
+  border-color: var(--tone);
+  box-shadow: inset 0 -3px var(--tone);
+}
+.plugin-page .plugin-stats,
+.plugin-page .plugin-facts {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr));
+}
+.plugin-page .plugin-stats > div {
+  display: block;
+  grid-column: auto;
+}
+.plugin-stats dd small {
+  display: block;
+  margin-top: 4px;
+}
+.plugin-page-actions {
+  margin-top: 10px;
+}
+.plugin-page-actions > *,
+.plugin-page button,
+.plugin-page-dialog button {
+  max-width: 100%;
+  white-space: normal;
+}
+.plugin-page-form fieldset {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.plugin-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+}
+.plugin-field[data-type="checkbox"] {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+.plugin-field[data-type="checkbox"] input {
+  grid-area: 1 / 1;
+}
+.plugin-field[data-type="checkbox"] label {
+  grid-area: 1 / 2;
+}
+.plugin-field small {
+  grid-column: 1 / -1;
+  color: var(--secondary);
+}
+.plugin-field :is(input:not([type="checkbox"]), textarea, select) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+}
+.plugin-field textarea {
+  resize: vertical;
+}
+.plugin-page-form [role="alert"],
+#modal .plugin-page-dialog [role="alert"] {
+  color: var(--danger);
+}

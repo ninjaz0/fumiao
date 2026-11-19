@@ -1,3 +1,5 @@
+import type { PluginPageEntry } from "../../../packages/plugin-sdk/src/contributions.js";
+
 export const adminSettingsTabs = [
   "plugins",
   "models",
@@ -19,4 +21,27 @@ const settingsTabs = [
   ...adminSettingsTabs,
 ] as const;
 
-export type SettingsTab = (typeof settingsTabs)[number];
+type PluginTab = `plugin:${string}:${string}`;
+export type SettingsTab = (typeof settingsTabs)[number] | PluginTab;
+
+export function pluginTab({ plugin, page }: PluginPageEntry): PluginTab {
+  return `plugin:${plugin}:${page}`;
+}
+
+export function resolvePluginTab(
+  tab: SettingsTab,
+  pages: readonly PluginPageEntry[] | undefined,
+  hasLegacyPanel: boolean,
+): SettingsTab {
+  if (tab === "gpu") {
+    if (!pages && hasLegacyPanel) return "gpu";
+    const first = pages?.find((page) => page.legacy);
+    return first ? pluginTab(first) : "general";
+  }
+  if (
+    tab.startsWith("plugin:") &&
+    !pages?.some((page) => pluginTab(page) === tab)
+  )
+    return "general";
+  return tab;
+}

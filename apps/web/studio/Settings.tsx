@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -20,6 +21,7 @@ import {
 import { AvatarPicker, PasswordDialog, Profile } from "./SettingsProfile";
 import { CreditAdmin } from "./SettingsCreditAdmin";
 import { Invites } from "./SettingsInvites";
+import { PluginPage, pluginPageClient } from "./PluginPage";
 import { PluginPanel } from "./PluginPanel";
 import { Members } from "./SettingsMembers";
 import { ModelSettings, type ModelSettingsPreferences } from "./SettingsModels";
@@ -30,19 +32,19 @@ import { SettingsShell } from "./SettingsShell";
 import { StorageSettings } from "./SettingsStorage";
 import { Workspaces } from "./SettingsWorkspaces";
 import type { Member, Space, StudioState } from "./state";
-import type { SettingsTab } from "./settings-tabs";
+import { pluginTab, resolvePluginTab, type SettingsTab } from "./settings-tabs";
 
 const adminTabs = [
-  ["plugins", "插件", "link"],
-  ["models", "模型管理", "model"],
-  ["prices", "生成定价", "sliders"],
-  ["creditAdmin", "积分管理", "drive"],
-  ["openai", "OpenAI", "picture"],
-  ["chatService", "对话服务", "chat"],
-  ["workspaces", "团队空间", "library"],
-  ["team", "成员管理", "team"],
-  ["invites", "邀请码", "link"],
-  ["storage", "存储空间", "drive"],
+  ["plugins", "插件", "link", "services"],
+  ["models", "模型管理", "model", "services"],
+  ["prices", "生成定价", "sliders", "billing"],
+  ["creditAdmin", "积分管理", "drive", "billing"],
+  ["openai", "OpenAI", "picture", "services"],
+  ["chatService", "对话服务", "chat", "services"],
+  ["workspaces", "团队空间", "library", "organization"],
+  ["team", "成员管理", "team", "organization"],
+  ["invites", "邀请码", "link", "organization"],
+  ["storage", "存储空间", "drive", "organization"],
 ] as const;
 
 function General() {
@@ -89,7 +91,7 @@ function General() {
 
 export function Settings({
   state,
-  tab,
+  tab: requestedTab,
   visit,
   draft,
   modelPreferences,
@@ -207,12 +209,32 @@ export function Settings({
     else void openOrder(returnedOrder, null);
   }, []);
 
+  const pages = state.plugin_pages?.filter(
+    (page) => admin || page.audience === "member",
+  );
+  const legacyPanel = admin && !!state.gpu_node_settings;
+  const tab = resolvePluginTab(requestedTab, pages, legacyPanel);
+  const selected = pages?.find((page) => pluginTab(page) === tab);
+  const legacy = pages?.find((page) => page.legacy);
+  const plugin = selected?.plugin,
+    pageId = selected?.page;
+  const client = useMemo(
+    () =>
+      plugin && pageId
+        ? pluginPageClient(workspace, plugin, pageId)
+        : undefined,
+    [workspace, plugin, pageId],
+  );
+  useEffect(() => {
+    if (requestedTab !== tab) navigate(tab);
+  }, [requestedTab, tab, navigate]);
+
   const sections = [
-    ["profile", "个人资料", "account"],
-    ["general", "常规", "settings"],
-    ["credits", "积分", "drive"],
-    ...(admin && state.gpu_node_settings
-      ? [["gpu", state.gpu_node_settings.title, "gpu"] as const]
+    ["profile", "个人资料", "account", "account"],
+    ["general", "常规", "settings", "account"],
+    ["credits", "积分", "drive", "account"],
+    ...(!pages && legacyPanel && state.gpu_node_settings
+      ? [["gpu", state.gpu_node_settings.title, "gpu", "account"] as const]
       : []),
     ...(admin
       ? adminTabs.filter(([key]) =>
@@ -229,12 +251,16 @@ export function Settings({
                 : true,
         )
       : []),
+    ...(pages ?? []).map(
+      (page) => [pluginTab(page), page.title, page.icon, page.group] as const,
+    ),
   ] as const;
   return (
     <SettingsShell
       state={state}
       tab={tab}
       sections={sections}
+      legacyTab={legacy && pluginTab(legacy)}
       navigate={(key) => {
         ++request.current;
         navigate(key);
@@ -277,13 +303,25 @@ export function Settings({
             notify={notify}
           />
         )}
-        {admin && state.gpu_node_settings && tab === "gpu" && (
+        {admin && ((legacyPanel && tab === "gpu") || selected?.legacy) && (
           <PluginPanel
-            key={`${state.me.id}:${workspace}`}
+            key={`${state.me.id}:${workspace}:${tab}:${selected?.version ?? ""}`}
+            client={client}
+            refresh={refresh}
             state={state}
-            open={open}
+            open={client ? openAdmin : open}
             confirm={confirmAdmin}
             manage={adminRequest}
+            notify={notify}
+          />
+        )}
+        {selected && !selected.legacy && client && (
+          <PluginPage
+            key={`${state.me.id}:${workspace}:${tab}:${selected.version}`}
+            page={selected}
+            client={client}
+            open={openAdmin}
+            refresh={refresh}
             notify={notify}
           />
         )}
