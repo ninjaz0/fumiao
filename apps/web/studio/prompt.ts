@@ -10,23 +10,45 @@ export function readPrompt(
   editor: HTMLElement,
   state: StudioState,
   refs: string[],
+  plain = false,
 ) {
-  function read(node: Node): string {
-    if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
-    if (!(node instanceof HTMLElement)) return "";
+  let text = "";
+  function read(node: Node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += (node.textContent || "").replace(/\r\n?/g, "\n");
+      return;
+    }
+    if (!(node instanceof HTMLElement)) return;
     const id = node.dataset.refid;
-    if (id)
-      return refs.includes(id)
-        ? `<${referenceType(state, id)} ${referenceIndex(state, id, refs)}>`
-        : "";
-    if (node.tagName === "BR") return "\n";
-    const value = Array.from(node.childNodes, read).join("");
-    return ["DIV", "P"].includes(node.tagName) ? value + "\n" : value;
+    if (id) {
+      if (!plain && refs.includes(id))
+        text += `<${referenceType(state, id)} ${referenceIndex(state, id, refs)}>`;
+      return;
+    }
+    if (node.tagName === "BR") {
+      text += "\n";
+      return;
+    }
+    const block = node.tagName === "DIV" || node.tagName === "P";
+    if (block && text && !text.endsWith("\n")) text += "\n";
+    const start = text.length;
+    for (const child of node.childNodes) read(child);
+    if (block && (text.length === start || !text.endsWith("\n")))
+      text += "\n";
   }
-  return Array.from(editor.childNodes, read)
-    .join("")
-    .replace(/\n+$/, "")
-    .replace(/@图片(\d+)/g, "<Picture $1>");
+  for (const child of editor.childNodes) read(child);
+  const output = text.replace(/\n+$/, "");
+  if (plain) return output;
+  const pictureCount = refs.filter(
+    (ref) => referenceType(state, ref) === "Picture",
+  ).length;
+  if (!pictureCount) return output;
+  return output.replace(/@图片(\d+)/g, (match, digits) => {
+    const index = Number(digits);
+    return index >= 1 && index <= pictureCount && String(index) === digits
+      ? `<Picture ${index}>`
+      : match;
+  });
 }
 
 export function createReferenceToken(
@@ -79,7 +101,7 @@ export function paintPrompt(
   state: StudioState,
   refs: string[],
   prompt: string,
-  frames: boolean,
+  plain: boolean,
 ) {
   const nodes = document.createDocumentFragment();
   function appendText(text: string) {
@@ -94,7 +116,7 @@ export function paintPrompt(
     const id = refs.filter((ref) => referenceType(state, ref) === match[1])[
       Number(match[2]) - 1
     ];
-    if (id && !frames) nodes.append(createReferenceToken(state, refs, id));
+    if (id && !plain) nodes.append(createReferenceToken(state, refs, id));
     else appendText(match[0]);
     cursor = match.index + match[0].length;
   }

@@ -255,7 +255,49 @@ type DraftSnapshot = {
 };
 export type DraftSession = DraftSnapshot & {
   suspendedImageDraft: DraftSnapshot | null;
+  suspendedAudioDraft: DraftSnapshot | null;
+  suspendedMediaDraft: DraftSnapshot | null;
 };
+function draftSnapshot(session: DraftSession): DraftSnapshot {
+  return {
+    draft: session.draft,
+    refs: session.refs,
+    parent: session.parent,
+    retainedSeed: session.retainedSeed,
+    submitId: session.submitId,
+  };
+}
+function readSnapshot(state: StudioState, value: unknown): DraftSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Partial<DraftSnapshot>;
+  if (!raw.draft || typeof raw.draft !== "object") return null;
+  const draft = { ...initialDraft, ...raw.draft };
+  if (!state.studio_plugins) {
+    if (!["image", "audio"].includes(draft.kind)) draft.kind = "video";
+    if (!state.images.models[draft.model])
+      draft.model = state.images.default_model;
+    if (!state.video_models[draft.videoModel]) draft.videoModel = H3;
+  }
+  const isAudio = draft.kind === "audio";
+  return {
+    draft: isAudio ? { ...draft, packs: [] } : draft,
+    refs: isAudio
+      ? []
+      : Array.isArray(raw.refs)
+        ? raw.refs.filter(
+            (id): id is string =>
+              typeof id === "string" &&
+              state.assets.some((asset) => asset.id === id),
+          )
+        : [],
+    parent: typeof raw.parent === "number" ? raw.parent : null,
+    retainedSeed: typeof raw.retainedSeed === "number" ? raw.retainedSeed : null,
+    submitId:
+      typeof raw.submitId === "string" && raw.submitId
+        ? raw.submitId
+        : crypto.randomUUID(),
+  };
+}
 export const displayName = (member: Member) => member.nickname || member.name;
 export const mediaURL = (key: string) => "/media/" + key;
 export function modelAvailable(state: StudioState, model: string) {
@@ -297,15 +339,26 @@ export function readDraft(state: StudioState): DraftSession {
       draft.model = state.images.default_model;
     if (!state.video_models[draft.videoModel]) draft.videoModel = H3;
   }
+  const isAudio = draft.kind === "audio";
+  const normalizedDraft =
+    saved?.draft &&
+    state.studio_plugins &&
+    !modelAvailable(state, selectedModel(draft))
+      ? draft
+      : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft));
   return {
-    parent: null,
-    retainedSeed: null,
-    suspendedImageDraft: null,
-    ...saved,
-    refs: (saved?.refs || []).filter((id) =>
-      state.assets.some((asset) => asset.id === id),
-    ),
-    draft: saved?.draft && state.studio_plugins && !modelAvailable(state,selectedModel(draft)) ? draft : normalizeParams(state, saved?.draft ? draft : ensureModel(state,draft)),
+    parent: typeof saved?.parent === "number" ? saved.parent : null,
+    retainedSeed:
+      typeof saved?.retainedSeed === "number" ? saved.retainedSeed : null,
+    suspendedImageDraft: readSnapshot(state, saved?.suspendedImageDraft),
+    suspendedAudioDraft: readSnapshot(state, saved?.suspendedAudioDraft),
+    suspendedMediaDraft: readSnapshot(state, saved?.suspendedMediaDraft),
+    refs: isAudio
+      ? []
+      : (saved?.refs || []).filter((id) =>
+          state.assets.some((asset) => asset.id === id),
+        ),
+    draft: isAudio ? { ...normalizedDraft, packs: [] } : normalizedDraft,
     submitId: saved?.submitId || crypto.randomUUID(),
   };
 }
@@ -384,6 +437,23 @@ export function draftValues(draft: Draft): FormValues {
     seconds: Number(draft.seconds),
   };
 }
+export function seedError(form: ModelForm | undefined, raw: string): string {
+  const value = raw.trim();
+  if (!value) return "";
+  const field = form?.fields.seed;
+  const min = field?.minimum ?? 0;
+  const max = field?.maximum;
+  if (!/^\d+$/.test(value)) return "请输入有效的非负整数";
+  const parsed = Number(value);
+  if (max !== undefined) {
+    if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max)
+      return `随机种子需为 ${min}–${max} 之间的整数`;
+    return "";
+  }
+  if (!Number.isSafeInteger(parsed)) return "请输入有效的非负整数";
+  if (parsed < min) return `随机种子需为不小于 ${min} 的整数`;
+  return "";
+}
 export function normalizeParams(state: StudioState, draft: Draft): Draft {
   const form = modelForm(state, draft);
   const flow = flowSpec(state, selectedModel(draft));
@@ -405,6 +475,7 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
   const values = form
     ? normalizeForm(form, { ...draftValues(draft), ...draft.params })
     : {};
+  const seed = typeof draft.seed === "string" ? draft.seed.trim() : "";
   return {
     ...draft,
     h3: form?.referenceModes ? h3Options(draft.h3) : undefined,
@@ -419,10 +490,146 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
       !!form?.fastSteps &&
       (draft.fast_mode || draft.sampling_steps === form.fastSteps),
     sampling_steps: standardSteps(form, draft.sampling_steps),
-    seed:
-      Number(draft.seed) > (form?.fields.seed?.maximum ?? Infinity)
-        ? ""
-        : draft.seed,
+    seed: seedError(form, seed) ? "" : seed,
+  };
+}
+function ensureCreation(state: StudioState, draft: Draft, kind: Draft["kind"]) {
+  const next = { ...draft, kind };
+  const available = Object.keys(modelsForKind(state, kind)).filter((id) =>
+    modelAvailable(state, id),
+  );
+  return normalizeParams(
+    state,
+    available.includes(selectedModel(next))
+      ? next
+      : chooseModel(next, available[0] || ""),
+  );
+}
+function restoreParent(state: StudioState, saved: DraftSnapshot) {
+  const hasParent =
+    saved.parent !== null && state.jobs.some((job) => job.id === saved.parent);
+  return {
+    parent: hasParent ? saved.parent : null,
+    retainedSeed: hasParent ? saved.retainedSeed : null,
+  };
+}
+export function changeCreation(
+  state: StudioState,
+  session: DraftSession,
+  kind: Draft["kind"],
+): DraftSession {
+  const { draft } = session;
+  if (draft.kind === kind) return session;
+  if (kind === "audio") {
+    const mediaSnapshot = draftSnapshot(session);
+    const savedAudio = session.suspendedAudioDraft;
+    if (savedAudio) {
+      return {
+        ...savedAudio,
+        draft: ensureCreation(
+          state,
+          { ...savedAudio.draft, packs: [] },
+          "audio",
+        ),
+        refs: [],
+        ...restoreParent(state, savedAudio),
+        suspendedImageDraft: session.suspendedImageDraft,
+        suspendedAudioDraft: null,
+        suspendedMediaDraft: mediaSnapshot,
+      };
+    }
+    return {
+      draft: ensureCreation(
+        state,
+        {
+          ...initialDraft,
+          audioModel: draft.audioModel,
+          voiceDescription: draft.voiceDescription,
+          kind: "audio",
+        },
+        "audio",
+      ),
+      refs: [],
+      parent: null,
+      retainedSeed: null,
+      submitId: session.submitId,
+      suspendedImageDraft: session.suspendedImageDraft,
+      suspendedAudioDraft: null,
+      suspendedMediaDraft: mediaSnapshot,
+    };
+  }
+  if (draft.kind === "audio") {
+    const audioSnapshot = draftSnapshot(session);
+    if (kind === "image" && session.suspendedImageDraft) {
+      const saved = session.suspendedImageDraft;
+      return {
+        ...saved,
+        draft: ensureCreation(state, saved.draft, "image"),
+        refs: saved.refs.filter((id) => referenceAsset(state, id)),
+        ...restoreParent(state, saved),
+        suspendedImageDraft: null,
+        suspendedAudioDraft: audioSnapshot,
+        suspendedMediaDraft: null,
+      };
+    }
+    if (session.suspendedMediaDraft) {
+      const saved = session.suspendedMediaDraft;
+      const sameKind = saved.draft.kind === kind;
+      return {
+        ...saved,
+        draft: ensureCreation(state, saved.draft, kind),
+        refs: saved.refs.filter((id) => referenceAsset(state, id)),
+        ...(sameKind
+          ? restoreParent(state, saved)
+          : { parent: null, retainedSeed: null }),
+        suspendedImageDraft: session.suspendedImageDraft,
+        suspendedAudioDraft: audioSnapshot,
+        suspendedMediaDraft: null,
+      };
+    }
+    return {
+      draft: ensureCreation(
+        state,
+        {
+          ...initialDraft,
+          videoModel: draft.videoModel,
+          model: draft.model,
+          ratio: draft.ratio,
+          quality: draft.quality,
+          seconds: draft.seconds,
+          sampling_steps: draft.sampling_steps,
+          fast_mode: draft.fast_mode,
+          imageQuality: draft.imageQuality,
+          resolution: draft.resolution,
+          kind,
+        },
+        kind,
+      ),
+      refs: [],
+      parent: null,
+      retainedSeed: null,
+      submitId: session.submitId,
+      suspendedImageDraft: session.suspendedImageDraft,
+      suspendedAudioDraft: audioSnapshot,
+      suspendedMediaDraft: null,
+    };
+  }
+  if (kind === "image" && session.suspendedImageDraft) {
+    const saved = session.suspendedImageDraft;
+    return {
+      ...saved,
+      refs: saved.refs.filter((id) => referenceAsset(state, id)),
+      ...restoreParent(state, saved),
+      suspendedImageDraft: null,
+      suspendedAudioDraft: session.suspendedAudioDraft,
+      suspendedMediaDraft: null,
+    };
+  }
+  return {
+    ...session,
+    draft: ensureCreation(state, draft, kind),
+    parent: null,
+    retainedSeed: null,
   };
 }
 export function changeFlow(
@@ -473,12 +680,14 @@ function jobH3(job: Job) {
 export const frames = (draft: Draft) =>
   isH3(draft) && draft.h3?.mode === "frames";
 export function activeReferences({ draft, refs }: DraftSession) {
+  if (draft.kind === "audio") return [];
   const { first_frame, last_frame } = h3Options(draft.h3);
   return frames(draft)
     ? [...new Set([first_frame, last_frame].filter((id): id is string => !!id))]
     : refs;
 }
 export function packReferences(session: DraftSession) {
+  if (session.draft.kind === "audio") return [];
   return [
     ...new Set([
       ...activeReferences(session),
@@ -815,14 +1024,25 @@ export function loadJob(
     fast_mode:
       Number(job.sampling_steps) === state.model_forms?.[job.model]?.fastSteps,
   });
+  const wasAudio = session.draft.kind === "audio";
   return {
     ...session,
     draft: ensureModel(state, draft),
-    refs: [...job.refs],
+    refs: audio ? [] : [...job.refs],
     parent: job.id,
     retainedSeed: !state.model_forms?.[job.model]?.fields.seed
       ? null
       : (job.seed ?? null),
+    suspendedAudioDraft: audio
+      ? null
+      : wasAudio
+        ? draftSnapshot(session)
+        : session.suspendedAudioDraft,
+    suspendedMediaDraft: audio
+      ? wasAudio
+        ? session.suspendedMediaDraft
+        : draftSnapshot(session)
+      : null,
   };
 }
 export function generationRequest(
