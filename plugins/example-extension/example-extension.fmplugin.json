@@ -1,0 +1,145 @@
+{
+  "format": 1,
+  "id": "example-extension",
+  "label": "模型目录示例",
+  "version": "1.1.0",
+  "adapterVersion": "1.0.0",
+  "remote": {
+    "endpoint": "http://127.0.0.1:4100",
+    "manifest": {
+      "id": "example-extension",
+      "label": "模型目录示例",
+      "version": "1.0.0",
+      "contractVersion": 1,
+      "mode": "request",
+      "originalSubmission": {
+        "version": 3
+      },
+      "configSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiKey"
+        ],
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true
+          }
+        }
+      },
+      "models": [
+        {
+          "id": "example-extension-image",
+          "label": "示例色卡",
+          "kind": "image",
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {},
+            "x-references": {
+              "max": 0
+            }
+          },
+          "studio": {
+            "order": 1000,
+            "priceOrder": 1000,
+            "descriptor": {
+              "kind": "image",
+              "label": "示例色卡"
+            },
+            "prices": [
+              {
+                "tier": "standard",
+                "label": "标准",
+                "amount": 0,
+                "match": {
+                  "type": "object"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "contributes": {
+    "version": 1,
+    "settings": {
+      "global": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "labelMode"
+        ],
+        "properties": {
+          "labelMode": {
+            "type": "string",
+            "enum": [
+              "name",
+              "id"
+            ],
+            "default": "name"
+          }
+        }
+      },
+      "workspace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "showDisabled"
+        ],
+        "properties": {
+          "showDisabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "migrate": "(values, { scope, from }) => {\n  if (from === \"1.0.0\") {\n    if (scope === \"global\" && typeof values.useModelIds === \"boolean\") {\n      return { labelMode: values.useModelIds ? \"id\" : \"name\" };\n    }\n    if (scope === \"workspace\" && typeof values.includeDisabled === \"boolean\") {\n      return { showDisabled: values.includeDisabled };\n    }\n  }\n  return values;\n}"
+    },
+    "settingsPages": [
+      {
+        "id": "display",
+        "title": "目录显示设置",
+        "icon": "sliders",
+        "group": "services",
+        "order": 100,
+        "audience": "admin",
+        "visibleWhen": "installed",
+        "scopes": [
+          "settings"
+        ],
+        "actions": [
+          {
+            "id": "save",
+            "kind": "settings",
+            "scope": "global"
+          }
+        ],
+        "program": "{\n  view({ settings }) {\n    const { values, revision } = settings.global;\n    return {\n      schema: 1,\n      title: \"目录显示设置\",\n      blocks: [\n        {\n          type: \"form\",\n          id: \"display\",\n          presentation: \"inline\",\n          revision,\n          fields: [\n            {\n              type: \"select\",\n              name: \"labelMode\",\n              label: \"概览中显示\",\n              help: \"此设置对所有工作区生效。\",\n              value: values.labelMode,\n              required: true,\n              options: [\n                { value: \"name\", label: \"模型名称\" },\n                { value: \"id\", label: \"模型 ID\" },\n              ],\n            },\n          ],\n          submit: { action: \"save\", label: \"保存设置\" },\n        },\n      ],\n    };\n  },\n}"
+      },
+      {
+        "id": "overview",
+        "title": "示例模型概览",
+        "icon": "model",
+        "group": "services",
+        "order": 101,
+        "audience": "admin",
+        "visibleWhen": "installed",
+        "scopes": [
+          "settings",
+          "models"
+        ],
+        "actions": [
+          {
+            "id": "toggle-disabled",
+            "kind": "program"
+          }
+        ],
+        "program": "{\n  view({ settings, models }) {\n    const { showDisabled } = settings.workspace.values;\n    const label = showDisabled ? \"隐藏停用模型\" : \"显示停用模型\";\n    return {\n      schema: 1,\n      title: \"示例模型概览\",\n      primary: {\n        action: \"toggle-disabled\",\n        label,\n        confirm: {\n          title: label,\n          summary: \"更改当前工作区的模型列表显示方式。\",\n        },\n      },\n      blocks: [\n        {\n          type: \"list\",\n          empty: \"当前没有符合显示条件的模型。\",\n          rows: models\n            .filter((model) => showDisabled || model.enabled)\n            .map((model) => ({\n              id: model.id,\n              title:\n                settings.global.values.labelMode === \"id\"\n                  ? model.id\n                  : model.label,\n              status: model.enabled ? \"已启用\" : \"已停用\",\n            })),\n        },\n      ],\n    };\n  },\n  action(id, payload, { settings }) {\n    if (id !== \"toggle-disabled\") throw Error(\"未知操作\");\n    const showDisabled = !settings.workspace.values.showDisabled;\n    return {\n      settings: { workspace: { showDisabled } },\n      notice: showDisabled\n        ? \"当前工作区已显示停用模型\"\n        : \"当前工作区已隐藏停用模型\",\n    };\n  },\n}"
+      }
+    ]
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "format": 1,
+  "id": "example-extension",
+  "label": "模型目录示例",
+  "version": "1.1.0",
+  "adapterVersion": "1.0.0",
+  "remote": {
+    "endpoint": "http://127.0.0.1:4100",
+    "manifest": {
+      "id": "example-extension",
+      "label": "模型目录示例",
+      "version": "1.0.0",
+      "contractVersion": 1,
+      "mode": "request",
+      "originalSubmission": { "version": 3 },
+      "configSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["apiKey"],
+        "properties": {
+          "apiKey": { "type": "string", "minLength": 1, "writeOnly": true }
+        }
+      },
+      "models": [
+        {
+          "id": "example-extension-image",
+          "label": "示例色卡",
+          "kind": "image",
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {},
+            "x-references": { "max": 0 }
+          },
+          "studio": {
+            "order": 1000,
+            "priceOrder": 1000,
+            "descriptor": { "kind": "image", "label": "示例色卡" },
+            "prices": [
+              {
+                "tier": "standard",
+                "label": "标准",
+                "amount": 0,
+                "match": { "type": "object" }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "contributes": {
+    "version": 1,
+    "settings": {
+      "global": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["labelMode"],
+        "properties": {
+          "labelMode": {
+            "type": "string",
+            "enum": ["name", "id"],
+            "default": "name"
+          }
+        }
+      },
+      "workspace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["showDisabled"],
+        "properties": {
+          "showDisabled": { "type": "boolean", "default": true }
+        }
+      },
+      "migrateFile": "migrate.js"
+    },
+    "settingsPages": [
+      {
+        "id": "display",
+        "title": "目录显示设置",
+        "icon": "sliders",
+        "group": "services",
+        "order": 100,
+        "audience": "admin",
+        "visibleWhen": "installed",
+        "scopes": ["settings"],
+        "actions": [{ "id": "save", "kind": "settings", "scope": "global" }],
+        "programFile": "display.js"
+      },
+      {
+        "id": "overview",
+        "title": "示例模型概览",
+        "icon": "model",
+        "group": "services",
+        "order": 101,
+        "audience": "admin",
+        "visibleWhen": "installed",
+        "scopes": ["settings", "models"],
+        "actions": [{ "id": "toggle-disabled", "kind": "program" }],
+        "programFile": "overview.js"
+      }
+    ]
+  }
+}

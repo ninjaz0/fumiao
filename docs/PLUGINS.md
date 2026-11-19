@@ -26,6 +26,76 @@
 
 平台每天检查一次。管理员也可以点击「检查更新」，检查记录显示在插件设置中。检测到新版后，卡片显示更新按钮，确认时再次校验下载内容。更新前使用已有服务配置做只读检查。新增模型默认关闭，有定价覆盖的档位沿用原价，可在设置中回到上一版本。管理员可覆盖作者的更新地址并填写独立的只读凭据。Git 服务器使用 Bearer 时填令牌，要求 HTTP Basic 时填 `用户名:只读令牌`。发布到私服时同时上传两个文件；离线环境可手动导入完整包。
 
+## 为 Studio 设置贡献页面
+
+在包顶层添加 `contributes`，安装后即可从 Studio 设置打开插件自己的页面。示例包的「目录显示设置」保存全站偏好，「示例模型概览」按该偏好展示模型，并允许每个工作区单独决定是否显示停用模型。两页都可在包停用时打开，无需配置模型服务。可直接对照[示例源码](../plugins/example-extension/package/release.json)和[可导入的单文件包](../plugins/example-extension/example-extension.fmplugin.json)。
+
+### 声明页面与权限
+
+| `contributes` 字段 | 作者填写的内容 |
+|---|---|
+| `version` | 固定为 `1`。包版本仍由顶层 `version` 指定。 |
+| `settingsPages` | 最多 8 页。每页提供 `id`、`title` 和 QuickJS 对象表达式 `program`。可指定 `icon`、`group`（account / services / billing / organization）、`order`（0–1000）、`audience`、`visibleWhen`、`scopes` 和 `actions`。 |
+| `settings` | `global` 和 `workspace` 各自声明一个对象 JSON Schema，可选 `migrate` 函数表达式。给必填字段提供有效默认值，使首次打开页面即可编辑。密钥放在连接的 `configSchema` 中，插件设置禁止 `writeOnly: true`。 |
+| `hostCapabilities` | 默认空数组。读取节点或调用节点操作需声明 `nodes`，宿主还会检查 pull 模式、节点程序和适配器导出的 `NodeManagement`。 |
+
+页面 ID 在包内唯一，操作 ID 在页内唯一。两者均以小写字母开头，可含小写字母、数字、连字符，最长 32 字符。导航键为 `plugin:<插件 ID>:<页面 ID>`。`visibleWhen: "installed"` 在安装后持续显示到移除完成，`"enabled"` 只在启用时显示。默认受众 `admin`。成员页使用 `member`，只读，并且只对能访问当前工作区的用户开放。
+
+`view(input)` 中的字段由服务端按本页的 `scopes` 组装。只声明页面实际用到的范围。
+
+| scope | 可读取的数据 | 成员页可用 |
+|---|---|---|
+| `plugin` | 本包的标识、名称、版本、启用与移除状态、在途数 | 是 |
+| `models` | 本包模型的 ID、名称、类型和启用状态 | 是 |
+| `services` | 本包连接的 ID、名称和启用状态，连接配置保密 | 否 |
+| `jobs` | 最近最多 100 条任务摘要。成员只可看当前工作区自己的本插件任务；摘要省略提示词、媒体和用户身份 | 是 |
+| `settings` | 本包的全站及当前工作区设置，每个范围为 `{values, revision}`，未声明的范围为 `null` | 是 |
+| `nodes` | 已配对节点及可安装的节点模型，需 `nodes` 能力 | 否 |
+
+每页最多声明 16 个操作，均由管理员执行。安装确认页列出每页标题、受众、读取范围、操作及设置范围。升级时检查新增页面和扩大的权限。宿主在执行时再次校验权限，记录操作者、工作区、目标和结果。
+
+| 操作声明 | 调用与结果 |
+|---|---|
+| `{id, kind: "settings", scope}` | 表单的 `payload` 替换指定范围的完整设置。表单应带上读取时的 `revision`。 |
+| `{id, kind: "program"}` | QuickJS 调用本页的 `action(id, payload, input)`，读取范围与本页视图相同。返回值可含 `notice` 和 `settings: {global?, workspace?}`。宿主对返回的每个范围校验完整值和修订号后写入。示例只返回当前工作区的设置。 |
+| `{id, kind: "host", operation}` | 引用宿主登记的 `nodes.suggestName`、`nodes.pair`、`nodes.drain`、`nodes.stop`、`nodes.resume`、`nodes.remove`。配对传 `{name, models}`，返回可复制命令；管理已有节点时以节点 ID 为 `target`。 |
+
+### 视图块
+
+`view(input)` 返回 `{schema: 1, title, blocks}`，可附 `description` 和主按钮 `primary`。QuickJS 只接收 JSON，可用内存 16 MB，每次执行限时 100 ms，输出上限 2 MB。页面按宿主提供的块组合，样式、对话框和焦点由 Studio 处理。
+
+| 块类型 | 字段与用途 |
+|---|---|
+| `notice` / `text` | `notice` 用 `tone` 和 `text` 给出提示，`text` 块只需 `text`。 |
+| `stats` / `keyValue` | `items` 各项含 `label` 和字符串 `value`；统计项可附 `hint`。 |
+| `list` | 提供 `empty` 空状态文案和 `rows`。每行需 `id`、`title`，可带图标、状态、`tone`、`metadata`、`detail` 和操作按钮。 |
+| `form` | 提供 `id`、`fields`、`submit: {action, label}`。字段支持 text、textarea、number、select、multiselect、checkbox。以 `value` 回填字段，选项用 `{value, label}`。默认内联展示，`presentation: "dialog"` 由按钮的 `opensForm` 引用表单 ID 打开。 |
+
+按钮用 `action` 引用本页声明的操作，提供 `label`，按需附带 `target`、`payload`（最多 4 KB）或 `confirm: {title, summary}`。确认后才执行操作。无效视图返回 422。字段长度、块数和选项上限见 [SDK 视图契约](../packages/plugin-sdk/src/contributions.ts)。
+
+### 设置的保存、升级与回滚
+
+1. **首次读取**。没有记录时，宿主从该范围的 schema 填充默认值并返回 `revision: 0`。
+2. **保存**。宿主验证完整对象（上限 64 KB）并比对修订号。成功后修订号加一；若其他管理员先保存，返回 409。刷新页面取得最新值，再确认要提交的修改。
+3. **升级**。宿主逐条将已保存的值传给目标版本的 `migrate(values, {scope, from, to})`，并按目标 schema 校验。没有迁移函数时直接校验原值。旧值随升级事务保留，任一迁移或校验失败会撤销整个升级。示例将 1.0.0 的全站 `useModelIds` 转为 `labelMode`，工作区的 `includeDisabled` 改名为 `showDisabled`。
+4. **回滚**。恢复目标版本升级前保存的值；没有对应快照时，按目标版本的迁移和校验规则处理。
+5. **停用和移除**。停用保留设置。移除会等待已接单任务结算，完成后清除本插件各范围的设置，重新安装从默认值开始。
+
+### 本地调试示例
+
+在 `plugins/example-extension/package/` 修改声明和程序。仓库打包脚本从 `release.json` 读取贡献声明。`programFile` 和 `migrateFile` 是相对该文件的源码路径，各文件以 `export default` 导出独立表达式。打包后这两个字段分别替换为 `program` 和 `migrate` 字符串。也可以直接在声明中写表达式字符串。
+
+```sh
+pnpm plugins:pack
+pnpm exec tsx --test tests/advanced/example-extension.test.ts
+```
+
+测试读取发行文件，检查更新摘要及贡献契约，用平台的 `loadProgram` 执行两个页面、一轮工作区切换和旧值迁移。查看返回内容时，可在测试中检查 `viewSchema.parse(run("view", input))`、`programActionOutputSchema.parse(run("action", id, {}, input))`。产生的包内含一个 request 模式图片模型；本机需要验证生成时，可启动仓库已有的固定色卡服务（`PLUGIN_KEY=local-demo-key pnpm exec tsx plugins/example-studio/server.ts`），连接的 API 密钥填写相同值。示例 endpoint 的 `127.0.0.1:4100` 按 API 和 worker 所在环境解释，使用容器测试生成时需在打包前改为两者都能访问的服务地址。
+
+在支持扩展 v1 的 Studio 中，以管理员进入 `/studio` → 设置 → 插件，导入[示例包](../plugins/example-extension/example-extension.fmplugin.json)。确认权限后，在「生成服务 → 目录显示设置」选择「模型 ID」并保存。在「示例模型概览」确认行标题变为模型 ID，点击「隐藏停用模型」，切换到另一个首次使用的工作区，那里仍显示停用模型。用两个标签页同时打开全站表单，可以复测过期修订号的 409。
+
+旧 GPU 包继续使用顶层 `settingsPage: {title, render}`。宿主将它映射为「账户」分组的 `nodes` 页，保留旧节点面板、配对操作和原发行字节。新包使用 `contributes.settingsPages`；同一文件同时声明两种格式会在导入时被拒绝。
+
 ## 边界
 
 业务核心负责登录、租户权限、素材授权、积分、任务状态和持久化。提供方插件负责协议转换、提交、查询与产物描述。插件不能直接修改积分或读取其他工作区的数据。
