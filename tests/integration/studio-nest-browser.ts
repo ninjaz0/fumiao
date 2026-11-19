@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { chromium, expect } from "@playwright/test";
+import { chromium, expect, type Page } from "@playwright/test";
 import sharp from "sharp";
+import { newNode, type Project } from "../../apps/web/canvas-editor/types.js";
 import type { StudioState } from "../../apps/web/studio/state.js";
 import { one } from "../../packages/platform/src/db.js";
 import type { Actor, Platform } from "../../packages/platform/src/platform.js";
@@ -24,6 +25,48 @@ const chatDraft = "重启后恢复未发对话";
 const chatReply = "隔离验收回复";
 const canvasTitle = "隔离工作台画布";
 const apiTimeout = 20_000;
+
+async function dragPastImage(page: Page) {
+  const fixed = page.getByAltText("固定参考图", { exact: true });
+  const moving = page.getByAltText("拖动参考图", { exact: true });
+  for (const image of [fixed, moving])
+    await expect(image).toHaveJSProperty("naturalWidth", 24);
+
+  const original = await fixed.elementHandle();
+  assert.ok(original);
+  const box = await moving.boundingBox();
+  const viewport = page.viewportSize();
+  assert.ok(box && viewport);
+  const y = box.y + box.height / 2;
+  const viewportX = () =>
+    page
+      .locator(".react-flow__viewport")
+      .evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).m41);
+  const startX = await viewportX();
+  const stationary = await fixed.boundingBox();
+  assert.ok(stationary);
+  await page.mouse.move(box.x + box.width / 2, y);
+  await page.mouse.down();
+  try {
+    // Drag along the edge until auto-pan takes the other image out of view.
+    await page.mouse.move(viewport.width - 2, y, { steps: 8 });
+    await expect
+      .poll(viewportX)
+      .toBeLessThan(startX - stationary.x - stationary.width);
+    await page.mouse.move(2, y, { steps: 8 });
+    await expect.poll(viewportX).toBeGreaterThanOrEqual(startX);
+    await page.mouse.move(viewport.width / 2, y);
+    await expect(fixed).toBeInViewport();
+    assert.ok(
+      await original.evaluate((img) => img.isConnected),
+      "drag remounted a loaded canvas image",
+    );
+  } finally {
+    await page.mouse.up();
+  }
+  await expect(fixed).toHaveJSProperty("naturalWidth", 24);
+  assert.ok(await original.evaluate((img) => img.isConnected));
+}
 
 export async function studioBrowser(
   platform: Platform,
@@ -259,8 +302,7 @@ export async function studioBrowser(
     assert.equal(canvas.status(), 200, await canvas.text());
     const { id: canvasId } = await canvas.json();
     const canvasPath = "/api/canvases/" + canvasId;
-    const document = () =>
-      read<{ document: { nodes: { text?: string }[] } }>(canvasPath, workspace);
+    const document = () => read<Project>(canvasPath, workspace);
     await nav("chat");
     const edit = page.getByRole("textbox", { name: "发送消息" });
     await edit.fill("把本地回复放入画布");
@@ -279,6 +321,31 @@ export async function studioBrowser(
         (await document()).document.nodes.map((item) => item.text),
       )
       .toEqual([chatReply]);
+    const headers = { Origin: web, "X-Workspace-Id": String(workspace) };
+    const project = await document();
+    for (const [i, title] of ["固定参考图", "拖动参考图"].entries()) {
+      const upload = await context.request.post("/api/assets", {
+        headers: { ...headers, "Content-Type": "image/png" },
+        data: bytes,
+      });
+      assert.equal(upload.status(), 200, await upload.text());
+      project.document.nodes.push({
+        ...newNode("image", i === 0 ? -150 : 430, 190, i + 1),
+        title,
+        width: 200,
+        height: 160,
+        media_id: (await upload.json()).id,
+      });
+    }
+    const seeded = await context.request.put(canvasPath + "/document", {
+      headers,
+      data: {
+        title: canvasTitle,
+        expected_revision: project.revision,
+        document: project.document,
+      },
+    });
+    assert.equal(seeded.status(), 200, await seeded.text());
     await assistant.getByRole("link", { name: "打开画布" }).click();
     await expect(page).toHaveURL(
       web + `/canvas/${canvasId}?workspace=${workspace}`,
@@ -286,6 +353,8 @@ export async function studioBrowser(
     await expect(page.getByRole("textbox", { name: "画布名称" })).toHaveValue(
       canvasTitle,
     );
+    await dragPastImage(page);
+    await expect(page.locator(".save-state")).toHaveText("已保存");
     await page.getByRole("link", { name: "返回工作台" }).click();
     await expect(page).toHaveURL(web + studio);
     await expect(page.locator("#prompt")).toHaveText(draft);
