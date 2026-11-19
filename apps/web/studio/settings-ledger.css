@@ -1107,7 +1107,8 @@
 }
 .ledger-settings[data-member="true"] .settings-navigation section {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 4px 16px;
   border-bottom: 1px solid var(--line);
 }
 .ledger-settings[data-member="true"] .settings-navigation button {
@@ -1267,4 +1268,10 @@
   .member-search {
     font-size: 16px;
   }
+}
+
+.ledger-settings[data-member="true"] .settings-navigation button[data-value^="plugin:"] {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }

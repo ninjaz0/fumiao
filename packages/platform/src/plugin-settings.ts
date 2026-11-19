@@ -1,6 +1,6 @@
 import { loadProgram } from "./plugin-program.js";
 import { one, type Sql } from "./db.js";
-import AjvModule from "ajv";
+import AjvModule, { type ValidateFunction } from "ajv";
 import { DomainError, requireValue } from "./security.js";
 import type {
   SettingsDeclaration,
@@ -17,18 +17,30 @@ import type {
 
 const MAX_BYTES = 64 * 1024;
 const Ajv = AjvModule.default || AjvModule;
-// Package-local validator: releases of one plugin may reuse a schema $id, so
-// compiled settings schemas must never be published to a shared registry.
-const validator = new Ajv({
-  allErrors: true,
-  useDefaults: true,
-  strict: false,
-  addUsedSchema: false,
-});
+// PostgreSQL decodes a fresh schema object for each read. Cache by content,
+// and keep each compiled schema's $id and references in its own Ajv instance.
+const MAX_VALIDATORS = 64;
+const validators = new Map<string, ValidateFunction>();
+
+function settingsValidator(schema: Record<string, unknown>) {
+  const key = JSON.stringify(schema);
+  const cached = validators.get(key);
+  if (cached) return cached;
+  const check = new Ajv({
+    allErrors: true,
+    useDefaults: true,
+    strict: false,
+    addUsedSchema: false,
+  }).compile(schema);
+  if (validators.size >= MAX_VALIDATORS)
+    validators.delete(validators.keys().next().value!);
+  validators.set(key, check);
+  return check;
+}
 
 function validate(schema: Record<string, unknown>, values: unknown) {
   const data = structuredClone(values ?? {});
-  const check = validator.compile(schema);
+  const check = settingsValidator(schema);
   if (!check(data)) return null;
   requireValue(
     JSON.stringify(data).length <= MAX_BYTES,

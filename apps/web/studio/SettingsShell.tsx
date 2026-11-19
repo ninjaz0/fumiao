@@ -112,7 +112,11 @@ export function SettingsShell({
   }
 
   return (
-    <div className="settings-page ledger-settings" data-member={member} data-plugin-page={tab.startsWith("plugin:") || undefined}>
+    <div
+      className="settings-page ledger-settings"
+      data-member={member}
+      data-plugin-page={tab.startsWith("plugin:") || undefined}
+    >
       <header className="settings-title">
         <h1>设置</h1>
         <span className="settings-space">{workspace?.name}</span>
@@ -158,7 +162,11 @@ export function SettingsShell({
                           ) : (
                             <Icon name={icon} />
                           )}
-                          <span data-value={key === legacyTab ? "gpu" : undefined}>{label}</span>
+                          <span
+                            data-value={key === legacyTab ? "gpu" : undefined}
+                          >
+                            {label}
+                          </span>
                           {key === "invites" && !!inviteCount && (
                             <span className="ledger-count" aria-hidden="true">
                               {inviteCount}

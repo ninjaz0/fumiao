@@ -32,9 +32,13 @@ import { SettingsShell } from "./SettingsShell";
 import { StorageSettings } from "./SettingsStorage";
 import { Workspaces } from "./SettingsWorkspaces";
 import type { Member, Space, StudioState } from "./state";
-import { extensionTab, pluginTab, resolvePluginTab, type SettingsTab } from "./settings-tabs";
+import {
+  extensionTab,
+  pluginTab,
+  resolvePluginTab,
+  type SettingsTab,
+} from "./settings-tabs";
 import { PluginSettingsPage } from "./PluginSettingsPage";
-
 
 const adminTabs = [
   ["plugins", "插件", "link", "services"],
@@ -254,14 +258,15 @@ export function Settings({
         )
       : []),
     ...(pages ?? []).map(
-      (page) => [
-        pluginTab(page),
-        titles.filter((title) => title === page.title).length > 1
-          ? page.title + " · " + page.plugin + " (" + page.page + ")"
-          : page.title,
-        page.icon,
-        page.legacy ? "extensions" : page.group,
-      ] as const,
+      (page) =>
+        [
+          pluginTab(page),
+          titles.filter((title) => title === page.title).length > 1
+            ? page.title + " · " + page.plugin + " (" + page.page + ")"
+            : page.title,
+          page.icon,
+          page.legacy ? "extensions" : page.group,
+        ] as const,
     ),
   ] as const;
   const resolved = resolvePluginTab(requestedTab, pages, legacyPanel);

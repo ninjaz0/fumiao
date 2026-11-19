@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
+import { Ajv } from "ajv";
 import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
 import { one } from "../../packages/platform/src/db.js";
 import {
@@ -57,6 +58,28 @@ const schema = (field: string) => ({
   required: [field],
   additionalProperties: false,
   properties: { [field]: { type: "string", default: "默认" } },
+});
+
+test("settings reads reuse compiled schemas, evict old entries and isolate schema IDs", async (t) => {
+  const compile = t.mock.method(Ajv.prototype, "compile");
+  const store = new PluginSettingsStore();
+  const target = {
+    pluginId: "example",
+    scope: "global",
+    workspaceId: null,
+  } as const;
+  const sql = { query: async () => ({ rows: [] }) };
+  const read = async (field: string) => {
+    const result = await store.read(sql, target, {
+      global: { $id: "urn:fumiao:cache-test", ...schema(field) },
+    });
+    assert.deepEqual(result?.values, { [field]: "默认" });
+  };
+  for (let i = 0; i < 100; i++) await read("initial");
+  assert.equal(compile.mock.callCount(), 1);
+  for (let i = 0; i < 64; i++) await read("field" + i);
+  await read("initial");
+  assert.equal(compile.mock.callCount(), 66);
 });
 
 test("preview and import reject conflicting formats and invalid contribution permissions", async (t) => {
