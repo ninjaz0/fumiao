@@ -6,6 +6,10 @@ import {
   reservedAdapterId,
   type OfficialAdapter,
 } from "./distribution/official-adapter.js";
+import {
+  packageContributions,
+  type LegacySettingsPage,
+} from "../../plugin-sdk/src/contributions.js";
 import type { PairedAgentProtocol } from "../../plugin-sdk/src/paired-agent.js";
 import { validator } from "./schema.js";
 export { validator } from "./schema.js";
@@ -30,11 +34,23 @@ export class PluginRegistry {
   private builtins = new Map<string, ProviderPlugin>();
   private protocols = new Map<string, PairedAgentProtocol>();
   private extensions = new Map<string, OfficialAdapter>();
-  async nodeExtension(sql: Sql) {
+  async nodeExtension(sql: Sql, pluginId?: string) {
     if (await hasStudioPackages(sql)) {
-      const row = await one(
-        sql,
-        `SELECT p.id,r.package->>'adapterVersion' AS version FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE p.installed AND r.package ? 'settingsPage'`,
+      const candidates = await sql.query<{
+        id: string;
+        version: string;
+        settingsPage: LegacySettingsPage | null;
+        contributes: unknown;
+      }>(
+        `SELECT p.id,r.package->>'adapterVersion' AS version,r.package->'settingsPage' AS "settingsPage",
+           r.package->'contributes' AS contributes FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+         WHERE p.installed AND ($1::text IS NULL OR p.id=$1)
+           AND (r.package ? 'settingsPage' OR r.package->'contributes'->'hostCapabilities' ? 'nodes')
+         ORDER BY p.id`,
+        [pluginId ?? null],
+      );
+      const row = candidates.rows.find((candidate) =>
+        packageContributions(candidate).hostCapabilities.includes("nodes"),
       );
       if (row) {
         if (!this.extensions.has(row.id + "@" + row.version)) {
@@ -60,6 +76,7 @@ export class PluginRegistry {
         "尚未安装节点插件",
       );
     }
+    requireValue(pluginId === undefined, 404, "尚未安装节点插件");
     const [{ OriginalNodes: NodeManagement }, { OriginalPairedAgent: Agent }] =
       await Promise.all([
         import("../../original-api/src/nodes.js"),
