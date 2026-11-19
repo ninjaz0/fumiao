@@ -626,11 +626,11 @@ export const loginFields: Record<string, Field> = {
   code: { kind: "string", max: 128, default: "" },
 };
 export const teamFields: Record<string, Field> = {
-  name: { kind: "string", min: 1, max: 40 },
+  name: { kind: "string", max: 40 },
   members: { kind: "integers", max: 500, default: [] },
 };
 export const inviteFields: Record<string, Field> = {
-  name: { kind: "string", min: 1, max: 40 },
+  name: { kind: "string", max: 40 },
   expires: {
     kind: "integer",
     min: 1,

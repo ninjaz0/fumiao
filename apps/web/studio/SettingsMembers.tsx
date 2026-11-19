@@ -74,7 +74,12 @@ export function Members({
           <div key={member.id} className="member-row">
             <Avatar member={member} current={false} />
             <div className="member-identity">
-              <span className="member-name">{displayName(member)}</span>
+              <div className="member-heading">
+                <span className="member-name">{displayName(member)}</span>
+                <span className="member-role-badge" data-role={member.role}>
+                  {member.role === "admin" ? "管理员" : "成员"}
+                </span>
+              </div>
               <small>{member.name}</small>
             </div>
             <span className="member-role">
@@ -130,7 +135,9 @@ export function Members({
             )}
           </div>
         ))}
-        {!visible.length && <p className="muted">没有匹配的成员</p>}
+        {!visible.length && (
+          <p className="muted members-empty">没有匹配的成员</p>
+        )}
       </div>
     </div>
   );
@@ -138,6 +145,7 @@ export function Members({
 
 function AddMember({ request, refresh, notify }: AdminSave) {
   const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
   const pending = useRef(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -147,6 +155,7 @@ function AddMember({ request, refresh, notify }: AdminSave) {
     const fields = new FormData(form);
     pending.current = true;
     setSaving(true);
+    setMessage("");
     try {
       await request("/api/users", {
         name: String(fields.get("username")).trim(),
@@ -157,7 +166,7 @@ function AddMember({ request, refresh, notify }: AdminSave) {
       await refresh();
       notify("成员已添加");
     } catch (error) {
-      notify((error as Error).message);
+      setMessage((error as Error).message);
       pending.current = false;
       setSaving(false);
     }
@@ -194,6 +203,9 @@ function AddMember({ request, refresh, notify }: AdminSave) {
             required
           />
         </label>
+        <p className="form-message" role="alert">
+          {message}
+        </p>
         <button className="primary" type="submit" disabled={saving}>
           添加
         </button>

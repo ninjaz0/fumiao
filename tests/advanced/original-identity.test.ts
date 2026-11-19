@@ -1,5 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {
+  identityContracts,
+  validateIdentityRequest,
+} from "../../packages/original-api/src/contracts.js";
 import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
 import { one } from "../../packages/platform/src/db.js";
 import { hash } from "../../packages/platform/src/security.js";
@@ -404,6 +408,59 @@ test("advanced and original protocols share registration, sessions and workspace
     );
     await i.logout(otherToken);
     await assert.rejects(p.actor(otherToken), { status: 401 });
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("empty and whitespace-only workspace and invite names return 400 field messages", async () => {
+  const f = await fixture();
+  try {
+    const { identity: i, admin } = f;
+    const createWorkspaceContract = identityContracts.find(
+      (c) => c.method === "POST" && c.body === "createWorkspace",
+    )!;
+    const createInviteContract = identityContracts.find(
+      (c) => c.method === "POST" && c.body === "createInvite",
+    )!;
+    const invite = await i.createInvite(admin, { name: "有效邀请码" });
+    assert.ok(invite);
+    for (const blank of ["", "   "]) {
+      assert.doesNotThrow(() =>
+        validateIdentityRequest(createWorkspaceContract, "/api/workspaces", {
+          name: blank,
+          members: [],
+        }),
+      );
+      assert.doesNotThrow(() =>
+        validateIdentityRequest(createInviteContract, "/api/invite-codes", {
+          name: blank,
+        }),
+      );
+      await assert.rejects(
+        i.createWorkspace(admin, { name: blank, members: [] }),
+        { status: 400, message: "请输入团队名称" },
+      );
+      await assert.rejects(
+        i.updateWorkspace(admin, 1, {
+          name: blank,
+          members: [],
+          expected_revision: 1,
+        }),
+        { status: 400, message: "请输入团队名称" },
+      );
+      await assert.rejects(i.createInvite(admin, { name: blank }), {
+        status: 400,
+        message: "请填写邀请码名称",
+      });
+      await assert.rejects(
+        i.updateInvite(admin, invite.id, {
+          name: blank,
+          expected_revision: invite.revision,
+        }),
+        { status: 400, message: "请填写邀请码名称" },
+      );
+    }
   } finally {
     await f.cleanup();
   }
