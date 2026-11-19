@@ -1,11 +1,98 @@
-/* Use the Studio theme for both the settings panel and the native invite dialog. */
+/* Modern Studio Console design system for Fumiao Settings & Invite Sheet.
+ * Synthesizes Supabase Studio (dark carbon & rail precision), Dub (crisp light cards &
+ * workspace switcher), LobeHub (status badges & clarity), Coolify (compact ops grids),
+ * and shadcn-admin (consistent light/dark parity & combobox controls).
+ */
 .ledger-settings,
 .ledger-invite-sheet {
-  --ledger-rule: color-mix(in srgb, var(--text) 18%, transparent);
-  --ledger-serif:
-    "Songti SC", STSong, "Noto Serif CJK SC", "Noto Serif SC", SimSun, serif;
+  --console-canvas: #ffffff;
+  --console-sidebar: #fafafa;
+  --console-card: #ffffff;
+  --console-card-foot: #fafafa;
+  --console-muted: #f4f4f5;
+  --console-hover: #f0f0f2;
+  --console-active: #ececef;
+  --console-border: #e4e4e7;
+  --console-border-strong: #d4d4d8;
+  --console-text: #09090b;
+  --console-text-2: #52525b;
+  --console-text-3: #71717a;
+  --console-primary: #18181b;
+  --console-primary-hover: #27272a;
+  --console-primary-fg: #fafafa;
+  --console-accent: #10b981;
+  --console-accent-soft: rgba(16, 185, 129, 0.12);
+  --console-accent-text: #047857;
+  --console-info: #3b82f6;
+  --console-info-soft: rgba(59, 130, 246, 0.1);
+  --console-info-text: #1d4ed8;
+  --console-warn: #f59e0b;
+  --console-warn-soft: rgba(245, 158, 11, 0.14);
+  --console-warn-text: #b45309;
+  --console-danger: #ef4444;
+  --console-danger-soft: rgba(239, 68, 68, 0.1);
+  --console-danger-text: #dc2626;
+  --console-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --console-shadow-lg: 0 18px 42px rgba(0, 0, 0, 0.14);
+  --console-ring: rgba(16, 185, 129, 0.28);
+  --console-radius: 10px;
+  --console-radius-sm: 7px;
+
+  /* Map legacy Studio variables inside settings so existing sub-components stay cohesive */
+  --bg: var(--console-canvas);
+  --surface: var(--console-card);
+  --field: var(--console-canvas);
+  --pop: var(--console-card);
+  --line: var(--console-border);
+  --text: var(--console-text);
+  --secondary: var(--console-text-2);
+  --muted: var(--console-text-3);
+  --hover: var(--console-hover);
+  --selected: var(--console-active);
+  --button: var(--console-primary);
+  --on-button: var(--console-primary-fg);
+  --danger: var(--console-danger-text);
+  --ledger-rule: var(--console-border-strong);
+  --ledger-sans:
+    Inter, -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --ledger-serif: var(--ledger-sans);
   --ledger-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --ledger-focus: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus);
+  --ledger-focus: 0 0 0 2px var(--console-canvas), 0 0 0 4px var(--console-accent);
+}
+
+:root[data-theme="dark"] .ledger-settings,
+:root[data-theme="dark"] .ledger-invite-sheet {
+  --console-canvas: #141619;
+  --console-sidebar: #111214;
+  --console-card: #181b1f;
+  --console-card-foot: #14161a;
+  --console-muted: #1f2329;
+  --console-hover: #22262d;
+  --console-active: #262b33;
+  --console-border: #262a31;
+  --console-border-strong: #353b45;
+  --console-text: #f4f5f7;
+  --console-text-2: #a1a8b3;
+  --console-text-3: #6e7684;
+  --console-primary: #f4f5f7;
+  --console-primary-hover: #e2e5ea;
+  --console-primary-fg: #0c0d0e;
+  --console-accent: #3ecf8e;
+  --console-accent-soft: rgba(62, 207, 142, 0.14);
+  --console-accent-text: #3ecf8e;
+  --console-info: #60a5fa;
+  --console-info-soft: rgba(96, 165, 250, 0.14);
+  --console-info-text: #60a5fa;
+  --console-warn: #fbbf24;
+  --console-warn-soft: rgba(251, 191, 36, 0.14);
+  --console-warn-text: #fbbf24;
+  --console-danger: #f87171;
+  --console-danger-soft: rgba(248, 113, 113, 0.14);
+  --console-danger-text: #f87171;
+  --console-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --console-shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.58);
+  --console-ring: rgba(62, 207, 142, 0.34);
 }
 
 .workspace:has(> #view > .ledger-settings) > .topbar {
@@ -21,66 +108,165 @@
   min-height: 100dvh;
   margin: 0;
   padding: 0;
-  color: var(--text);
-  background: var(--bg);
+  color: var(--console-text);
+  background: var(--console-canvas);
+  font-family: var(--ledger-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Console Topbar */
 .ledger-settings .settings-title {
+  position: sticky;
+  top: 0;
+  z-index: 15;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 56px;
+  min-height: 54px;
   margin: 0;
-  padding: 10px 24px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--console-border);
+  background: color-mix(in srgb, var(--console-canvas) 92%, transparent);
+  backdrop-filter: blur(10px);
 }
+
+.console-title-group {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
 .ledger-settings .settings-title h1 {
   font-family: inherit;
-  font-size: 20px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
   margin: 0;
+  white-space: nowrap;
 }
-.settings-space {
+
+.console-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--console-text-3);
+  overflow: hidden;
+}
+
+.console-breadcrumb strong {
+  color: var(--console-text);
+  font-weight: 550;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--secondary);
-  font-size: 13px;
 }
+
+.settings-space {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(260px, 48%);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--console-text-2);
+  font-size: 12.5px;
+}
+
+.console-space-switcher {
+  position: relative;
+  min-width: 0;
+  max-width: min(260px, 52%);
+}
+
+.settings-space-trigger {
+  max-width: 100%;
+  height: 32px;
+  padding: 0 10px 0 6px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card);
+  color: var(--console-text);
+  font-weight: 500;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.settings-space-trigger:hover {
+  border-color: var(--console-border-strong);
+  background: var(--console-hover);
+}
+
+.settings-space-trigger .space-badge {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  border-radius: 5px;
+  flex: none;
+}
+
+.settings-space-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-space-panel {
+  right: 0;
+  left: auto;
+}
+
+/* Main 2-Column Console Layout */
 .ledger-settings .settings-layout {
   flex: 1;
-  grid-template-columns: clamp(172px, 20cqi, 224px) minmax(0, 1fr);
+  grid-template-columns: clamp(192px, 21cqi, 244px) minmax(0, 1fr);
   gap: 0;
 }
 
 .ledger-settings .settings-content {
   container: settings-content / inline-size;
   width: 100%;
-  max-width: 1040px;
-  padding: 24px clamp(14px, 3cqi, 38px) 40px;
+  max-width: 1000px;
+  padding: 26px clamp(16px, 3cqi, 38px) 52px;
 }
 
 .ledger-settings
   .settings-content
   :is(
     .settings-section > h2,
+    .console-page-head h2,
     .page-heading h2,
     .recharge-heading h2,
     .ledger-invite-heading h2
   ) {
-  font: inherit;
-  font-size: 24px;
-  line-height: 1.35;
+  margin: 0;
+  font-family: inherit;
+  font-size: 21px;
+  line-height: 1.3;
   font-weight: 650;
-  letter-spacing: normal;
+  letter-spacing: -0.02em;
+  color: var(--console-text);
 }
+
+.ledger-settings .settings-section > h2 {
+  margin-bottom: 16px;
+}
+
+/* Console Navigation Sidebar */
 .ledger-navigation {
   min-width: 0;
-  padding: 17px 14px 22px;
-
-  background: var(--surface);
-  border-right: 1px solid var(--line);
+  padding: 16px 12px 24px;
+  background: var(--console-sidebar);
+  border-right: 1px solid var(--console-border);
 }
 
 .ledger-navigation-toggle {
@@ -89,7 +275,7 @@
 
 .ledger-settings .settings-navigation {
   display: grid;
-  gap: 12px;
+  gap: 14px;
   margin: 0;
   padding: 0;
   overflow: visible;
@@ -97,25 +283,28 @@
 
 .ledger-settings .settings-navigation h2 {
   margin: 0 0 4px;
-  padding: 0 10px;
-  color: var(--secondary);
-  font-size: 12px;
-  font-weight: 550;
-  letter-spacing: 0.08em;
+  padding: 0 9px;
+  color: var(--console-text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .ledger-settings .settings-navigation button {
   position: relative;
   width: 100%;
-  min-height: 34px;
-  margin: 2px 0;
-  padding: 5px 8px;
+  min-height: 32px;
+  margin: 1px 0;
+  padding: 5px 9px;
   border: 1px solid transparent;
-  border-radius: 8px;
-  gap: 8px;
+  border-radius: var(--console-radius-sm);
+  gap: 9px;
   font-size: 13px;
   white-space: normal;
-  color: var(--secondary);
+  color: var(--console-text-2);
+  transition:
+    background 100ms ease,
+    color 100ms ease;
 }
 
 .ledger-settings .settings-navigation svg,
@@ -123,52 +312,427 @@
   flex: none;
 }
 
+.ledger-settings .settings-navigation button svg {
+  opacity: 0.78;
+}
+
 .ledger-settings .settings-navigation button:hover {
-  background: var(--bg);
+  background: var(--console-hover);
+  color: var(--console-text);
 }
 
 .ledger-settings .settings-navigation button.active {
-  color: var(--text);
-  font-weight: 600;
-  background: var(--surface);
-  border-color: var(--line);
-  box-shadow: 0 1px 2px var(--line);
+  color: var(--console-text);
+  font-weight: 550;
+  background: var(--console-active);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.ledger-settings .settings-navigation button.active svg {
+  opacity: 1;
+  color: var(--console-accent-text);
 }
 
 .ledger-settings .settings-navigation button.active::before {
   position: absolute;
-  left: -1px;
+  left: -12px;
+  top: 6px;
+  bottom: 6px;
   width: 3px;
-  height: 55%;
-  border-radius: 4px;
-  background: var(--text);
+  border-radius: 0 3px 3px 0;
+  background: var(--console-accent);
   content: "";
 }
 
 .ledger-count {
   margin-left: auto;
-  padding: 0 5px;
+  padding: 1px 6px;
   min-width: 18px;
   border-radius: 999px;
-  background: var(--selected);
-  color: var(--text);
-  font-size: 11px;
+  background: var(--console-muted);
+  border: 1px solid var(--console-border);
+  color: var(--console-text-2);
+  font-family: var(--ledger-mono);
+  font-size: 10.5px;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
 
+/* Searchable Console Inputs, Toolbars, Pills & KPIs */
+.console-page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin-bottom: 16px;
+}
 
+.console-page-desc {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--console-text-2);
+}
+
+.console-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.console-toolbar .model-search,
+.console-search-inline {
+  width: min(100%, 300px);
+  margin: 0 !important;
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card);
+  color: var(--console-text);
+  font-size: 13px;
+}
+
+.console-toolbar .model-search:focus,
+.console-search-inline:focus {
+  outline: none;
+  border-color: var(--console-border-strong);
+  box-shadow: 0 0 0 2px var(--console-ring);
+}
+
+.console-toolbar-meta {
+  font-size: 12px;
+  color: var(--console-text-3);
+}
+
+.console-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--console-border);
+}
+
+.console-card-head h3 {
+  margin: 0 !important;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--console-text);
+}
+
+.console-row-title {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.console-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--console-muted);
+  border: 1px solid var(--console-border);
+  color: var(--console-text-2);
+  font-family: var(--ledger-mono);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.console-pill.ok {
+  background: var(--console-accent-soft);
+  border-color: transparent;
+  color: var(--console-accent-text);
+  font-family: inherit;
+}
+
+.console-pill.info {
+  background: var(--console-info-soft);
+  border-color: transparent;
+  color: var(--console-info-text);
+  font-family: inherit;
+}
+
+.console-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.console-kpi {
+  padding: 14px 16px;
+  border-radius: var(--console-radius);
+  border: 1px solid var(--console-border);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.console-kpi span {
+  font-size: 12px;
+  color: var(--console-text-3);
+}
+
+.console-kpi strong {
+  font-family: var(--ledger-mono);
+  font-size: 21px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+/* Searchable Multi-Team Scope Combobox */
+.console-combo {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.console-combo-trigger {
+  min-height: 34px;
+  max-width: 100%;
+  min-width: min(230px, 100%);
+  padding: 5px 10px 5px 12px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card);
+  color: var(--console-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  box-shadow: var(--console-shadow-sm);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.console-combo-trigger:hover:not(:disabled) {
+  border-color: var(--console-border-strong);
+  background: var(--console-hover);
+}
+
+.console-combo-trigger[aria-expanded="true"] .console-combo-chevron {
+  rotate: 180deg;
+}
+
+.console-combo-trigger-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.console-combo-trigger-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.console-combo-prefix {
+  font-size: 11.5px;
+  color: var(--console-text-3);
+  flex: none;
+}
+
+.console-combo-chevron {
+  flex: none;
+  color: var(--console-text-3);
+  transition: rotate 140ms ease;
+}
+
+.console-combo-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: min(340px, calc(100vw - 32px));
+  border-radius: var(--console-radius);
+  border: 1px solid var(--console-border-strong);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-lg);
+  z-index: 40;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.console-combo-head {
+  padding: 8px;
+  border-bottom: 1px solid var(--console-border);
+  background: var(--console-card-foot);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.console-pop-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid var(--console-border);
+  background: var(--console-canvas);
+  color: var(--console-text-3);
+}
+
+.console-pop-search:focus-within {
+  border-color: var(--console-border-strong);
+  box-shadow: 0 0 0 2px var(--console-ring);
+}
+
+.console-pop-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--console-text);
+  font-size: 12.5px;
+}
+
+.console-combo-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.console-chip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--console-border);
+  background: var(--console-canvas);
+  color: var(--console-text-2);
+  font-size: 11px;
+  min-height: 24px;
+}
+
+.console-chip:hover {
+  background: var(--console-hover);
+  color: var(--console-text);
+}
+
+.console-chip.active {
+  background: var(--console-primary);
+  color: var(--console-primary-fg);
+  border-color: var(--console-primary);
+}
+
+.console-combo-list {
+  max-height: 264px;
+  overflow-y: auto;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.console-pop-group {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--console-text-3);
+  padding: 6px 8px 3px;
+  letter-spacing: 0.03em;
+}
+
+.console-combo-opt {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--console-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  font-size: 12.5px;
+}
+
+.console-combo-opt:hover {
+  background: var(--console-hover);
+}
+
+.console-combo-opt.active {
+  background: var(--console-active);
+  font-weight: 600;
+}
+
+.console-combo-opt-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-combo-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: 11px;
+  color: var(--console-text-3);
+}
+
+.console-combo-meta svg {
+  color: var(--console-accent-text);
+}
+
+.console-pop-empty {
+  margin: 0;
+  padding: 16px 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--console-text-3);
+}
+
+.console-scope-banner {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: var(--console-radius-sm);
+  background: var(--console-info-soft);
+  border: 1px solid color-mix(in srgb, var(--console-info) 28%, transparent);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  font-size: 12.5px;
+  color: var(--console-text);
+}
+
+/* Search Box */
 .ledger-search {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
   min-height: 33px;
-  padding: 3px 8px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  color: var(--secondary);
-  background: var(--surface);
+  padding: 3px 9px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  color: var(--console-text-3);
+  background: var(--console-card);
 }
 
 .ledger-search input {
@@ -178,17 +742,18 @@
   border: 0;
   outline: 0;
   background: transparent;
-  color: var(--text);
+  color: var(--console-text);
   font: inherit;
   font-size: 13px;
 }
-
 
 :is(.ledger-settings, .ledger-invite-sheet)
   :is(
     .ledger-button,
     .ledger-navigation-toggle,
-    .settings-navigation button
+    .settings-navigation button,
+    .console-combo-trigger,
+    .settings-space-trigger
   ):focus-visible,
 .ledger-search:focus-within,
 .ledger-segments input:focus-visible + span,
@@ -197,6 +762,41 @@
   box-shadow: var(--ledger-focus);
 }
 
+/* Console Buttons */
+.ledger-settings :is(.primary, .profile-save) {
+  background: var(--console-primary);
+  color: var(--console-primary-fg);
+  border-color: var(--console-primary);
+  border-radius: var(--console-radius-sm);
+  font-weight: 550;
+}
+
+.ledger-settings :is(.primary, .profile-save):hover:not(:disabled) {
+  background: var(--console-primary-hover);
+}
+
+.ledger-settings :is(.quiet-button, .profile-secondary) {
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card);
+  color: var(--console-text);
+}
+
+.ledger-settings :is(.quiet-button, .profile-secondary):hover:not(:disabled) {
+  background: var(--console-hover);
+  border-color: var(--console-border-strong);
+}
+
+.ledger-settings .quiet-button.danger {
+  color: var(--console-danger-text);
+}
+
+.ledger-settings .quiet-button.danger:hover:not(:disabled) {
+  background: var(--console-danger-soft);
+  border-color: color-mix(in srgb, var(--console-danger) 35%, transparent);
+}
+
+/* Invites & Shared Console Surfaces */
 .ledger-invite-heading {
   display: flex;
   align-items: start;
@@ -209,15 +809,10 @@
   flex: 1 1 220px;
 }
 
-.ledger-invite-heading h2 {
-  margin: 0;
-  font: 700 26px/1.3 var(--ledger-serif);
-  letter-spacing: 0.04em;
-}
-
 .ledger-invite-heading .invite-intro {
-  margin: 7px 0 0;
-  color: var(--secondary);
+  margin: 5px 0 0;
+  color: var(--console-text-2);
+  font-size: 13px;
 }
 
 .ledger-button {
@@ -225,80 +820,95 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 34px;
+  min-height: 32px;
   padding: 5px 11px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 13px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card);
+  color: var(--console-text);
+  font-size: 12.5px;
+  font-weight: 500;
   white-space: nowrap;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
 }
 
 .ledger-button:not(:disabled):hover {
-  background: var(--hover);
+  background: var(--console-hover);
+  border-color: var(--console-border-strong);
 }
 
 .ledger-button.ledger-primary {
-  border-color: var(--button);
-  background: var(--button);
-  color: var(--on-button);
+  border-color: var(--console-primary);
+  background: var(--console-primary);
+  color: var(--console-primary-fg);
   font-weight: 550;
 }
 
 .ledger-button.ledger-primary:not(:disabled):hover {
-  background: var(--button);
-  opacity: 0.85;
+  background: var(--console-primary-hover);
+  border-color: var(--console-primary-hover);
 }
 
 .ledger-button.ledger-quiet {
   border-color: transparent;
   background: transparent;
-  color: var(--secondary);
+  color: var(--console-text-2);
+}
+
+.ledger-button.ledger-quiet:not(:disabled):hover {
+  background: var(--console-hover);
+  color: var(--console-text);
 }
 
 .ledger-button.ledger-danger {
-  color: var(--danger);
+  color: var(--console-danger-text);
 }
+
+.ledger-button.ledger-danger:not(:disabled):hover {
+  background: var(--console-danger-soft);
+}
+
 .ledger-button:disabled {
-  opacity: 0.58;
+  opacity: 0.52;
   cursor: progress;
 }
 
 .ledger-tally {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 22px 0 0;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
+  gap: 12px;
+  margin: 18px 0 0;
 }
 
 .ledger-tally > div {
   min-width: 0;
-  padding: 12px clamp(8px, 2cqi, 18px);
+  padding: 13px 16px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
 }
 
-.ledger-tally > div + div {
-  border-left: 1px dashed var(--ledger-rule);
-}
 .ledger-tally dt {
-  color: var(--secondary);
+  color: var(--console-text-3);
   font-size: 12px;
 }
 
 .ledger-tally dd {
-  margin: 3px 0 0;
-  font: 700 25px/1.3 var(--ledger-serif);
+  margin: 4px 0 0;
+  font-family: var(--ledger-mono);
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
 .ledger-tally dd small {
-  font:
-    400 12px/1.3 system-ui,
-    sans-serif;
-  color: var(--secondary);
+  font: 400 12px/1.3 var(--ledger-sans);
+  color: var(--console-text-2);
 }
 
 .invite-empty.ledger-empty {
@@ -306,47 +916,48 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
   gap: 18px;
-  margin-top: 22px;
-  padding: 28px;
-  border: 1px dashed var(--ledger-rule);
-  border-radius: 16px;
+  margin-top: 18px;
+  padding: 26px;
+  border: 1px dashed var(--console-border-strong);
+  border-radius: var(--console-radius);
   text-align: left;
-  background: repeating-linear-gradient(
-    -45deg,
-    transparent 0 10px,
-    color-mix(in srgb, var(--line) 28%, transparent) 10px 11px
-  );
+  background: var(--console-card-foot);
 }
 
 .ledger-empty > svg {
   width: 100%;
-  max-width: 270px;
+  max-width: 240px;
   justify-self: center;
 }
+
 .invite-empty.ledger-empty h3 {
   margin: 0;
-  font: 700 23px/1.4 var(--ledger-serif);
+  font-size: 18px;
+  font-weight: 650;
 }
+
 .invite-empty.ledger-empty p {
   margin: 6px 0 14px;
-  color: var(--secondary);
+  color: var(--console-text-2);
 }
 
 .ledger-guide {
-  margin-top: 16px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
+  margin-top: 14px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius);
+  background: var(--console-card);
 }
 
 .ledger-guide summary {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 11px 14px;
-  border-radius: 14px;
+  padding: 11px 16px;
+  border-radius: var(--console-radius);
   list-style: none;
-  color: var(--secondary);
+  color: var(--console-text-2);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -366,9 +977,9 @@
 .ledger-guide ol {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
   margin: 0;
-  padding: 4px 14px 16px;
+  padding: 4px 16px 16px;
   list-style: none;
   counter-reset: invite-step;
 }
@@ -376,25 +987,31 @@
 .ledger-guide li {
   display: grid;
   grid-template-rows: auto auto 1fr;
-  gap: 3px;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--console-radius-sm);
+  border: 1px solid var(--console-border);
+  background: var(--console-card-foot);
   counter-increment: invite-step;
 }
 
 .ledger-guide li::before {
   display: grid;
   place-items: center;
-  width: 27px;
-  height: 27px;
-  margin-bottom: 3px;
-  border: 1px solid var(--text);
-  border-radius: 50%;
-  content: counter(invite-step, cjk-decimal);
-  font-family: var(--ledger-serif);
-  color: var(--text);
+  width: 22px;
+  height: 22px;
+  margin-bottom: 2px;
+  border-radius: 999px;
+  background: var(--console-accent-soft);
+  color: var(--console-accent-text);
+  content: counter(invite-step);
+  font-family: var(--ledger-mono);
+  font-size: 11.5px;
+  font-weight: 650;
 }
 
 .ledger-guide li span {
-  color: var(--secondary);
+  color: var(--console-text-2);
   font-size: 12px;
 }
 
@@ -404,22 +1021,23 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 9px;
-  margin: 18px 0 12px;
+  margin: 16px 0 12px;
 }
 
 .ledger-invite-toolbar .ledger-search {
   flex: 1 1 175px;
-  max-width: 240px;
+  max-width: 250px;
 }
 
+/* Segmented Controls (LobeHub / Dub style) */
 .ledger-segments {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
-  gap: 3px;
+  gap: 2px;
   padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--hover);
+  border: 1px solid var(--console-border);
+  border-radius: 8px;
+  background: var(--console-muted);
 }
 
 .ledger-segments label {
@@ -440,97 +1058,92 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 28px;
+  min-height: 26px;
   gap: 5px;
-  padding: 2px 8px;
-  border-radius: 7px;
-  color: var(--secondary);
+  padding: 2px 9px;
+  border-radius: 6px;
+  color: var(--console-text-2);
   font-size: 12px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
 .ledger-segments small {
-  color: var(--secondary);
+  color: var(--console-text-3);
+  font-family: var(--ledger-mono);
   font-variant-numeric: tabular-nums;
 }
 
 .ledger-segments input:checked + span {
-  background: var(--surface);
-  color: var(--text);
+  background: var(--console-card);
+  color: var(--console-text);
   font-weight: 600;
-  box-shadow: 0 0 0 1px var(--line);
+  box-shadow: var(--console-shadow-sm);
 }
 
 .ledger-segments input:checked + span small {
-  color: var(--text);
+  color: var(--console-text-2);
 }
+
+/* Modern Console Invite Cards */
 .ledger-ticket-list {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .invite-code-row.ledger-ticket {
   display: grid;
-  grid-template-columns: minmax(195px, 0.78fr) minmax(0, 1.22fr);
+  grid-template-columns: minmax(195px, 0.8fr) minmax(0, 1.2fr);
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: 0 1px 3px var(--line);
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
+  transition: border-color 120ms ease;
+}
+
+.invite-code-row.ledger-ticket:hover {
+  border-color: var(--console-border-strong);
 }
 
 .ledger-ticket:not([data-status="valid"]) {
-  background: var(--bg);
+  background: var(--console-card-foot);
   box-shadow: none;
 }
 
 .ledger-ticket-stub {
   position: relative;
   min-width: 0;
-  padding: 16px 18px;
-  border-right: 1px dashed var(--ledger-rule);
+  padding: 15px 18px;
+  border-right: 1px solid var(--console-border);
 }
 
-.ledger-ticket-stub::before,
-.ledger-ticket-stub::after {
-  position: absolute;
-  z-index: 1;
-  right: -8px;
-  width: 15px;
-  height: 15px;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: var(--bg);
-  content: "";
-}
-
-.ledger-ticket-stub::before {
-  top: -8px;
-  clip-path: inset(50% 0 0 0);
-}
-.ledger-ticket-stub::after {
-  bottom: -8px;
-  clip-path: inset(0 0 50% 0);
-}
 .ledger-ticket-stub h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14.5px;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
+
 .ledger-ticket .invite-code-value {
   flex-direction: column;
   align-items: start;
   gap: 7px;
+  margin-top: 6px;
 }
 
 .ledger-ticket .invite-code-value code {
-  font: 650 clamp(17px, 2.3cqi, 19px) / 1.4 var(--ledger-mono);
-  letter-spacing: 0.055em;
+  font: 600 clamp(14px, 2cqi, 16px) / 1.4 var(--ledger-mono);
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--console-muted);
+  border: 1px solid var(--console-border);
   overflow-wrap: anywhere;
 }
 
 .ledger-ticket:not([data-status="valid"]) code {
-  color: var(--secondary);
+  color: var(--console-text-3);
   text-decoration: line-through;
 }
 
@@ -540,7 +1153,7 @@
   flex-direction: column;
   justify-content: space-between;
   min-width: 0;
-  padding: 15px 16px 9px 20px;
+  padding: 14px 16px 10px 18px;
 }
 
 .ledger-facts {
@@ -548,84 +1161,90 @@
   grid-template-columns: 1.15fr 1fr;
   gap: 8px 12px;
   margin: 0;
-  padding-right: 56px;
+  padding-right: 76px;
 }
 
 .ledger-facts dt,
 .ledger-facts dd small {
-  color: var(--secondary);
+  color: var(--console-text-3);
   font-size: 12px;
 }
+
 .ledger-facts dd {
   margin: 1px 0 0;
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
 }
+
 .ledger-facts dd small {
   display: block;
 }
-.ledger-ticket[data-status="expired"] .ledger-facts dd small {
-  color: var(--secondary);
-}
 
+/* Modern status pill replacing rotated seal */
 .ledger-ticket .ledger-seal {
   position: absolute;
-  top: 13px;
+  top: 14px;
   right: 14px;
-  display: grid;
-  place-items: center;
-  width: 51px;
-  height: 51px;
-  padding: 0;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-  outline: 1px solid currentColor;
-  outline-offset: -6px;
-  color: var(--text);
-  background: transparent;
-  font: 700 15px/1 var(--ledger-serif);
-  rotate: -12deg;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--console-accent-soft);
+  color: var(--console-accent-text);
+  font-size: 11.5px;
+  font-weight: 550;
+}
+
+.ledger-ticket .ledger-seal::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
 }
 
 .ledger-ticket[data-status="expired"] .ledger-seal {
-  color: var(--secondary);
-  border-style: dashed;
-  rotate: 8deg;
+  background: var(--console-warn-soft);
+  color: var(--console-warn-text);
 }
+
 .ledger-ticket[data-status="disabled"] .ledger-seal {
-  color: var(--secondary);
-  rotate: -4deg;
+  background: var(--console-muted);
+  color: var(--console-text-2);
 }
-.ledger-ticket:not([data-status="valid"]) .ledger-seal {
-  font-size: 12px;
-}
+
 .ledger-ticket .invite-code-actions {
-  padding-top: 5px;
-  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  margin-top: 8px;
+  border-top: 1px solid var(--console-border);
 }
+
 .ledger-ticket .ledger-button {
-  min-height: 30px;
+  min-height: 28px;
 }
 
 .ledger-no-results {
-  padding: 24px 14px;
-  border: 1px dashed var(--ledger-rule);
-  border-radius: 12px;
+  padding: 26px 14px;
+  border: 1px dashed var(--console-border-strong);
+  border-radius: var(--console-radius);
+  background: var(--console-card-foot);
   text-align: center;
 }
 
 .ledger-no-results p {
-  margin: 0 0 8px;
-  color: var(--secondary);
+  margin: 0 0 10px;
+  color: var(--console-text-2);
 }
 
-/* Settings sections share the same surfaces as invitation tickets. */
+/* Shared Modern Console Cards (Dub + Supabase Studio) */
 .ledger-settings :is(.ledger-card, .list-surface, .credit-summary > div) {
   min-width: 0;
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
+  padding: 18px 20px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-sm);
 }
 
 .ledger-card + .ledger-card,
@@ -639,6 +1258,22 @@
   margin-top: 0;
 }
 
+.ledger-settings .storage-total strong {
+  font-family: var(--ledger-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-settings .storage-track {
+  height: 9px;
+  border-radius: 999px;
+  background: var(--console-muted);
+}
+
+.ledger-settings .storage-track > span {
+  background: var(--console-accent);
+  border-radius: 999px;
+}
+
 .ledger-settings
   :is(
     .profile-field-row,
@@ -650,81 +1285,147 @@
   ):last-child {
   border-bottom-width: 0;
 }
+
 .ledger-settings .model-group .setting-row:last-of-type {
   border-bottom-width: 0;
 }
 
-.ledger-settings .profile-section,
-.ledger-settings .extension-settings {
-  max-width: 680px;
+.ledger-settings .credit-account-row > span,
+.ledger-settings .credit-amount,
+.ledger-settings .price-row input {
+  font-family: var(--ledger-mono);
+  font-variant-numeric: tabular-nums;
 }
+
+.ledger-settings .price-row input {
+  border: 1px solid var(--console-border);
+  border-radius: 6px;
+  background: var(--console-canvas);
+}
+
+.ledger-settings .price-row input:focus {
+  outline: none;
+  border-color: var(--console-accent);
+  box-shadow: 0 0 0 2px var(--console-ring);
+}
+
+.ledger-settings .model-switch input:checked + span {
+  background: var(--console-accent);
+}
+
+.ledger-settings .profile-section {
+  max-width: none;
+}
+
 .ledger-profile-identity {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 14px;
   align-items: center;
   overflow-wrap: anywhere;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--console-border);
 }
+
 .ledger-profile-identity .user-avatar {
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
 }
+
 .ledger-profile-identity small {
   display: block;
-  color: var(--secondary);
+  color: var(--console-text-3);
 }
+
 .ledger-appearance .setting-label {
   margin-bottom: 12px;
-  font-weight: 550;
+  font-weight: 600;
 }
+
 .ledger-appearance .theme-choices {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
   padding: 0;
   background: transparent;
 }
+
 .ledger-appearance .theme-choices button {
   flex-direction: column;
   align-items: stretch;
-  gap: 8px;
-  padding: 7px;
-  text-align: center;
-  background: var(--surface);
-  border: 1px solid var(--ledger-rule);
-  border-radius: 10px;
+  gap: 9px;
+  padding: 10px;
+  text-align: left;
+  background: var(--console-canvas);
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius);
+  font-weight: 550;
+  transition: border-color 120ms ease;
 }
+
+.ledger-appearance .theme-choices button:hover {
+  border-color: var(--console-border-strong);
+}
+
 .ledger-appearance .theme-choices button.selected {
-  color: var(--text);
-  border-color: var(--text);
-  box-shadow: inset 0 0 0 1px var(--text);
+  color: var(--console-text);
+  border-color: var(--console-accent);
+  box-shadow: 0 0 0 1px var(--console-accent);
 }
+
 .ledger-theme-swatch {
-  height: 52px;
-  border-radius: 5px;
-  border: 1px solid var(--line);
-  background: linear-gradient(to right, #fff 38%, #f8f9fa 38%);
+  height: 62px;
+  border-radius: 6px;
+  border: 1px solid var(--console-border);
+  background: linear-gradient(to right, #fafafa 34%, #ffffff 34%);
 }
+
 [data-value="dark"] .ledger-theme-swatch {
-  background: linear-gradient(to right, #1e1e1e 38%, #111 38%);
+  background: linear-gradient(to right, #111214 34%, #181b1f 34%);
 }
+
 .ledger-settings .credit-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
   padding: 0;
   border: 0;
 }
+
 .ledger-settings .credit-summary strong {
-  font-family: var(--ledger-serif);
+  font-family: var(--ledger-mono);
+  font-size: 24px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
+
 .ledger-settings .recharge-info {
   margin-block: 14px;
 }
+
+/* Responsive Container Queries (Zero horizontal overflow down to 320px) */
+@container settings-content (max-width: 560px) {
+  .console-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+  .console-combo {
+    width: 100%;
+  }
+  .console-combo-trigger {
+    width: 100%;
+    min-width: 0;
+  }
+  .console-combo-panel {
+    left: 0;
+    right: 0;
+    width: 100%;
+  }
+}
+
 @container settings-content (max-width: 420px) {
   .ledger-settings :is(.ledger-card, .list-surface) {
-    padding: 12px;
+    padding: 13px;
   }
   .ledger-settings .credit-summary {
     grid-template-columns: 1fr;
@@ -745,43 +1446,37 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .ledger-tally > div:last-child {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
     grid-column: 1 / -1;
-    border-left: 0;
-    border-top: 1px dashed var(--ledger-rule);
   }
 }
+
 @container settings-ledger (max-width: 760px) {
   .ledger-settings .settings-title {
-    padding: 20px 22px 15px;
+    padding: 8px 16px;
   }
   .ledger-settings .settings-content {
-    padding: 20px 22px 30px;
+    padding: 20px 18px 32px;
+  }
+  .console-breadcrumb {
+    display: none;
   }
 }
 
 @container settings-ledger (max-width: 640px) {
   .ledger-settings .settings-title {
-    padding: 15px 14px;
+    padding: 8px 14px;
   }
-  .ledger-settings .settings-title h1 {
-    font-size: 19px;
-  }
-
   .ledger-settings .settings-layout {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto 1fr;
   }
   .ledger-settings .settings-content {
-    padding: 17px 14px 24px;
+    padding: 16px 14px 28px;
   }
   .ledger-navigation {
-    border-radius: 0;
     padding: 10px 14px;
     border-right: 0;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--console-border);
   }
   .ledger-navigation-toggle {
     display: flex;
@@ -789,12 +1484,14 @@
     justify-content: space-between;
     gap: 8px;
     width: 100%;
-    padding: 7px 9px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
+    padding: 7px 10px;
+    border: 1px solid var(--console-border);
+    border-radius: var(--console-radius-sm);
     text-align: left;
-    background: var(--surface);
-    color: var(--text);
+    background: var(--console-card);
+    color: var(--console-text);
+    font-size: 13px;
+    font-weight: 500;
   }
   .ledger-navigation-toggle[aria-expanded="true"] svg {
     rotate: 180deg;
@@ -805,6 +1502,9 @@
   }
   .ledger-navigation-panel[data-expanded="true"] {
     display: block;
+  }
+  .ledger-settings .settings-navigation button.active::before {
+    left: 0;
   }
 }
 
@@ -820,26 +1520,14 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .ledger-ticket-stub {
-    padding-right: 78px;
+    padding-right: 88px;
     border-right: 0;
-    border-bottom: 1px dashed var(--ledger-rule);
-  }
-  .ledger-ticket-stub::before,
-  .ledger-ticket-stub::after {
-    top: auto;
-    bottom: -8px;
-  }
-  .ledger-ticket-stub::before {
-    left: -8px;
-    clip-path: inset(0 0 0 50%);
-  }
-  .ledger-ticket-stub::after {
-    clip-path: inset(0 50% 0 0);
+    border-bottom: 1px solid var(--console-border);
   }
   .invite-empty.ledger-empty {
     grid-template-columns: 1fr;
     padding: 16px;
-    gap: 4px;
+    gap: 8px;
     text-align: center;
   }
   .ledger-empty > svg {
@@ -859,7 +1547,7 @@
     grid-template-columns: 1fr;
   }
   .ledger-guide li {
-    grid-template-columns: 28px 1fr;
+    grid-template-columns: 24px 1fr;
     grid-template-rows: auto auto;
     column-gap: 9px;
   }
@@ -868,6 +1556,7 @@
   }
 }
 
+/* Slide-over Invite Sheet (Modern Drawer) */
 #modal.ledger-invite-sheet {
   max-width: 100%;
   width: min(480px, 100%);
@@ -875,18 +1564,22 @@
   max-height: 100dvh;
   margin: 0 0 0 auto;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 18px 0 0 18px;
-  background: var(--pop);
-  color: var(--text);
+  border: 0;
+  border-left: 1px solid var(--console-border);
+  border-radius: 0;
+  background: var(--console-card);
+  color: var(--console-text);
+  box-shadow: var(--console-shadow-lg);
   overflow: hidden;
 }
 
 #modal.ledger-invite-sheet::backdrop {
+  background: rgba(0, 0, 0, 0.48);
   backdrop-filter: blur(2px);
 }
+
 #modal.ledger-invite-sheet[open] {
-  animation: ledger-sheet-in 200ms ease-out;
+  animation: ledger-sheet-in 180ms ease-out;
 }
 
 @keyframes ledger-sheet-in {
@@ -907,19 +1600,22 @@
 }
 
 .ledger-sheet-heading {
-  padding: 16px 52px 12px 20px;
-  border-bottom: 1px solid var(--line);
+  padding: 16px 52px 14px 20px;
+  border-bottom: 1px solid var(--console-border);
 }
 
 .ledger-sheet-heading > span {
-  color: var(--secondary);
+  color: var(--console-text-3);
   font-size: 12px;
 }
 
 #modal.ledger-invite-sheet h2 {
   margin: 2px 0 0;
-  font: 700 24px/1.35 var(--ledger-serif);
-  letter-spacing: 0.04em;
+  font-family: inherit;
+  font-size: 18px;
+  line-height: 1.35;
+  font-weight: 650;
+  letter-spacing: -0.015em;
 }
 
 .ledger-sheet-fields {
@@ -928,63 +1624,74 @@
   overflow-y: auto;
   display: grid;
   align-content: start;
-  gap: 12px;
-  padding: 15px 20px;
+  gap: 14px;
+  padding: 16px 20px;
 }
 
 .ledger-ticket-preview {
   display: grid;
   gap: 4px;
-  padding: 10px 12px;
-  border: 1px dashed var(--ledger-rule);
-  border-radius: 10px;
-  background: var(--surface);
+  padding: 12px 14px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card-foot);
   overflow-wrap: anywhere;
 }
 
 .ledger-ticket-preview small {
-  color: var(--text);
+  color: var(--console-text-3);
+  font-size: 11.5px;
 }
+
 .ledger-ticket-preview strong {
-  font: 700 17px/1.4 var(--ledger-serif);
+  font-size: 15px;
+  font-weight: 600;
 }
+
 .ledger-ticket-preview code {
   font-family: var(--ledger-mono);
-  color: var(--secondary);
+  color: var(--console-text-2);
 }
+
 .ledger-ticket-preview ul {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin: 3px 0 0;
+  gap: 5px;
+  margin: 4px 0 0;
   padding: 0;
   list-style: none;
 }
+
 .ledger-ticket-preview li {
-  padding: 0 6px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--secondary);
-  font-size: 12px;
+  padding: 1px 7px;
+  border: 1px solid var(--console-border);
+  border-radius: 5px;
+  background: var(--console-card);
+  color: var(--console-text-2);
+  font-size: 11.5px;
 }
 
 .ledger-sheet-fields .formlabel {
   margin: 0;
-  color: var(--secondary);
+  color: var(--console-text-2);
 }
+
 .ledger-sheet-fields .formlabel > span {
   display: flex;
   justify-content: space-between;
 }
+
 .ledger-sheet-fields .formlabel small {
-  color: var(--secondary);
+  color: var(--console-text-3);
 }
+
 #invite-form .ledger-sheet-fields .formlabel :is(input, select) {
   min-width: 0;
-  min-height: 37px;
-  background: var(--field);
-  border-color: var(--ledger-rule);
-  color: var(--text);
+  min-height: 36px;
+  background: var(--console-canvas);
+  border-color: var(--console-border);
+  border-radius: var(--console-radius-sm);
+  color: var(--console-text);
 }
 
 .ledger-expiry {
@@ -993,25 +1700,31 @@
   padding: 0;
   border: 0;
 }
+
 .ledger-expiry legend {
-  margin-bottom: 5px;
-  color: var(--secondary);
-  font-size: 13px;
+  margin-bottom: 6px;
+  color: var(--console-text-2);
+  font-size: 12.5px;
+  font-weight: 500;
 }
+
 .ledger-expiry .ledger-segments {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
+
 .ledger-sheet-fields .invite-grant-row {
   margin: 0;
-  color: var(--secondary);
+  color: var(--console-text-2);
 }
+
 .ledger-credit-presets {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 5px;
+  gap: 6px;
+  margin-top: 6px;
 }
+
 .ledger-credit-presets .ledger-button {
   min-height: 26px;
   padding: 2px 8px;
@@ -1020,13 +1733,15 @@
 
 #modal.ledger-invite-sheet .invite-form-help {
   margin: 0;
-  color: var(--secondary);
+  color: var(--console-text-3);
   font-size: 12px;
 }
+
 #modal.ledger-invite-sheet .form-message {
   margin: 0;
-  color: var(--danger);
+  color: var(--console-danger-text);
 }
+
 #modal.ledger-invite-sheet .form-message:empty {
   display: none;
 }
@@ -1034,9 +1749,9 @@
 .ledger-invite-sheet .invite-form-actions {
   flex-shrink: 0;
   margin: 0;
-  padding: 11px 20px max(11px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line);
-  background: var(--surface);
+  padding: 12px 20px max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--console-border);
+  background: var(--console-card-foot);
 }
 
 @media (max-width: 640px) {
@@ -1044,7 +1759,9 @@
     width: 100%;
     height: min(810px, calc(100dvh - 14px));
     margin: auto 0 0;
-    border-radius: 18px 18px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--console-border);
+    border-radius: 14px 14px 0 0;
   }
   #modal.ledger-invite-sheet[open] {
     animation-name: ledger-sheet-up;
@@ -1073,30 +1790,36 @@
 @container settings-ledger (min-width: 641px) {
   .ledger-navigation-panel {
     position: sticky;
-    top: 12px;
-    max-height: calc(100dvh - 24px);
+    top: 66px;
+    max-height: calc(100dvh - 82px);
     overflow-y: auto;
   }
 }
+
+/* Member (non-admin) centered horizontal console tabs */
 .ledger-settings[data-member="true"] .settings-layout {
   display: block;
 }
+
 .ledger-settings[data-member="true"]
   :is(.ledger-navigation, .settings-content) {
-  max-width: 740px;
+  max-width: 780px;
   width: 100%;
   margin-inline: auto;
 }
+
 .ledger-settings[data-member="true"] .ledger-navigation {
-  padding: 0 18px;
+  padding: 0 20px;
   border: 0;
   background: transparent;
 }
+
 .ledger-settings[data-member="true"] .ledger-navigation-panel {
   display: block;
   padding: 0;
   position: static;
 }
+
 .ledger-settings[data-member="true"]
   :is(
     .ledger-navigation-toggle,
@@ -1105,12 +1828,14 @@
   ) {
   display: none;
 }
+
 .ledger-settings[data-member="true"] .settings-navigation section {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 16px;
-  border-bottom: 1px solid var(--line);
+  gap: 4px 18px;
+  border-bottom: 1px solid var(--console-border);
 }
+
 .ledger-settings[data-member="true"] .settings-navigation button {
   width: auto;
   min-height: 42px;
@@ -1123,47 +1848,54 @@
   background: transparent;
   white-space: nowrap;
 }
+
 .ledger-settings[data-member="true"] .settings-navigation button.active {
-  border-bottom-color: var(--blue);
-  color: var(--text);
+  border-bottom-color: var(--console-accent);
+  color: var(--console-text);
+  background: transparent;
 }
+
 .ledger-settings[data-member="true"]
   .settings-navigation
   button.active::before {
   display: none;
 }
-.ledger-settings .settings-navigation button.active {
-  background: var(--hover);
-  border-color: transparent;
-  box-shadow: none;
+
+.ledger-settings[data-member="true"]
+  .settings-navigation
+  button[data-value^="plugin:"] {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
-.ledger-settings .settings-navigation button.active::before {
-  background: var(--blue);
-}
-.ledger-profile-identity {
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line);
-}
+
+/* Profile & Members Table */
 .profile-name-row {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 6px 12px;
-  max-width: 420px;
+  max-width: 440px;
   padding-top: 16px;
 }
+
 .profile-name-row .profile-input-action input {
-  grid-column: 1/-1;
-  border-color: var(--ledger-rule);
+  grid-column: 1 / -1;
+  border-color: var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-canvas);
 }
+
 .profile-name-row .profile-save {
   margin-top: 6px;
 }
+
 .profile-count,
 .profile-password-row small,
 .profile-field-label small {
   font-size: 12px;
-  color: var(--secondary);
+  color: var(--console-text-3);
 }
+
 .ledger-settings .profile-section .profile-field-row {
   display: flex;
   align-items: center;
@@ -1172,90 +1904,132 @@
   padding: 14px 0 0;
   min-height: 0;
 }
+
 .profile-password-row small {
   display: block;
 }
+
 .ledger-settings .profile-section .profile-password-row {
   padding: 0;
 }
+
 .ledger-settings .profile-save-status {
   padding: 6px 0 0;
 }
+
 .ledger-settings .profile-section :is(.profile-secondary, .profile-save) {
   width: auto;
 }
+
 .extension-settings fieldset {
   border: 0;
   min-width: 0;
   padding: 0;
 }
+
 .extension-settings fieldset button {
   margin: 12px 8px 0 0;
 }
+
 .member-search {
   width: min(100%, 320px);
-  padding: 8px 12px;
-  border: 1px solid var(--ledger-rule);
-  border-radius: 8px;
-  background: var(--field);
-  color: var(--text);
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card);
+  color: var(--console-text);
   margin-bottom: 12px;
+  font-size: 13px;
 }
+
+.member-search:focus {
+  outline: none;
+  border-color: var(--console-border-strong);
+  box-shadow: 0 0 0 2px var(--console-ring);
+}
+
 .ledger-settings .members-list {
   padding: 0;
   overflow: visible;
 }
+
 .members-head,
 .ledger-settings .members-list .member-row {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 64px 54px 36px;
+  grid-template-columns: 32px minmax(0, 1fr) 72px 64px 36px;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 11px 16px;
 }
+
 .members-head {
-  font-size: 12px;
-  color: var(--secondary);
-  background: var(--hover);
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--console-text-3);
+  background: var(--console-card-foot);
+  border-bottom: 1px solid var(--console-border);
+  border-radius: var(--console-radius) var(--console-radius) 0 0;
 }
+
 .members-head span:first-child {
   grid-column: span 2;
 }
+
 .member-actions {
   position: relative;
   display: block;
 }
+
 .member-actions summary {
   list-style: none;
   cursor: pointer;
   padding: 4px;
   text-align: center;
+  border-radius: 6px;
 }
+
+.member-actions summary:hover {
+  background: var(--console-hover);
+}
+
 .member-actions summary::-webkit-details-marker {
   display: none;
 }
+
 .member-action-list {
   position: absolute;
   right: 0;
-  z-index: 2;
+  z-index: 5;
   display: grid;
-  min-width: 100px;
-  border: 1px solid var(--line);
+  gap: 2px;
+  min-width: 108px;
+  border: 1px solid var(--console-border-strong);
   border-radius: 8px;
   padding: 4px;
-  background: var(--pop);
-  box-shadow: var(--shadow);
+  background: var(--console-card);
+  box-shadow: var(--console-shadow-lg);
 }
+
+.member-action-list button {
+  border: 0 !important;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 5px;
+}
+
 .member-state,
 .member-role {
-  font-size: 13px;
+  font-size: 12.5px;
+  color: var(--console-text-2);
 }
+
 @container settings-content (max-width: 450px) {
   .members-head,
   .ledger-settings .members-list .member-row {
-    grid-template-columns: 30px minmax(0, 1fr) 38px 30px;
+    grid-template-columns: 30px minmax(0, 1fr) 44px 30px;
     gap: 5px;
-    padding: 9px;
+    padding: 9px 10px;
   }
   .members-head span:nth-child(2),
   .member-role {
@@ -1268,10 +2042,4 @@
   .member-search {
     font-size: 16px;
   }
-}
-
-.ledger-settings[data-member="true"] .settings-navigation button[data-value^="plugin:"] {
-  max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
 }

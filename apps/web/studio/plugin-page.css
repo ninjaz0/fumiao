@@ -58,9 +58,10 @@
 }
 .plugin-page .plugin-notice {
   padding: 10px 14px;
-  border-inline-start: 3px solid var(--tone, var(--line));
-  border-radius: 4px;
-  background: var(--surface);
+  border: 1px solid var(--console-border, var(--line));
+  border-inline-start: 3px solid var(--tone, var(--console-accent, var(--line)));
+  border-radius: var(--console-radius-sm, 7px);
+  background: var(--console-card-foot, var(--surface));
 }
 .plugin-page .node-state,
 .plugin-page .ledger-button:not(.ledger-primary) {

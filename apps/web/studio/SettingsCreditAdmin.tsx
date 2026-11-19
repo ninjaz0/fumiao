@@ -25,10 +25,31 @@ export function CreditAdmin({
   open: AdminOpen;
 }) {
   const [visibleAccounts, setVisibleAccounts] = useState(accounts);
+  const [query, setQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<"all" | "team" | "personal">(
+    "all",
+  );
   useLayoutEffect(() => {
     if (!dialogOpen) setVisibleAccounts(accounts);
   }, [accounts, dialogOpen]);
   const historyRead = useRef(0);
+
+  const totalAvailable = visibleAccounts.reduce(
+    (sum, item) => sum + item.available,
+    0,
+  );
+  const totalReserved = visibleAccounts.reduce(
+    (sum, item) => sum + item.reserved,
+    0,
+  );
+  const needle = query.trim().toLowerCase();
+  const filteredAccounts = visibleAccounts.filter((account) => {
+    if (kindFilter !== "all" && account.kind !== kindFilter) return false;
+    if (!needle) return true;
+    return (account.name + " " + (account.username || ""))
+      .toLowerCase()
+      .includes(needle);
+  });
 
   async function history(account: CreditAccount, opener: HTMLButtonElement) {
     const version = ++historyRead.current;
@@ -55,53 +76,127 @@ export function CreditAdmin({
   return (
     <section className="settings-section credit-admin">
       <h2>积分管理</h2>
-      {accountKinds.map(([kind, label]) => (
-        <section className="ledger-card" key={kind}>
-          <h3 className="credit-heading">{label}</h3>
-          {visibleAccounts
-            .filter((account) => account.kind === kind)
-            .map((account) => (
-              <div key={account.workspace} className="credit-account-row">
-                <div>
-                  <strong>{account.name}</strong>
-                  {account.username && account.username !== account.name && (
-                    <small>{account.username}</small>
-                  )}
-                </div>
-                <span>
-                  {account.available.toLocaleString()}
-                  <small>{`可用 · 冻结 ${account.reserved.toLocaleString()}`}</small>
-                </span>
-                <button
-                  className="quiet-button"
-                  data-act="credit-history"
-                  data-id={account.workspace}
-                  onClick={(event) =>
-                    void history(account, event.currentTarget)
-                  }
-                >
-                  明细
-                </button>
-                <button
-                  className="profile-secondary"
-                  data-act="credit-adjust"
-                  data-id={account.workspace}
-                  onClick={(event) => {
-                    ++historyRead.current;
-                    open(
-                      <CreditAdjustment
-                        {...{ account, request, refresh, notify }}
-                      />,
-                      event.currentTarget,
-                    );
-                  }}
-                >
-                  调整
-                </button>
-              </div>
+      <div className="console-kpi-grid">
+        <div className="console-kpi">
+          <span>全平台可用积分</span>
+          <strong>{totalAvailable.toLocaleString()}</strong>
+        </div>
+        <div className="console-kpi">
+          <span>任务在途冻结</span>
+          <strong>{totalReserved.toLocaleString()}</strong>
+        </div>
+        <div className="console-kpi">
+          <span>积分账户</span>
+          <strong>{visibleAccounts.length}</strong>
+        </div>
+      </div>
+      {visibleAccounts.length > 2 && (
+        <div className="console-toolbar">
+          <div className="ledger-segments" role="radiogroup" aria-label="账户类型">
+            {(
+              [
+                ["all", "全部"],
+                ["team", "团队积分"],
+                ["personal", "个人积分"],
+              ] as const
+            ).map(([key, label]) => (
+              <label key={key}>
+                <input
+                  type="radio"
+                  name="credit-kind-filter"
+                  checked={kindFilter === key}
+                  onChange={() => setKindFilter(key)}
+                />
+                <span>{label}</span>
+              </label>
             ))}
-        </section>
-      ))}
+          </div>
+          <input
+            className="member-search console-search-inline"
+            type="search"
+            aria-label="搜索积分账户"
+            placeholder="搜索空间或成员..."
+            value={query}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+          />
+        </div>
+      )}
+      {accountKinds
+        .filter(([kind]) => kindFilter === "all" || kindFilter === kind)
+        .map(([kind, label]) => {
+          const rows = filteredAccounts.filter(
+            (account) => account.kind === kind,
+          );
+          if (needle && !rows.length) return null;
+          return (
+            <section className="ledger-card" key={kind}>
+              <div className="console-card-head">
+                <h3 className="credit-heading">{label}</h3>
+                <span className="console-pill">{rows.length} 个账户</span>
+              </div>
+              {rows.length ? (
+                rows.map((account) => (
+                  <div key={account.workspace} className="credit-account-row">
+                    <div>
+                      <strong>{account.name}</strong>
+                      {account.username &&
+                        account.username !== account.name && (
+                          <small>{account.username}</small>
+                        )}
+                    </div>
+                    <span>
+                      {account.available.toLocaleString()}
+                      <small>{`可用 · 冻结 ${account.reserved.toLocaleString()}`}</small>
+                    </span>
+                    <button
+                      className="quiet-button"
+                      data-act="credit-history"
+                      data-id={account.workspace}
+                      onClick={(event) =>
+                        void history(account, event.currentTarget)
+                      }
+                    >
+                      明细
+                    </button>
+                    <button
+                      className="profile-secondary"
+                      data-act="credit-adjust"
+                      data-id={account.workspace}
+                      onClick={(event) => {
+                        ++historyRead.current;
+                        open(
+                          <CreditAdjustment
+                            {...{ account, request, refresh, notify }}
+                          />,
+                          event.currentTarget,
+                        );
+                      }}
+                    >
+                      调整
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <p className="empty-note">暂无账户</p>
+              )}
+            </section>
+          );
+        })}
+      {needle && !filteredAccounts.length && (
+        <div className="ledger-no-results">
+          <p>没有匹配的积分账户</p>
+          <button
+            type="button"
+            className="ledger-button"
+            onClick={() => {
+              setQuery("");
+              setKindFilter("all");
+            }}
+          >
+            重置筛选
+          </button>
+        </div>
+      )}
     </section>
   );
 }

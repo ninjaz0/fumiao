@@ -1,5 +1,5 @@
 import type { PageGroup } from "../../../packages/plugin-sdk/src/contributions";
-import { ChevronDown, Ticket } from "lucide-react";
+import { Check, ChevronDown, Search, Ticket } from "lucide-react";
 import {
   useEffect,
   useId,
@@ -10,8 +10,9 @@ import {
   type ReactNode,
 } from "react";
 import { Icon } from "./Icon";
+import { WorkspaceBadge } from "./Navigation";
 import type { SettingsTab } from "./settings-tabs";
-import type { StudioState } from "./state";
+import { displayName, type StudioState } from "./state";
 import "./settings-ledger.css";
 
 const groups = {
@@ -34,6 +35,7 @@ export function SettingsShell({
   tab,
   sections,
   navigate,
+  selectWorkspace,
   children,
   legacyTab,
 }: {
@@ -41,15 +43,23 @@ export function SettingsShell({
   tab: SettingsTab;
   sections: readonly Section[];
   navigate: (tab: SettingsTab) => void;
+  selectWorkspace?: (id: number) => void;
   children: ReactNode;
   legacyTab?: SettingsTab;
 }) {
   const member = state.me.role !== "admin";
   const [expanded, setExpanded] = useState(false);
+  const [spaceOpen, setSpaceOpen] = useState(false);
+  const [spaceQuery, setSpaceQuery] = useState("");
   const panelId = useId();
+  const spaceMenuId = useId();
   const panel = useRef<HTMLDivElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
+  const spaceWrap = useRef<HTMLDivElement>(null);
+  const spaceSearch = useRef<HTMLInputElement>(null);
+
   const active = sections.find(([key]) => key === tab);
+  const activeGroupName = active ? groups[active[3]] : "";
   const workspace = state.workspaces.find(
     ({ id }) => id === state.workspace_id,
   );
@@ -61,12 +71,54 @@ export function SettingsShell({
     name,
     sections: sections.filter((section) => section[3] === group),
   }));
+
+  const needle = spaceQuery.trim().toLowerCase();
+  const personalSpaces = state.workspaces.filter(
+    (s) =>
+      s.kind === "personal" &&
+      (!needle ||
+        (s.name + " " + displayName(state.me)).toLowerCase().includes(needle)),
+  );
+  const teamSpaces = state.workspaces.filter(
+    (s) => s.kind === "team" && (!needle || s.name.toLowerCase().includes(needle)),
+  );
+  const canSwitchWorkspace =
+    Boolean(selectWorkspace) && state.workspaces.length > 1;
+
   useEffect(() => {
     if (expanded)
       panel.current
         ?.querySelector<HTMLButtonElement>('[aria-current="page"]')
         ?.focus();
   }, [expanded]);
+
+  useEffect(() => {
+    if (!spaceOpen) return;
+    spaceSearch.current?.focus();
+    function onPointerDown(event: MouseEvent) {
+      if (
+        spaceWrap.current &&
+        event.target instanceof Node &&
+        !spaceWrap.current.contains(event.target)
+      ) {
+        setSpaceOpen(false);
+      }
+    }
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSpaceOpen(false);
+        spaceWrap.current
+          ?.querySelector<HTMLButtonElement>(".settings-space-trigger")
+          ?.focus();
+      }
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [spaceOpen]);
 
   function select(key: SettingsTab) {
     setExpanded(false);
@@ -118,8 +170,136 @@ export function SettingsShell({
       data-plugin-page={tab.startsWith("plugin:") || undefined}
     >
       <header className="settings-title">
-        <h1>设置</h1>
-        <span className="settings-space">{workspace?.name}</span>
+        <div className="console-title-group">
+          <h1>设置</h1>
+          {active && (
+            <span className="console-breadcrumb" aria-hidden="true">
+              <span>/</span>
+              <span>{activeGroupName}</span>
+              <span>/</span>
+              <strong>{active[1]}</strong>
+            </span>
+          )}
+        </div>
+        {workspace &&
+          (canSwitchWorkspace ? (
+            <div className="console-space-switcher" ref={spaceWrap}>
+              <button
+                type="button"
+                className="settings-space settings-space-trigger"
+                aria-haspopup="listbox"
+                aria-expanded={spaceOpen}
+                aria-controls={spaceMenuId}
+                onClick={() => {
+                  if (!spaceOpen) setSpaceQuery("");
+                  setSpaceOpen((open) => !open);
+                }}
+              >
+                <WorkspaceBadge space={workspace} member={state.me} />
+                <span className="settings-space-name">{workspace.name}</span>
+                <ChevronDown aria-hidden="true" size={14} />
+              </button>
+              {spaceOpen && (
+                <div
+                  className="console-combo-panel console-space-panel"
+                  id={spaceMenuId}
+                  role="dialog"
+                  aria-label="切换当前空间"
+                >
+                  {state.workspaces.length >= 4 && (
+                    <div className="console-combo-head">
+                      <label className="console-pop-search">
+                        <Search aria-hidden="true" size={14} />
+                        <input
+                          ref={spaceSearch}
+                          type="search"
+                          aria-label="筛选空间"
+                          placeholder={`搜索 ${state.workspaces.length} 个空间...`}
+                          value={spaceQuery}
+                          onChange={(event) =>
+                            setSpaceQuery(event.currentTarget.value)
+                          }
+                        />
+                      </label>
+                    </div>
+                  )}
+                  <div
+                    className="console-combo-list"
+                    role="listbox"
+                    aria-label="可用空间"
+                  >
+                    {personalSpaces.length > 0 && (
+                      <>
+                        <div className="console-pop-group">个人空间</div>
+                        {personalSpaces.map((space) => {
+                          const current = space.id === state.workspace_id;
+                          return (
+                            <button
+                              key={space.id}
+                              type="button"
+                              role="option"
+                              aria-selected={current}
+                              className={`console-combo-opt${current ? " active" : ""}`}
+                              onClick={() => {
+                                setSpaceOpen(false);
+                                if (!current) selectWorkspace?.(space.id);
+                              }}
+                            >
+                              <span className="console-combo-opt-name">
+                                {space.name}
+                              </span>
+                              <span className="console-combo-meta">
+                                <span>仅自己可见</span>
+                                {current && <Check aria-hidden="true" size={14} />}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
+                    {teamSpaces.length > 0 && (
+                      <>
+                        <div className="console-pop-group">
+                          团队空间（{teamSpaces.length}）
+                        </div>
+                        {teamSpaces.map((space) => {
+                          const current = space.id === state.workspace_id;
+                          return (
+                            <button
+                              key={space.id}
+                              type="button"
+                              role="option"
+                              aria-selected={current}
+                              className={`console-combo-opt${current ? " active" : ""}`}
+                              onClick={() => {
+                                setSpaceOpen(false);
+                                if (!current) selectWorkspace?.(space.id);
+                              }}
+                            >
+                              <span className="console-combo-opt-name">
+                                {space.name}
+                              </span>
+                              <span className="console-combo-meta">
+                                {space.member_count !== undefined && (
+                                  <span>{space.member_count} 人</span>
+                                )}
+                                {current && <Check aria-hidden="true" size={14} />}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
+                    {!personalSpaces.length && !teamSpaces.length && (
+                      <p className="console-pop-empty">没有匹配的空间</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <span className="settings-space">{workspace.name}</span>
+          ))}
       </header>
       <div className="settings-layout">
         <div className="ledger-navigation">

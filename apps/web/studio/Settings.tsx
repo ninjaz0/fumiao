@@ -296,6 +296,7 @@ export function Settings({
       tab={tab}
       sections={sections}
       legacyTab={legacy && pluginTab(legacy)}
+      selectWorkspace={selectWorkspace}
       navigate={(key) => {
         ++request.current;
         navigate(key);
@@ -419,6 +420,10 @@ export function Settings({
             state={state}
             show={showWorkspace}
             select={selectWorkspace}
+            openModels={(id) => {
+              modelPreferences.scope = String(id);
+              navigate("models");
+            }}
           />
         )}
         {admin && tab === "team" && (
