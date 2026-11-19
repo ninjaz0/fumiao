@@ -38,10 +38,9 @@ const releases = [
     id: "compatible-chat",
     entry: 'export { chatStreaming as adapter } from "../chat/src/stream.js";',
   },
+  { id: "example-extension" },
 ];
-for (const { id, entry, program } of releases) {
-  const root = "plugins/" + id,
-    file = JSON.parse(await readFile(root + "/package/release.json", "utf8"));
+async function buildAdapter(root, entry) {
   const result = await build({
     stdin: {
       contents: entry,
@@ -82,9 +81,32 @@ for (const { id, entry, program } of releases) {
       },
     ],
   });
-  const packed = gzipSync(result.outputFiles[0].contents);
-  trusted[id + "@" + file.adapterVersion] = hash(packed);
-  file.adapterModule = packed.toString("base64");
+  return gzipSync(result.outputFiles[0].contents);
+}
+async function packContributions(root, contributes) {
+  for (const page of contributes.settingsPages ?? []) {
+    if (page.programFile) {
+      page.program = await expression(join(root, page.programFile));
+      delete page.programFile;
+    }
+  }
+  if (contributes.settings?.migrateFile) {
+    contributes.settings.migrate = await expression(
+      join(root, contributes.settings.migrateFile),
+    );
+    delete contributes.settings.migrateFile;
+  }
+}
+for (const { id, entry, program } of releases) {
+  const root = "plugins/" + id,
+    file = JSON.parse(await readFile(root + "/package/release.json", "utf8"));
+  if (entry) {
+    const packed = await buildAdapter(root, entry);
+    trusted[id + "@" + file.adapterVersion] = hash(packed);
+    file.adapterModule = packed.toString("base64");
+  }
+  if (file.contributes)
+    await packContributions(root + "/package", file.contributes);
   if (program) file.program = await expression(root + "/package/program.js");
   if (id === "gpu") {
     file.settingsPage = {
