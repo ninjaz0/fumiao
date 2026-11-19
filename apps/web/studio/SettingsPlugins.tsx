@@ -61,6 +61,7 @@ type Preview = {
 const labels: Record<string, string> = {
   publicUrl: "服务公开地址",
   baseUrl: "服务地址",
+  provider: "提供方",
   apiKey: "API 密钥",
   artifactOrigins: "允许下载媒体的其他地址",
 };
@@ -125,33 +126,53 @@ function ServiceForm({
         </label>
       )}
       {Object.entries(plugin.configSchema.properties || {}).map(([key, f]) => {
+        const required =
+          plugin.configSchema.required?.includes(key) &&
+          !service?.configuredFields.includes(key);
         const field = (
           <label>
             {label(key, f)}
-            <input
-              name={key}
-              type={
-                f.writeOnly ? "password" : key === "baseUrl" ? "url" : "text"
-              }
-              autoComplete="off"
-              defaultValue={
-                service?.values[key] === undefined
-                  ? ""
-                  : typeof service.values[key] === "string"
-                    ? String(service.values[key])
-                    : JSON.stringify(service.values[key])
-              }
-              placeholder={
-                service?.configuredFields.includes(key) &&
-                service.values[key] === undefined
-                  ? "已保存，留空沿用"
-                  : undefined
-              }
-              required={
-                plugin.configSchema.required?.includes(key) &&
-                !service?.configuredFields.includes(key)
-              }
-            />
+            {f.type === "string" && f.enum && !f.writeOnly ? (
+              <select
+                aria-label={label(key, f)}
+                name={key}
+                required={required}
+                defaultValue={String(service?.values[key] ?? "")}
+              >
+                <option value="">
+                  {service?.configuredFields.includes(key)
+                    ? "沿用当前选项"
+                    : "请选择"}
+                </option>
+                {f.enum.map((value) => (
+                  <option key={String(value)} value={String(value)}>
+                    {String(value)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                name={key}
+                type={
+                  f.writeOnly ? "password" : key === "baseUrl" ? "url" : "text"
+                }
+                autoComplete="off"
+                defaultValue={
+                  service?.values[key] === undefined
+                    ? ""
+                    : typeof service.values[key] === "string"
+                      ? String(service.values[key])
+                      : JSON.stringify(service.values[key])
+                }
+                placeholder={
+                  service?.configuredFields.includes(key) &&
+                  service.values[key] === undefined
+                    ? "已保存，留空沿用"
+                    : undefined
+                }
+                required={required}
+              />
+            )}
           </label>
         );
         return !plugin.configSchema.required?.includes(key) ? (

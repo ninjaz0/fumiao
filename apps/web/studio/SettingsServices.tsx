@@ -68,12 +68,9 @@ export function OpenAISettings({
   );
 }
 
-const providers = [
-  ["deepseek", "DeepSeek"],
-  ["openai", "OpenAI"],
-] as const;
-type Provider = (typeof providers)[number];
-type ChatConfig = { providers: Record<Provider[0], { configured: boolean }> };
+type ChatConfig = {
+  providers: Record<string, { label: string; configured: boolean }>;
+};
 
 export function ChatSettings({
   request,
@@ -102,11 +99,16 @@ export function ChatSettings({
   return (
     <section className="settings-section fm-chat-service">
       <h2>对话服务</h2>
-      {providers.map((provider) => (
+      {!config && <p role="status">正在读取对话服务…</p>}
+      {config && !Object.keys(config.providers).length && (
+        <p>暂无已接入的对话服务</p>
+      )}
+      {Object.entries(config?.providers ?? {}).map(([id, provider]) => (
         <ChatProvider
-          key={provider[0]}
-          provider={provider}
-          configured={config?.providers[provider[0]].configured}
+          key={id}
+          id={id}
+          label={provider.label}
+          configured={provider.configured}
           request={request}
         />
       ))}
@@ -115,12 +117,14 @@ export function ChatSettings({
 }
 
 function ChatProvider({
-  provider: [id, label],
+  id,
+  label,
   configured,
   request,
 }: {
-  provider: Provider;
-  configured?: boolean;
+  id: string;
+  label: string;
+  configured: boolean;
   request: AdminRequest;
 }) {
   const secret = useRef<HTMLInputElement>(null);
@@ -164,7 +168,7 @@ function ChatProvider({
       <header>
         <h3>{label}</h3>
         <span className="muted" data-chat-status="">
-          {status === undefined ? "载入中…" : status ? "已配置" : "未配置"}
+          {status ? "已配置" : "未配置"}
         </span>
       </header>
       <div className="service-secret">

@@ -24,6 +24,11 @@ import { wavFixture } from "../helpers/timing.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 import { secret } from "../../packages/platform/src/security.js";
 import { OriginalNodes } from "../../packages/original-api/src/nodes.js";
+import { OriginalChatSettings } from "../../packages/original-api/src/chat-settings.js";
+import { OriginalChats } from "../../packages/original-api/src/chats.js";
+import { ChatExecution } from "../../packages/original-api/src/chat-execution.js";
+import { ChatRuntime } from "../../packages/original-api/src/chat-runtime.js";
+import { chatProviderFixture } from "../helpers/chat-provider.js";
 const load = async (id: string): Promise<PackageFile> =>
   JSON.parse(
     await readFile("plugins/" + id + "/" + id + ".fmplugin.json", "utf8"),
@@ -215,6 +220,99 @@ for (const id of ["flow", "muse"]) {
     },
   );
 }
+test("chat package drains accepted replies and can be reinstalled with fresh credentials", async () => {
+  const f = await setup(),
+    wire = await chatProviderFixture();
+  const file = await load("compatible-chat");
+  const settings = new OriginalChatSettings(f.p),
+    chats = new OriginalChats(f.p);
+  const models = async () =>
+    Object.keys((await settings.config(f.actor)).models).sort();
+  const pkg = async () => (await f.packages.list(f.actor))[0];
+  const change = async (action: "enable" | "disable" | "remove") =>
+    f.packages.change(f.actor, file.id, (await pkg()).revision, action);
+  const connect = (model: string) =>
+    f.p.createConnection(
+      f.actor,
+      {
+        name: model,
+        pluginId: file.id,
+        version: file.adapterVersion,
+        config: wire.config(model),
+      },
+      true,
+    );
+  try {
+    assert.deepEqual(await models(), []);
+    await f.packages.install(f.actor, file);
+    await connect("gpt-4.1");
+    await connect("deepseek-flash");
+    await assert.rejects(connect("deepseek-flash"), { status: 409 });
+    assert.deepEqual(await models(), []);
+    await change("enable");
+    assert.deepEqual(await models(), ["deepseek-flash", "gpt-4.1"]);
+    await f.db.query("UPDATE wallets SET balance=10");
+    const { conversation } = await chats.create(f.actor, {});
+    const draft = {
+      uid: randomUUID(),
+      model: "gpt-4.1",
+      text: "插件回复验证",
+      expected_revision: conversation.revision,
+      price_revision: (await settings.config(f.actor)).pricing.revision,
+    };
+    const send = () => chats.send(f.actor, conversation.id, draft);
+    await change("disable");
+    await assert.rejects(send, { status: 403 });
+    await change("enable");
+    await send();
+    const turn = await one(f.db, "SELECT id FROM chat_turns WHERE uid=$1", [
+      draft.uid,
+    ]);
+    await change("remove");
+    assert.equal((await pkg()).removing, true);
+    assert.deepEqual(await models(), []);
+    await send(); // Retrying the accepted UID during removal returns the same turn.
+    f.p.registry = new PluginRegistry();
+    wire.setWire("stream", {
+      raw: 'data: {"choices":[{"delta":{"content":"已完成"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+    });
+    const runtime = new ChatRuntime(new ChatExecution(chats));
+    await runtime.execute(turn.id);
+    await runtime.execute(turn.id);
+    assert.equal(
+      (await chats.get(f.actor, conversation.id)).messages.at(-1)?.content,
+      "已完成",
+    );
+    assert.deepEqual(
+      wire.requests.filter((r) => r.body?.stream).map((r) => r.path),
+      ["/v1/chat/completions"],
+    );
+    assert.deepEqual(
+      await one(
+        f.db,
+        "SELECT balance::int,held::int FROM wallets JOIN chat_charges USING(workspace_id) WHERE turn_id=$1",
+        [turn.id],
+      ),
+      { balance: 9, held: 0 },
+    );
+    await f.packages.finishRemovals();
+    assert.deepEqual(await f.packages.list(f.actor), []);
+    assert.deepEqual((await settings.read(f.actor)).providers, {});
+    await f.packages.install(f.actor, file);
+    assert.ok(
+      Object.values((await settings.read(f.actor)).providers).every(
+        (p) => !p.configured,
+      ),
+    );
+    await connect("deepseek-flash");
+    await change("enable");
+    assert.deepEqual(await models(), ["deepseek-flash"]);
+  } finally {
+    await wire.cleanup();
+    await f.cleanup();
+  }
+});
+
 test("GPU package installs its administrator panel while disabled and removes the pairing capability", async () => {
   const f = await setup(),
     file = await load("gpu");
@@ -674,6 +772,71 @@ test("an authenticated Git update uses the repository default branch and its com
     server.closeAllConnections();
     if (server.listening)
       await new Promise<void>((r) => server.close(() => r()));
+    await f.cleanup();
+  }
+});
+
+test("a previously restored chat connection adopts the packaged adapter on restart", async () => {
+  const f = await databaseFixture("033_studio_plugin_profile.sql"),
+    file = await load("compatible-chat");
+  try {
+    await f.p.registry.initializeStudio(f.db, false);
+    await f.db.transaction((sql) =>
+      f.p.registry.installStudioPackage(sql, file.id, file.adapterVersion),
+    );
+    const identity = new OriginalIdentity(f.p),
+      user = { name: "admin", password: randomUUID() };
+    await identity.bootstrap({ ...user, nickname: "对话管理员" });
+    const actor = await identity.actor(await identity.login(user, "upgrade"));
+    const { id } = await f.p.createConnection(actor, {
+      name: "已有对话服务",
+      pluginId: file.id,
+      version: file.adapterVersion,
+      config: { provider: "deepseek", apiKey: "fixture-key" },
+    });
+    await f.p.updateConnection(actor, id, {
+      revision: 1,
+      enabled: true,
+      concurrency: 1,
+    });
+    await assert.rejects(
+      f.p.updateConnection(actor, id, {
+        revision: 2,
+        enabled: true,
+        concurrency: 1,
+        preserveCredentials: true,
+        config: { baseUrl: "http://127.0.0.1" },
+      }),
+      /切换服务地址/,
+    );
+    await f.db.query(
+      await readFile("migrations/034_studio_packages.sql", "utf8"),
+    );
+    // Simulate a previous platform boot which restored the historical adapter.
+    await f.db.query(
+      `UPDATE studio_package_releases SET package=package||'{"restored":true}'::jsonb WHERE id=$1`,
+      [file.id],
+    );
+    const registry = (f.p.registry = new PluginRegistry());
+    await registry.initializeStudio(f.db, false);
+    await registry.initializeStudio(f.db, false);
+    const [pkg] = await new StudioPackages(f.p).list(actor);
+    assert.equal(pkg.version, file.version);
+    assert.equal(pkg.enabled, true);
+    assert.deepEqual(
+      await one(
+        f.db,
+        "SELECT version,code FROM studio_adapter_modules WHERE id=$1",
+        [file.id],
+      ),
+      { version: file.adapterVersion, code: file.adapterModule },
+    );
+    assert.deepEqual(
+      Object.keys((await new OriginalChatSettings(f.p).config(actor)).models),
+      ["deepseek-flash"],
+    );
+    assert.equal((await f.p.studioConnections(actor))[0].id, id);
+  } finally {
     await f.cleanup();
   }
 });

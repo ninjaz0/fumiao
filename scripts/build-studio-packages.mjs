@@ -16,16 +16,35 @@ async function expression(path) {
     .replace(/;$/, "");
 }
 const trusted = {};
-for (const id of ["flow", "muse", "gpu"]) {
+const releases = [
+  {
+    id: "flow",
+    entry: 'export { flowText as adapter } from "./src/text.js";',
+    program: true,
+  },
+  {
+    id: "muse",
+    entry: 'export { museText as adapter } from "./src/text.js";',
+    program: true,
+  },
+  {
+    id: "gpu",
+    entry:
+      'export { gpuText as adapter } from "./src/text.js";' +
+      'export {gpuPairedAgent as protocol} from "./src/paired-agent.js";export {OriginalNodes as NodeManagement} from "./src/node-management.js";export {OriginalPairedAgent as Agent} from "./src/agent-dispatch.js";',
+    program: true,
+  },
+  {
+    id: "compatible-chat",
+    entry: 'export { chatStreaming as adapter } from "../chat/src/stream.js";',
+  },
+];
+for (const { id, entry, program } of releases) {
   const root = "plugins/" + id,
     file = JSON.parse(await readFile(root + "/package/release.json", "utf8"));
   const result = await build({
     stdin: {
-      contents:
-        `export { ${id}Text as adapter } from "./src/text.js";` +
-        (id === "gpu"
-          ? 'export {gpuPairedAgent as protocol} from "./src/paired-agent.js";export {OriginalNodes as NodeManagement} from "./src/node-management.js";export {OriginalPairedAgent as Agent} from "./src/agent-dispatch.js";'
-          : ""),
+      contents: entry,
       resolveDir: resolve(root),
     },
     format: "esm",
@@ -66,7 +85,7 @@ for (const id of ["flow", "muse", "gpu"]) {
   const packed = gzipSync(result.outputFiles[0].contents);
   trusted[id + "@" + file.adapterVersion] = hash(packed);
   file.adapterModule = packed.toString("base64");
-  file.program = await expression(root + "/package/program.js");
+  if (program) file.program = await expression(root + "/package/program.js");
   if (id === "gpu") {
     file.settingsPage = {
       title: "GPU 节点",

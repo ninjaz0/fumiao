@@ -6,13 +6,17 @@
 
 同一插件可以添加多个服务。第一个服务默认承接任务，管理员可以按模型切换。两个插件要提供同一个公开模型时，以相同的稳定模型 ID 发布，并由新增插件通过包顶层的 `equivalentModels` 声明这些 ID。平台核对模型种类、输入和计价规则，管理员手动选择全站默认服务。独立模型用不同 ID，可以有相同显示名。已受理的任务保留插件版本、服务、配置和价格。
 
-首批独立文件见 [Flow](../plugins/flow/flow.fmplugin.json)、[Muse](../plugins/muse/muse.fmplugin.json) 和 [GPU 节点](../plugins/gpu/gpu.fmplugin.json)。GPU 包附带配对页面、执行协议和机器安装文件。安装后管理员即可配对。关闭停止接收新的生成请求，移除会等待已受理的任务结算，再清理连接和密钥。每台机器的程序由管理员单独更新。
+首批独立文件见 [Flow](../plugins/flow/flow.fmplugin.json)、[Muse](../plugins/muse/muse.fmplugin.json)、[GPU 节点](../plugins/gpu/gpu.fmplugin.json) 和 [兼容对话](../plugins/compatible-chat/compatible-chat.fmplugin.json)。GPU 包附带配对页面、执行协议和机器安装文件。安装后管理员即可配对。关闭停止接收新的生成请求，移除会等待已受理的任务结算，再清理连接和密钥。每台机器的程序由管理员单独更新。
+
+在「兼容对话 → 设置」中选择提供方，展开「更多设置」填写 API 密钥。使用自建兼容服务时填写 API 根地址，留空会使用提供方默认地址。保存并测试连接，再打开插件开关。每个提供方可建一个连接。`deepseek` 提供 DeepSeek Flash，`openai` 提供 GPT-4.1。创作者在「对话」中发送消息，生成定价按每条完整回复设置积分。
+
+对话包版本为 `1.2.1`，沿用 `compatible-chat@1.2.0` 适配器。平台版本须包含该适配器的发行摘要。已由旧版工作台登记的同版本连接在重启时自动接入，保留原配置与启用状态。
 
 ### 发布与更新
 
 文件顶层包含 `format: 1`、`id`、`label`、`version` 和 `adapterVersion`。版本采用三个非负整数，以点分隔。直接接入服务的通用包包含 `manifest` 和 `program`。清单按下文 v3 契约声明模型、参数和价格。程序是一个 JavaScript 对象表达式，提供 `request({model,kind,input,remoteId})` 和 `result({raw,model,kind,remoteId})`。前者返回同源的 `{path,body}`，省略 body 为 GET；后者把服务响应映射成下文的任务回执。程序在受时间和内存限制的 QuickJS 中处理 JSON，平台负责携带密钥发请求。已有独立协议服务可在同一个包中用 `remote: {endpoint,manifest}` 作为接入方式。
 
-首批发行包还携带由平台按摘要校验的原生适配器。GPU 的节点协议、Flow 的流处理和 Muse 的异步任务恢复使用这项能力。已核验的原生代码运行在宿主进程，新原生二进制需要平台发行版信任其摘要；普通映射程序、节点设置内容可随插件独立更新。运行 `pnpm plugins:pack` 从源码生成三个文件、校验值和更新清单。
+首批发行包还携带由平台按摘要校验的原生适配器。GPU 的节点协议、Flow 的流处理、Muse 的异步任务恢复和对话的流式回复使用这项能力。已核验的原生代码运行在宿主进程，新原生二进制需要平台发行版信任其摘要；普通映射程序、节点设置内容可随插件独立更新。运行 `pnpm plugins:pack` 从源码生成各插件的单文件包、校验值和更新清单。
 
 `updateUrl` 可以指向自建 HTTP(S) 服务器上的清单，也可以指向以 `.git` 结尾的 HTTP(S) Git 仓库。Git 读取默认分支根目录的 `update.json`，包和清单来自同一次提交。HTTP 包从同源地址读取。以下示例中的摘要须替换为发布文件原始字节的 SHA-256。
 

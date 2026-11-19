@@ -464,7 +464,7 @@ export class Platform {
         enabled: boolean;
         concurrency: number;
         config: string;
-        fields: Record<string, { writeOnly?: boolean }>;
+        fields: Record<string, { writeOnly?: boolean; enum?: unknown[] }>;
       }>(`SELECT c.id,c.name,c.plugin_id,c.plugin_version,c.revision,c.enabled,c.concurrency,c.config,
       v.manifest->'configSchema'->'properties' AS fields FROM connections c JOIN plugin_versions v ON (v.id,v.version)=(c.plugin_id,c.plugin_version)
       WHERE NOT c.removed AND NOT c.fmworker_resource_driver ORDER BY c.name`)
@@ -473,10 +473,13 @@ export class Platform {
       const saved = this.vault.open(config);
       // Only expressly public service fields may be returned to a browser.
       const values = Object.fromEntries(
-        ["baseUrl", "publicUrl", "artifactOrigins"]
+        ["baseUrl", "publicUrl", "artifactOrigins", "provider"]
           .filter(
             (k) =>
-              fields?.[k] && !fields[k].writeOnly && saved[k] !== undefined,
+              fields?.[k] &&
+              !fields[k].writeOnly &&
+              saved[k] !== undefined &&
+              (k !== "provider" || fields[k].enum?.includes(saved[k])),
           )
           .map((k) => [k, saved[k]]),
       );
@@ -654,18 +657,24 @@ export class Platform {
       const retained = Object.keys(saved).filter(
         (k) => !Object.hasOwn(input.config!, k),
       );
+      const savedBaseUrl =
+        saved.baseUrl ||
+        plugin.manifest.chat?.providers.find(
+          (p) => p.id === plugin.chatProvider?.(saved),
+        )?.defaultConfig.baseUrl;
       if (
         input.config.baseUrl &&
-        saved.baseUrl &&
+        savedBaseUrl &&
         retained.some(
           (k) =>
             fields?.[k]?.writeOnly ||
-            !["baseUrl", "publicUrl", "artifactOrigins"].includes(k),
+            (!["baseUrl", "publicUrl", "artifactOrigins"].includes(k) &&
+              !(k === "provider" && plugin.manifest.chat)),
         )
       )
         requireValue(
           new URL(String(input.config.baseUrl)).origin ===
-            new URL(String(saved.baseUrl)).origin,
+            new URL(String(savedBaseUrl)).origin,
           400,
           "切换服务地址时请重新填写密钥",
         );

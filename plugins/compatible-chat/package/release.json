@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "id": "compatible-chat",
+  "label": "兼容对话",
+  "version": "1.2.1",
+  "adapterVersion": "1.2.0",
+  "updateUrl": "https://raw.githubusercontent.com/ninjaz0/fumiao/main/plugins/compatible-chat/update.json"
+}

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Actor, Platform } from "../../platform/src/platform.js";
 import { one, type Sql } from "../../platform/src/db.js";
 import { requireValue } from "../../platform/src/security.js";
+import { StudioCatalog } from "../../platform/src/catalog.js";
 import { ChatProviders } from "../../platform/src/chat-providers.js";
 import {
   chatBytes,
@@ -376,12 +377,9 @@ export class OriginalChats {
         workspace.id,
       ]);
       requireValue(
-        (
-          await one(sql, "SELECT studio_model_allowed($1,$2) AS allowed", [
-            body.model,
-            workspace.id,
-          ])
-        ).allowed,
+        (await new StudioCatalog(this.p.db).effective(sql, workspace.id))[
+          body.model
+        ],
         403,
         "当前空间未开放该模型，请选择其他模型",
       );

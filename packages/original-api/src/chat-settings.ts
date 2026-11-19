@@ -71,6 +71,7 @@ export class OriginalChatSettings {
       "密钥格式无效",
     );
     return this.p.db.transaction(async (sql) => {
+      await sql.query("SELECT price_revision FROM studio_policy FOR SHARE");
       // All original saves serialize with connection creation, including two first saves.
       await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
         "original-chat-settings",
