@@ -2,6 +2,7 @@ import { ParameterFields } from "./ParameterFields";
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useImperativeHandle,
@@ -166,7 +167,7 @@ export function Composer({
   flowSourceContents: RefObject<FlowSourceDisplay | null>;
   managePlugins: () => void;
 }) {
-  const { draft, refs } = session;
+  const { draft } = session;
   const box = useRef<HTMLElement>(null);
   const prompt = useRef<HTMLDivElement>(null);
   const files = useRef<HTMLInputElement>(null);
@@ -174,6 +175,7 @@ export function Composer({
   const frameSlot = useRef<FrameSlot | undefined>(undefined);
   const painted = useRef<{
     plain: boolean;
+    refsKey: string;
     prompt: string;
     serialized: string;
   } | null>(null);
@@ -190,7 +192,7 @@ export function Composer({
   const frameMode = frames(draft);
   const plainPrompt = frameMode || audio;
   const frameOptions = h3Options(draft.h3);
-  const references = packReferences(session);
+  const references = useMemo(() => packReferences(session), [session]);
   const issue = referenceIssue(state, session) || flowIssue(state, session);
   const price = quote(state, draft);
   const limit = promptLimit(draft);
@@ -254,24 +256,41 @@ export function Composer({
     : "";
 
   useLayoutEffect(() => {
-    const current = readPrompt(prompt.current!, state, refs, plainPrompt);
+    const element = prompt.current!;
+    const refsKey = references.join("\0");
+    const current = readPrompt(element, state, references, plainPrompt);
+    const staleChip =
+      !plainPrompt &&
+      Array.from(element.querySelectorAll<HTMLElement>("[data-refid]")).some(
+        (chip) => {
+          const id = chip.dataset.refid!;
+          return (
+            !references.includes(id) ||
+            chip.lastElementChild?.textContent !==
+              referenceLabel(state, id, references)
+          );
+        },
+      );
     const samePainted =
       painted.current?.plain === plainPrompt &&
+      painted.current?.refsKey === refsKey &&
       painted.current?.prompt === draft.prompt &&
       painted.current?.serialized === current;
     if (
       painted.current?.plain !== plainPrompt ||
+      staleChip ||
       (current !== draft.prompt && !samePainted)
     ) {
-      paintPrompt(prompt.current!, state, refs, draft.prompt, plainPrompt);
+      paintPrompt(element, state, references, draft.prompt, plainPrompt);
       savedRange.current = null;
       painted.current = {
         plain: plainPrompt,
+        refsKey,
         prompt: draft.prompt,
-        serialized: readPrompt(prompt.current!, state, refs, plainPrompt),
+        serialized: readPrompt(element, state, references, plainPrompt),
       };
     }
-  }, [state, refs, draft.prompt, plainPrompt]);
+  }, [state, references, draft.prompt, plainPrompt]);
 
   useLayoutEffect(() => {
     const composer = box.current!;
@@ -298,7 +317,7 @@ export function Composer({
     savedRange.current = rememberSelection(prompt.current!, savedRange.current);
   }
   function savePrompt() {
-    change(readPrompt(prompt.current!, state, refs, plainPrompt));
+    change(readPrompt(prompt.current!, state, references, plainPrompt));
     remember();
   }
   useImperativeHandle(editor, () => ({
@@ -316,7 +335,7 @@ export function Composer({
       return readPrompt(element, state, next, plainPrompt);
     },
     insert(id) {
-      if (plainPrompt || !refs.includes(id)) return;
+      if (plainPrompt || !references.includes(id)) return;
       const range = savedRange.current;
       if (
         range?.collapsed &&
@@ -326,7 +345,7 @@ export function Composer({
         range.setStart(range.startContainer, range.startOffset - 1);
       savedRange.current = appendAtCaret(
         prompt.current!,
-        createReferenceToken(state, refs, id),
+        createReferenceToken(state, references, id),
         range,
       );
       savedRange.current = appendAtCaret(
@@ -548,9 +567,10 @@ export function Composer({
             if (
               !event.nativeEvent.isComposing &&
               event.key === "@" &&
-              refs.length &&
+              references.length &&
               !frameMode &&
-              !audio
+              !audio &&
+              form?.references.max !== 0
             ) {
               remember();
               open(

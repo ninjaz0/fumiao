@@ -5,6 +5,7 @@ import {
   referenceType,
   type StudioState,
 } from "./state";
+export { reindexPrompt } from "./state";
 
 export function readPrompt(
   editor: HTMLElement,

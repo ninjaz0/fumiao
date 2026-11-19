@@ -210,7 +210,13 @@ type H3Options = {
   last_frame?: string | null;
   video_audio?: string[];
 };
-export type Pack = { id: string; revision: number; media: string[] };
+export type Pack = {
+  id: string;
+  revision: number;
+  media: string[];
+  name?: string;
+  purpose?: string;
+};
 export const emptyH3 = {
   mode: "reference" as const,
   first_frame: null,
@@ -679,14 +685,17 @@ function jobH3(job: Job) {
 }
 export const frames = (draft: Draft) =>
   isH3(draft) && draft.h3?.mode === "frames";
-export function activeReferences({ draft, refs }: DraftSession) {
+export function activeReferences({
+  draft,
+  refs,
+}: Pick<DraftSession, "draft" | "refs">) {
   if (draft.kind === "audio") return [];
   const { first_frame, last_frame } = h3Options(draft.h3);
   return frames(draft)
     ? [...new Set([first_frame, last_frame].filter((id): id is string => !!id))]
     : refs;
 }
-export function packReferences(session: DraftSession) {
+export function packReferences(session: Pick<DraftSession, "draft" | "refs">) {
   if (session.draft.kind === "audio") return [];
   return [
     ...new Set([
@@ -718,6 +727,294 @@ export function referenceLabel(state: StudioState, id: string, refs: string[]) {
       referenceType(state, id)
     ] + referenceIndex(state, id, refs)
   );
+}
+export function referencesShifted(
+  prevState: StudioState,
+  nextState: StudioState,
+  prevRefs: string[],
+  nextRefs: string[],
+) {
+  return prevRefs.some(
+    (id) =>
+      !nextRefs.includes(id) ||
+      referenceType(prevState, id) !== referenceType(nextState, id) ||
+      referenceIndex(prevState, id, prevRefs) !==
+        referenceIndex(nextState, id, nextRefs),
+  );
+}
+export function reindexPrompt(
+  prevState: StudioState,
+  nextState: StudioState,
+  prompt: string,
+  prevRefs: string[],
+  nextRefs: string[],
+  plain = false,
+) {
+  if (plain || !prompt) return prompt;
+  return prompt.replace(
+    /<(Picture|Video|Audio) (\d+)>/g,
+    (match, type: "Picture" | "Video" | "Audio", digits: string) => {
+      const index = Number(digits);
+      if (!Number.isSafeInteger(index) || index < 1 || String(index) !== digits)
+        return match;
+      const id = prevRefs.filter(
+        (ref) => referenceType(prevState, ref) === type,
+      )[index - 1];
+      if (!id) return match;
+      if (!nextRefs.includes(id)) return "";
+      const nextType = referenceType(nextState, id);
+      return `<${nextType} ${referenceIndex(nextState, id, nextRefs)}>`;
+    },
+  );
+}
+export function syncDraftReferences(
+  prevState: StudioState,
+  nextState: StudioState,
+  prevSession: DraftSession,
+  nextSession: DraftSession,
+  reindexActive?: (nextRefs: string[]) => string,
+): DraftSession {
+  const plain = frames(nextSession.draft) || nextSession.draft.kind === "audio";
+  if (plain) return nextSession;
+  const prevRefs = packReferences(prevSession);
+  const nextRefs = packReferences(nextSession);
+  if (!referencesShifted(prevState, nextState, prevRefs, nextRefs))
+    return nextSession;
+  const prompt = reindexActive
+    ? reindexActive(nextRefs)
+    : reindexPrompt(
+        prevState,
+        nextState,
+        nextSession.draft.prompt,
+        prevRefs,
+        nextRefs,
+        false,
+      );
+  return prompt === nextSession.draft.prompt
+    ? nextSession
+    : {
+        ...nextSession,
+        draft: { ...nextSession.draft, prompt },
+      };
+}
+export function mergeAssetPackAssets<T extends { id: string }>(
+  loaded: T[],
+  uploaded: T[],
+): T[] {
+  const seen = new Set<string>();
+  const merged: T[] = [];
+  for (const item of [...uploaded, ...loaded]) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(item);
+  }
+  return merged;
+}
+export function hasDraftPacks(session: DraftSession) {
+  return Boolean(
+    session.draft.packs?.length ||
+      session.draft.h3ReferenceDraft?.packs?.length ||
+      session.suspendedImageDraft?.draft.packs?.length ||
+      session.suspendedImageDraft?.draft.h3ReferenceDraft?.packs?.length ||
+      session.suspendedMediaDraft?.draft.packs?.length ||
+      session.suspendedMediaDraft?.draft.h3ReferenceDraft?.packs?.length,
+  );
+}
+function mapPackList(
+  packs: Pack[] | undefined,
+  transform: (pack: Pack) => Pack | null,
+) {
+  if (!packs?.length) return { packs, changed: false };
+  let changed = false;
+  const next: Pack[] = [];
+  for (const pack of packs) {
+    const updated = transform(pack);
+    if (!updated) {
+      changed = true;
+    } else {
+      if (updated !== pack) changed = true;
+      next.push(updated);
+    }
+  }
+  return changed ? { packs: next, changed: true } : { packs, changed: false };
+}
+function updateSnapshotPacks<T extends DraftSnapshot>(
+  prevState: StudioState,
+  nextState: StudioState,
+  snapshot: T,
+  transform: (pack: Pack) => Pack | null,
+  includeH3Saved: boolean,
+  reindexActive?: (nextRefs: string[]) => string,
+): T {
+  let draft = snapshot.draft;
+  if (includeH3Saved && draft.h3ReferenceDraft?.packs?.length) {
+    const saved = draft.h3ReferenceDraft;
+    const mappedSaved = mapPackList(saved.packs, transform);
+    if (mappedSaved.changed) {
+      const nextSavedPacks = mappedSaved.packs ?? [];
+      const prevSavedRefs = [
+        ...new Set([
+          ...saved.refs,
+          ...saved.packs.flatMap((pack) => pack.media),
+        ]),
+      ];
+      const nextSavedRefs = [
+        ...new Set([
+          ...saved.refs,
+          ...nextSavedPacks.flatMap((pack) => pack.media),
+        ]),
+      ];
+      const prompt = referencesShifted(
+        prevState,
+        nextState,
+        prevSavedRefs,
+        nextSavedRefs,
+      )
+        ? reindexPrompt(
+            prevState,
+            nextState,
+            saved.prompt,
+            prevSavedRefs,
+            nextSavedRefs,
+            false,
+          )
+        : saved.prompt;
+      draft = {
+        ...draft,
+        h3ReferenceDraft: {
+          ...saved,
+          packs: nextSavedPacks,
+          prompt,
+        },
+      };
+    }
+  }
+  const mapped = mapPackList(draft.packs, transform);
+  if (mapped.changed) {
+    draft = { ...draft, packs: mapped.packs };
+  }
+  if (draft === snapshot.draft) return snapshot;
+  const nextSnapshot = { ...snapshot, draft };
+  const plain = frames(draft) || draft.kind === "audio";
+  if (plain) return nextSnapshot;
+  const prevRefs = packReferences(snapshot);
+  const nextRefs = packReferences(nextSnapshot);
+  if (!referencesShifted(prevState, nextState, prevRefs, nextRefs))
+    return nextSnapshot;
+  const prompt = reindexActive
+    ? reindexActive(nextRefs)
+    : reindexPrompt(
+        prevState,
+        nextState,
+        draft.prompt,
+        prevRefs,
+        nextRefs,
+        false,
+      );
+  return prompt === draft.prompt
+    ? nextSnapshot
+    : { ...nextSnapshot, draft: { ...draft, prompt } };
+}
+export function removeDraftPack(
+  state: StudioState,
+  session: DraftSession,
+  packId: string,
+  options?: {
+    allSnapshots?: boolean;
+    reindexActive?: (nextRefs: string[]) => string;
+  },
+): DraftSession {
+  const allSnapshots = options?.allSnapshots ?? false;
+  const transform = (pack: Pack) => (pack.id === packId ? null : pack);
+  const updated = updateSnapshotPacks(
+    state,
+    state,
+    session,
+    transform,
+    allSnapshots,
+    options?.reindexActive,
+  );
+  if (!allSnapshots) return updated;
+  const suspendedImageDraft = updated.suspendedImageDraft
+    ? updateSnapshotPacks(
+        state,
+        state,
+        updated.suspendedImageDraft,
+        transform,
+        true,
+      )
+    : null;
+  const suspendedMediaDraft = updated.suspendedMediaDraft
+    ? updateSnapshotPacks(
+        state,
+        state,
+        updated.suspendedMediaDraft,
+        transform,
+        true,
+      )
+    : null;
+  if (
+    updated === session &&
+    suspendedImageDraft === session.suspendedImageDraft &&
+    suspendedMediaDraft === session.suspendedMediaDraft
+  )
+    return session;
+  return {
+    ...updated,
+    suspendedImageDraft,
+    suspendedMediaDraft,
+  };
+}
+export function pruneDraftPacks(
+  prevState: StudioState,
+  nextState: StudioState,
+  session: DraftSession,
+  livePacks: ReadonlyMap<string, Pick<Pack, "id" | "name">>,
+  reindexActive?: (nextRefs: string[]) => string,
+): DraftSession {
+  const transform = (pack: Pack) => {
+    const live = livePacks.get(pack.id);
+    if (!live) return null;
+    if (!pack.name && live.name) return { ...pack, name: live.name };
+    return pack;
+  };
+  const updated = updateSnapshotPacks(
+    prevState,
+    nextState,
+    session,
+    transform,
+    true,
+    reindexActive,
+  );
+  const suspendedImageDraft = updated.suspendedImageDraft
+    ? updateSnapshotPacks(
+        prevState,
+        nextState,
+        updated.suspendedImageDraft,
+        transform,
+        true,
+      )
+    : null;
+  const suspendedMediaDraft = updated.suspendedMediaDraft
+    ? updateSnapshotPacks(
+        prevState,
+        nextState,
+        updated.suspendedMediaDraft,
+        transform,
+        true,
+      )
+    : null;
+  if (
+    updated === session &&
+    suspendedImageDraft === session.suspendedImageDraft &&
+    suspendedMediaDraft === session.suspendedMediaDraft
+  )
+    return session;
+  return {
+    ...updated,
+    suspendedImageDraft,
+    suspendedMediaDraft,
+  };
 }
 
 function frameRatiosDiffer(first?: Asset, last?: Asset) {
@@ -833,6 +1130,8 @@ export function checkImages(
   ids: string[],
   existing = packReferences(session),
 ) {
+  if (session.draft.kind === "audio")
+    throw new Error("当前语音生成不支持参考图片，请先切换为视频生成或图片生成");
   const images = [...new Set(ids)];
   if (
     images.some(
@@ -843,13 +1142,16 @@ export function checkImages(
     throw new Error("图片已移除或不在当前空间，请重新选择");
   const combined = [...new Set([...existing, ...images])];
   const limits = modelForm(state, session.draft)?.references;
-  const pictures = limits?.counts?.image ?? limits?.max ?? 0;
+  const max = limits?.max ?? 0;
+  const pictures = limits?.counts?.image ?? max;
+  if (pictures <= 0 || max <= 0)
+    throw new Error("当前模型不支持参考图片，请先切换支持参考图的模型");
   if (
     combined.filter((id) => referenceType(state, id) === "Picture").length >
     pictures
   )
     throw new Error(`最多选择 ${pictures} 张参考图片，请先移除部分图片`);
-  if (combined.length > (modelForm(state, session.draft)?.references.max ?? 0))
+  if (combined.length > max)
     throw new Error("参考素材已达上限，请先移除部分素材");
   return images.filter((id) => !existing.includes(id));
 }

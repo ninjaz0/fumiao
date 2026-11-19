@@ -60,17 +60,21 @@ import {
   frames,
   generationRequest,
   h3Options,
+  hasDraftPacks,
   isH3,
   loadJob,
   modelAvailable,
   normalizeParams,
   packReferences,
   promptLimit,
+  pruneDraftPacks,
   referenceAsset,
   referenceIssue,
   referenceType,
+  removeDraftPack,
   resultTab,
   selectedModel,
+  syncDraftReferences,
   quote,
   readDraft,
   writeDraft,
@@ -253,34 +257,90 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             adminSettingsTabs.some((key) => key === tab) ? "general" : tab,
           );
         }
-        const priorDraft = currentDraft.current || readDraft(next);
+        const initialDraft = currentDraft.current || readDraft(next);
+        let livePacks: Map<string, Pack> | null = null;
+        if (hasDraftPacks(initialDraft)) {
+          try {
+            const result = await api<{ packs?: Pack[] }>(
+              String(next.workspace_id),
+              "/api/asset-packs",
+            );
+            if (version !== stateRead.current || leaving.current) return;
+            if (Array.isArray(result?.packs)) {
+              livePacks = new Map(
+                result.packs.map((pack) => [pack.id, pack]),
+              );
+            }
+          } catch {
+            // Keep existing pack references when /api/asset-packs fails.
+          }
+        }
+        const priorDraft = currentDraft.current || initialDraft;
+        const prevSpace = previous ?? next;
         const model = selectedModel(priorDraft.draft);
         const changedForm =
           previous &&
           JSON.stringify(previous.model_forms?.[model]) !==
             JSON.stringify(next.model_forms?.[model]);
-        const keepUnavailable=next.studio_plugins && model && !modelAvailable(next,model);
-        const draft = keepUnavailable ? priorDraft.draft : ensureModel(
-          next,
-          changedForm
-            ? normalizeParams(next, priorDraft.draft)
-            : priorDraft.draft,
+        const keepUnavailable =
+          next.studio_plugins && model && !modelAvailable(next, model);
+        const normalizedDraft = keepUnavailable
+          ? priorDraft.draft
+          : ensureModel(
+              next,
+              changedForm
+                ? normalizeParams(next, priorDraft.draft)
+                : priorDraft.draft,
+            );
+        const afterPacks = livePacks
+          ? pruneDraftPacks(prevSpace, next, priorDraft, livePacks)
+          : priorDraft;
+        const filteredRefs = priorDraft.refs.filter((id) =>
+          referenceAsset(next, id),
         );
-        const refs = priorDraft.refs.filter((id) => referenceAsset(next, id));
+        const lostRef = filteredRefs.length !== priorDraft.refs.length;
+        const refs = lostRef ? filteredRefs : priorDraft.refs;
         const hasParent = next.jobs.some(({ id }) => id === priorDraft.parent);
-        const lostRef = refs.length !== priorDraft.refs.length;
         const lostParent = priorDraft.parent !== null && !hasParent;
-        if (draft !== priorDraft.draft || lostRef || lostParent) {
+        const draftChanged =
+          normalizedDraft !== priorDraft.draft ||
+          afterPacks.draft.packs !== priorDraft.draft.packs ||
+          afterPacks.draft.h3ReferenceDraft !==
+            priorDraft.draft.h3ReferenceDraft;
+        const mergedDraft = draftChanged
+          ? {
+              ...normalizedDraft,
+              packs: afterPacks.draft.packs,
+              h3ReferenceDraft: afterPacks.draft.h3ReferenceDraft,
+            }
+          : priorDraft.draft;
+        const nextBase: DraftSession =
+          mergedDraft !== priorDraft.draft ||
+          afterPacks !== priorDraft ||
+          lostRef ||
+          lostParent
+            ? {
+                ...afterPacks,
+                draft: mergedDraft,
+                refs,
+                ...(lostParent ? { parent: null, retainedSeed: null } : {}),
+              }
+            : priorDraft;
+        const nextSession =
+          nextBase === priorDraft
+            ? priorDraft
+            : syncDraftReferences(
+                prevSpace,
+                next,
+                priorDraft,
+                nextBase,
+                editor.current
+                  ? (nextRefs) => editor.current!.reindex(nextRefs)
+                  : undefined,
+              );
+        if (nextSession !== priorDraft) {
           persist(next, {
-            ...priorDraft,
-            draft: lostRef
-              ? {
-                  ...draft,
-                  prompt: editor.current?.reindex(refs) ?? draft.prompt,
-                }
-              : draft,
-            refs,
-            ...(lostParent ? { parent: null, retainedSeed: null } : {}),
+            ...nextSession,
             submitId: crypto.randomUUID(),
           });
         } else if (!previous) {
@@ -803,22 +863,39 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     const session = currentDraft.current;
     if (!space || !session || busy.current.has("upload")) return;
     try {
+      const type = referenceType(space, id);
+      if (session.draft.kind === "audio")
+        throw new Error(
+          type === "Picture"
+            ? "当前语音生成不支持参考图片，请先切换为视频生成或图片生成"
+            : "请先选择 MiniMax H3 全能参考模式",
+        );
       let next = session;
-      if (referenceType(space, id) === "Picture")
-        next = addImages(space, session, [id]);
+      if (type === "Picture") next = addImages(space, session, [id]);
       else if (!isH3(session.draft))
         throw new Error("请先选择 MiniMax H3 全能参考模式");
       else if (frames(session.draft)) next = assignFrame(space, session, id);
       else if (
-        session.refs.length >=
+        packReferences(session).length >=
         (space.model_forms?.[selectedModel(session.draft)]?.references.max ?? 9)
       )
         throw new Error(
-          `最多选择 ${(space.model_forms?.[selectedModel(session.draft)]?.references.max ?? 9)} 个参考素材`,
+          `最多选择 ${space.model_forms?.[selectedModel(session.draft)]?.references.max ?? 9} 个参考素材`,
         );
       else if (!session.refs.includes(id))
         next = { ...session, refs: [...session.refs, id] };
-      if (next !== session) updateDraft(next);
+      if (next !== session)
+        updateDraft(
+          syncDraftReferences(
+            space,
+            space,
+            session,
+            next,
+            editor.current
+              ? (nextRefs) => editor.current!.reindex(nextRefs)
+              : undefined,
+          ),
+        );
       if (!referencePicking) openHomeComposer();
     } catch (error) {
       notify((error as Error).message);
@@ -846,6 +923,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   async function changePacks(
     action: (space: StudioState, session: DraftSession) => DraftSession,
     reload = true,
+    close = true,
   ) {
     const before = active.current;
     if (!before || busy.current.has("upload"))
@@ -855,8 +933,32 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     const session = currentDraft.current;
     if (!space || !session || !sameSpace(before, space) || leaving.current)
       return;
-    updateDraft(action(space, session));
-    setDialog(null);
+    const next = action(space, session);
+    if (next !== session)
+      updateDraft(
+        syncDraftReferences(
+          space,
+          space,
+          session,
+          next,
+          editor.current
+            ? (nextRefs) => editor.current!.reindex(nextRefs)
+            : undefined,
+        ),
+      );
+    if (close) setDialog(null);
+  }
+
+  function removePack(id: string) {
+    const space = active.current;
+    const session = currentDraft.current;
+    if (!space || !session || leaving.current) return;
+    const next = removeDraftPack(space, session, id, {
+      reindexActive: editor.current
+        ? (nextRefs) => editor.current!.reindex(nextRefs)
+        : undefined,
+    });
+    if (next !== session) updateDraft(next);
   }
 
   function openPacks() {
@@ -891,6 +993,18 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           }),
           false,
         ),
+      deletePack: async (id) => {
+        const space = active.current;
+        const session = currentDraft.current;
+        if (!space || !session || leaving.current) return;
+        const next = removeDraftPack(space, session, id, {
+          allSnapshots: true,
+          reindexActive: editor.current
+            ? (nextRefs) => editor.current!.reindex(nextRefs)
+            : undefined,
+        });
+        if (next !== session) updateDraft(next);
+      },
     });
   }
 
@@ -1165,10 +1279,22 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             return;
           const h3 = isH3(current.draft);
           const frameMode = frames(current.draft);
-          const limit =
-            space.model_forms[selectedModel(current.draft)]?.references.max ??
-            0;
-          if (!frameMode && current.refs.length >= limit) {
+          const form = space.model_forms[selectedModel(current.draft)];
+          const limit = form?.references.max ?? 0;
+          const pictures = form?.references.counts?.image ?? limit;
+          const kind = file.type.startsWith("video/")
+            ? "video"
+            : file.type.startsWith("audio/")
+              ? "audio"
+              : "image";
+          if (
+            !frameMode &&
+            (limit <= 0 || (kind === "image" && pictures <= 0))
+          ) {
+            notify("当前模型不支持参考图片，请先切换支持参考图的模型");
+            break;
+          }
+          if (!frameMode && packReferences(current).length >= limit) {
             notify(
               h3
                 ? `最多选择 ${limit} 个参考素材`
@@ -1176,11 +1302,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             );
             break;
           }
-          const kind = file.type.startsWith("video/")
-            ? "video"
-            : file.type.startsWith("audio/")
-              ? "audio"
-              : "image";
           if (kind !== "image" && (!h3 || frameMode))
             throw new Error("这个模式只接收图片");
           const result = await api<
@@ -1214,10 +1335,19 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           if (result.first_frame) notify("动态图或多页图片已按首帧导入");
           else if (result.resized)
             notify(`图片已适配为 ${result.w} × ${result.h}`);
+          const nextSession = frameMode
+            ? assignFrame(withAsset, latest, result.id, frame)
+            : { ...latest, refs: [...latest.refs, result.id] };
           updateDraft(
-            frameMode
-              ? assignFrame(withAsset, latest, result.id, frame)
-              : { ...latest, refs: [...latest.refs, result.id] },
+            syncDraftReferences(
+              withAsset,
+              withAsset,
+              latest,
+              nextSession,
+              editor.current
+                ? (nextRefs) => editor.current!.reindex(nextRefs)
+                : undefined,
+            ),
           );
           frame = undefined;
         }
@@ -1229,16 +1359,16 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }
 
   function changeRefs(refs: string[], removed?: string) {
+    const space = active.current;
     const session = currentDraft.current;
-    if (!session) return;
+    if (!space || !session) return;
     const { draft } = session;
     const options = h3Options(draft.h3);
-    updateDraft({
+    const nextSession: DraftSession = {
       ...session,
       refs,
       draft: {
         ...draft,
-        prompt: editor.current?.reindex(refs) ?? draft.prompt,
         ...(removed && isH3(draft)
           ? {
               h3: {
@@ -1248,7 +1378,18 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             }
           : {}),
       },
-    });
+    };
+    updateDraft(
+      syncDraftReferences(
+        space,
+        space,
+        session,
+        nextSession,
+        editor.current
+          ? (nextRefs) => editor.current!.reindex(nextRefs)
+          : undefined,
+      ),
+    );
   }
 
   const composer = state && session && (
@@ -1592,6 +1733,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
               editor.current?.insert(id);
             }}
             changeRefs={changeRefs}
+            removePack={removePack}
             pickAssets={startPicking}
             openPacks={openPacks}
             notify={notify}

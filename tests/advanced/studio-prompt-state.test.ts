@@ -1,16 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { paintPrompt, readPrompt } from "../../apps/web/studio/prompt.js";
+import {
+  createReferenceToken,
+  paintPrompt,
+  readPrompt,
+  reindexPrompt,
+} from "../../apps/web/studio/prompt.js";
 import {
   activeReferences,
+  addImages,
   changeCreation,
+  checkImages,
   H3,
+  hasDraftPacks,
   loadJob,
+  mergeAssetPackAssets,
   modelForm,
   normalizeParams,
   packReferences,
+  pruneDraftPacks,
   readDraft,
+  removeDraftPack,
   seedError,
+  syncDraftReferences,
   writeDraft,
   type DraftSession,
   type Job,
@@ -734,4 +746,333 @@ test("#90 seedError and normalizeParams enforce model seed minimum and maximum b
   assert.equal(seedError(unboundedForm, "0"), "");
   assert.equal(seedError(unboundedForm, "4294967296"), "");
   assert.equal(seedError(unboundedForm, "9007199254740992"), "请输入有效的非负整数");
+});
+
+test("#46 mergeAssetPackAssets preserves locally uploaded assets when a stale load finishes later", () => {
+  // Stale load returned empty list after local upload succeeded.
+  assert.deepEqual(
+    mergeAssetPackAssets([], [{ id: "uploaded-1" }]),
+    [{ id: "uploaded-1" }],
+  );
+
+  // Deduplicates by id while keeping newly uploaded items at the front.
+  assert.deepEqual(
+    mergeAssetPackAssets(
+      [{ id: "old-1" }, { id: "uploaded-1" }, { id: "old-2" }],
+      [{ id: "uploaded-2" }, { id: "uploaded-1" }],
+    ),
+    [
+      { id: "uploaded-2" },
+      { id: "uploaded-1" },
+      { id: "old-1" },
+      { id: "old-2" },
+    ],
+  );
+});
+
+test("#86 packReferences aligns prompt chips, @图片N conversion, and reindexing with backend expansion order", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState({
+    assets: [
+      { id: "img1", owner: 1, kind: "ref", w: 100, h: 100 },
+      { id: "img2", owner: 1, kind: "ref", w: 100, h: 100 },
+      { id: "img3", owner: 1, kind: "ref", w: 100, h: 100 },
+      { id: "vid1", owner: 1, kind: "ref_video", w: 100, h: 100, seconds: 5, has_audio: true },
+    ],
+  });
+
+  const base = readDraft(state);
+  const packOnlySession: DraftSession = {
+    ...base,
+    refs: [],
+    draft: {
+      ...base.draft,
+      kind: "video",
+      packs: [{ id: "pack-a", name: "主角 A", revision: 1, media: ["img1", "img2"] }],
+      prompt: "让 <Picture 1> 和 <Picture 2> 同框",
+    },
+  };
+
+  const refs = packReferences(packOnlySession);
+  assert.deepEqual(refs, ["img1", "img2"]);
+
+  // Painting & reading with packReferences renders chips for pack-only references.
+  const editor = env.el("div");
+  paintPrompt(
+    editor as unknown as HTMLElement,
+    state,
+    refs,
+    packOnlySession.draft.prompt,
+    false,
+  );
+  const tokens = editor.querySelectorAll(".reference-token");
+  assert.equal(tokens.length, 2);
+  assert.equal(tokens[0].dataset.refid, "img1");
+  assert.equal(tokens[1].dataset.refid, "img2");
+  assert.equal(readPrompt(editor as unknown as HTMLElement, state, refs, false), "让 <Picture 1> 和 <Picture 2> 同框");
+
+  // Creating a token for a pack image labels it with its effective picture index.
+  const created = createReferenceToken(state, refs, "img2") as unknown as FakeHTMLElement;
+  assert.equal(created.dataset.refid, "img2");
+  assert.equal(created.childNodes[created.childNodes.length - 1]?.textContent, "图片2");
+
+  // Literal @图片N matches against packReferences count (converts 1 & 2, keeps 3 literal).
+  const literalEditor = env.el("div", ["参考 @图片1 @图片2 @图片3"]);
+  assert.equal(
+    readPrompt(literalEditor as unknown as HTMLElement, state, refs, false),
+    "参考 <Picture 1> <Picture 2> @图片3",
+  );
+
+  // Mixing direct video + direct image + overlapping pack matches generation.ts expansion order.
+  const mixedSession: DraftSession = {
+    ...packOnlySession,
+    refs: ["vid1", "img3"],
+    draft: {
+      ...packOnlySession.draft,
+      packs: [
+        { id: "pack-a", name: "主角 A", revision: 1, media: ["img3", "img1"] },
+        { id: "pack-b", name: "场景 B", revision: 1, media: ["img2"] },
+      ],
+    },
+  };
+  assert.deepEqual(packReferences(mixedSession), ["vid1", "img3", "img1", "img2"]);
+
+  // Adding a direct image while a pack is imported shifts existing pack <Picture N> tags.
+  const shiftedSession = syncDraftReferences(
+    state,
+    state,
+    packOnlySession,
+    { ...packOnlySession, refs: ["img3"] },
+  );
+  assert.deepEqual(packReferences(shiftedSession), ["img3", "img1", "img2"]);
+  assert.equal(shiftedSession.draft.prompt, "让 <Picture 2> 和 <Picture 3> 同框");
+
+  // Removing the direct ref shifts pack references back cleanly.
+  const unshifted = syncDraftReferences(
+    state,
+    state,
+    shiftedSession,
+    { ...shiftedSession, refs: [] },
+  );
+  assert.equal(unshifted.draft.prompt, "让 <Picture 1> 和 <Picture 2> 同框");
+});
+
+test("#84 removeDraftPack and pruneDraftPacks clean deleted packs, reindex prompts, and tolerate refresh edge cases", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState({
+    assets: [
+      { id: "img1", owner: 1, kind: "ref", w: 100, h: 100 },
+      { id: "img2", owner: 1, kind: "ref", w: 100, h: 100 },
+      { id: "img3", owner: 1, kind: "ref", w: 100, h: 100 },
+    ],
+  });
+
+  const base = readDraft(state);
+  const session: DraftSession = {
+    ...base,
+    refs: ["img1"],
+    draft: {
+      ...base.draft,
+      kind: "video",
+      prompt: "<Picture 1> 和 <Picture 2> 在 <Picture 3> 中",
+      packs: [
+        { id: "pack-1", revision: 1, media: ["img2"] },
+        { id: "pack-2", name: "场景 B", revision: 2, media: ["img3"] },
+      ],
+      h3ReferenceDraft: {
+        refs: [],
+        prompt: "镜头 <Picture 1> 到 <Picture 2>",
+        packs: [
+          { id: "pack-1", revision: 1, media: ["img2"] },
+          { id: "pack-2", name: "场景 B", revision: 2, media: ["img3"] },
+        ],
+        video_audio: [],
+      },
+    },
+    suspendedMediaDraft: {
+      draft: {
+        ...base.draft,
+        kind: "video",
+        prompt: "挂起 <Picture 1> 和 <Picture 2>",
+        packs: [
+          { id: "pack-1", revision: 1, media: ["img2"] },
+          { id: "pack-2", name: "场景 B", revision: 2, media: ["img3"] },
+        ],
+      },
+      refs: [],
+      parent: null,
+      retainedSeed: null,
+      submitId: "media-1",
+    },
+  };
+
+  assert.equal(hasDraftPacks(session), true);
+
+  // Direct removal from references popover removes only from active draft and reindexes prompt.
+  const removedActiveOnly = removeDraftPack(state, session, "pack-1");
+  assert.deepEqual(
+    removedActiveOnly.draft.packs?.map((p) => p.id),
+    ["pack-2"],
+  );
+  assert.equal(removedActiveOnly.draft.prompt, "<Picture 1> 和  在 <Picture 2> 中");
+  assert.equal(removedActiveOnly.suspendedMediaDraft?.draft.packs?.length, 2);
+
+  // Server-side pack deletion (allSnapshots: true) scrubs active, h3ReferenceDraft, and suspended drafts.
+  const deletedEverywhere = removeDraftPack(state, session, "pack-1", {
+    allSnapshots: true,
+  });
+  assert.deepEqual(
+    deletedEverywhere.draft.packs?.map((p) => p.id),
+    ["pack-2"],
+  );
+  assert.equal(deletedEverywhere.draft.prompt, "<Picture 1> 和  在 <Picture 2> 中");
+  assert.deepEqual(
+    deletedEverywhere.draft.h3ReferenceDraft?.packs.map((p) => p.id),
+    ["pack-2"],
+  );
+  assert.equal(deletedEverywhere.draft.h3ReferenceDraft?.prompt, "镜头  到 <Picture 1>");
+  assert.deepEqual(
+    deletedEverywhere.suspendedMediaDraft?.draft.packs?.map((p) => p.id),
+    ["pack-2"],
+  );
+  assert.equal(deletedEverywhere.suspendedMediaDraft?.draft.prompt, "挂起  和 <Picture 1>");
+
+  // pruneDraftPacks (refresh validation) removes missing packs, hydrates missing name, and preserves revision.
+  const liveAfterDelete = new Map([
+    ["pack-2", { id: "pack-2", name: "场景 B（已更新）" }],
+  ]);
+  const pruned = pruneDraftPacks(state, state, session, liveAfterDelete);
+  assert.deepEqual(
+    pruned.draft.packs?.map((p) => ({ id: p.id, revision: p.revision, name: p.name })),
+    [{ id: "pack-2", revision: 2, name: "场景 B" }],
+  );
+  assert.equal(pruned.draft.prompt, "<Picture 1> 和  在 <Picture 2> 中");
+  assert.equal(pruned.suspendedMediaDraft?.draft.prompt, "挂起  和 <Picture 1>");
+
+  // Hydrates missing name on a legacy pack while leaving revision/prompt untouched.
+  const liveAll = new Map([
+    ["pack-1", { id: "pack-1", name: "主角 A" }],
+    ["pack-2", { id: "pack-2", name: "场景 B" }],
+  ]);
+  const hydrated = pruneDraftPacks(state, state, session, liveAll);
+  assert.equal(hydrated.draft.packs?.[0]?.name, "主角 A");
+  assert.equal(hydrated.draft.packs?.[0]?.revision, 1);
+  assert.equal(hydrated.draft.prompt, session.draft.prompt);
+
+  // Second prune with no changes returns the exact same session reference (no unnecessary persist).
+  assert.equal(pruneDraftPacks(state, state, hydrated, liveAll), hydrated);
+
+  // Removing a pack whose image also exists in direct refs preserves the direct ref tag.
+  const overlapping: DraftSession = {
+    ...base,
+    refs: ["img1"],
+    draft: {
+      ...base.draft,
+      prompt: "<Picture 1> 主体",
+      packs: [{ id: "pack-overlap", name: "重叠包", revision: 1, media: ["img1"] }],
+    },
+  };
+  const afterOverlapRemove = removeDraftPack(state, overlapping, "pack-overlap");
+  assert.deepEqual(afterOverlapRemove.draft.packs, []);
+  assert.equal(afterOverlapRemove.draft.prompt, "<Picture 1> 主体");
+
+  // reindexPrompt preserves non-matching literal tags and plain mode text.
+  assert.equal(
+    reindexPrompt(state, state, "<Picture 1> <Picture 9> <Picture 01>", ["img1"], [], false),
+    " <Picture 9> <Picture 01>",
+  );
+  assert.equal(
+    reindexPrompt(state, state, "<Picture 1> 朗读", ["img1"], [], true),
+    "<Picture 1> 朗读",
+  );
+});
+
+test("#94 checkImages and addImages return clear guidance in audio mode and zero-reference models", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState({
+    model_forms: {
+      ...makeState().model_forms,
+      "flow-t2v": {
+        fields: { ratio: { type: "string", enum: ["16:9"], default: "16:9" } },
+        tiers: [],
+        references: { min: 0, max: 0 },
+      },
+      "no-pic-model": {
+        fields: { ratio: { type: "string", enum: ["16:9"], default: "16:9" } },
+        tiers: [],
+        references: { min: 0, max: 3, counts: { image: 0, video: 3, audio: 0 } },
+      },
+    },
+    video_models: {
+      ...makeState().video_models,
+      "flow-t2v": "Flow T2V",
+      "no-pic-model": "No Pic",
+    },
+    model_policy: {
+      revision: 1,
+      enabled: {
+        [H3]: true,
+        "breeze-tts-2": true,
+        "gpt-image-2.6-sunburst": true,
+        "flow-t2v": true,
+        "no-pic-model": true,
+      },
+    },
+    model_catalog: {
+      ...makeState().model_catalog,
+      "flow-t2v": { provider: "gpu", label: "Flow T2V" },
+      "no-pic-model": { provider: "gpu", label: "No Pic" },
+    },
+  });
+
+  const base = readDraft(state);
+
+  // Audio generation mode: clear actionable guidance, never "最多选择 0 张参考图片".
+  const audioSession = changeCreation(state, base, "audio");
+  assert.throws(
+    () => checkImages(state, audioSession, ["img1"]),
+    { message: "当前语音生成不支持参考图片，请先切换为视频生成或图片生成" },
+  );
+  assert.throws(
+    () => addImages(state, audioSession, ["img1"]),
+    { message: "当前语音生成不支持参考图片，请先切换为视频生成或图片生成" },
+  );
+
+  // Non-audio model with references.max === 0.
+  const zeroMaxSession: DraftSession = {
+    ...base,
+    draft: { ...base.draft, kind: "video", videoModel: "flow-t2v", h3: undefined },
+  };
+  assert.throws(
+    () => checkImages(state, zeroMaxSession, ["img1"]),
+    { message: "当前模型不支持参考图片，请先切换支持参考图的模型" },
+  );
+
+  // Non-audio model with counts.image === 0.
+  const zeroPicSession: DraftSession = {
+    ...base,
+    draft: { ...base.draft, kind: "video", videoModel: "no-pic-model", h3: undefined },
+  };
+  assert.throws(
+    () => checkImages(state, zeroPicSession, ["img1"]),
+    { message: "当前模型不支持参考图片，请先切换支持参考图的模型" },
+  );
+
+  // Model supporting references still adds valid images and reports positive limit when exceeded.
+  const imageSession = changeCreation(state, base, "image");
+  const added = addImages(state, imageSession, ["img1"]);
+  assert.deepEqual(added.refs, ["img1"]);
+  assert.throws(
+    () =>
+      checkImages(state, imageSession, ["img2"], [
+        "img1",
+        "img-a",
+        "img-b",
+        "img-c",
+      ]),
+    { message: "最多选择 4 张参考图片，请先移除部分图片" },
+  );
 });
