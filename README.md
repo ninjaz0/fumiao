@@ -57,4 +57,4 @@ pnpm test:studio
 
 `test:studio` 从正式版入口验证登录、生成、支付回跳、画布、私有媒体、任务结算、服务重启和路由响应。需要可执行的 `initdb`、`postgres` 和 `redis-server`，可通过 `PG_BINDIR` 和 `REDIS_SERVER` 指定路径。GPU 和数据导出工具使用 Python 3；工作台只运行新版服务。
 
-GitHub Actions 的配置保存在 [ci/github-actions.yml](ci/github-actions.yml)。需要启用自动检查时，由有工作流写入权限的维护者将它移动到 `.github/workflows/ci.yml`。
+向 `main` 提 PR 或推送到 `main` 时，[Studio PR checks](.github/workflows/ci.yml) 使用 PG 18 和 Redis 8、构建生产前端、验证正式入口并构建 Docker 镜像。
