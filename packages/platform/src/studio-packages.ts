@@ -643,7 +643,8 @@ export class StudioPackages {
     if (
       await one(
         sql,
-        "SELECT id FROM jobs WHERE plugin_id=$1 AND state NOT IN ('completed','failed','cancelled') LIMIT 1",
+        `SELECT 1 FROM jobs WHERE plugin_id=$1 AND state NOT IN ('completed','failed','cancelled')
+         UNION ALL SELECT 1 FROM chat_turns WHERE plugin_id=$1 AND state='running' LIMIT 1`,
         [id],
       )
     )

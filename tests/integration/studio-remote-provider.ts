@@ -20,6 +20,7 @@ import {
 } from "./studio-settings-browser.js";
 import { execFileSync } from "node:child_process";
 import sharp from "sharp";
+import { verifyChatPackage } from "./studio-chat-package.js";
 
 async function composerMedia(directory: string) {
   const path = join(directory, "composer-media");
@@ -260,6 +261,17 @@ export async function verifyRemoteProvider(
     await expect(
       page.locator('.settings-navigation [data-value="gpu"]'),
     ).toHaveCount(0);
+    const fund = async (space: number) =>
+      call("/api/admin/credits/adjust", {
+        data: {
+          workspace: space,
+          amount: 100,
+          note: "隔离测试",
+          uid: randomUUID(),
+        },
+      });
+    await fund(workspace);
+    await verifyChatPackage(page);
     const other = await call("/api/workspaces", {
       data: { name: "隔离提供方测试空间" },
     });
@@ -403,16 +415,6 @@ export async function verifyRemoteProvider(
       /original-key/,
     );
 
-    const fund = async (space: number) =>
-      call("/api/admin/credits/adjust", {
-        data: {
-          workspace: space,
-          amount: 100,
-          note: "隔离测试",
-          uid: randomUUID(),
-        },
-      });
-    await fund(workspace);
     await fund(other.id);
     const balance = (await state()).credits.available;
     const upload = async (space: number) => {
@@ -741,6 +743,6 @@ export async function verifyRemoteProvider(
     await new Promise<void>((resolve) => provider.close(() => resolve()));
   }
   console.log(
-    "Default Chromium Studio selected and generated remote image, video and audio through BullMQ; verified isolation, immutable versions/config and ledger.",
+    "Chromium imported a standalone chat package into an empty Studio, streamed a reply and generated remote image, video and audio through BullMQ; verified isolation, immutable versions/config and ledger.",
   );
 }

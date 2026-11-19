@@ -22,7 +22,7 @@ docker compose up -d --wait
 
 打开 `http://localhost:3000/studio`，新实例的默认管理员用户名为 `admin`。Compose 将 Web 绑定在本机 3000 端口。对外服务通过 HTTPS 反向代理接入，`PUBLIC_URL` 应与浏览器地址一致。[部署、备份与恢复](docs/OPERATIONS.md)
 
-1. 在「设置 → 插件」点「导入插件」。全新安装的列表为空。仓库提供 [Flow2API](plugins/flow/flow.fmplugin.json)、[Muse2API](plugins/muse/muse.fmplugin.json) 和 [GPU 节点](plugins/gpu/gpu.fmplugin.json) 三个独立文件。
+1. 在「设置 → 插件」点「导入插件」。全新安装的列表为空。仓库提供 [Flow2API](plugins/flow/flow.fmplugin.json)、[Muse2API](plugins/muse/muse.fmplugin.json)、[GPU 节点](plugins/gpu/gpu.fmplugin.json) 和 [兼容对话](plugins/compatible-chat/compatible-chat.fmplugin.json) 四个独立文件。
 2. 确认插件及模型清单后，在卡片中打开「设置」，填写服务地址及密钥并测试连接。可以勾选模型，进入生成定价设置各档积分，或添加第二个服务。卡片开关对全平台生效。
 3. GPU 插件安装后，平台管理员可在「设置 → GPU 节点」配对服务器。关闭插件仍可管理节点，并继续处理已受理的任务。
 4. 在创作页选择模型并生成。管理员可在插件卡片检查更新、查看变更并确认安装。[插件包及更新源格式](docs/PLUGINS.md)

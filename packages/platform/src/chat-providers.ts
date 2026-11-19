@@ -3,6 +3,7 @@ import { studioPluginProfile } from "./studio-plugin-profile.js";
 import { one, type Sql } from "./db.js";
 import { requireValue } from "./security.js";
 import { validator } from "./plugins.js";
+import { hasStudioPackages } from "./studio-plugin-profile.js";
 import type { ProviderPlugin, ChatPolicy } from "../../plugin-sdk/src/index.js";
 export type ChatConnection = {
   plugin: ProviderPlugin;
@@ -26,11 +27,23 @@ export class ChatProviders {
     if (!versions.length && (await studioPluginProfile(sql)) === "explicit")
       return result;
     requireValue(versions.length, 503, "原对话插件尚未完整启用");
+    const packaged = await hasStudioPackages(sql);
+    const liveConnections = packaged ? " AND NOT removed" : "";
     for (const v of versions) {
+      const managed =
+        packaged &&
+        (await one(
+          sql,
+          "SELECT installed,removing FROM studio_packages WHERE id=$1",
+          [v.id],
+        ));
+      if (managed && (!managed.installed || managed.removing)) continue;
       const plugin = await this.p.registry.resolve(sql, v.id, v.version);
       const rows = (
         await sql.query(
-          "SELECT * FROM connections WHERE plugin_id=$1 AND plugin_version=$2 ORDER BY id" +
+          "SELECT * FROM connections WHERE plugin_id=$1 AND plugin_version=$2" +
+            liveConnections +
+            " ORDER BY id" +
             (lock ? " FOR SHARE" : ""),
           [v.id, v.version],
         )
@@ -67,7 +80,17 @@ export class ChatProviders {
           ...provider.defaultConfig,
         };
         let config = { ...storedConfig };
-        if (!plugin.chatConfigured!(config) && provider.credentialFallback) {
+        // An imported service may use a custom host. Only inherit a credential
+        // for the provider's declared destination on managed installations.
+        const defaultUrl = provider.defaultConfig.baseUrl;
+        if (
+          !plugin.chatConfigured!(config) &&
+          provider.credentialFallback &&
+          (!managed ||
+            (typeof defaultUrl === "string" &&
+              URL.parse(String(config.baseUrl || defaultUrl))?.origin ===
+                new URL(defaultUrl).origin))
+        ) {
           const fallback = provider.credentialFallback;
           const model = await one(
             sql,
@@ -77,7 +100,9 @@ export class ChatProviders {
           if (model) {
             const candidates = (
               await sql.query(
-                "SELECT config FROM connections WHERE plugin_id=$1 AND plugin_version=$2 ORDER BY id" +
+                "SELECT config FROM connections WHERE plugin_id=$1 AND plugin_version=$2" +
+                  liveConnections +
+                  " ORDER BY id" +
                   (lock ? " FOR SHARE" : ""),
                 [model.plugin_id, model.plugin_version],
               )

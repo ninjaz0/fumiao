@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { portablePlugin } from "./portable-plugin.js";
 import {
+  approvedAdapterVersions,
   officialAdapter,
   reservedAdapterId,
   type OfficialAdapter,
@@ -128,9 +129,13 @@ export class PluginRegistry {
     // Migration 034 names only services that already existed. Hydrate those
     // releases without registering any extra provider, model or connection.
     const rows = (
-      await sql.query(`SELECT p.id,p.version,r.package,v.manifest,v.endpoint FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+      await sql.query(
+        `SELECT p.id,p.version,r.package,v.manifest,v.endpoint FROM studio_packages p JOIN studio_package_releases r USING(id,version)
       JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
-      WHERE p.installed AND NOT (r.package ?| array['remote','adapterModule','manifest','restored'])`)
+      WHERE p.installed AND NOT (r.package ?| array['remote','adapterModule','manifest'])
+      AND (NOT (r.package ? 'restored') OR (v.id || '@' || v.version)=ANY($1::text[]))`,
+        [approvedAdapterVersions],
+      )
     ).rows;
     for (const row of rows) {
       let release = { ...row.package, restored: true };
@@ -174,7 +179,7 @@ export class PluginRegistry {
         [row.id, release.version, JSON.stringify(release)],
       );
       await sql.query(
-        "UPDATE studio_packages SET version=$2,update_url=$3 WHERE id=$1",
+        "UPDATE studio_packages SET version=$2,update_url=COALESCE(update_url,$3) WHERE id=$1",
         [row.id, release.version, release.updateUrl ?? null],
       );
       await sql.query(

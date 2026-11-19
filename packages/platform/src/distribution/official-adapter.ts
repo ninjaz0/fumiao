@@ -12,8 +12,9 @@ import { requireValue } from "../security.js";
 const approved: Record<string, string> = JSON.parse(
   readFileSync(new URL("./official-adapters.json", import.meta.url), "utf8"),
 );
+export const approvedAdapterVersions = Object.keys(approved);
 export const reservedAdapterId = (id: string) =>
-  Object.keys(approved).some((key) => key.split("@")[0] === id);
+  approvedAdapterVersions.some((key) => key.split("@")[0] === id);
 export type OfficialAdapter = {
   adapter: ProviderPlugin;
   protocol?: PairedAgentProtocol;
