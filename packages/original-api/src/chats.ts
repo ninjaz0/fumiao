@@ -1,3 +1,4 @@
+import { listedStudioCatalog } from "../../platform/src/studio-plugin-profile.js";
 import { randomUUID } from "node:crypto";
 import type { Actor, Platform } from "../../platform/src/platform.js";
 import { one, type Sql } from "../../platform/src/db.js";
@@ -43,7 +44,7 @@ export class OriginalChats {
   private async models(sql: Sql) {
     return (
       await sql.query(
-        "SELECT id,descriptor FROM studio_catalog WHERE descriptor->>'kind'='chat' ORDER BY position,id",
+        `SELECT id,descriptor FROM ${await listedStudioCatalog(sql)} c WHERE descriptor->>'kind'='chat' ORDER BY position,id`,
       )
     ).rows;
   }

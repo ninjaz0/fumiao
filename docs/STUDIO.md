@@ -24,7 +24,7 @@ pnpm build
 STUDIO_ENV_FILE=.env.studio-nest pnpm start:studio
 ```
 
-启动器读取 `STUDIO_ENV_FILE` 或仓库根目录的 `.env`，当前进程变量优先。它应用 PostgreSQL 迁移并初始化实例的插件目录。全新实例由管理员在「设置 → 插件」安装模型包，已有实例沿用原目录。启动器确认存在活跃管理员、指定导入已完成、私有磁盘目录可用且 Redis 可连接后，再启动工作台。通过 `http://localhost:3000/studio` 访问；可配置 `STUDIO_PORT`、`LEGACY_API_PORT` 和浏览器 origin `STUDIO_PUBLIC_URL`（也可使用 `PUBLIC_URL`）。配置或服务错误会退出并提示检查项。网关遇到后端连接错误返回 502，写请求只有一个固定上游。
+启动器读取 `STUDIO_ENV_FILE` 或仓库根目录的 `.env`，当前进程变量优先。它应用 PostgreSQL 迁移并初始化实例的插件目录。全新实例由管理员在「设置 → 插件」安装模型包，升级实例在设置页显示已安装的插件及已接入的旧服务模型。原有定价保留，接入相应插件后可继续编辑。启动器确认存在活跃管理员、指定导入已完成、私有磁盘目录可用且 Redis 可连接后，再启动工作台。通过 `http://localhost:3000/studio` 访问；可配置 `STUDIO_PORT`、`LEGACY_API_PORT` 和浏览器 origin `STUDIO_PUBLIC_URL`（也可使用 `PUBLIC_URL`）。配置或服务错误会退出并提示检查项。网关遇到后端连接错误返回 502，写请求只有一个固定上游。
 
 已有工作区按 [备份和导入步骤](MIGRATION.md#迁移前) 操作。全新安装才运行以下命令，先将自己的 `ADMIN_PASSWORD` 注入当前进程。积分和提供方连接随后由管理员配置。
 
