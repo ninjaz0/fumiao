@@ -233,7 +233,28 @@ export async function verifyRemoteProvider(
       call("/api/state", { workspace });
     const before = await state();
     const workspace = before.workspace_id;
-    assert.equal(before.model_catalog[example.id], undefined);
+    assert.deepEqual(before.model_catalog, {});
+    assert.deepEqual(before.model_groups, {});
+    assert.equal(
+      (await context.request.get("/connect/install.sh")).status(),
+      404,
+    );
+    await call("/api/pairs", { data: {}, status: 404 });
+    assert.deepEqual(
+      (await call("/api/chat/config", { method: "GET" })).models,
+      {},
+    );
+    await expect(page.locator(".generate-button")).toBeDisabled();
+    await call("/api/canvases", { data: { title: "零插件画布" } });
+    await page.getByRole("button", { name: "前往安装插件" }).click();
+    await expect(page.locator(".settings-section h2")).toHaveText("插件");
+    const search = page.getByRole("searchbox", { name: "搜索设置" });
+    await search.fill("插件");
+    await expect(page.locator(".settings-navigation [data-value]")).toHaveText(["插件"]);
+    await search.clear();
+    await expect(
+      page.locator('.settings-navigation [data-value="gpu"]'),
+    ).toHaveCount(0);
     const other = await call("/api/workspaces", {
       data: { name: "隔离提供方测试空间" },
     });
@@ -280,7 +301,22 @@ export async function verifyRemoteProvider(
     const badPrice = structuredClone(manifest);
     badPrice.models[0].studio!.prices[0].match = { type: "object" };
     await install(badPrice, "/first", 400);
-    await install(manifest);
+    await call("/api/admin/plugins", {
+      method: "GET",
+      status: 403,
+      client: member.request,
+    });
+
+    await page.getByText("安装远程插件", { exact: true }).click();
+    await page.getByLabel("插件服务地址").fill(endpoint + "/first");
+    await page.getByLabel("插件清单 JSON").fill(JSON.stringify(manifest));
+    const installed = await request(page, "/api/admin/plugins", "POST", () =>
+      page.getByRole("button", { name: "安装插件", exact: true }).click(),
+    );
+    assert.equal(installed.status(), 201, await installed.text());
+    await expect(page.getByLabel("模型提供方")).toHaveValue(
+      manifest.id + "@" + manifest.version,
+    );
     await install(manifest, "/second", 409);
     const connection = {
       name: "Loopback Studio provider",
@@ -292,10 +328,14 @@ export async function verifyRemoteProvider(
       data: { ...connection, config: {} },
       status: 400,
     });
-    const { id } = await call("/api/admin/connections", {
-      data: connection,
-      status: 201,
-    });
+    await page.getByRole("button", { name: "添加连接" }).click();
+    await page.getByLabel("连接名称").fill(connection.name);
+    await page.getByLabel("API 密钥").fill("original-key");
+    const created = await request(page, "/api/admin/connections", "POST", () =>
+      page.getByRole("button", { name: "创建连接" }).click(),
+    );
+    assert.equal(created.status(), 201, await created.text());
+    const { id } = await created.json();
     const connectionPath = "/api/admin/connections/" + id;
     const update = (revision: number, apiKey?: string) =>
       call(connectionPath, {
@@ -307,7 +347,36 @@ export async function verifyRemoteProvider(
           ...(apiKey ? { config: { apiKey } } : {}),
         },
       });
-    await update(1);
+    await page.getByLabel("启用连接").check();
+    const enabled = await request(page, connectionPath, "PUT", () =>
+      page.getByRole("button", { name: "保存连接" }).click(),
+    );
+    assert.equal(enabled.status(), 200, await enabled.text());
+    await page.getByRole("button", { name: "测试连接" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "连接可用" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "管理模型权限" }).click();
+    await expect(page.getByRole("heading", { name: "模型管理" })).toBeVisible();
+    const policy = page.locator(`[data-model="${example.id}"]`);
+    await request(page, "/api/settings/models", "PATCH", () =>
+      policy.uncheck(),
+    );
+    await expect
+      .poll(async () => (await state()).model_policy.enabled[example.id])
+      .toBe(false);
+    await request(page, "/api/settings/models", "PATCH", () => policy.check());
+    await setTab(page, "prices");
+    const priceKey = example.id + "|1K|low";
+    await page.locator(`[data-price="${priceKey}"]`).fill("11");
+    await request(page, "/api/settings/prices", "PUT", () =>
+      page.getByRole("button", { name: "保存价格" }).click(),
+    );
+    assert.equal(
+      (await state()).pricing.items.find((row) => row.key === priceKey)?.amount,
+      11,
+    );
+    await page.goto("/studio");
     assert.deepEqual(
       await call(connectionPath + "/health", { method: "POST", status: 201 }),
       { ready: true },
@@ -442,15 +511,20 @@ export async function verifyRemoteProvider(
       models: [example, mediaModel("video"), mediaModel("audio")],
     };
     await install(upgraded, "/second");
-    await call(connectionPath + "/upgrade", {
-      status: 201,
-      data: {
-        revision: 3,
-        version: upgraded.version,
-        activateCatalog: true,
-        config: { apiKey: "new-key" },
-      },
-    });
+    await settings(page);
+    await setTab(page, "plugins");
+    await page
+      .getByLabel("模型提供方")
+      .selectOption(upgraded.id + "@" + upgraded.version);
+    await page.getByLabel("API 密钥").fill("new-key");
+    const switched = await request(
+      page,
+      connectionPath + "/upgrade",
+      "POST",
+      () => page.getByRole("button", { name: "切换连接及目录版本" }).click(),
+    );
+    assert.equal(switched.status(), 201, await switched.text());
+    await page.goto("/studio");
     await update(4);
     assert.deepEqual(await retry(), { id: image.id });
     await queue.resume();
@@ -485,6 +559,9 @@ export async function verifyRemoteProvider(
     assert.equal(
       frozen.input.references[0].url,
       "data:image/png;base64," + artifacts.image.bytes.toString("base64"),
+    );
+    await expect(page.locator(`#job-${image.id} .asset-preview img`)).toHaveAttribute(
+      "src", "/media/" + imageKey, { timeout: 15_000 },
     );
     await page
       .locator(`#job-${image.id} .asset-preview`)
@@ -545,6 +622,36 @@ export async function verifyRemoteProvider(
     assert.equal((await state(other.id)).credits.available, 100);
     assert.equal((await queue.getJobCounts("completed", "failed")).failed, 0);
     assert.equal(calls.length, 3);
+    await setTab(page, "plugins");
+    await page
+      .getByLabel("模型提供方")
+      .selectOption({
+        label:
+          "本地实例接入 · " +
+          (await call("/api/admin/plugins", { method: "GET" })).find(
+            (p: { id: string }) => p.id === "gpu",
+          ).version,
+      });
+    await page.getByRole("button", { name: "安装此插件" }).click();
+    await expect(
+      page.locator('.settings-navigation [data-value="gpu"]'),
+    ).toHaveText("实例接入");
+    await call("/api/admin/plugins/builtin", {
+      data: {
+        id: "gpu",
+        version: (await call("/api/admin/plugins", { method: "GET" })).find(
+          (p: { id: string }) => p.id === "gpu",
+        ).version,
+      },
+      client: member.request,
+      status: 403,
+    });
+    const gpu = (await state()).gpu_models || {};
+    assert.ok(Object.keys(gpu).length);
+    const pair = await call("/api/pairs", {
+      data: { models: [Object.keys(gpu)[0]] },
+    });
+    assert.ok(pair.code || pair.command);
     assert.deepEqual(errors, []);
   } finally {
     await browser?.close();

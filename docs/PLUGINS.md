@@ -72,7 +72,7 @@ export PLUGIN_KEY=local-demo-key
 PORT=4100 pnpm exec tsx plugins/example-studio/server.ts
 ```
 
-使用当前工作台的原协议管理员会话调用下表接口。请求以 JSON 提交。浏览器的 `Origin` 使用工作台地址。
+管理员也可以在普通 `/studio` 的「设置 → 插件」中安装清单、创建连接、测试与启用连接。插件服务地址须能从 API 和 worker 容器访问。自动化管理使用当前工作台的原协议管理员会话调用下表接口。请求以 JSON 提交。浏览器的 `Origin` 使用工作台地址。
 
 | 请求 | JSON |
 |---|---|

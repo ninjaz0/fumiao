@@ -22,6 +22,8 @@ docker compose up -d --wait
 
 打开 `http://localhost:3000/studio`，新实例的默认管理员用户名为 `admin`。Compose 将 Web 绑定在本机 3000 端口。对外服务通过 HTTPS 反向代理接入，`PUBLIC_URL` 应与浏览器地址一致。[部署、备份与恢复](docs/OPERATIONS.md)
 
+全新安装后，管理员可在工作台的「设置 → 插件」按需安装内置模型包或远程插件，配置并启用连接，再设置模型权限和生成定价。升级已有实例会保留当前模型目录和定价。
+
 ## 本地开发
 
 每个任务可在独立 Git worktree 运行 `python3 scripts/worktree.py up`。脚本创建专属端口、测试账号、数据库、队列和媒体卷，输出本任务的 Studio 地址。运行 `python3 scripts/worktree.py down` 可停止任务环境并保留数据。固定的本机 3000 端口供选定版本验收。分支约定、日志和验收命令见 [AGENTS.md](AGENTS.md)。

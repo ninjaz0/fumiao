@@ -4,7 +4,10 @@ import { expect, type Page } from "@playwright/test";
 export function tab(page: Page, name: string) {
   return page.locator(`.settings-navigation [data-value="${name}"]`);
 }
-export function setTab(page: Page, name: string) {
+export async function setTab(page: Page, name: string) {
+  const toggle = page.locator(".ledger-navigation-toggle");
+  if (await toggle.isVisible() && await toggle.getAttribute("aria-expanded") === "false")
+    await toggle.click();
   return tab(page, name).click();
 }
 export async function settings(page: Page) {

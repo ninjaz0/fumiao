@@ -8,6 +8,7 @@ import {
   Req,
   Res,
 } from "@nestjs/common";
+import { pairedPluginAvailable } from "../../../packages/platform/src/studio-plugin-profile.js";
 import type { Request, Response } from "express";
 import { resolve } from "node:path";
 import { OriginalIdentity } from "../../../packages/original-api/src/identity.js";
@@ -79,6 +80,7 @@ export function originalNodeRequest(
     )
       return false;
     try {
+      requireValue(await pairedPluginAvailable(identity.p.db), 404, "尚未安装实例接入插件");
       const route = routes.find((r) => r.path.test(path));
       if (
         !route &&
