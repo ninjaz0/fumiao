@@ -10,6 +10,7 @@ export function PluginSettingsPage({
 }: AdminSave & { page: InstalledSettingsPage }) {
   const [draft, setDraft] = useState<{
     revision: number;
+    fields: InstalledSettingsPage["fields"];
     values: Record<string, string>;
   }>();
   const [busy, setBusy] = useState(false);
@@ -24,7 +25,7 @@ export function PluginSettingsPage({
     try {
       await request(
         `/api/admin/plugins/${page.plugin}/pages/${page.id}`,
-        draft,
+        { revision: draft.revision, values: draft.values },
         "PUT",
       );
       await refresh();
@@ -45,7 +46,7 @@ export function PluginSettingsPage({
       </p>
       <form className="ledger-card" onSubmit={save}>
         <fieldset disabled={busy || page.removing}>
-          {page.fields.map((field) => (
+          {(draft?.fields ?? page.fields).map((field) => (
             <label className="setting-row" key={field.id}>
               {field.label}
               <select
@@ -54,6 +55,7 @@ export function PluginSettingsPage({
                   setError("");
                   setDraft({
                     revision: draft?.revision ?? page.revision,
+                    fields: draft?.fields ?? page.fields,
                     values: {
                       ...values,
                       [field.id]: event.currentTarget.value,

@@ -328,6 +328,13 @@ export async function verifyRemoteProvider(
       version: m.version,
       adapterVersion: m.version,
       remote: { endpoint: endpoint + path, manifest: m },
+      settingsPages: [{
+        id: "export", title: "导出设置", view: "fields",
+        fields: [{
+          id: "format", label: "字幕格式",
+          options: ["SRT", m.version === manifest.version ? "WebVTT" : "ASS"],
+        }],
+      }],
     });
     const chooseFile = async (file: unknown) =>
       page.getByLabel("选择插件文件").setInputFiles({
@@ -528,6 +535,12 @@ export async function verifyRemoteProvider(
     };
     await settings(page);
     await setTab(page, "plugins");
+    const editor = await context.newPage();
+    await editor.goto("/studio");
+    await settings(editor);
+    await setTab(editor, `extension/${manifest.id}/export`);
+    const format = editor.getByLabel("字幕格式");
+    await format.selectOption("WebVTT");
     await chooseFile(packageFor(upgraded, "/second"));
     const switched = await request(
       page,
@@ -536,6 +549,19 @@ export async function verifyRemoteProvider(
       () => page.getByRole("button", { name: "确认更新" }).click(),
     );
     assert.equal(switched.status(), 201, await switched.text());
+    await editor.bringToFront();
+    const reload = editor.getByRole("button", { name: "载入最新设置" });
+    await expect(reload).toBeVisible({ timeout: 20_000 });
+    await expect(format).toHaveValue("WebVTT");
+    const saveFormat = editor.getByRole("button", { name: "保存", exact: true });
+    await expect(saveFormat).toBeDisabled();
+    await reload.click();
+    await expect(format).toHaveValue("SRT");
+    await format.selectOption("ASS");
+    const saved = await request(editor, `/api/admin/plugins/${manifest.id}/pages/export`, "PUT", () => saveFormat.click());
+    assert.equal(saved.status(), 200, await saved.text());
+    await expect(editor.getByText("插件设置已保存")).toBeVisible();
+    await editor.close();
     await update(3, "new-key");
     const pkgRows = () => call("/api/admin/plugins", { method: "GET" });
     for (const model of upgraded.models.filter((m) => m.id !== example.id)) {
