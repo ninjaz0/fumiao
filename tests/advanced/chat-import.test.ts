@@ -1,0 +1,395 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { databaseFixture } from "../helpers/database.js";
+import { chatImportDraft, chatImportTables } from "../helpers/chat-import.js";
+import {
+  importLegacy,
+  legacyId,
+} from "../../packages/platform/src/importer.js";
+import { validateChatImport } from "../../packages/platform/src/import-chats.js";
+import { OriginalChats } from "../../packages/original-api/src/chats.js";
+import { ChatExecution } from "../../packages/original-api/src/chat-execution.js";
+import {
+  OriginalIdentity,
+  type OriginalActor,
+} from "../../packages/original-api/src/identity.js";
+import { one } from "../../packages/platform/src/db.js";
+import { canonical } from "../../packages/platform/src/plugins.js";
+
+test("Native chat import preserves sparse identities, private history, raw text, settled charges and orphaned adoption audits", async () => {
+  const f = await databaseFixture(),
+    data = chatImportDraft();
+  try {
+    await importLegacy(f.p, data, f.directory);
+    assert.equal(
+      (await importLegacy(f.p, data, f.directory)).alreadyImported,
+      true,
+    );
+    const rows = await chatImportTables(f.db);
+    for (const [key, records] of Object.entries(rows))
+      assert.deepEqual(
+        records.map(canonical).sort(),
+        data.tables[key].map(canonical).sort(),
+        key,
+      );
+    const chats = new OriginalChats(f.p),
+      identity = new OriginalIdentity(f.p);
+    const admin = (await one(
+        f.db,
+        "SELECT * FROM users WHERE public_id=7",
+      )) as OriginalActor,
+      member = (await one(
+        f.db,
+        "SELECT * FROM users WHERE public_id=42",
+      )) as OriginalActor;
+    assert.equal(identity.profile(admin).id, 7);
+    const cid = data.tables.conversations[0].id,
+      deleted = data.tables.conversations[1].id;
+    const view = await chats.get(admin, cid);
+    assert.equal(view.conversation.title, "保留\0😀");
+    assert.equal(view.messages[1].usage, '{"total_tokens": 9007199254740993}');
+    await assert.rejects(chats.get(member, cid), { status: 404 });
+    await assert.rejects(chats.get(admin, deleted), { status: 404 });
+    await assert.rejects(chats.get(member, deleted), /对话已删除/);
+    await chats.restore(member, deleted);
+    assert.equal(
+      (await chats.get(member, deleted)).messages[1].state,
+      "stopped",
+    );
+    assert.deepEqual(await new ChatExecution(chats).ready(), []);
+    assert.equal(await new ChatExecution(chats).recover(), 0);
+    for (const t of data.tables.chat_turns)
+      assert.equal(
+        await chats.finish(legacyId(data.source, "chat-turn", t.id), {
+          state: "complete",
+          text: "late",
+        }),
+        false,
+      );
+    const ledger = await one(
+      f.db,
+      "SELECT count(*)::integer AS count FROM ledger WHERE chat_turn_id IS NOT NULL",
+    );
+    assert.equal(ledger.count, 4);
+    const raw = (
+      await f.db.query(
+        "SELECT collection,payload,workspace_id FROM legacy_chat_records",
+      )
+    ).rows;
+    for (const [key, records] of Object.entries(rows))
+      assert.deepEqual(
+        raw
+          .filter((r) => r.collection === key)
+          .map((r) => canonical(JSON.parse(Buffer.from(r.payload).toString())))
+          .sort(),
+        records.map(canonical).sort(),
+      );
+    assert.ok(raw.every((r) => r.workspace_id));
+    assert.equal(
+      (await one(f.db, "SELECT count(*)::integer AS count FROM sessions"))
+        .count,
+      0,
+    );
+    const application = await one(
+      f.db,
+      "SELECT * FROM chat_applications WHERE project_id IS NULL",
+    );
+    assert.equal(application.project_public_id, "d".repeat(32));
+    await f.db.query("DELETE FROM documents WHERE public_id=$1", [
+      "c".repeat(32),
+    ]);
+    assert.equal(
+      (
+        await one(
+          f.db,
+          "SELECT count(*)::integer AS count FROM chat_applications WHERE project_id IS NULL",
+        )
+      ).count,
+      2,
+    );
+    assert.equal(
+      (
+        await one(
+          f.db,
+          "SELECT count(*)::integer AS count FROM canvas_chat_links",
+        )
+      ).count,
+      0,
+    );
+    const newChat = await chats
+      .create(admin, { model: "deepseek-flash" })
+      .catch((e) => {
+        assert.match(e.message, /未知对话模型/);
+        return null;
+      });
+    assert.equal(
+      newChat,
+      null,
+      "archived turns never install or configure a live provider",
+    );
+    await f.db.query(
+      "SELECT nextval(pg_get_serial_sequence('chat_messages','public_id'))",
+    );
+    assert.equal(
+      Number(
+        (
+          await one(
+            f.db,
+            "SELECT nextval(pg_get_serial_sequence('chat_messages','public_id')) AS id",
+          )
+        ).id,
+      ),
+      87,
+    );
+    assert.equal(
+      Number(
+        (
+          await one(
+            f.db,
+            "SELECT nextval(pg_get_serial_sequence('chat_conversations','ordinal')) AS id",
+          )
+        ).id,
+      ),
+      16,
+    );
+    const before = await chatImportTables(f.db);
+    await importLegacy(f.p, data, "unused-on-repeat");
+    assert.deepEqual(await chatImportTables(f.db), before);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("Incomplete, active, cross-space or inconsistent chat exports fail before object copying or SQL writes", async () => {
+  const f = await databaseFixture();
+  try {
+    let copies = 0;
+    f.p.storage.put = async () => {
+      copies++;
+      throw new Error("must not copy");
+    };
+    const changes: [string, (d: ReturnType<typeof chatImportDraft>) => void][] =
+      [
+        [
+          "old export",
+          (d) => {
+            delete d.chatVersion;
+          },
+        ],
+        [
+          "missing turns",
+          (d) => {
+            delete d.tables.chat_turns;
+          },
+        ],
+        [
+          "missing applications",
+          (d) => {
+            delete d.tables.chat_applications;
+          },
+        ],
+        [
+          "running",
+          (d) => {
+            d.tables.chat_turns[0].state = "running";
+          },
+        ],
+        [
+          "held charge",
+          (d) => {
+            d.tables.credit_chat_charges[0].state = "held";
+          },
+        ],
+        [
+          "missing charge",
+          (d) => {
+            d.tables.credit_chat_charges.pop();
+          },
+        ],
+        [
+          "wrong settlement",
+          (d) => {
+            d.tables.credit_chat_charges[0].state = "refunded";
+          },
+        ],
+        [
+          "wrong amount",
+          (d) => {
+            d.tables.credit_chat_charges[0].amount = 99;
+          },
+        ],
+        [
+          "duplicate settlement",
+          (d) => {
+            d.tables.credit_ledger.push({
+              ...d.tables.credit_ledger[1],
+              id: 99,
+            });
+          },
+        ],
+        [
+          "missing reserve",
+          (d) => {
+            d.tables.credit_ledger.shift();
+          },
+        ],
+        [
+          "missing wallet",
+          (d) => {
+            d.tables.credit_accounts.shift();
+          },
+        ],
+        [
+          "cross-space",
+          (d) => {
+            d.tables.conversations[0].workspace = 85;
+          },
+        ],
+        [
+          "reply crosses conversation",
+          (d) => {
+            d.tables.chat_messages[1].reply_to = 80;
+          },
+        ],
+        [
+          "application crosses conversation",
+          (d) => {
+            d.tables.chat_applications[0].message = 85;
+          },
+        ],
+        [
+          "link crosses space",
+          (d) => {
+            d.tables.canvas_chat_links[0].conversation = "b".repeat(32);
+          },
+        ],
+        [
+          "duplicate uid",
+          (d) => {
+            d.tables.chat_turns[1].uid = d.tables.chat_turns[0].uid;
+          },
+        ],
+        [
+          "duplicate order",
+          (d) => {
+            d.tables.conversations[1].original_order = 11;
+          },
+        ],
+        [
+          "unsafe message id",
+          (d) => {
+            d.tables.chat_messages[1].id = Number.MAX_SAFE_INTEGER + 1;
+          },
+        ],
+        [
+          "invalid context",
+          (d) => {
+            d.tables.chat_messages[0].context = "[]";
+          },
+        ],
+        [
+          "isolated surrogate",
+          (d) => {
+            d.tables.chat_messages[0].content = "\ud800";
+          },
+        ],
+        [
+          "unexpected credentials",
+          (d) => {
+            d.tables.chat_turns[0].api_key = "private-do-not-import";
+          },
+        ],
+      ];
+    for (const [name, change] of changes) {
+      const draft = chatImportDraft();
+      change(draft);
+      await assert.rejects(
+        importLegacy(f.p, draft, "missing-objects"),
+        (error) =>
+          (error as any).status === 400 || (error as any).status === 409,
+        name,
+      );
+      assert.equal(
+        (await one(f.db, "SELECT count(*)::integer AS count FROM users")).count,
+        0,
+        name,
+      );
+      assert.equal(
+        (
+          await one(
+            f.db,
+            "SELECT count(*)::integer AS count FROM legacy_imports",
+          )
+        ).count,
+        0,
+        name,
+      );
+    }
+    assert.equal(copies, 0);
+    const nil = chatImportDraft();
+    nil.tables.chat_turns[0].uid = "00000000-0000-0000-0000-000000000000";
+    assert.doesNotThrow(() => validateChatImport(nil.tables, nil.chatVersion));
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("Chat import rolls back the complete identity/history/wallet unit after a late database failure and can safely retry", async () => {
+  const f = await databaseFixture(),
+    data = chatImportDraft();
+  try {
+    await f.db
+      .query(`CREATE FUNCTION reject_chat_ledger() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.chat_turn_id IS NOT NULL THEN RAISE EXCEPTION 'fixture late ledger failure'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER reject_chat_ledger BEFORE INSERT ON ledger FOR EACH ROW EXECUTE FUNCTION reject_chat_ledger();`);
+    await assert.rejects(
+      importLegacy(f.p, data, f.directory),
+      /fixture late ledger failure/,
+    );
+    for (const table of [
+      "users",
+      "wallets",
+      "documents",
+      "chat_conversations",
+      "chat_messages",
+      "chat_turns",
+      "chat_charges",
+      "chat_applications",
+      "legacy_chat_records",
+      "legacy_imports",
+    ])
+      assert.equal(
+        (await one(f.db, `SELECT count(*)::integer AS count FROM ${table}`))
+          .count,
+        0,
+        table,
+      );
+    await f.db.query("DROP TRIGGER reject_chat_ledger ON ledger");
+    await Promise.all([
+      importLegacy(f.p, data, f.directory),
+      importLegacy(f.p, data, f.directory),
+    ]);
+    assert.equal(
+      (await one(f.db, "SELECT count(*)::integer AS count FROM chat_turns"))
+        .count,
+      2,
+    );
+    assert.equal(
+      (
+        await one(
+          f.db,
+          "SELECT count(*)::integer AS count FROM ledger WHERE chat_turn_id IS NOT NULL",
+        )
+      ).count,
+      4,
+    );
+    assert.equal(
+      (await importLegacy(f.p, data, f.directory)).alreadyImported,
+      true,
+    );
+    const changed = structuredClone(data);
+    changed.tables.chat_messages[0].content += " edited";
+    await assert.rejects(importLegacy(f.p, changed, f.directory), /内容已变化/);
+  } finally {
+    await f.cleanup();
+  }
+});

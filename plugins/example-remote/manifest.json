@@ -1,0 +1,27 @@
+{
+  "id": "example-echo",
+  "version": "1.0.0",
+  "contractVersion": 1,
+  "label": "示例插件（非 AI）",
+  "mode": "request",
+  "configSchema": {
+    "type": "object",
+    "required": ["apiKey"],
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": { "type": "string", "minLength": 1, "writeOnly": true }
+    }
+  },
+  "models": [
+    {
+      "id": "echo",
+      "label": "回显测试",
+      "kind": "chat",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    }
+  ]
+}

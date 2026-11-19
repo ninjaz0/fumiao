@@ -1,0 +1,57 @@
+# 运行与验收
+
+## 进程拓扑
+
+```mermaid
+flowchart LR
+ B[浏览器] --> W[Next.js]
+ W --> A[NestJS API]
+ A --> P[(PostgreSQL)]
+ A --> S[(私有对象存储)]
+ P --> D[任务调度器]
+ D --> R[(Redis / BullMQ)]
+ R --> E[执行 Worker]
+ E --> P
+ E --> S
+ E --> M[Muse / Flow / 远程插件]
+ G[GPU v2 Worker] --> A
+```
+
+API、worker、Web 可分别扩容。数据库保存可恢复任务状态；Redis 队列只负责分发。启用多副本前改用共享 S3，统一所有实例的 `ENCRYPTION_KEY`，并控制数据库连接总量（当前每进程连接池上限 15）。不要让单个插件的并发超过其上游许可。
+
+## 启动顺序
+
+Compose 默认启动原协议 NestJS。先运行 `docker compose build` 和 `docker compose up migrate`，然后初始化管理员或导入旧实例。API 启动检查 PostgreSQL、活跃管理员、配置中的导入标识、私有磁盘路径及 BullMQ Redis；Web 和 worker 在 API 健康后启动。Web 在运行时读 `LEGACY_API_INTERNAL_URL`，镜像无需包含环境配置。详见 [Docker 初始化](../README.md#docker-compose-启动) 和 [导入步骤](MIGRATION.md#导出与导入)。
+
+`WORKER_CONCURRENCY` 控制单个 worker 处理数，默认 8。连接的并发是所有 worker 合计的数据库约束。GPU 连接的并发同样跨节点生效。
+
+## 凭据与媒体
+
+密钥使用 AES-256-GCM 加密写入 PostgreSQL，连接 API 不返回明文。旧任务保留加密配置快照，用于避免管理员换密钥时改变在途任务。加密密钥和数据库应独立备份并一同恢复。生产数据库、Redis、插件服务只允许内部网络访问，站点由 HTTPS 入口提供服务。
+
+磁盘存储支持范围读取，S3 使用短期签名下载地址。上传会实际解析内容。工作区默认 20 GiB 配额，数据库触发器原子计量，避免并发上传超额。修改配额可通过受控数据库迁移操作 `workspaces.storage_limit`；当前没有管理页配额编辑。
+
+备份包含 PostgreSQL、对象存储、加密密钥和部署配置。定期演练还原，禁止仅备份 Redis。上传后数据库提交失败可能产生未引用媒体对象，清理应以数据库引用核对并保留宽限期；当前未附带自动对象垃圾回收器。
+
+## 目标栈停写备份与恢复
+
+1. 关闭写入入口，停止 API、调度器和 worker，并停止 GPU 节点回传。记录 PostgreSQL 中待处理任务的状态、上游任务 ID、回执及租约。计划停机时可先排空任务再停进程。
+2. 使用匹配服务器版本的 `pg_dump --format=custom --file=studio.dump --dbname="service=studio-source"`。保持停写，按原对象键导出私有桶的对象内容、MIME 类型及元数据，核对清单、大小和 SHA-256。单独保管 `ENCRYPTION_KEY` 与部署配置，并将它们关联到同一份备份。
+3. 启动独立 PostgreSQL 实例、新 Redis 和新私有桶。使用 `pg_restore --single-transaction --exit-on-error --no-owner --no-privileges --dbname="service=studio-target" studio.dump` 写入空数据库，按目标部署角色配置数据库权限。按对象清单还原至新桶并复核字节。上述 `service` 名须在 PostgreSQL 客户端连接配置中分别指向源和目标。
+4. 使用目标 PostgreSQL、Redis 和对象存储连接配置，保留备份对应的 `ENCRYPTION_KEY`。将 `STUDIO_MEDIA_ORIGIN` 指向可供浏览器访问的目标 S3 签名地址源。先对账钱包余额、冻结额、最后一笔账本及充值记录，再启动同版本 Next、Nest 和 worker。验收原会话和重新登录、公开编号、私有媒体、画布和对话，复核待处理任务和重复提交后再恢复写入。
+
+合成演练入口为 `pnpm build` 后运行 `pnpm test:studio:restore`。需要 Node 24、pnpm、PostgreSQL 的 `initdb`、`postgres`、`pg_dump`、`pg_restore`，以及 `redis-server`、SeaweedFS `weed`、`openssl`、`ffmpeg` 和 `ffprobe`。可用 `PG_BINDIR`、`REDIS_SERVER`、`STUDIO_WEED` 指定路径。脚本在随机回环端口和临时目录启动两套数据服务，使用模拟商户、模型端点和普通 GPU 节点。对话和请求型任务等待实际租约过期。GPU 过期场景将合成任务的租约截止时间设为已过期，由现有协议执行回收。退出时清理数据。
+
+## 故障语义
+
+- 排队任务尚未调用上游，可安全取消并释放积分。
+- 支持续查的插件可根据上游任务 ID 继续查询。支持恢复落盘的插件可凭已保存的回执继续保存媒体。
+- 提交结果未知且插件没有专用恢复规则时，执行器将任务标记为 `uncertain` 并保留冻结积分。具有原协议请求生命周期的插件可将任务结算为失败并记录 `request_uncertain`。这两种路径都避免自动重发这次未知提交。
+- 普通 GPU 使用 180 秒租约。第一次租约被回收后任务可再次领取。原节点在尚未重新分配且其槽位空闲时可按原协议续租。任务换票或耗尽重试机会后，旧票据不能续租或提交结果。
+- 队列丢失后从 PostgreSQL 重新分发。数据库租约和任务状态防止重复执行已结算任务。
+- 对话的未领取任务由 PostgreSQL outbox 重新投递。已领取的对话在租约过期后标记为 `interrupted` 并退回冻结积分。
+- 管理员核对任务须记录理由。远程同步插件若没有查询能力，应先核对提供方后台，再选择结束并释放积分。
+
+## 多实例验证
+
+构建后执行 `pnpm test:studio:replicas` 验证两个 Next/Nest 实例共用数据库、队列和私有桶时的权限、幂等和结算。需要 SeaweedFS，可通过 `STUDIO_WEED` 指定其二进制文件。

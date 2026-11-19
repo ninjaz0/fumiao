@@ -1,0 +1,725 @@
+{
+  "release": "/srv/fumiao/releases/20261110T123434Z-remove-lab",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/",
+      "source": "server.py",
+      "handler": "home"
+    },
+    {
+      "method": "HEAD",
+      "path": "/",
+      "source": "server.py",
+      "handler": "home"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/claim",
+      "source": "worker_api.py",
+      "handler": "claim"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/enroll",
+      "source": "worker_api.py",
+      "handler": "enroll"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/heartbeat",
+      "source": "worker_api.py",
+      "handler": "heartbeat"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/jobs/{i}/error",
+      "source": "worker_api.py",
+      "handler": "error"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/jobs/{i}/receipt",
+      "source": "worker_api.py",
+      "handler": "receipt"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/jobs/{i}/ref/{key}",
+      "source": "worker_api.py",
+      "handler": "ref"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/jobs/{i}/result",
+      "source": "worker_api.py",
+      "handler": "finish"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/registration",
+      "source": "worker_api.py",
+      "handler": "registration"
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/chat",
+      "source": "chat_api.py",
+      "handler": "admin_config"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/admin/chat/{provider}",
+      "source": "chat_api.py",
+      "handler": "configure"
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/chat/{provider}/test",
+      "source": "chat_api.py",
+      "handler": "test_provider"
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/credits",
+      "source": "credits_api.py",
+      "handler": "accounts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/credits/adjust",
+      "source": "credits_api.py",
+      "handler": "adjustment"
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/fmworker/config",
+      "source": "worker_pool_api.py",
+      "handler": "reward_config"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/admin/fmworker/config",
+      "source": "worker_pool_api.py",
+      "handler": "save_reward_config"
+    },
+    {
+      "method": "GET",
+      "path": "/api/asset-packs",
+      "source": "asset_packs.py",
+      "handler": "listing"
+    },
+    {
+      "method": "POST",
+      "path": "/api/asset-packs",
+      "source": "asset_packs.py",
+      "handler": "create"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/asset-packs/{key}",
+      "source": "asset_packs.py",
+      "handler": "delete"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/asset-packs/{key}",
+      "source": "asset_packs.py",
+      "handler": "update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assets",
+      "source": "server.py",
+      "handler": "upload"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assets/batch-delete",
+      "source": "library_api.py",
+      "handler": "batch_delete"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assets/batch-download",
+      "source": "library_api.py",
+      "handler": "prepare_download"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/assets/{key}",
+      "source": "server.py",
+      "handler": "remove_asset"
+    },
+    {
+      "method": "POST",
+      "path": "/api/audio-jobs",
+      "source": "audio_api.py",
+      "handler": "submit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/canvases",
+      "source": "canvas_api.py",
+      "handler": "listing"
+    },
+    {
+      "method": "POST",
+      "path": "/api/canvases",
+      "source": "canvas_api.py",
+      "handler": "create"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/canvases/{pid}",
+      "source": "canvas_api.py",
+      "handler": "delete"
+    },
+    {
+      "method": "GET",
+      "path": "/api/canvases/{pid}",
+      "source": "canvas_api.py",
+      "handler": "get_project"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/canvases/{pid}/document",
+      "source": "canvas_api.py",
+      "handler": "save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/canvases/{pid}/duplicate",
+      "source": "canvas_api.py",
+      "handler": "duplicate"
+    },
+    {
+      "method": "GET",
+      "path": "/api/canvases/{pid}/exports",
+      "source": "storyboard_export.py",
+      "handler": "listing"
+    },
+    {
+      "method": "POST",
+      "path": "/api/canvases/{pid}/exports",
+      "source": "storyboard_export.py",
+      "handler": "create"
+    },
+    {
+      "method": "POST",
+      "path": "/api/canvases/{pid}/nodes/{nid}/candidates",
+      "source": "canvas_api.py",
+      "handler": "generate_candidates"
+    },
+    {
+      "method": "POST",
+      "path": "/api/canvases/{pid}/nodes/{nid}/narration",
+      "source": "canvas_api.py",
+      "handler": "narrate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/canvases/{pid}/nodes/{nid}/runs",
+      "source": "canvas_api.py",
+      "handler": "generate"
+    },
+    {
+      "method": "GET",
+      "path": "/api/canvases/{pid}/runs",
+      "source": "canvas_api.py",
+      "handler": "runs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/canvases/{pid}/shots/download",
+      "source": "canvas_api.py",
+      "handler": "export_shots"
+    },
+    {
+      "method": "GET",
+      "path": "/api/chat/config",
+      "source": "chat_api.py",
+      "handler": "config"
+    },
+    {
+      "method": "GET",
+      "path": "/api/chats",
+      "source": "chat_api.py",
+      "handler": "listing"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chats",
+      "source": "chat_api.py",
+      "handler": "create"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/chats/{cid}",
+      "source": "chat_api.py",
+      "handler": "delete"
+    },
+    {
+      "method": "GET",
+      "path": "/api/chats/{cid}",
+      "source": "chat_api.py",
+      "handler": "get"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/chats/{cid}",
+      "source": "chat_api.py",
+      "handler": "rename"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chats/{cid}/apply",
+      "source": "chat_api.py",
+      "handler": "apply"
+    },
+    {
+      "method": "GET",
+      "path": "/api/chats/{cid}/events",
+      "source": "chat_api.py",
+      "handler": "events"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chats/{cid}/messages",
+      "source": "chat_api.py",
+      "handler": "send"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chats/{cid}/restore",
+      "source": "chat_api.py",
+      "handler": "restore"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chats/{cid}/stop",
+      "source": "chat_api.py",
+      "handler": "stop"
+    },
+    {
+      "method": "GET",
+      "path": "/api/credits",
+      "source": "credits_api.py",
+      "handler": "listing"
+    },
+    {
+      "method": "GET",
+      "path": "/api/downloads/{secret}",
+      "source": "library_api.py",
+      "handler": "download_archive"
+    },
+    {
+      "method": "POST",
+      "path": "/api/estimate",
+      "source": "server.py",
+      "handler": "estimate"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/favorites",
+      "source": "library_api.py",
+      "handler": "change_favorites"
+    },
+    {
+      "method": "GET",
+      "path": "/api/fmworker/account",
+      "source": "worker_pool_api.py",
+      "handler": "account"
+    },
+    {
+      "method": "GET",
+      "path": "/api/fmworker/flow-verification",
+      "source": "worker_verification.py",
+      "handler": "status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/fmworker/history",
+      "source": "worker_pool_api.py",
+      "handler": "history"
+    },
+    {
+      "method": "POST",
+      "path": "/api/fmworker/resources",
+      "source": "worker_pool_api.py",
+      "handler": "register"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/fmworker/resources/{node}",
+      "source": "worker_pool_api.py",
+      "handler": "remove"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/fmworker/resources/{node}",
+      "source": "worker_pool_api.py",
+      "handler": "configure"
+    },
+    {
+      "method": "POST",
+      "path": "/api/h3/references",
+      "source": "h3_inputs.py",
+      "handler": "upload"
+    },
+    {
+      "method": "POST",
+      "path": "/api/image-jobs",
+      "source": "image_api.py",
+      "handler": "submit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/invite-codes",
+      "source": "server.py",
+      "handler": "invite_codes"
+    },
+    {
+      "method": "POST",
+      "path": "/api/invite-codes",
+      "source": "server.py",
+      "handler": "create_invite_code"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/invite-codes/{i}",
+      "source": "server.py",
+      "handler": "update_invite_code"
+    },
+    {
+      "method": "POST",
+      "path": "/api/invites",
+      "source": "server.py",
+      "handler": "retired_invites"
+    },
+    {
+      "method": "POST",
+      "path": "/api/invites/{i}/revoke",
+      "source": "server.py",
+      "handler": "retired_invites"
+    },
+    {
+      "method": "POST",
+      "path": "/api/jobs",
+      "source": "server.py",
+      "handler": "submit"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/jobs/{i}",
+      "source": "server.py",
+      "handler": "change_job"
+    },
+    {
+      "method": "POST",
+      "path": "/api/jobs/{i}/cancel",
+      "source": "server.py",
+      "handler": "change_job"
+    },
+    {
+      "method": "POST",
+      "path": "/api/login",
+      "source": "server.py",
+      "handler": "login"
+    },
+    {
+      "method": "POST",
+      "path": "/api/logout",
+      "source": "server.py",
+      "handler": "logout"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/me",
+      "source": "profiles.py",
+      "handler": "edit_profile"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/me/avatar",
+      "source": "profiles.py",
+      "handler": "upload_avatar"
+    },
+    {
+      "method": "POST",
+      "path": "/api/me/password",
+      "source": "profiles.py",
+      "handler": "change_password"
+    },
+    {
+      "method": "POST",
+      "path": "/api/nodes/{i}/{action}",
+      "source": "worker_api.py",
+      "handler": "manage"
+    },
+    {
+      "method": "POST",
+      "path": "/api/pairs",
+      "source": "worker_api.py",
+      "handler": "pair"
+    },
+    {
+      "method": "GET",
+      "path": "/api/pairs/default-name",
+      "source": "worker_api.py",
+      "handler": "default_name"
+    },
+    {
+      "method": "GET",
+      "path": "/api/recharge",
+      "source": "recharge.py",
+      "handler": "listing"
+    },
+    {
+      "method": "GET",
+      "path": "/api/recharge/notify/{method}",
+      "source": "recharge.py",
+      "handler": "notify"
+    },
+    {
+      "method": "POST",
+      "path": "/api/recharge/notify/{method}",
+      "source": "recharge.py",
+      "handler": "notify"
+    },
+    {
+      "method": "POST",
+      "path": "/api/recharge/orders",
+      "source": "recharge.py",
+      "handler": "create"
+    },
+    {
+      "method": "GET",
+      "path": "/api/recharge/orders/{oid}",
+      "source": "recharge.py",
+      "handler": "detail"
+    },
+    {
+      "method": "GET",
+      "path": "/api/recharge/orders/{oid}/pay",
+      "source": "recharge.py",
+      "handler": "checkout"
+    },
+    {
+      "method": "POST",
+      "path": "/api/register",
+      "source": "server.py",
+      "handler": "register"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/settings/models",
+      "source": "server.py",
+      "handler": "set_model"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/settings/openai",
+      "source": "image_api.py",
+      "handler": "settings"
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/openai/check",
+      "source": "image_api.py",
+      "handler": "check"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/settings/prices",
+      "source": "credits_api.py",
+      "handler": "pricing"
+    },
+    {
+      "method": "GET",
+      "path": "/api/state",
+      "source": "server.py",
+      "handler": "state"
+    },
+    {
+      "method": "GET",
+      "path": "/api/storyboard-exports/{key}/subtitles",
+      "source": "storyboard_export.py",
+      "handler": "subtitles"
+    },
+    {
+      "method": "POST",
+      "path": "/api/users",
+      "source": "profiles.py",
+      "handler": "create_member"
+    },
+    {
+      "method": "POST",
+      "path": "/api/users/{i}/disable",
+      "source": "server.py",
+      "handler": "disable"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/users/{uid}",
+      "source": "profiles.py",
+      "handler": "delete_member"
+    },
+    {
+      "method": "POST",
+      "path": "/api/users/{uid}/password",
+      "source": "profiles.py",
+      "handler": "reset_member_password"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspaces",
+      "source": "workspace_api.py",
+      "handler": "listing"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspaces",
+      "source": "workspace_api.py",
+      "handler": "create"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspaces/{wid}",
+      "source": "workspace_api.py",
+      "handler": "edit"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspaces/{wid}/select",
+      "source": "workspace_api.py",
+      "handler": "select"
+    },
+    {
+      "method": "GET",
+      "path": "/avatars/uploads/{filename}",
+      "source": "profiles.py",
+      "handler": "custom_avatar"
+    },
+    {
+      "method": "GET",
+      "path": "/avatars/{filename}",
+      "source": "profiles.py",
+      "handler": "built_in_avatar"
+    },
+    {
+      "method": "GET",
+      "path": "/canvas",
+      "source": "server.py",
+      "handler": "canvas_home"
+    },
+    {
+      "method": "GET",
+      "path": "/canvas/{project_id}",
+      "source": "server.py",
+      "handler": "canvas_home"
+    },
+    {
+      "method": "GET",
+      "path": "/connect/{file}",
+      "source": "server.py",
+      "handler": "script"
+    },
+    {
+      "method": "POST",
+      "path": "/fmworker/claim",
+      "source": "worker_pool_api.py",
+      "handler": "pool_claim"
+    },
+    {
+      "method": "POST",
+      "path": "/fmworker/heartbeat",
+      "source": "worker_pool_api.py",
+      "handler": "pool_heartbeat"
+    },
+    {
+      "method": "PUT",
+      "path": "/fmworker/jobs/{job_id}/result",
+      "source": "worker_pool_api.py",
+      "handler": "flow_result"
+    },
+    {
+      "method": "POST",
+      "path": "/fmworker/jobs/{job_id}/verification",
+      "source": "worker_verification.py",
+      "handler": "create"
+    },
+    {
+      "method": "GET",
+      "path": "/fmworker/jobs/{job_id}/verification/{request_id}",
+      "source": "worker_verification.py",
+      "handler": "result"
+    },
+    {
+      "method": "POST",
+      "path": "/fmworker/usage",
+      "source": "worker_pool_api.py",
+      "handler": "report_usage"
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "source": "server.py",
+      "handler": "health"
+    },
+    {
+      "method": "HEAD",
+      "path": "/health",
+      "source": "server.py",
+      "handler": "health"
+    },
+    {
+      "method": "GET",
+      "path": "/media/{key}",
+      "source": "server.py",
+      "handler": "media"
+    },
+    {
+      "method": "GET",
+      "path": "/payments/return",
+      "source": "recharge.py",
+      "handler": "return_page"
+    },
+    {
+      "method": "GET",
+      "path": "/static/{file}",
+      "source": "server.py",
+      "handler": "static"
+    },
+    {
+      "method": "HEAD",
+      "path": "/static/{file}",
+      "source": "server.py",
+      "handler": "static"
+    },
+    {
+      "method": "GET",
+      "path": "/studio",
+      "source": "server.py",
+      "handler": "studio_home"
+    },
+    {
+      "method": "HEAD",
+      "path": "/studio",
+      "source": "server.py",
+      "handler": "studio_home"
+    },
+    {
+      "method": "GET",
+      "path": "/studio/",
+      "source": "server.py",
+      "handler": "studio_slash"
+    },
+    {
+      "method": "HEAD",
+      "path": "/studio/",
+      "source": "server.py",
+      "handler": "studio_slash"
+    }
+  ]
+}

@@ -1,0 +1,387 @@
+import type { Sql } from "../../packages/platform/src/db.js";
+import { chatText } from "../../packages/platform/src/chat-values.js";
+/** Reconstruct every persisted original chat field from native relational data. */
+export async function chatImportTables(sql: Sql) {
+  const conversations = (
+    await sql.query(
+      `SELECT c.*,w.public_id AS workspace,u.public_id AS owner FROM chat_conversations c JOIN workspaces w ON w.id=c.workspace_id JOIN users u ON u.id=c.owner_id ORDER BY c.ordinal`,
+    )
+  ).rows.map((c) => ({
+    original_order: Number(c.ordinal),
+    id: c.public_id,
+    workspace: Number(c.workspace),
+    owner: Number(c.owner),
+    title: chatText(c.title),
+    custom_title: Number(c.custom_title),
+    model: c.model,
+    created: c.created,
+    updated: c.updated,
+    revision: c.revision,
+    deleted_at: c.deleted_at,
+  }));
+  const chat_messages = (
+    await sql.query(
+      `SELECT m.*,c.public_id AS conversation,u.public_id AS author,r.public_id AS reply_number FROM chat_messages m JOIN chat_conversations c ON c.id=m.conversation_id LEFT JOIN users u ON u.id=m.author_id LEFT JOIN chat_messages r ON r.id=m.reply_to ORDER BY m.public_id`,
+    )
+  ).rows.map((m) => ({
+    id: Number(m.public_id),
+    conversation: m.conversation,
+    role: m.role,
+    author: m.author === null ? null : Number(m.author),
+    content: chatText(m.content),
+    state: m.state,
+    model: m.model,
+    created: m.created,
+    context: m.context,
+    reply_to: m.reply_number === null ? null : Number(m.reply_number),
+    superseded: Number(m.superseded),
+  }));
+  const chat_turns = (
+    await sql.query(
+      `SELECT t.*,c.public_id AS conversation,u.public_id AS owner,m.public_id AS user_number,a.public_id AS assistant_number FROM chat_turns t JOIN chat_conversations c ON c.id=t.conversation_id JOIN users u ON u.id=t.owner_id JOIN chat_messages m ON m.id=t.user_message JOIN chat_messages a ON a.id=t.assistant_message ORDER BY a.public_id`,
+    )
+  ).rows.map((t) => ({
+    id: t.public_id,
+    uid: t.uid,
+    conversation: t.conversation,
+    owner: Number(t.owner),
+    user_message: Number(t.user_number),
+    assistant_message: Number(t.assistant_number),
+    model: t.model,
+    state: t.state,
+    created: t.created,
+    started: t.started,
+    first_token: t.first_token,
+    finished: t.finished,
+    updated: t.updated,
+    usage: t.usage,
+    error: chatText(t.error),
+    request_id: chatText(t.request_id),
+    finish_reason: chatText(t.finish_reason),
+  }));
+  const credit_chat_charges = (
+    await sql.query(
+      `SELECT h.*,t.public_id AS turn,w.public_id AS workspace,u.public_id AS owner FROM chat_charges h JOIN chat_turns t ON t.id=h.turn_id JOIN workspaces w ON w.id=h.workspace_id JOIN users u ON u.id=h.owner_id`,
+    )
+  ).rows.map((c) => ({
+    turn: c.turn,
+    workspace: Number(c.workspace),
+    owner: Number(c.owner),
+    amount: Number(c.amount),
+    price_key: c.price_key,
+    price_revision: c.price_revision,
+    state: c.state,
+    created: Number(c.created),
+  }));
+  const canvas_chat_links = (
+    await sql.query(
+      `SELECT d.public_id AS project,l.node,c.public_id AS conversation,l.created FROM canvas_chat_links l JOIN documents d ON d.id=l.project_id JOIN chat_conversations c ON c.id=l.conversation_id`,
+    )
+  ).rows;
+  const chat_applications = (
+    await sql.query(
+      `SELECT a.uid,u.public_id AS owner,c.public_id AS conversation,m.public_id AS message,a.project_public_id AS project,a.node,a.mode,a.created FROM chat_applications a JOIN users u ON u.id=a.owner_id JOIN chat_conversations c ON c.id=a.conversation_id JOIN chat_messages m ON m.id=a.message_id`,
+    )
+  ).rows.map((a) => ({
+    ...a,
+    owner: Number(a.owner),
+    message: Number(a.message),
+  }));
+  return {
+    conversations,
+    chat_messages,
+    chat_turns,
+    credit_chat_charges,
+    canvas_chat_links,
+    chat_applications,
+  };
+}
+
+/** Synthetic but fully related sparse history for offline validation/rollback tests. */
+export function chatImportDraft(): import("../../packages/platform/src/importer.js").LegacyExport {
+  const c1 = "a".repeat(32),
+    c2 = "b".repeat(32),
+    project = "c".repeat(32),
+    gone = "d".repeat(32),
+    t1 = "e".repeat(32),
+    t2 = "f".repeat(32);
+  const uid = (n: number) =>
+    "00000000-0000-0000-0000-" + String(n).padStart(12, "0");
+  return {
+    version: 1,
+    chatVersion: 1,
+    canvasVersion: 1,
+    source: "chat-history-test",
+    tables: {
+      users: [
+        {
+          id: 7,
+          name: "admin",
+          nickname: "管理员",
+          role: "admin",
+          active: 1,
+          salt: "fixture",
+          pw: "fixture",
+        },
+        {
+          id: 42,
+          name: "member",
+          nickname: "成员",
+          role: "member",
+          active: 1,
+          salt: "fixture",
+          pw: "fixture",
+        },
+      ],
+      workspaces: [
+        { id: 20, kind: "personal", owner: 7, name: "个人" },
+        { id: 85, kind: "personal", owner: 42, name: "成员个人" },
+      ],
+      credit_accounts: [
+        { workspace: 20, balance: 99, reserved: 0 },
+        { workspace: 85, balance: 100, reserved: 0 },
+      ],
+      credit_ledger: [
+        {
+          id: 1,
+          workspace: 20,
+          actor: 7,
+          job: null,
+          chat_turn: t1,
+          action: "reserve",
+          amount: 1,
+          balance: 100,
+          reserved: 1,
+          note: "DeepSeek Flash 对话",
+          created: 10,
+        },
+        {
+          id: 3,
+          workspace: 20,
+          actor: 7,
+          job: null,
+          chat_turn: t1,
+          action: "spend",
+          amount: 1,
+          balance: 99,
+          reserved: 0,
+          note: "AI 对话",
+          created: 11,
+        },
+        {
+          id: 4,
+          workspace: 85,
+          actor: 42,
+          job: null,
+          chat_turn: t2,
+          action: "reserve",
+          amount: 1,
+          balance: 100,
+          reserved: 1,
+          note: "DeepSeek Flash 对话",
+          created: 10,
+        },
+        {
+          id: 7,
+          workspace: 85,
+          actor: 42,
+          job: null,
+          chat_turn: t2,
+          action: "refund",
+          amount: 1,
+          balance: 100,
+          reserved: 0,
+          note: "AI 对话",
+          created: 11,
+        },
+      ],
+      canvas_media_refs: [],
+      canvas_job_links: [],
+      canvas_run_batches: [],
+      storyboard_exports: [],
+      storyboard_export_refs: [],
+      canvas_projects: [
+        {
+          id: project,
+          owner: 7,
+          workspace: 20,
+          title: "画布",
+          document: '{"schemaVersion":1,"nodes":[],"edges":[]}',
+          revision: 2,
+          created: 1,
+          updated: 10,
+          last_editor: 7,
+        },
+      ],
+      conversations: [
+        {
+          id: c1,
+          original_order: 11,
+          workspace: 20,
+          owner: 7,
+          title: "保留\u0000😀",
+          custom_title: 1,
+          model: "deepseek-flash",
+          created: 1.25,
+          updated: 11.25,
+          revision: 4,
+          deleted_at: null,
+        },
+        {
+          id: c2,
+          original_order: 15,
+          workspace: 85,
+          owner: 42,
+          title: "已删除",
+          custom_title: 0,
+          model: "deepseek-flash",
+          created: 1.25,
+          updated: 11.25,
+          revision: 4,
+          deleted_at: 12.5,
+        },
+      ],
+      chat_messages: [
+        {
+          id: 41,
+          conversation: c1,
+          role: "user",
+          author: 7,
+          content: "问题\u0000😀",
+          state: "complete",
+          model: "",
+          created: 10.25,
+          context: '{"text": "\\u0000"}',
+          reply_to: null,
+          superseded: 0,
+        },
+        {
+          id: 42,
+          conversation: c1,
+          role: "assistant",
+          author: null,
+          content: "回答\u0000😀",
+          state: "complete",
+          model: "deepseek-flash",
+          created: 10.25,
+          context: "{}",
+          reply_to: 41,
+          superseded: 0,
+        },
+        {
+          id: 80,
+          conversation: c2,
+          role: "user",
+          author: 42,
+          content: "问题",
+          state: "complete",
+          model: "",
+          created: 10.25,
+          context: "{}",
+          reply_to: null,
+          superseded: 0,
+        },
+        {
+          id: 85,
+          conversation: c2,
+          role: "assistant",
+          author: null,
+          content: "部分",
+          state: "stopped",
+          model: "deepseek-flash",
+          created: 10.25,
+          context: "{}",
+          reply_to: 80,
+          superseded: 0,
+        },
+      ],
+      chat_turns: [
+        {
+          id: t1,
+          uid: uid(1),
+          conversation: c1,
+          owner: 7,
+          user_message: 41,
+          assistant_message: 42,
+          model: "deepseek-flash",
+          state: "complete",
+          created: 10.25,
+          started: 10.5,
+          first_token: 10.75,
+          finished: 11.25,
+          updated: 11.25,
+          usage: '{"total_tokens": 9007199254740993}',
+          error: "",
+          request_id: "req\u0000",
+          finish_reason: "stop",
+        },
+        {
+          id: t2,
+          uid: uid(2),
+          conversation: c2,
+          owner: 42,
+          user_message: 80,
+          assistant_message: 85,
+          model: "deepseek-flash",
+          state: "stopped",
+          created: 10.25,
+          started: null,
+          first_token: null,
+          finished: 11.25,
+          updated: 11.25,
+          usage: "{}",
+          error: "",
+          request_id: "",
+          finish_reason: "",
+        },
+      ],
+      credit_chat_charges: [
+        {
+          turn: t1,
+          workspace: 20,
+          owner: 7,
+          amount: 1,
+          price_key: "deepseek-flash|reply",
+          price_revision: 9,
+          state: "spent",
+          created: 10,
+        },
+        {
+          turn: t2,
+          workspace: 85,
+          owner: 42,
+          amount: 1,
+          price_key: "deepseek-flash|reply",
+          price_revision: 9,
+          state: "refunded",
+          created: 10,
+        },
+      ],
+      canvas_chat_links: [
+        { project, node: "removed-node", conversation: c1, created: 11.5 },
+      ],
+      chat_applications: [
+        {
+          uid: uid(3),
+          owner: 7,
+          conversation: c1,
+          message: 42,
+          project,
+          node: "removed-node",
+          mode: "replace",
+          created: 11.5,
+        },
+        {
+          uid: uid(4),
+          owner: 7,
+          conversation: c1,
+          message: 42,
+          project: gone,
+          node: "gone",
+          mode: "new",
+          created: 11.75,
+        },
+      ],
+    },
+  };
+}

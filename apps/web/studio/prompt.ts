@@ -1,0 +1,135 @@
+import {
+  mediaURL,
+  referenceIndex,
+  referenceLabel,
+  referenceType,
+  type StudioState,
+} from "./state";
+
+export function readPrompt(
+  editor: HTMLElement,
+  state: StudioState,
+  refs: string[],
+) {
+  function read(node: Node): string {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
+    if (!(node instanceof HTMLElement)) return "";
+    const id = node.dataset.refid;
+    if (id)
+      return refs.includes(id)
+        ? `<${referenceType(state, id)} ${referenceIndex(state, id, refs)}>`
+        : "";
+    if (node.tagName === "BR") return "\n";
+    const value = Array.from(node.childNodes, read).join("");
+    return ["DIV", "P"].includes(node.tagName) ? value + "\n" : value;
+  }
+  return Array.from(editor.childNodes, read)
+    .join("")
+    .replace(/\n+$/, "")
+    .replace(/@图片(\d+)/g, "<Picture $1>");
+}
+
+export function createReferenceToken(
+  state: StudioState,
+  refs: string[],
+  id: string,
+) {
+  const token = document.createElement("span");
+  token.className = "reference-token";
+  token.contentEditable = "false";
+  token.dataset.refid = id;
+  const type = referenceType(state, id);
+  if (type === "Picture") {
+    const image = document.createElement("img");
+    image.src = mediaURL(id);
+    image.alt = "";
+    token.append(image);
+  } else if (type === "Video") {
+    const video = document.createElement("video");
+    video.src = mediaURL(id) + "#t=0.1";
+    video.preload = "metadata";
+    video.setAttribute("muted", "");
+    video.playsInline = true;
+    token.append(video);
+  } else {
+    const thumb = document.createElement("span");
+    thumb.className = "h3-audio-thumb";
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("class", "icon");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute(
+      "d",
+      "M9 5a3 3 0 016 0v7a3 3 0 01-6 0V5zM5 10v2a7 7 0 0014 0v-2M12 19v3m-4 0h8",
+    );
+    svg.append(path);
+    thumb.append(svg);
+    token.append(thumb);
+  }
+  const label = document.createElement("span");
+  label.textContent = referenceLabel(state, id, refs);
+  token.append(label);
+  return token;
+}
+
+export function paintPrompt(
+  editor: HTMLElement,
+  state: StudioState,
+  refs: string[],
+  prompt: string,
+  frames: boolean,
+) {
+  const nodes = document.createDocumentFragment();
+  function appendText(text: string) {
+    text.split("\n").forEach((line, index) => {
+      if (index) nodes.append(document.createElement("br"));
+      if (line) nodes.append(line);
+    });
+  }
+  let cursor = 0;
+  for (const match of prompt.matchAll(/<(Picture|Video|Audio) (\d+)>/g)) {
+    appendText(prompt.slice(cursor, match.index));
+    const id = refs.filter((ref) => referenceType(state, ref) === match[1])[
+      Number(match[2]) - 1
+    ];
+    if (id && !frames) nodes.append(createReferenceToken(state, refs, id));
+    else appendText(match[0]);
+    cursor = match.index + match[0].length;
+  }
+  appendText(prompt.slice(cursor));
+  nodes.normalize();
+  editor.replaceChildren(nodes);
+}
+
+export function rememberSelection(editor: HTMLElement, previous: Range | null) {
+  const selection = getSelection();
+  if (
+    !selection?.rangeCount ||
+    !editor.contains(selection.getRangeAt(0).commonAncestorContainer)
+  )
+    return previous;
+  return selection.getRangeAt(0).cloneRange();
+}
+export function appendAtCaret(
+  editor: HTMLElement,
+  node: Node,
+  previous: Range | null,
+) {
+  editor.focus();
+  let range = previous?.cloneRange();
+  if (!range || !editor.contains(range.commonAncestorContainer)) {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  range.deleteContents();
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.collapse(true);
+  const selection = getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  return range;
+}

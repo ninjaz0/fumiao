@@ -1,0 +1,50 @@
+{
+  "MiniMax H3": {
+    "label": "MiniMax H3",
+    "slug": "minimax-h3",
+    "kind": "video",
+    "adapter": "h3",
+    "backends": [
+      "cuda",
+      "rocm"
+    ],
+    "min_vram_gib": 96,
+    "min_ram_gib": 128,
+    "disk_gib": 155,
+    "min_python": [
+      3,
+      12
+    ],
+    "manifest": "engine/assets/models.lock.json",
+    "cache_env": "H3_CACHE",
+    "cache_dir": "fumiao-h3",
+    "model_subdir": "models",
+    "persistence_priority": 0,
+    "precision": "bf16",
+    "workflow": "h3-v3-rocm-qkv-safe"
+  },
+  "breeze-tts-2": {
+    "label": "Breeze TTS 2",
+    "slug": "breeze-tts-2",
+    "kind": "audio",
+    "adapter": "breeze",
+    "backends": [
+      "cuda",
+      "rocm"
+    ],
+    "min_vram_gib": 12,
+    "min_ram_gib": 16,
+    "disk_gib": 20,
+    "min_python": [
+      3,
+      10
+    ],
+    "manifest": "breeze.lock.json",
+    "cache_env": "BREEZE_HOME",
+    "cache_dir": "fumiao-breeze",
+    "model_subdir": "checkpoint",
+    "persistence_priority": 10,
+    "precision": "bf16",
+    "workflow": "breeze-tts-2-eager-v1"
+  }
+}

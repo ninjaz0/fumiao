@@ -1,0 +1,268 @@
+{
+  "source": "nvmes.com server snapshot",
+  "capturedAt": "2026-11-17",
+  "release": "/srv/fumiao/releases/20261110T123434Z-remove-lab",
+  "upstreamCommit": "167896e59196adc2d96a816191b02d3f4561f605",
+  "files": {
+    "asset_packs.py": {
+      "sha256": "a04eb12ad9175ba8577bc5557baacd2a13e2d95af354d2425a6da982e31cecd0",
+      "size": 6042
+    },
+    "audio_api.py": {
+      "sha256": "9f15aecd1328229c301ed9ee55165082f5c19c9e386c6cbadbc63416d85c33d1",
+      "size": 3621
+    },
+    "avatars.py": {
+      "sha256": "c6495611d6550e8ea6080fd97d3b1e44ec82bf10edcac6e216ab65b73afbf9df",
+      "size": 877
+    },
+    "bootstrap_admin.py": {
+      "sha256": "9685b3e8186fe181e49ba3c9f1f42729c24c65f2335679d5e6a77adb3a76883d",
+      "size": 664
+    },
+    "canvas_api.py": {
+      "sha256": "036135b2921a6381b24f0c3b73beb1a37e67b96f25f8a83a052ae3f03693338d",
+      "size": 28334
+    },
+    "chat_api.py": {
+      "sha256": "5d997e2183099996fa458e9024342c1b96f1f14522b4752682de16d98c0a1991",
+      "size": 14959
+    },
+    "chat_models.py": {
+      "sha256": "54b34b61ba888acba57556a69c63cc43b5ff0f99f49d59a97c29fc91abc26130",
+      "size": 591
+    },
+    "chat_runtime.py": {
+      "sha256": "0039fc472536988c9d16bd96a2bc12c61def7dc4cb1eaa6c38e725893d353e2a",
+      "size": 10505
+    },
+    "chat_storage.py": {
+      "sha256": "675fdc176d9bde1aaf72819693b73f9a252ab04bac2bc200d844a814a8a9e109",
+      "size": 7258
+    },
+    "core.py": {
+      "sha256": "e23a346828dfce7e5cdf4628d202ecab45232e441f15029cabc6ec5c252d2452",
+      "size": 16592
+    },
+    "credits.py": {
+      "sha256": "2acba309fab9d04b96e0b75a97921377a08bb33704f5e53bc6fed7062d77b873",
+      "size": 10786
+    },
+    "credits_api.py": {
+      "sha256": "a50610b01023309ec6333b50692df5dc7f637d6ea25c04a4856368bc340959c1",
+      "size": 1437
+    },
+    "flow_catalog.py": {
+      "sha256": "b79e227a1b953daef946356158bee9c5014298e225f5fbf601e2f897f2e7b68e",
+      "size": 664
+    },
+    "flow_models.json": {
+      "sha256": "6915290794a05fa9eff418798e66f2acc2e7b4b5d0aa9e39f487b3fa577fddca",
+      "size": 35365
+    },
+    "flow_provider.py": {
+      "sha256": "1af398b369fcfb62f477ce200907fa0d950d0b6c43b81ffa4701321def419d1f",
+      "size": 18346
+    },
+    "generation.py": {
+      "sha256": "cc66da3e8b8de766a6c72b2c8b2278fa5bb181959549e313b2f1b15c92472a21",
+      "size": 5911
+    },
+    "gpu_lanes.py": {
+      "sha256": "5d8ebb459923b663cd28ff6485cca6347bee917b3c507779e9d6d9525b4a699d",
+      "size": 5692
+    },
+    "h3_inputs.py": {
+      "sha256": "c97afda19ad5295a6b0fce91d4ed0cb6be1f3f80ae5dfbdc89e3af336991b6b7",
+      "size": 9344
+    },
+    "image_api.py": {
+      "sha256": "02392ce696c5b5d64d1e1d96f50a091d7fb482198ac250b4373f93dd4d9acad1",
+      "size": 16399
+    },
+    "image_imports.py": {
+      "sha256": "d8d2f3aea692452e9695fdcebfd39a1b2d36fdd27339ce3ae4599b7cd832fe43",
+      "size": 5707
+    },
+    "invitations.py": {
+      "sha256": "dbfcb958eeca4561df963d3f124d9a721689b06a9acd5e6dd96eb905cfda70be",
+      "size": 3311
+    },
+    "library_api.py": {
+      "sha256": "e7ff235a251b2e124b09c9fbb034c65a007dd301e0d428580c1d53775a77e4bc",
+      "size": 10360
+    },
+    "model_policy.py": {
+      "sha256": "3c6e358909ac1ca650fde7d5734fa2cab54e10c7d6935d68b5961c0a06cb96c4",
+      "size": 6918
+    },
+    "muse_provider.py": {
+      "sha256": "66372ae196bc5568232c6294814e5d59198b6657ec73ce72c4cf982d5f936c91",
+      "size": 21939
+    },
+    "node_models.py": {
+      "sha256": "4550aefcc9c8d03e8412aaf79e7c4607b0eb77d05323aafb51af9c0619a31e5d",
+      "size": 9988
+    },
+    "profiles.py": {
+      "sha256": "131c4849362f2ddbf743bbf85fd03a91f9ad262ae28aa78ba12f4f53b1588094",
+      "size": 9171
+    },
+    "public_assets.py": {
+      "sha256": "08c0923d722d4d83bd10cf488b7d7a6ec83f739872055de266bbc23833a0e5a4",
+      "size": 1406
+    },
+    "recharge.py": {
+      "sha256": "00f424553c945c3964fc6cfd339c31e9b7fac91e250b22bdd5d2fc0345486949",
+      "size": 18220
+    },
+    "requirements.txt": {
+      "sha256": "d5fae1dfbd4c3b199784c122e29bd36d13b8bfc4b6c189c2fc42edd320f42281",
+      "size": 99
+    },
+    "server.py": {
+      "sha256": "6af71bff6072a773803d82e015a71232733d890e1d2b60638f46c5eb9589849f",
+      "size": 31868
+    },
+    "storage.py": {
+      "sha256": "98315caf9dedf42fcccd164269d99f990e752881f755612b31e201e6dcb7ece7",
+      "size": 2625
+    },
+    "storyboard_export.py": {
+      "sha256": "df1a144de20bbfd2dbf0dbe13970ed8bdd994029c18052ad25c2ff4b08a6fedb",
+      "size": 13604
+    },
+    "timing.py": {
+      "sha256": "e75cc3f43d84f0277cd041b89cc4514dbe798fdf19be44dbddffb94a6dfaa225",
+      "size": 40320
+    },
+    "worker_api.py": {
+      "sha256": "7d81744e895eddd7992d7e2c702eae5d459f724cf1fb75b53b5063cdfd9f23ff",
+      "size": 23317
+    },
+    "worker_pool.py": {
+      "sha256": "59251ae9621e5acc4875af659e8b101344984b023e960f91e0496f5a60466518",
+      "size": 10615
+    },
+    "worker_pool_api.py": {
+      "sha256": "0457a0719b832da435d5491774f84be8f0d01006a82c13eb72583bc78e695bf9",
+      "size": 13148
+    },
+    "worker_verification.py": {
+      "sha256": "c0e1a1f7f00494e160e1c9e85063f4c084d9c9ce5c8bd5a66ff2767815bb69d1",
+      "size": 7523
+    },
+    "workspace_access.py": {
+      "sha256": "57005129231cca65f52978b592900dc2e7a77539576027edb51e58b76053cdd3",
+      "size": 5839
+    },
+    "workspace_api.py": {
+      "sha256": "543a4a524a85590dd05b55989e27da6f72e72964f906613491bac11d266085c1",
+      "size": 2849
+    },
+    "static/canvas.css": {
+      "sha256": "b214272d782c8c43380dd3a9625e3a7a41165ab3544ff54c12c805007e27c57c",
+      "size": 70955
+    },
+    "static/canvas.html": {
+      "sha256": "c431151fb6f1adde217e8902218c33c33a97cbe76cb82f8bc71d6431183a5053",
+      "size": 1400
+    },
+    "static/canvas.js": {
+      "sha256": "f8d0f6c0ee07526093c0b3ae7cc9d914988bddc9c558ea1b276fe67e1a3ce201",
+      "size": 946144
+    },
+    "static/chat.css": {
+      "sha256": "c3cb02b085dd7262b13ba0727f6a0620a10866c7b3294984a2b4723a3ed509b8",
+      "size": 22071
+    },
+    "static/chat.js": {
+      "sha256": "560be0e8f951a768501ab43961f14bf056ba79ae06f84e971e307356d5366c37",
+      "size": 339460
+    },
+    "static/flowpicker.js": {
+      "sha256": "fcb91545ee58062220e1e3c967be4c90bb81ef47f11a46b8c287427f449114a8",
+      "size": 4188
+    },
+    "static/home.css": {
+      "sha256": "e5d5d0b56ca80b4ddaf6ebce84cd9c8f4d6b6c69869d4a376882c8d4c6a3847c",
+      "size": 20844
+    },
+    "static/home.html": {
+      "sha256": "0227604a7da4b3e2b2d4f11863d7e1bdada4794dff2ea86573ea5885e6320aef",
+      "size": 18681
+    },
+    "static/home.js": {
+      "sha256": "d01f4918dc651ca70bfa0209bf16c6a9bd43061c0c134b52365946472300bb3f",
+      "size": 4130
+    },
+    "static/index.html": {
+      "sha256": "c202959cfec7f9327ac05ca40ea49ea28189e8303579265d9f2968ff88daaf0f",
+      "size": 3016
+    },
+    "static/mark.svg": {
+      "sha256": "4cb8d80a915731becf011fe2b75797cd868bd98f4c55ebe12d2971798a1026c7",
+      "size": 220
+    },
+    "static/studio.css": {
+      "sha256": "686ab4075ff30b87579ebe2efaee87eeabc222ba4f4c10dea8e48060fa3f730b",
+      "size": 71842
+    },
+    "static/studio.js": {
+      "sha256": "942776dbd14bd1230bcd81e7efb2c115b2486ec2a9181fcc41c3ee47af96f162",
+      "size": 182775
+    },
+    "static/theme.js": {
+      "sha256": "ea0cb74ced0e3512a82b1319c626734fd8cf98b28b1e1136f6e2e4d2c5d5ec66",
+      "size": 868
+    },
+    "static/avatars/alpine.svg": {
+      "sha256": "d8fb456d625bab6b963918ee132296f50307176e82cb67e5f2bd6ba22591ebac",
+      "size": 279
+    },
+    "static/avatars/flower.svg": {
+      "sha256": "44fe0885cb6979daaf72b0515845e4aba6e0911edf2123b3f8fa2d2611c5a284",
+      "size": 619
+    },
+    "static/avatars/forest.svg": {
+      "sha256": "dc1e315e1771493502a1c403bd9454ea5f6f85cdc9eb3611749a2920232816bc",
+      "size": 321
+    },
+    "static/avatars/island.svg": {
+      "sha256": "6e8dd8d8bd69aedacdd4d7563a1e852e8491bbeb85b9061b601b9bd4d434176d",
+      "size": 421
+    },
+    "static/avatars/leaf.svg": {
+      "sha256": "fbacf5bd4edc7d99829a890b797966149a07ddfd09103b2851d38b4057565fa7",
+      "size": 297
+    },
+    "static/avatars/moon.svg": {
+      "sha256": "257fc45e04dc4075be2b9ad7a98b635d48b275d30168ca25204f3b79b447e1bc",
+      "size": 372
+    },
+    "static/avatars/orange.svg": {
+      "sha256": "009d54d6292372f320f0837f597de46a6df508a5d04c7285396571a627c792f7",
+      "size": 423
+    },
+    "static/avatars/planet.svg": {
+      "sha256": "c76c38498ebbad6f3ccfd96db24a35c3d136102e1db71d9608995fc770dfbcbb",
+      "size": 367
+    },
+    "static/avatars/rainbow.svg": {
+      "sha256": "673bb07c650b2cd9498a654bfb13129ecd4cc9885c20f68e815a7b5b33f1e381",
+      "size": 381
+    },
+    "static/avatars/sail.svg": {
+      "sha256": "f1fc3124accfe44fb7c07a47338a51e2ce770442bb8f1ad2340cbaff719c4873",
+      "size": 363
+    },
+    "static/avatars/sunrise.svg": {
+      "sha256": "7c0016f65c66b180a4595a38ea87121a06971e796bc4d3ae07ef7a265df1086b",
+      "size": 302
+    },
+    "static/avatars/waves.svg": {
+      "sha256": "48cd4ea6fec1004f0c21b0e06ca6eb4d67b587a8b065fe0846a3f260c434207e",
+      "size": 311
+    }
+  }
+}
