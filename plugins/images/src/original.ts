@@ -1,3 +1,4 @@
+import { resolutions } from "./studio.js";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { imagesQueue } from "./queue.js";
@@ -44,8 +45,7 @@ export function createImagesOriginal(
       namespace: () => "-image",
       validate(d, phase) {
         if (phase !== "before-retry") return;
-        if (!["1K", "2K"].includes(d.resolution))
-          fail("该模型不支持这个分辨率");
+        if (!resolutions.includes(d.resolution)) fail("该模型不支持这个分辨率");
         if (
           !strip(d.prompt) ||
           !Object.hasOwn(sizes, d.ratio) ||

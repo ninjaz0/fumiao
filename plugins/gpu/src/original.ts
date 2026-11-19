@@ -1,3 +1,4 @@
+import { videoSeconds, videoQualities } from "./index.js";
 import { gpuNative } from "./native.js";
 import { prepareInput, referenceIds, ratios } from "./inputs.js";
 import {
@@ -57,8 +58,8 @@ export function createGpuOriginal(
         if (phase === "before-retry" && d.kind === "video") {
           if (
             !strip(d.prompt) ||
-            ![480, 768].includes(d.quality) ||
-            ![5, 10, 15].includes(d.seconds)
+            !videoQualities.includes(d.quality) ||
+            !videoSeconds.includes(d.seconds)
           )
             fail("请检查提示词、清晰度和时长");
           if (d.ratio !== "auto" && !Object.hasOwn(ratios, d.ratio))

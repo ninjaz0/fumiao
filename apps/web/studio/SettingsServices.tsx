@@ -27,41 +27,43 @@ export function OpenAISettings({
   return (
     <section className="settings-section openai-settings">
       <h2>OpenAI</h2>
-      <div className="setting-row">
-        <span>连接状态</span>
-        <span>{configured ? "已配置" : "未配置"}</span>
-      </div>
-      <div className="setting-row">
-        <span>模型</span>
-        <span>gpt-image-2.6</span>
-      </div>
-      <form
-        id="openai-settings-form"
-        onSubmit={(event) => event.preventDefault()}
-      >
-        <div className="openai-actions">
-          <button
-            className="profile-secondary"
-            type="button"
-            id="openai-check"
-            disabled={!configured || testing}
-            onClick={() => void check()}
-          >
-            测试连接
-          </button>
-          <a
-            className="quiet-button"
-            href="https://platform.openai.com/usage"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            查看用量 ↗
-          </a>
+      <div className="ledger-card">
+        <div className="setting-row">
+          <span>连接状态</span>
+          <span>{configured ? "已配置" : "未配置"}</span>
         </div>
-        <p className="form-message" role="status">
-          {message}
-        </p>
-      </form>
+        <div className="setting-row">
+          <span>模型</span>
+          <span>gpt-image-2.6</span>
+        </div>
+        <form
+          id="openai-settings-form"
+          onSubmit={(event) => event.preventDefault()}
+        >
+          <div className="openai-actions">
+            <button
+              className="profile-secondary"
+              type="button"
+              id="openai-check"
+              disabled={!configured || testing}
+              onClick={() => void check()}
+            >
+              测试连接
+            </button>
+            <a
+              className="quiet-button"
+              href="https://platform.openai.com/usage"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              查看用量 ↗
+            </a>
+          </div>
+          <p className="form-message" role="status">
+            {message}
+          </p>
+        </form>
+      </div>
     </section>
   );
 }
@@ -152,6 +154,7 @@ function ChatProvider({
 
   return (
     <form
+      className="ledger-card"
       data-chat-provider={id}
       onSubmit={(event) => {
         event.preventDefault();

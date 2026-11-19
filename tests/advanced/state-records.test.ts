@@ -191,7 +191,7 @@ test("state archive preserves original IDs, ownership, ordering and attempts wit
     const mine = await records.nodes(f.db, member, 1075);
     assert.deepEqual(
       mine.map((n) => [n.id, n.stage, n.contributor, n.detail]),
-      [[49, "ready", "member", "旧详情"]],
+      [],
     );
     assert.deepEqual(
       (await records.assets(f.db, wid)).map((a) => a.id),

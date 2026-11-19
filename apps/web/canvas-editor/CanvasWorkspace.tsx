@@ -1,3 +1,4 @@
+import { matches, normalizeForm } from "../../../packages/plugin-sdk/src/model-form";
 import React, {
   createContext,
   memo,
@@ -551,7 +552,7 @@ export function CanvasWorkspace({
   }).find(Boolean)||'';
   const compared = doc.value.document.nodes.find((node) => node.id === compareNode);
   const comparisonRuns = compared ? resolveNode(compared, runs).list.filter((job) => job.status === "done" && job.result) : [];
-  const availableModel = (model:string) => (studio.model_access || studio.model_policy?.enabled)?.[model] === true && (model !== 'gpt-image-2.6-sunburst' || studio.images.configured) && (studio.model_catalog?.[model]?.provider!=='flow' || Boolean(studio.flow?.configured));
+  const availableModel = (model:string) => !!studio.model_forms?.[model]?.canvas && (studio.model_access || studio.model_policy?.enabled)?.[model] === true && (model !== 'gpt-image-2.6-sunburst' || studio.images.configured) && (studio.model_catalog?.[model]?.provider!=='flow' || Boolean(studio.flow?.configured));
   const imagesEnabled = Object.keys(studio.images.models || {}).some(availableModel);
   const rawModelChoices = Object.entries(single?.type==='image' ? studio.images.models || {} : studio.video_models || {}).filter(([model])=>availableModel(model));
   const requestedModel = single?.params.model || (single?.type === 'image' ? 'gpt-image-2.6-sunburst' : 'MiniMax H3');
@@ -559,15 +560,19 @@ export function CanvasWorkspace({
   const modelChoices = FlowPicker.grouped(Object.fromEntries(rawModelChoices),studio.model_catalog,availableModel,selectedModel,single?.params);
   const flowModel=studio.model_catalog?.[selectedModel]?.provider==='flow'?studio.model_catalog[selectedModel]:null;
   const flowParameters=flowModel?.family?FlowPicker.options(studio.model_catalog,selectedModel,availableModel):null;
+  const form = studio.model_forms?.[selectedModel];
+  const fields = form?.fields;
+  const stepsOptions = (fields?.sampling_steps?.enum ?? []).map(Number).filter(v=>v!==form?.fastSteps) as Params["sampling_steps"][];
   useEffect(()=>{
     if (!single || !['image','video'].includes(single.type) || !selectedModel) return;
-    const native=selectedModel.startsWith('muse-');
+    if (!form) return;
+    const values = normalizeForm(form,{ratio:single.params.ratio,resolution:single.params.resolution,seconds:single.params.seconds,quality:single.params.quality,image_quality:single.params.image_quality});
     const desired:Partial<Params>=flowModel?{model:selectedModel,ratio:flowModel.ratio!,seconds:flowModel.seconds!,resolution:(flowModel.resolution==='原生'?'1K':flowModel.resolution) as Params['resolution'],fast_mode:false,sampling_steps:20,seed:null,flow_source_job:flowModel.mode==='extend'?single.params.flow_source_job||null:null}:
-      {model:selectedModel,flow_source_job:null,resolution:['1K','2K'].includes(single.params.resolution)?single.params.resolution:'1K',ratio:native&&!((single.type==='image'?['1:1','16:9','9:16','4:3','3:4']:['16:9','9:16']).includes(single.params.ratio))?'16:9':single.params.ratio,seconds:(native?[5,6,8,10]:[5,10,15]).includes(single.params.seconds)?single.params.seconds:native?6:5};
+      {model:selectedModel,flow_source_job:null, ratio:String(values.ratio ?? single.params.ratio),seconds:Number(values.seconds ?? single.params.seconds), resolution:(values.resolution ?? single.params.resolution) as Params["resolution"], quality:(values.quality ?? single.params.quality) as Params["quality"],image_quality:(values.image_quality ?? single.params.image_quality) as Params["image_quality"]};
     if(Object.entries(desired).every(([key,value])=>(single.params as any)[key]===value))return;
     const nid=single.id;doc.change(d=>({...d,document:{...d.document,nodes:d.document.nodes.map(n=>n.id===nid?{...n,params:{...n.params,...desired}}:n)}}));
   },[single?.id,single?.params.model,single?.params.ratio,single?.params.seconds,single?.params.resolution,selectedModel]);
-  const muse = selectedModel.startsWith('muse-');
+  const muse = form?.nativeResolution;
   const currentImageEnabled = imagesEnabled && availableModel(selectedModel);
   const closeModelMenu = () => { setMenu(null); modelButtonRef.current?.focus(); };
   useEffect(() => {
@@ -914,7 +919,7 @@ export function CanvasWorkspace({
     );
     if (type === 'image' || type === 'video') {
       node.params.model=Object.keys(type==='image'?studio.images.models||{}:studio.video_models||{}).find(availableModel) || '';
-      if (node.params.model==='muse-video') node.params.seconds=6;
+      node.params.seconds = Number(studio.model_forms[node.params.model]?.fields.seconds?.default ?? node.params.seconds);
     }
     doc.change((d) => ({
       ...d,
@@ -1438,7 +1443,7 @@ export function CanvasWorkspace({
     node.type === "text" ? !node.text.trim() : !resolveNode(node, runs).media,
   );
   const linkedReferenceMedia = incoming.filter(({node})=>node.type==='image').map(({node})=>resolveNode(node,runs).media);
-  const h3Native=single?.type==="video"&&selectedModel==="MiniMax H3";
+  const h3Native=single?.type==="video" && !!form?.referenceModes;
   const h3Options=single?.params.h3 || {mode:"reference" as const,video_audio:[]};
   const h3Frames=h3Native&&h3Options.mode==="frames";
   const h3Ids=[...new Set([...linkedReferenceMedia,...(single?.params.h3_refs||[])])].filter((k):k is string=>Boolean(k));
@@ -1477,7 +1482,7 @@ export function CanvasWorkspace({
     }
     setPackPicker(null);
   };
-  const firstFrame = single?.type === "video" && selectedModel === "MiniMax H3" &&
+  const firstFrame = single?.type === "video" && !!form?.referenceModes &&
     !single.params.h3 && referenceMedia.length === 1 ? referenceMedia[0] : null;
   const submittedInput=current?.run?.inputs;
   const combinedPrompt=[...incoming.filter(({node})=>node.type==='text').map(({node})=>node.text.trim()),...(single?.prompt.trim()?[single.prompt.trim()]:[])].join('\n\n');
@@ -1496,7 +1501,8 @@ export function CanvasWorkspace({
   const pendingRun = pendingRuns.length > 0;
   const latestBatch = current?.latest?.batch;
   const visibleCandidates = latestBatch?.count === 2 ? (current?.list.filter(job=>job.batch?.uid===latestBatch.uid)||[]) : pendingRuns;
-  const creditTier=flowModel?'native':selectedModel==='muse-image'?'native':selectedModel==='muse-video'?String(single?.params.seconds):single?.type==='image'?`${single.params.resolution}|${single.params.image_quality}`:`${single?.params.quality}|${single?.params.seconds}`;
+  const creditTiers=single && form?.tiers.filter(t => matches(t.when,{seconds:single.params.seconds,ratio:single.params.ratio,resolution:single.params.resolution,quality:single.params.quality,image_quality:single.params.image_quality}));
+  const creditTier=creditTiers?.length===1 ? creditTiers[0].tier : undefined;
   const creditPrice=studio.pricing?.items.find(p=>p.key===selectedModel+'|'+creditTier)?.amount;
   const candidateCost = creditPrice == null ? null : creditPrice * candidateCount;
   const creditAvailable=candidateCost!=null && studio.credits.available>=candidateCost;
@@ -2180,12 +2186,13 @@ export function CanvasWorkspace({
                 {!selectedModel ? "无模型" : FlowPicker.label(studio.model_catalog,selectedModel)}<ChevronDown size={13}/>
               </button>
               {menu === "model" && <div ref={modelMenuRef} id="canvas-model-options" className="cv-menu duration-menu model-menu" role="listbox" aria-label="选择模型">{modelChoices.length>12&&<input className="cv-model-search" aria-label="搜索画布模型" placeholder="搜索模型" value={modelSearch} onChange={e=>setModelSearch(e.target.value)} onKeyDown={e=>{e.stopPropagation();if(e.key==='Escape')closeModelMenu();}}/>} {modelChoices.filter(([,label])=>label.toLowerCase().includes(modelSearch.toLowerCase())).map(([value,label]) => <button key={value} role="option" aria-selected={FlowPicker.sameFamily(studio.model_catalog,selectedModel,value)} tabIndex={FlowPicker.sameFamily(studio.model_catalog,selectedModel,value) ? 0 : -1} onClick={() => {
-                const nextMuse=value.startsWith('muse-');
-                const allowed=nextMuse ? single.type === 'image' ? ['1:1','16:9','9:16','4:3','3:4'] : ['16:9','9:16'] : studio.ratios;
-                const spec=studio.model_catalog?.[value];patchParams(spec?.provider==='flow'?{model:value,ratio:spec.ratio!,seconds:spec.seconds!,resolution:(spec.resolution==='原生'?'1K':spec.resolution) as Params['resolution'],flow_source_job:null}:{model:value,ratio:allowed.includes(single.params.ratio) ? single.params.ratio : '16:9',seconds:nextMuse ? 6 : 5,flow_source_job:null});setModelSearch('');closeModelMenu();
+                const nextForm = studio.model_forms[value];
+                const spec = studio.model_catalog[value];
+                const values = normalizeForm(nextForm, {ratio:single.params.ratio,seconds:single.params.seconds});
+                patchParams(spec?.provider==='flow'?{model:value,ratio:spec.ratio!,seconds:spec.seconds!,resolution:(spec.resolution==='原生'?'1K':spec.resolution) as Params['resolution'],flow_source_job:null}:{model:value,ratio:String(values.ratio ?? single.params.ratio),seconds:Number(values.seconds ?? single.params.seconds),flow_source_job:null});setModelSearch('');closeModelMenu();
               }}>{label}{FlowPicker.sameFamily(studio.model_catalog,selectedModel,value) && <Check size={14}/>}</button>)}</div>}
             </div>
-            {h3Native&&<div className="parameter-wrap menu-trigger"><button className="parameter" disabled={h3Busy} aria-haspopup="listbox" aria-expanded={menu==='h3-mode'} onClick={()=>setMenu(menu==='h3-mode'?null:'h3-mode')}>{h3Frames?<Film size={15}/>:<Link2 size={15}/>} {h3Frames?'首尾帧':'全能参考'}<ChevronDown size={13}/></button>{menu==='h3-mode'&&<div className="cv-menu duration-menu" role="listbox" aria-label="参考模式">{(['reference','frames'] as const).map(mode=><button key={mode} role="option" aria-selected={h3Options.mode===mode} onClick={()=>chooseH3Mode(mode)}>{mode==='frames'?'首尾帧':'全能参考'}{h3Options.mode===mode&&<Check size={14}/>}</button>)}</div>}</div>}
+            {h3Native&&<div className="parameter-wrap menu-trigger"><button className="parameter" disabled={h3Busy} aria-haspopup="listbox" aria-expanded={menu==='h3-mode'} onClick={()=>setMenu(menu==='h3-mode'?null:'h3-mode')}>{h3Frames?<Film size={15}/>:<Link2 size={15}/>} {h3Frames?'首尾帧':'全能参考'}<ChevronDown size={13}/></button>{menu==='h3-mode'&&<div className="cv-menu duration-menu" role="listbox" aria-label="参考模式">{(form?.referenceModes ?? []).map(mode=><button key={mode} role="option" aria-selected={h3Options.mode===mode} onClick={()=>chooseH3Mode(mode)}>{mode==='frames'?'首尾帧':'全能参考'}{h3Options.mode===mode&&<Check size={14}/>}</button>)}</div>}</div>}
             <div className="parameter-wrap menu-trigger">
               <button
                 className={"parameter " + (flowModel&&!flowParameters ? "fixed-parameter " : "") + (menu === "format" ? "active" : "")}
@@ -2206,7 +2213,7 @@ export function CanvasWorkspace({
                   {flowParameters&&flowParameters.modes.length>1&&<><span className="menu-label">生成方式</span><div className="resolution-options" role="group" aria-label="生成方式">{flowParameters.modes.map(mode=><button key={mode} className={flowModel?.mode===mode?'active':''} onClick={()=>patchParams({},mode)}>{FlowPicker.modeLabels[mode]}</button>)}</div></>}
                   <span className="menu-label">选择比例</span>
                   <div className="ratio-options">
-                    {(flowParameters?flowParameters.ratios:muse ? single.type === 'image' ? ['1:1','16:9','9:16','4:3','3:4'] : ['16:9','9:16'] : ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]).map((r) => (
+                    {(flowParameters?.ratios ?? fields?.ratio?.enum?.map(String) ?? []).map((r) => (
                       <button
                         key={r}
                         disabled={h3Frames&&referenceMedia.length>0}
@@ -2223,10 +2230,10 @@ export function CanvasWorkspace({
                   </div>
                   {!muse && !flowModel && <><span className="menu-label">选择分辨率</span>
                   <div className="resolution-options">
-                    {(single.type === "image" ? ["1K", "2K"] : [480, 768]).map(
+                    {((single.type === "image" ? fields?.resolution : fields?.quality)?.enum ?? []).map(
                       (v) => (
                         <button
-                          key={v}
+                          key={String(v)}
                           className={
                             (single.type === "image"
                               ? single.params.resolution
@@ -2275,11 +2282,11 @@ export function CanvasWorkspace({
               {menu === "duration" && (
                 <div className="cv-menu duration-menu">
                   {(single.type === "image"
-                    ? ["low", "medium", "high"]
-                    : flowParameters?flowParameters.seconds:muse ? [5,6,8,10] : [5, 10, 15]
+                    ? fields?.image_quality?.enum ?? []
+                    : flowParameters?.seconds ?? fields?.seconds?.enum ?? []
                   ).map((v) => (
                     <button
-                      key={v}
+                      key={String(v)}
                       onClick={() => {
                         patchParams(
                           single.type === "image"
@@ -2310,7 +2317,7 @@ export function CanvasWorkspace({
                 setPanel("references");
               }}
             />
-            {single.type === "video" && selectedModel === "MiniMax H3" && (
+            {single.type === "video" && !!form?.fastSteps && (
               <div className="parameter-wrap menu-trigger">
                 <IconButton
                   icon={Settings2}
@@ -2329,15 +2336,15 @@ export function CanvasWorkspace({
                     {!single.params.fast_mode && <div>
                     <div className="sampling-label">采样步数</div>
                     <div className="sampling-options" role="radiogroup" aria-label="采样步数">
-                      {([16,20,32,50] as const).map(steps=>(
+                      {stepsOptions.map(steps=>(
                         <button key={steps} type="button" role="radio" aria-checked={(single.params.sampling_steps ?? 20)===steps}
                           tabIndex={(single.params.sampling_steps ?? 20)===steps?0:-1}
                           onClick={()=>patchParams({sampling_steps:steps})}
                           onKeyDown={event=>{
                             if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;
                             event.preventDefault();event.stopPropagation();
-                            const options=[16,20,32,50] as const;const direction=['ArrowLeft','ArrowUp'].includes(event.key)?-1:1;
-                            const next=(options.indexOf(steps)+direction+4)%4;patchParams({sampling_steps:options[next]});
+                            const options=stepsOptions;const direction=['ArrowLeft','ArrowUp'].includes(event.key)?-1:1;
+                            const next=(options.indexOf(steps)+direction+options.length)%options.length;patchParams({sampling_steps:options[next]});
                             (event.currentTarget.parentElement?.children[next] as HTMLElement)?.focus();
                           }}>{steps}</button>
                       ))}

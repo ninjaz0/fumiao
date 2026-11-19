@@ -1,3 +1,4 @@
+import { ParameterFields } from "./ParameterFields";
 import {
   useEffect,
   useLayoutEffect,
@@ -30,7 +31,7 @@ import {
   h3Options,
   imageQualityLabels,
   isH3,
-  isMuseDraft,
+  modelForm,
   modelAvailable,
   packReferences,
   promptLimit,
@@ -71,7 +72,7 @@ export function useEstimate(
     session &&
     modelAvailable(state, selectedModel(session.draft)) &&
     (session.draft.kind !== "audio" || session.draft.prompt.trim())
-      ? estimateBody(session)
+      ? estimateBody(state, session)
       : null;
   const serialized = body && JSON.stringify(body);
   const requestKey =
@@ -178,7 +179,8 @@ export function Composer({
   const h3 = isH3(draft);
   const image = draft.kind === "image";
   const audio = draft.kind === "audio";
-  const muse = isMuseDraft(draft);
+  const form = modelForm(state, draft);
+  const muse = form?.nativeResolution;
   const flow = flowSpec(state, model);
   const fixed = !!flow && !flow.family;
   const frameMode = frames(draft);
@@ -226,7 +228,7 @@ export function Composer({
         : image
           ? draft.resolution
           : draft.quality + "P";
-  const modelName = model ? modelLabel(state.model_catalog, model) : "无模型";
+  const modelName = model ? modelLabel(state.model_catalog, model) : "暂无可用模型";
   const [, creation, creationIcon] = creationOptions.find(
     ([kind]) => kind === draft.kind,
   )!;
@@ -500,7 +502,12 @@ export function Composer({
           className={`composer-references${frameMode ? " has-frames" : ""}`}
           aria-label="参考素材"
           aria-busy={audio ? referenceContents.current?.busy : uploading}
-          hidden={audio}
+          hidden={
+            audio ||
+            (form?.parameterObject &&
+              !form.references.max &&
+              !references.length)
+          }
         >
           {audio ? referenceContents.current?.controls : referenceControls}
         </div>
@@ -612,10 +619,10 @@ export function Composer({
             <span>{creation}</span>
             <Chevron />
           </button>
-          {state.studio_plugins && !Object.keys(state.model_catalog).length && (
+          {state.studio_plugins && !Object.entries(state.model_catalog).some(([id,m])=>!m.hidden && state.model_access?.[id]) && (
             state.me.role === "admin"
-              ? <button className="parameter-button" onClick={managePlugins}>前往安装插件</button>
-              : <span>暂无模型，请联系管理员安装插件</span>
+              ? <button className="parameter-button" onClick={managePlugins}>去导入插件</button>
+              : <span>请联系管理员开通模型</span>
           )}
           <button
             className={`model-name parameter-button${available ? "" : " model-unavailable"}`}
@@ -626,15 +633,24 @@ export function Composer({
             onClick={opener("image-model")}
           >
             <Icon name="model" />
-            <span>{modelName}</span>
+            <span>{modelName}{state.studio_plugins && model && !available ? "（已停用）" : ""}</span>
             <Chevron />
           </button>
+          {form?.parameterObject && (
+            <ParameterFields
+              form={form}
+              values={draft.params ?? {}}
+              change={(params) =>
+                update({ ...session, draft: { ...draft, params } })
+              }
+            />
+          )}
           <button
             className="parameter-button h3-mode-control"
             data-menu="h3-mode"
             aria-label="选择参考模式"
             aria-expanded={menu === "h3-mode"}
-            hidden={!h3}
+            hidden={!form?.referenceModes || form.referenceModes.length < 2}
             disabled={uploading}
             onClick={opener("h3-mode")}
           >
@@ -648,7 +664,7 @@ export function Composer({
             aria-expanded={menu === "format"}
             aria-label="选择比例和分辨率"
             title={title}
-            hidden={audio}
+            hidden={audio || !!form?.parameterObject}
             disabled={fixed}
             onClick={opener("format")}
           >
@@ -661,7 +677,9 @@ export function Composer({
             data-menu="duration"
             aria-expanded={menu === "duration"}
             aria-label={durationName}
-            hidden={image && (muse || !!flow)}
+            hidden={
+              !!form?.parameterObject || (image && !form?.fields.image_quality)
+            }
             disabled={fixed}
             onClick={opener("duration")}
           >
@@ -687,7 +705,7 @@ export function Composer({
               aria-expanded={
                 seenMenus.has("mention") ? menu === "mention" : undefined
               }
-              hidden={audio || frameMode}
+              hidden={audio || frameMode || form?.references.max === 0}
               onClick={opener("mention")}
             >
               <Icon name="at" />
@@ -699,7 +717,7 @@ export function Composer({
               aria-expanded={
                 seenMenus.has("advanced") ? menu === "advanced" : undefined
               }
-              hidden={image || muse || !!flow}
+              hidden={!!form?.parameterObject || !form?.fields.seed}
               onClick={opener("advanced")}
             >
               <Icon name="sliders" />

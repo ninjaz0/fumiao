@@ -2,6 +2,8 @@ import {
   ProviderError,
   type ProviderPlugin,
 } from "../../../packages/plugin-sdk/src/index.js";
+export const videoQualities = [480, 768];
+export const videoSeconds = [5, 10, 15];
 export const gpu: ProviderPlugin = {
   manifest: {
     id: "gpu",
@@ -29,8 +31,8 @@ export const gpu: ProviderPlugin = {
               enum: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
               default: "16:9",
             },
-            quality: { type: "integer", enum: [480, 768], default: 480 },
-            seconds: { type: "integer", enum: [5, 10, 15], default: 5 },
+            quality: { type: "integer", enum: videoQualities, default: 480 },
+            seconds: { type: "integer", enum: videoSeconds, default: 5 },
             sampling_steps: {
               type: "integer",
               enum: [4, 16, 20, 32, 50],

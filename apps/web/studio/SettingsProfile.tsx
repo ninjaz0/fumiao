@@ -66,69 +66,72 @@ export function Profile({
   return (
     <div className="settings-section profile-section">
       <h2>个人资料</h2>
-      <div className="profile-field-row">
-        <span className="profile-field-label">头像</span>
-        <div className="profile-avatar-control">
-          <Avatar member={state.me} />
-          <button
-            className="profile-secondary"
-            data-act="avatar-picker"
-            onClick={(event) => avatar(event.currentTarget)}
-          >
-            更改头像
-          </button>
+      <div className="ledger-card ledger-profile-identity">
+        <Avatar member={state.me} />
+        <div>
+          <strong>{displayName(state.me)}</strong>
+          <small>{state.me.role === "admin" ? "管理员" : "成员"}</small>
         </div>
+        <button
+          className="profile-secondary"
+          data-act="avatar-picker"
+          onClick={(event) => avatar(event.currentTarget)}
+        >
+          更改头像
+        </button>
       </div>
-      <form id="profile-form" onSubmit={submit}>
-        <div className="profile-field-row profile-name-row">
-          <label htmlFor="nickname" className="profile-field-label">
-            昵称
-          </label>
-          <div className="profile-input-action">
-            <input
-              id="nickname"
-              name="nickname"
-              defaultValue={initialName.current}
-              maxLength={40}
-              required
-              autoComplete="nickname"
-              onInput={(event) => {
-                draft.current = event.currentTarget.value;
-                setName(draft.current);
-                setMessage("");
-              }}
-            />
+      <div className="ledger-card">
+        <form id="profile-form" onSubmit={submit}>
+          <div className="profile-field-row profile-name-row">
+            <label htmlFor="nickname" className="profile-field-label">
+              昵称
+            </label>
+            <div className="profile-input-action">
+              <input
+                id="nickname"
+                name="nickname"
+                defaultValue={initialName.current}
+                maxLength={40}
+                required
+                autoComplete="nickname"
+                onInput={(event) => {
+                  draft.current = event.currentTarget.value;
+                  setName(draft.current);
+                  setMessage("");
+                }}
+              />
+              <button
+                className="profile-save"
+                type="submit"
+                disabled={
+                  busy || !name.trim() || name.trim() === displayName(state.me)
+                }
+              >
+                保存
+              </button>
+            </div>
+          </div>
+          <div className="profile-save-status">
+            <span className="form-message" role="status">
+              {message}
+            </span>
+          </div>
+        </form>
+        <div className="profile-field-row">
+          <span className="profile-field-label">用户名</span>
+          <span className="profile-readonly">{state.me.name}</span>
+        </div>
+        <div className="profile-field-row profile-password-row">
+          <span className="profile-field-label">密码</span>
+          <div>
             <button
-              className="profile-save"
-              type="submit"
-              disabled={
-                busy || !name.trim() || name.trim() === displayName(state.me)
-              }
+              className="profile-secondary"
+              data-act="own-password"
+              onClick={(event) => password(event.currentTarget)}
             >
-              保存
+              更改密码
             </button>
           </div>
-        </div>
-        <div className="profile-save-status">
-          <span className="form-message" role="status">
-            {message}
-          </span>
-        </div>
-      </form>
-      <div className="profile-field-row">
-        <span className="profile-field-label">用户名</span>
-        <span className="profile-readonly">{state.me.name}</span>
-      </div>
-      <div className="profile-field-row profile-password-row">
-        <span className="profile-field-label">密码</span>
-        <div>
-          <button
-            className="profile-secondary"
-            data-act="own-password"
-            onClick={(event) => password(event.currentTarget)}
-          >
-            更改密码
-          </button>
         </div>
       </div>
     </div>

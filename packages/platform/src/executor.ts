@@ -1,3 +1,5 @@
+import { queuedModelPolicy } from "./studio-plugin-profile.js";
+import { loadProgram } from "./plugin-program.js";
 import { randomUUID } from "node:crypto";
 import { one, type Sql } from "./db.js";
 import { Platform } from "./platform.js";
@@ -31,8 +33,7 @@ export class Executor {
       JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
       LEFT JOIN model_permissions mp ON mp.model_id=m.id AND mp.workspace_id=j.workspace_id
       WHERE (j.state IN ('running','finalizing') OR (j.state='queued' AND c.enabled=true AND u.active=true
-        AND (m.catalog_id IS NOT NULL OR m.enabled=true) AND COALESCE(mp.enabled,true)=true
-        AND studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id) AND v.manifest->>'mode'='request'))
+        AND COALESCE(mp.enabled,true) AND ${await queuedModelPolicy(this.platform.db)} AND v.manifest->>'mode'='request'))
       AND NOT c.fmworker_resource_driver AND NOT (v.manifest ? 'fmworkerResources')
       AND ${executableJob}
       AND j.lease_token IS NULL AND (o.available_at IS NULL OR o.available_at<=now())
@@ -256,8 +257,14 @@ export class Executor {
         const model = await one(
           sql,
           `SELECT m.id FROM models m LEFT JOIN model_permissions mp ON mp.model_id=m.id AND mp.workspace_id=$2
-          JOIN users u ON u.id=$3 WHERE m.id=$1 AND (m.catalog_id IS NOT NULL OR m.enabled=true) AND COALESCE(mp.enabled,true)=true AND studio_model_allowed(COALESCE($4,m.catalog_id),$2) AND u.active=true`,
-          [job.model_id, job.workspace_id, job.owner_id, job.catalog_id],
+          JOIN users u ON u.id=$3 WHERE m.id=$1 AND ($5::boolean OR ((m.catalog_id IS NOT NULL OR m.enabled) AND studio_model_allowed(COALESCE($4,m.catalog_id),$2))) AND COALESCE(mp.enabled,true) AND u.active=true`,
+          [
+            job.model_id,
+            job.workspace_id,
+            job.owner_id,
+            job.catalog_id,
+            !!job.package_version,
+          ],
         );
         if (!model) return;
         if (
@@ -270,8 +277,7 @@ export class Executor {
             `SELECT j.id FROM jobs j JOIN models m ON m.id=j.model_id
             JOIN users u ON u.id=j.owner_id LEFT JOIN model_permissions mp ON mp.model_id=m.id AND mp.workspace_id=j.workspace_id
             WHERE j.connection_id=$1 AND j.state='queued' AND j.public_id<$2 AND u.active
-            AND (m.catalog_id IS NOT NULL OR m.enabled) AND COALESCE(mp.enabled,true)
-            AND studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id)
+            AND COALESCE(mp.enabled,true) AND ${await queuedModelPolicy(sql)}
             AND (j.request_retry_at IS NULL OR j.request_retry_at<=now()) AND ${executableJob} LIMIT 1`,
             [connection.id, job.public_id],
           );
@@ -488,6 +494,41 @@ export class Executor {
               controller.signal,
               !(lifecycle && job.remote_id),
             );
+      if (execution && job.package_version) {
+        const release = await one(
+          p.db,
+          "SELECT package->>'program' AS program FROM studio_package_releases WHERE id=$1 AND version=$2",
+          [job.plugin_id, job.package_version],
+        );
+        if (release?.program) {
+          const run = await loadProgram(release.program);
+          const descriptor = plugin.manifest.models.find(
+            (m) => m.id === execution.model,
+          )?.studio?.descriptor;
+          const mapped = run("request", {
+            model: execution.model,
+            kind: execution.kind,
+            input: execution.input,
+            descriptor,
+            remoteId: job.remote_id,
+          });
+          requireValue(
+            mapped &&
+              typeof mapped.path === "string" &&
+              /^\/(?!\/)[A-Za-z0-9/_-]+$/.test(mapped.path),
+            400,
+            "插件请求路径无效",
+          );
+          execution.mappedRequest = mapped;
+          execution.mapResult = (raw) =>
+            run("result", {
+              raw,
+              model: execution.model,
+              kind: execution.kind,
+              remoteId: job.remote_id,
+            });
+        }
+      }
       let receipt: Receipt = job.receipt;
       if (!receipt) {
         if (job.remote_id) {
@@ -658,7 +699,7 @@ export class Executor {
     const outputPolicy = version?.manifest.originalState;
     const remoteStudio =
       job.original_uid &&
-      version?.manifest.originalSubmission?.version === 2;
+      (version?.manifest.originalSubmission?.version ?? 0) >= 2;
     const lifecycle: RequestLifecycle | undefined =
       version?.manifest.requestLifecycle;
     const atomic = lifecycle?.version === 3 && !lifecycle.resumeAccepted;

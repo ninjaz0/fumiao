@@ -1,3 +1,4 @@
+import { choices } from "../../../packages/plugin-sdk/src/model-form.js";
 import { readFileSync } from "node:fs";
 import { flow } from "./index.js";
 import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
@@ -6,6 +7,20 @@ const catalog = JSON.parse(
 );
 export const flowStudio: ProviderPlugin = {
   ...flow,
+  modelForm(model) {
+    const spec = catalog[model.id];
+    return {
+      fields: {
+        ratio: choices([spec.ratio]),
+        resolution: choices([spec.resolution]),
+        ...(model.kind === "video"
+          ? { seconds: choices([Number(spec.seconds)]) }
+          : {}),
+      },
+      references: { min: spec.min_refs, max: spec.max_refs },
+      tiers: model.studio!.prices.map(({ tier }) => ({ tier, when: {} })),
+    };
+  },
   manifest: {
     ...flow.manifest,
     version: "1.1.0",

@@ -126,19 +126,21 @@ export function Credits({
           充值记录
         </button>
       </div>
-      <h3 className="credit-heading">积分明细</h3>
-      <CreditLedger rows={rows} />
-      {before !== undefined && (
-        <button
-          className="quiet-button"
-          data-act="credit-more"
-          data-before={before}
-          disabled={busy}
-          onClick={(event) => void more(event.currentTarget)}
-        >
-          加载更多
-        </button>
-      )}
+      <section className="ledger-card">
+        <h3 className="credit-heading">积分明细</h3>
+        <CreditLedger rows={rows} />
+        {before !== undefined && (
+          <button
+            className="quiet-button"
+            data-act="credit-more"
+            data-before={before}
+            disabled={busy}
+            onClick={(event) => void more(event.currentTarget)}
+          >
+            加载更多
+          </button>
+        )}
+      </section>
     </section>
   );
 }

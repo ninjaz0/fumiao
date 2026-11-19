@@ -56,7 +56,7 @@ function PriceForm({
     sections.map(([key]) => [key, []]),
   );
   for (const price of pricing.items) {
-    if (catalog[price.model]?.hidden) continue;
+    if (!catalog[price.model] || catalog[price.model].hidden) continue;
     const key =
       catalog[price.model]?.provider === "flow" &&
       price.model.startsWith("flow:")
@@ -124,7 +124,7 @@ function PriceSection({
   rows: StudioState["pricing"]["items"];
 }) {
   return (
-    <>
+    <section className="ledger-card">
       <h3 className="credit-heading">{label}</h3>
       {rows.map((price) => (
         <label key={price.key} className="price-row">
@@ -134,7 +134,7 @@ function PriceSection({
               type="number"
               data-price={price.key}
               defaultValue={price.amount ?? ""}
-              min="1"
+              min="0"
               max="1000000000"
               step="1"
               placeholder="未定价"
@@ -144,6 +144,6 @@ function PriceSection({
           </span>
         </label>
       ))}
-    </>
+    </section>
   );
 }

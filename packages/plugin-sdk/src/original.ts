@@ -1,10 +1,11 @@
 import { z } from "zod";
 import type { PreparationAsset } from "./preparation.js";
 
-/** Built-in adapters (v1) and the fixed remote request adapter (v2). */
+/** Built-in adapters (v1), legacy remote fields (v2), and model-defined parameters (v3). */
 export const originalPolicySchema = z.discriminatedUnion("version", [
   z.object({ version: z.literal(1) }).strict(),
   z.object({ version: z.literal(2) }).strict(),
+  z.object({ version: z.literal(3) }).strict(),
 ]);
 export type OriginalPolicy = z.infer<typeof originalPolicySchema>;
 export type OriginalDraft = {

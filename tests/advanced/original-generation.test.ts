@@ -654,7 +654,12 @@ test("023 leaves accepted jobs and immutable plugin manifests unchanged", async 
     await migrate(f.db);
     assert.deepEqual(
       (await f.db.query("SELECT * FROM jobs ORDER BY id")).rows,
-      jobs.map((job) => ({ ...job, original_gpu_ticket: null })),
+      jobs.map((job) => ({
+        ...job,
+        original_gpu_ticket: null,
+        package_version: null,
+        studio_client_uid: null,
+      })),
     );
     assert.deepEqual(
       (await f.db.query("SELECT * FROM plugin_versions ORDER BY id,version"))
