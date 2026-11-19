@@ -576,6 +576,30 @@ test("portable packages share a declared model across services without changing 
       /不能向新的服务地址/,
     );
     assert.equal(paths.length, requestsBefore);
+
+    await f.packages.change(
+      f.actor,
+      "station-b",
+      (await pkg()).revision,
+      "remove",
+    );
+    const catalog = new StudioCatalog(f.db);
+    const remaining = await catalog.prices();
+    assert.deepEqual(
+      remaining.items.map((price) => price.model),
+      [model.id],
+    );
+    assert.ok(Object.hasOwn(await catalog.catalog(), model.id));
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        { [remaining.items[0].key]: 3 },
+        remaining.revision,
+      ),
+    );
+    const [last] = await pkgs();
+    await f.packages.change(f.actor, last.id, last.revision, "remove");
+    assert.deepEqual((await catalog.prices()).items, []);
   } finally {
     await app.close();
     server.closeAllConnections();

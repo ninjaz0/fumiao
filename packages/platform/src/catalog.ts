@@ -208,7 +208,7 @@ export class StudioCatalog {
   ): Promise<Record<string, StudioModel["descriptor"] & { hidden: boolean }>> {
     const rows = (
       await sql.query(
-        `SELECT c.* FROM ${await listedStudioCatalog(sql)} c ORDER BY position,id`,
+        `SELECT c.* FROM ${await listedStudioCatalog(sql, "models")} c ORDER BY position,id`,
       )
     ).rows;
     return Object.fromEntries(
@@ -274,7 +274,7 @@ export class StudioCatalog {
     return Object.fromEntries(
       (
         await sql.query(
-          `SELECT id,${(await hasStudioPackages(sql)) ? "studio_plugin_accepts(plugin_id) AND" : ""} studio_model_allowed(id,$1) AS enabled FROM ${await listedStudioCatalog(sql)} c ORDER BY position,id`,
+          `SELECT id,${(await hasStudioPackages(sql)) ? "studio_plugin_accepts(plugin_id) AND" : ""} studio_model_allowed(id,$1) AS enabled FROM ${await listedStudioCatalog(sql, "models")} c ORDER BY position,id`,
           [wid],
         )
       ).rows.map((r) => [r.id, r.enabled]),
@@ -285,7 +285,7 @@ export class StudioCatalog {
     const rows = (
       await sql.query(
         `SELECT p.*,c.descriptor,g.price_revision FROM studio_policy g
-         LEFT JOIN (studio_prices p JOIN ${await listedStudioCatalog(sql)} c ON c.id=p.model_id) ON true
+         LEFT JOIN (studio_prices p JOIN ${await listedStudioCatalog(sql, "models")} c ON c.id=p.model_id) ON true
          ORDER BY c.price_position,p.position,p.key`,
       )
     ).rows;
