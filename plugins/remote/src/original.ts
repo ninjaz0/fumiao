@@ -79,9 +79,10 @@ export function validOriginalRemoteModels(manifest: Manifest) {
       (kind === "audio"
         ? limits === undefined
         : references.safeParse(limits ?? {}).success) &&
-      studio.prices.every(({ tier, match }) =>
-        isDeepStrictEqual(match, priceMatch(kind, tier)),
-      )
+      (manifest.originalSubmission?.version === 3 ||
+        studio.prices.every(({ tier, match }) =>
+          isDeepStrictEqual(match, priceMatch(kind, tier)),
+        ))
     );
   });
 }
@@ -127,30 +128,51 @@ export function originalRemoteSubmission(
     }),
     async prepare(d, resources) {
       originalParent(d, resources.parent, d.kind);
-      const options = { image, video, audio }[d.kind].safeParse(d);
-      if (!options.success) throw new OriginalSubmissionError("模型参数无效");
-      const params = options.data;
+      let params: Record<string, any>;
+      if (manifest.originalSubmission?.version === 3) {
+        params = structuredClone(d.params ?? {});
+      } else {
+        const options = { image, video, audio }[d.kind].safeParse(d);
+        if (!options.success) throw new OriginalSubmissionError("模型参数无效");
+        params = options.data;
+      }
       if (!validator.validate(models.get(d.model)!.inputSchema, params))
         throw new OriginalSubmissionError("模型参数无效");
       return {
         params,
         references: resources.references.map((ref) => ref.id),
         view: {
-          ratio: d.ratio ?? "16:9",
+          ...(manifest.originalSubmission?.version === 3 ? { params } : {}),
+          ratio:
+            typeof params.ratio === "string"
+              ? params.ratio
+              : (d.ratio ?? "16:9"),
           quality:
             d.kind === "image"
-              ? d.resolution === "2K"
+              ? params.resolution === "2K"
                 ? 2048
                 : 1024
-              : (d.quality ?? 0),
-          seconds: d.seconds ?? 0,
+              : typeof params.quality === "number"
+                ? params.quality
+                : 0,
+          seconds: typeof params.seconds === "number" ? params.seconds : 0,
           sampling_steps: 20,
-          seed: d.seed ?? 0,
+          seed: typeof params.seed === "number" ? params.seed : 0,
           width: 0,
           height: 0,
-          image_quality: d.image_quality ?? "standard",
+          image_quality:
+            typeof params.image_quality === "string"
+              ? params.image_quality
+              : "standard",
           audio_settings:
-            d.kind === "audio" ? { instruction: d.instruction } : {},
+            d.kind === "audio"
+              ? {
+                  instruction:
+                    typeof params.instruction === "string"
+                      ? params.instruction
+                      : "",
+                }
+              : {},
           h3_inputs: {},
         },
       };

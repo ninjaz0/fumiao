@@ -19,7 +19,7 @@ import {
   h3Options,
   imageQualityLabels,
   isH3,
-  isMuseDraft,
+  modelForm,
   modelAvailable,
   modelsForKind,
   normalizeParams,
@@ -28,7 +28,6 @@ import {
   referenceLabel,
   selectedModel,
   standardSteps,
-  videoDurations,
   type Draft,
   type DraftSession,
   type StudioState,
@@ -66,7 +65,7 @@ export function composerMenuLabel(
   if (kind === "format")
     return flowSpec(state, selectedModel(draft))?.family
       ? "选择生成方式和比例"
-      : isMuseDraft(draft)
+      : modelForm(state, draft)?.nativeResolution
         ? "选择比例"
         : "选择比例和分辨率";
   return labels[kind];
@@ -146,10 +145,12 @@ function Radio({
 
 function Advanced({
   session,
+  state,
   save,
   notify,
   reposition,
 }: {
+  state: StudioState;
   session: DraftSession;
   save: (patch: Partial<Draft>, focus?: boolean) => void;
   notify: (message: string) => void;
@@ -157,7 +158,9 @@ function Advanced({
 }) {
   const { draft, retainedSeed } = session;
   const [fast, setFast] = useState(draft.fast_mode);
-  const [steps, setSteps] = useState(standardSteps(draft.sampling_steps));
+  const [steps, setSteps] = useState(
+    standardSteps(modelForm(state, draft), draft.sampling_steps),
+  );
   const seed = useRef<HTMLInputElement>(null);
   useLayoutEffect(reposition, [fast, reposition]);
   return (
@@ -187,15 +190,18 @@ function Advanced({
               aria-label="采样步数"
               data-value={steps}
             >
-              {[16, 20, 32, 50].map((value) => (
-                <Radio
-                  action="sampling-steps"
-                  key={value}
-                  value={String(value)}
-                  current={String(steps)}
-                  pick={() => setSteps(value)}
-                />
-              ))}
+              {modelForm(state, draft)
+                ?.fields.sampling_steps?.enum?.map(Number)
+                .filter((v) => v !== modelForm(state, draft)?.fastSteps)
+                .map((value) => (
+                  <Radio
+                    action="sampling-steps"
+                    key={value}
+                    value={String(value)}
+                    current={String(steps)}
+                    pick={() => setSteps(value)}
+                  />
+                ))}
             </div>
           </div>
         </>
@@ -280,7 +286,8 @@ export function ComposerMenuContents({
   const image = draft.kind === "image";
   const audio = draft.kind === "audio";
   const h3 = isH3(draft);
-  const muse = isMuseDraft(draft);
+  const form = modelForm(state, draft);
+  const fields = form?.fields ?? {};
   const [search, setSearch] = useState("");
   const voice = useRef<HTMLTextAreaElement>(null);
   const dragged = useRef<string | null>(null);
@@ -398,36 +405,32 @@ export function ComposerMenuContents({
     case "h3-mode":
       return (
         <div className="choice-list" role="listbox" aria-label="参考模式">
-          {(
-            [
-              ["reference", "全能参考", "link"],
-              ["frames", "首尾帧", "film"],
-            ] as const
-          ).map(([value, label, icon]) => (
-            <Option
-              key={value}
-              action="h3-mode"
-              value={value}
-              label={label}
-              icon={icon}
-              selected={h3Options(draft.h3).mode === value}
-              pick={() => {
-                if (uploading || value === h3Options(draft.h3).mode) return;
-                update(changeH3Mode(state, session, value));
-                close(true);
-              }}
-            />
-          ))}
+          {(form?.referenceModes ?? [])
+            .map((value) =>
+              value === "reference"
+                ? (["reference", "全能参考", "link"] as const)
+                : (["frames", "首尾帧", "film"] as const),
+            )
+            .map(([value, label, icon]) => (
+              <Option
+                key={value}
+                action="h3-mode"
+                value={value}
+                label={label}
+                icon={icon}
+                selected={h3Options(draft.h3).mode === value}
+                pick={() => {
+                  if (uploading || value === h3Options(draft.h3).mode) return;
+                  update(changeH3Mode(state, session, value));
+                  close(true);
+                }}
+              />
+            ))}
         </div>
       );
     case "format": {
       const ratios =
-        flowOptions?.ratios ??
-        (muse
-          ? image
-            ? ["1:1", "16:9", "9:16", "4:3", "3:4"]
-            : ["16:9", "9:16"]
-          : ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]);
+        flowOptions?.ratios ?? fields.ratio?.enum?.map(String) ?? [];
       const auto = frames(draft) && activeReferences(session).length > 0;
       return (
         <Fragment key={session.submitId}>
@@ -500,7 +503,7 @@ export function ComposerMenuContents({
               </Radio>
             ))}
           </div>
-          {!muse && !flowOptions && (
+          {!flow && (fields.quality || fields.resolution) && (
             <>
               <div className="popover-label resolution-label">选择分辨率</div>
               <div
@@ -508,19 +511,23 @@ export function ComposerMenuContents({
                 role="radiogroup"
                 aria-label="选择分辨率"
               >
-                {(image ? ["1K", "2K"] : ["480", "768"]).map((value) => (
-                  <Radio
-                    key={value}
-                    action={image ? "resolution" : "quality"}
-                    value={value}
-                    current={image ? draft.resolution : String(draft.quality)}
-                    pick={() =>
-                      patch(image ? { resolution: value } : { quality: value })
-                    }
-                  >
-                    {image ? value : value + "P"}
-                  </Radio>
-                ))}
+                {((image ? fields.resolution : fields.quality)?.enum ?? [])
+                  .map(String)
+                  .map((value) => (
+                    <Radio
+                      key={value}
+                      action={image ? "resolution" : "quality"}
+                      value={value}
+                      current={image ? draft.resolution : String(draft.quality)}
+                      pick={() =>
+                        patch(
+                          image ? { resolution: value } : { quality: value },
+                        )
+                      }
+                    >
+                      {image ? value : value + "P"}
+                    </Radio>
+                  ))}
               </div>
             </>
           )}
@@ -536,7 +543,7 @@ export function ComposerMenuContents({
               <textarea
                 id="voice-description"
                 rows={4}
-                maxLength={300}
+                maxLength={fields.instruction?.maxLength}
                 aria-label="音色描述"
                 placeholder="例如：温柔自然的女声，语速舒缓，使用普通话"
                 ref={voice}
@@ -563,16 +570,24 @@ export function ComposerMenuContents({
               role="listbox"
               aria-label="选择图片质量"
             >
-              {Object.entries(imageQualityLabels).map(([value, label]) => (
-                <Option
-                  key={value}
-                  action="image-quality"
-                  value={value}
-                  label={label}
-                  selected={draft.imageQuality === value}
-                  pick={() => save({ imageQuality: value })}
-                />
-              ))}
+              {(fields.image_quality?.enum ?? [])
+                .map(String)
+                .map((value) => [
+                  value,
+                  imageQualityLabels[
+                    value as keyof typeof imageQualityLabels
+                  ] ?? value,
+                ])
+                .map(([value, label]) => (
+                  <Option
+                    key={value}
+                    action="image-quality"
+                    value={value}
+                    label={label}
+                    selected={draft.imageQuality === value}
+                    pick={() => save({ imageQuality: value })}
+                  />
+                ))}
             </div>
           </>
         );
@@ -584,27 +599,29 @@ export function ComposerMenuContents({
             role="listbox"
             aria-label="选择视频生成时长"
           >
-            {(flowOptions?.seconds.map(String) ?? videoDurations(draft)).map(
-              (value) => (
-                <Option
-                  key={value}
-                  action="seconds"
-                  value={value}
-                  label={value + "s"}
-                  selected={String(draft.seconds) === value}
-                  duration
-                  pick={() => {
-                    update({
-                      ...session,
-                      draft: changeFlow(state, draft, {
-                        seconds: Number(value),
-                      }) ?? { ...draft, seconds: value },
-                    });
-                    close(true);
-                  }}
-                />
-              ),
-            )}
+            {(
+              flowOptions?.seconds.map(String) ??
+              fields.seconds?.enum?.map(String) ??
+              []
+            ).map((value) => (
+              <Option
+                key={value}
+                action="seconds"
+                value={value}
+                label={value + "s"}
+                selected={String(draft.seconds) === value}
+                duration
+                pick={() => {
+                  update({
+                    ...session,
+                    draft: changeFlow(state, draft, {
+                      seconds: Number(value),
+                    }) ?? { ...draft, seconds: value },
+                  });
+                  close(true);
+                }}
+              />
+            ))}
           </div>
         </>
       );
@@ -612,6 +629,7 @@ export function ComposerMenuContents({
       return (
         <Advanced
           session={session}
+          state={state}
           save={save}
           notify={notify}
           reposition={reposition}
@@ -631,7 +649,8 @@ export function ComposerMenuContents({
       return (
         <>
           <div className="popover-label">
-            参考内容<span>{`${selected.length}/${h3 ? 12 : 9}`}</span>
+            参考内容
+            <span>{`${selected.length}/${form?.references.max ?? 0}`}</span>
           </div>
           {selected.length ? (
             <div className="reference-list">
@@ -774,10 +793,14 @@ export function ComposerMenuContents({
                 <Icon name="library" />
                 素材包{draft.packs?.length ? " · " + draft.packs.length : ""}
               </button>
-              {h3 && (
+              {form?.references.counts && (
                 <p className="h3-upload-note">
-                  最多 9 张图片、3 段视频、3 段音频，合计 12 个。视频、音频各
-                  2–15 秒，同类总时长不超过 15 秒。
+                  最多 {form.references.counts.image} 张图片、
+                  {form.references.counts.video} 段视频、
+                  {form.references.counts.audio} 段音频，合计{" "}
+                  {form.references.max} 个。视频、音频各{" "}
+                  {form.references.minSeconds}–{form.references.maxSeconds}{" "}
+                  秒，同类总时长不超过 {form.references.maxSeconds} 秒。
                 </p>
               )}
             </>

@@ -1,3 +1,4 @@
+import { videoSeconds } from "./index.js";
 import { gpuState } from "./state.js";
 import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
 export const gpuCanvas: ProviderPlugin = {
@@ -17,7 +18,7 @@ export const gpuCanvas: ProviderPlugin = {
           kind: "video",
           defaultForKind: true,
           templatePriority: 0,
-          durations: { values: [5, 10, 15], error: "MiniMax H3 时长选项无效" },
+          durations: { values: videoSeconds, error: "MiniMax H3 时长选项无效" },
         },
       ],
     },

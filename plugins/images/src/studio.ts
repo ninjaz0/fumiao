@@ -1,3 +1,7 @@
+import {
+  choices,
+  displayRatios,
+} from "../../../packages/plugin-sdk/src/model-form.js";
 import { readFileSync } from "node:fs";
 import { images } from "./index.js";
 import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
@@ -6,8 +10,30 @@ const sizes: Record<string, number[]> = JSON.parse(
 );
 const dimensions = (resolution: number) =>
   Object.values(sizes).map((v) => v[resolution] + "x" + v[resolution + 1]);
+export const resolutions = ["1K", "2K"];
+const qualities = { low: "草稿", medium: "标准", high: "高清" };
 export const imagesStudio: ProviderPlugin = {
   ...images,
+  modelForm(model) {
+    return {
+      fields: {
+        ratio: choices(
+          displayRatios.filter((r) => r in sizes),
+          "16:9",
+        ),
+        resolution: choices(resolutions),
+        image_quality: choices(Object.keys(qualities), "medium"),
+      },
+      references: { min: 0, max: 9 },
+      tiers: model.studio!.prices.map(({ tier }) => {
+        const [resolution, quality] = tier.split("|");
+        return {
+          tier,
+          when: { resolution: [resolution], image_quality: [quality] },
+        };
+      }),
+    };
+  },
   manifest: {
     ...images.manifest,
     version: "1.1.0",
@@ -25,7 +51,7 @@ export const imagesStudio: ProviderPlugin = {
           },
           quality: {
             type: "string",
-            enum: ["low", "medium", "high"],
+            enum: Object.keys(qualities),
             default: "medium",
           },
         },
@@ -35,12 +61,8 @@ export const imagesStudio: ProviderPlugin = {
         priceOrder: 20,
         descriptor: { kind: model.kind, label: "gpt-image-2.6" },
         runtime: { sizes },
-        prices: ["1K", "2K"].flatMap((resolution, index) =>
-          [
-            ["low", "草稿"],
-            ["medium", "标准"],
-            ["high", "高清"],
-          ].map(([quality, label]) => ({
+        prices: resolutions.flatMap((resolution, index) =>
+          Object.entries(qualities).map(([quality, label]) => ({
             tier: resolution + "|" + quality,
             label: resolution + " · " + label,
             amount: null,

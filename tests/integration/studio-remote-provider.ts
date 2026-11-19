@@ -142,8 +142,13 @@ export async function verifyRemoteProvider(
   const errors: unknown[] = [];
   const provider = createServer(async (req, res) => {
     try {
-      if (req.url === "/first/health") {
-        assert.equal(req.headers.authorization, "Bearer original-key");
+      if (req.url === "/first/health" || req.url === "/second/health") {
+        assert.equal(
+          req.headers.authorization,
+          req.url === "/first/health"
+            ? "Bearer original-key"
+            : "Bearer intermediate-key",
+        );
         res.writeHead(204).end();
         return;
       }
@@ -246,7 +251,7 @@ export async function verifyRemoteProvider(
     );
     await expect(page.locator(".generate-button")).toBeDisabled();
     await call("/api/canvases", { data: { title: "零插件画布" } });
-    await page.getByRole("button", { name: "前往安装插件" }).click();
+    await page.getByRole("button", { name: "去导入插件" }).click();
     await expect(page.locator(".settings-section h2")).toHaveText("插件");
     const search = page.getByRole("searchbox", { name: "搜索设置" });
     await search.fill("插件");
@@ -307,16 +312,28 @@ export async function verifyRemoteProvider(
       client: member.request,
     });
 
-    await page.getByText("安装远程插件", { exact: true }).click();
-    await page.getByLabel("插件服务地址").fill(endpoint + "/first");
-    await page.getByLabel("插件清单 JSON").fill(JSON.stringify(manifest));
-    const installed = await request(page, "/api/admin/plugins", "POST", () =>
-      page.getByRole("button", { name: "安装插件", exact: true }).click(),
+    const packageFor = (m: typeof manifest, path: string) => ({
+      format: 1,
+      id: m.id,
+      label: m.label,
+      version: m.version,
+      adapterVersion: m.version,
+      remote: { endpoint: endpoint + path, manifest: m },
+    });
+    const chooseFile = async (file: unknown) =>
+      page.getByLabel("选择插件文件").setInputFiles({
+        name: "example.fmplugin.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(JSON.stringify(file)),
+      });
+    await chooseFile(packageFor(manifest, "/first"));
+    const installed = await request(
+      page,
+      "/api/admin/plugins/import",
+      "POST",
+      () => page.getByRole("button", { name: "确认导入" }).click(),
     );
     assert.equal(installed.status(), 201, await installed.text());
-    await expect(page.getByLabel("模型提供方")).toHaveValue(
-      manifest.id + "@" + manifest.version,
-    );
     await install(manifest, "/second", 409);
     const connection = {
       name: "Loopback Studio provider",
@@ -328,11 +345,10 @@ export async function verifyRemoteProvider(
       data: { ...connection, config: {} },
       status: 400,
     });
-    await page.getByRole("button", { name: "添加连接" }).click();
-    await page.getByLabel("连接名称").fill(connection.name);
+    await page.getByLabel("服务名称").fill(connection.name);
     await page.getByLabel("API 密钥").fill("original-key");
     const created = await request(page, "/api/admin/connections", "POST", () =>
-      page.getByRole("button", { name: "创建连接" }).click(),
+      page.getByRole("button", { name: "保存服务设置" }).click(),
     );
     assert.equal(created.status(), 201, await created.text());
     const { id } = await created.json();
@@ -347,16 +363,17 @@ export async function verifyRemoteProvider(
           ...(apiKey ? { config: { apiKey } } : {}),
         },
       });
-    await page.getByLabel("启用连接").check();
-    const enabled = await request(page, connectionPath, "PUT", () =>
-      page.getByRole("button", { name: "保存连接" }).click(),
+    await request(
+      page,
+      "/api/admin/plugins/" + manifest.id + "/state",
+      "POST",
+      () => page.getByRole("switch", { name: manifest.label + "开关" }).click(),
     );
-    assert.equal(enabled.status(), 200, await enabled.text());
     await page.getByRole("button", { name: "测试连接" }).click();
     await expect(
-      page.getByRole("status").filter({ hasText: "连接可用" }),
+      page.getByRole("status").filter({ hasText: "服务可达" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "管理模型权限" }).click();
+    await setTab(page, "models");
     await expect(page.getByRole("heading", { name: "模型管理" })).toBeVisible();
     const policy = page.locator(`[data-model="${example.id}"]`);
     await request(page, "/api/settings/models", "PATCH", () =>
@@ -504,28 +521,39 @@ export async function verifyRemoteProvider(
     );
 
     // Change both the connection config and the active version before the worker runs.
-    await update(2, "intermediate-key");
+    await update(1, "intermediate-key");
     const upgraded = {
       ...manifest,
       version: "2.0.0",
       models: [example, mediaModel("video"), mediaModel("audio")],
     };
-    await install(upgraded, "/second");
     await settings(page);
     await setTab(page, "plugins");
-    await page
-      .getByLabel("模型提供方")
-      .selectOption(upgraded.id + "@" + upgraded.version);
-    await page.getByLabel("API 密钥").fill("new-key");
+    await chooseFile(packageFor(upgraded, "/second"));
     const switched = await request(
       page,
-      connectionPath + "/upgrade",
+      "/api/admin/plugins/import",
       "POST",
-      () => page.getByRole("button", { name: "切换连接及目录版本" }).click(),
+      () => page.getByRole("button", { name: "确认更新" }).click(),
     );
     assert.equal(switched.status(), 201, await switched.text());
+    await update(3, "new-key");
+    const pkgRows = () => call("/api/admin/plugins", { method: "GET" });
+    for (const model of upgraded.models.filter((m) => m.id !== example.id)) {
+      const pkg = (await pkgRows()).find(
+        (r: { id: string }) => r.id === manifest.id,
+      );
+      await call("/api/admin/plugins/" + manifest.id + "/model", {
+        status: 201,
+        data: {
+          model: model.id,
+          enabled: true,
+          service: id,
+          revision: pkg.revision,
+        },
+      });
+    }
     await page.goto("/studio");
-    await update(4);
     assert.deepEqual(await retry(), { id: image.id });
     await queue.resume();
 
@@ -560,9 +588,9 @@ export async function verifyRemoteProvider(
       frozen.input.references[0].url,
       "data:image/png;base64," + artifacts.image.bytes.toString("base64"),
     );
-    await expect(page.locator(`#job-${image.id} .asset-preview img`)).toHaveAttribute(
-      "src", "/media/" + imageKey, { timeout: 15_000 },
-    );
+    await expect(
+      page.locator(`#job-${image.id} .asset-preview img`),
+    ).toHaveAttribute("src", "/media/" + imageKey, { timeout: 15_000 });
     await page
       .locator(`#job-${image.id} .asset-preview`)
       .click({ timeout: 15_000 });
@@ -623,29 +651,82 @@ export async function verifyRemoteProvider(
     assert.equal((await queue.getJobCounts("completed", "failed")).failed, 0);
     assert.equal(calls.length, 3);
     await setTab(page, "plugins");
-    await page
-      .getByLabel("模型提供方")
-      .selectOption({
-        label:
-          "本地实例接入 · " +
-          (await call("/api/admin/plugins", { method: "GET" })).find(
-            (p: { id: string }) => p.id === "gpu",
-          ).version,
-      });
-    await page.getByRole("button", { name: "安装此插件" }).click();
+    const gpuFile = JSON.parse(
+      await readFile("plugins/gpu/gpu.fmplugin.json", "utf8"),
+    );
+    await chooseFile(gpuFile);
+    await page.getByRole("button", { name: "确认导入" }).click();
     await expect(
       page.locator('.settings-navigation [data-value="gpu"]'),
-    ).toHaveText("实例接入");
-    await call("/api/admin/plugins/builtin", {
-      data: {
-        id: "gpu",
-        version: (await call("/api/admin/plugins", { method: "GET" })).find(
-          (p: { id: string }) => p.id === "gpu",
-        ).version,
-      },
+    ).toHaveText("GPU 节点");
+    const originalViewport = page.viewportSize()!;
+    const colors: Record<string, string> = {};
+    for (const width of [1440, 768, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ["light", "dark"] as const) {
+        await setTab(page, "general");
+        await page
+          .getByRole("radio", { name: theme === "light" ? "浅色" : "深色" })
+          .click();
+        for (const section of ["plugins", "gpu"]) {
+          await setTab(page, section);
+          if (section === "plugins") {
+            const card = page
+              .locator(".plugin-connection")
+              .filter({
+                has: page.getByRole("switch", {
+                  name: manifest.label + "开关",
+                }),
+              });
+            const expand = card.getByRole("button", {
+              name: "设置",
+              exact: true,
+            });
+            if ((await expand.getAttribute("aria-expanded")) === "false")
+              await expand.click();
+            await card.getByRole("button", { name: "修改设置" }).click();
+            await expect(
+              card.getByRole("button", { name: "保存服务设置" }),
+            ).toBeVisible();
+          }
+          const surface = page
+            .locator(
+              section === "gpu"
+                ? ".settings-content .list-surface"
+                : ".studio-plugins .plugin-connection",
+            )
+            .first();
+          await expect(surface).toBeVisible();
+          await expect
+            .poll(() =>
+              page.evaluate(
+                () => document.documentElement.scrollWidth <= window.innerWidth,
+              ),
+            )
+            .toBeTruthy();
+          const box = await surface.boundingBox();
+          assert.ok(box && box.x >= 0 && box.x + box.width <= width + 1);
+          colors[theme] = await surface.evaluate(
+            (el) => getComputedStyle(el).backgroundColor,
+          );
+          if (process.env.STUDIO_PLUGIN_SCREENSHOTS)
+            await page.screenshot({
+              path: join(
+                process.env.STUDIO_PLUGIN_SCREENSHOTS,
+                section + "-" + width + "-" + theme + ".png",
+              ),
+            });
+        }
+      }
+      assert.notEqual(colors.light, colors.dark);
+    }
+    await page.setViewportSize(originalViewport);
+    await call("/api/admin/plugins/import", {
+      data: { file: gpuFile },
       client: member.request,
       status: 403,
     });
+    await call("/api/pairs", { data: {}, client: member.request, status: 403 });
     const gpu = (await state()).gpu_models || {};
     assert.ok(Object.keys(gpu).length);
     const pair = await call("/api/pairs", {

@@ -20,7 +20,7 @@ import {
 import { AvatarPicker, PasswordDialog, Profile } from "./SettingsProfile";
 import { CreditAdmin } from "./SettingsCreditAdmin";
 import { Invites } from "./SettingsInvites";
-import { GpuSettings } from "./SettingsGpu";
+import { PluginPanel } from "./PluginPanel";
 import { Members } from "./SettingsMembers";
 import { ModelSettings, type ModelSettingsPreferences } from "./SettingsModels";
 import { PluginSettings } from "./SettingsPlugins";
@@ -211,14 +211,8 @@ export function Settings({
     ["profile", "个人资料", "account"],
     ["general", "常规", "settings"],
     ["credits", "积分", "drive"],
-    ...(!state.studio_plugins || Object.keys(state.gpu_models || {}).length
-      ? [
-          [
-            "gpu",
-            state.studio_plugins ? "实例接入" : admin ? "GPU 实例" : "GPU 接入",
-            "gpu",
-          ] as const,
-        ]
+    ...(admin && state.gpu_node_settings
+      ? [["gpu", state.gpu_node_settings.title, "gpu"] as const]
       : []),
     ...(admin
       ? adminTabs.filter(([key]) =>
@@ -283,8 +277,8 @@ export function Settings({
             notify={notify}
           />
         )}
-        {tab === "gpu" && (
-          <GpuSettings
+        {admin && state.gpu_node_settings && tab === "gpu" && (
+          <PluginPanel
             key={`${state.me.id}:${workspace}`}
             state={state}
             open={open}

@@ -1,3 +1,9 @@
+import { loadProgram } from "../../../packages/platform/src/plugin-program.js";
+import {
+  StudioPackages,
+  upgradeFields,
+} from "../../../packages/platform/src/studio-packages.js";
+import { StudioUpdates } from "../../../packages/platform/src/studio-updates.js";
 import {
   Body,
   Controller,
@@ -51,52 +57,186 @@ export class OriginalProviderController {
 
   @Get("plugins")
   packages(@Req() req: Request) {
-    return this.admin(req, async () => {
-      const rows = await this.identity.p.db.query<{
-        id: string;
-        version: string;
-        label: string;
-        configSchema: Record<string, unknown>;
-        models: string[];
-        singleton: boolean;
-        active: boolean;
-      }>(
-        `SELECT v.id,v.version,v.manifest->>'label' AS label,
-                v.manifest->'configSchema' AS "configSchema",
-                v.manifest ? 'originalState' AS singleton,
-                ARRAY(SELECT m->>'label' FROM jsonb_array_elements(v.manifest->'models') m WHERE m ? 'studio') AS models,
-                NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v.manifest->'models') m
-                  WHERE m ? 'studio' AND NOT EXISTS (SELECT 1 FROM studio_catalog c
-                    WHERE (c.plugin_id,c.plugin_version,c.id)=(v.id,v.version,m->>'id'))) AS active
-         FROM plugin_versions v WHERE NOT (v.manifest ? 'fmworkerResources')
-           AND (EXISTS(SELECT 1 FROM studio_catalog c WHERE (c.plugin_id,c.plugin_version)=(v.id,v.version))
-             OR (v.endpoint IS NOT NULL AND v.manifest->'originalSubmission'->>'version'='2'))
-         ORDER BY v.id,v.version`,
+    return this.admin(req, (actor) =>
+      new StudioPackages(this.identity.p).list(actor),
+    );
+  }
+  @Post("plugins/import")
+  importPackage(@Req() req: Request, @Body() body: unknown) {
+    const input = z.object({
+      file: z.unknown(),
+      supplements: upgradeFields,
+      revision: z.number().int().optional(),
+    });
+    return this.admin(req, (actor) => {
+      const data = input.parse(body);
+      return new StudioPackages(this.identity.p).install(
+        actor,
+        data.file,
+        data.revision,
+        false,
+        data.supplements,
       );
-      const packages = this.identity.p.registry.studioPackages();
-      const active = rows.rows.map((row) => ({
-        ...row,
-        installed: true,
-        label:
-          packages.find((p) => p.manifest.id === row.id)?.label ?? row.label,
-      }));
-      for (const { manifest, label } of packages) {
-        if (active.some((p) => p.id === manifest.id)) continue;
-        active.push({
-          id: manifest.id,
-          version: manifest.version,
-          label,
-          installed: false,
-          active: false,
-          configSchema: manifest.configSchema,
-          singleton: Boolean(manifest.originalState),
-          models: manifest.models.filter((m) => m.studio).map((m) => m.label),
-        });
-      }
-      return active.sort((a, b) => a.label.localeCompare(b.label, "zh-CN"));
     });
   }
-
+  @Post("plugins/:id/panel")
+  panel(@Req() req: Request, @Param("id") id: string, @Body() input: unknown) {
+    return this.admin(req, async () => {
+      const r = await one(
+        this.identity.p.db,
+        "SELECT r.package->'settingsPage'->>'render' AS render FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE p.id=$1 AND p.installed",
+        [id],
+      );
+      requireValue(r?.render, 404, "未安装此设置页");
+      const run = await loadProgram("({view:" + r.render + "})");
+      return run("view", input);
+    });
+  }
+  @Post("plugins/preview")
+  preview(@Req() req: Request, @Body() value: unknown) {
+    return this.admin(req, (actor) =>
+      new StudioPackages(this.identity.p).preview(actor, value),
+    );
+  }
+  @Post("plugins/:id/review")
+  review(@Req() req: Request, @Param("id") id: string) {
+    return this.admin(req, (actor) =>
+      new StudioUpdates(this.identity.p).review(actor, id),
+    );
+  }
+  @Post("plugins/:id/model")
+  model(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    return this.admin(req, async (actor) => {
+      const input = z
+        .object({
+          model: z.string(),
+          label: z.string().trim().min(1).max(80).optional(),
+          enabled: z.boolean(),
+          service: z.string().uuid().optional(),
+          revision: z.number().int(),
+        })
+        .parse(body);
+      const p = this.identity.p;
+      return p.db.transaction(async (sql) => {
+        await sql.query("SELECT * FROM studio_policy FOR UPDATE");
+        const pkg = await one(
+          sql,
+          "SELECT id FROM studio_packages WHERE id=$1 AND revision=$2 AND installed FOR UPDATE",
+          [id, input.revision],
+        );
+        requireValue(pkg, 409, "插件已变化，请刷新");
+        requireValue(
+          await one(
+            sql,
+            "SELECT id FROM studio_catalog WHERE id=$1 AND (plugin_id=$2 OR EXISTS(SELECT 1 FROM studio_shared_models e WHERE e.model_id=$1 AND e.plugin_id=$2)) AND NOT hidden",
+            [input.model, id],
+          ),
+          404,
+          "模型不存在",
+        );
+        if (input.service) {
+          const service = await one(
+            sql,
+            `SELECT c.plugin_id,c.plugin_version FROM models m JOIN connections c ON c.id=m.connection_id JOIN studio_packages p ON p.id=c.plugin_id AND p.installed AND NOT p.removing
+            WHERE c.id=$1 AND m.catalog_id=$2 AND c.enabled AND NOT c.removed FOR SHARE OF c`,
+            [input.service, input.model],
+          );
+          requireValue(service, 400, "服务未提供此模型");
+          await sql.query(
+            "UPDATE studio_catalog SET plugin_id=$2,plugin_version=$3 WHERE id=$1",
+            [input.model, service.plugin_id, service.plugin_version],
+          );
+          await sql.query(
+            "INSERT INTO studio_model_service VALUES($1,$2) ON CONFLICT(model_id) DO UPDATE SET connection_id=excluded.connection_id",
+            [input.model, input.service],
+          );
+        }
+        if (input.label)
+          await sql.query(
+            "UPDATE studio_catalog SET display_label=$2 WHERE id=$1",
+            [input.model, input.label],
+          );
+        await sql.query(
+          "UPDATE studio_policy SET revision=revision+1,flags=flags||$1::jsonb",
+          [JSON.stringify({ [input.model]: input.enabled })],
+        );
+        await sql.query(
+          "UPDATE studio_packages SET revision=revision+1 WHERE id=$1 OR id IN (SELECT plugin_id FROM studio_shared_models WHERE model_id=$2)",
+          [id, input.model],
+        );
+        await p.audit(sql, actor, "plugin.model", input.model);
+        return { ok: true };
+      });
+    });
+  }
+  @Post("plugins/:id/state")
+  change(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    return this.admin(req, (actor) => {
+      const data = z
+        .object({
+          action: z.enum(["enable", "disable", "remove"]),
+          revision: z.number().int(),
+        })
+        .parse(body);
+      return new StudioPackages(this.identity.p).change(
+        actor,
+        id,
+        data.revision,
+        data.action,
+      );
+    });
+  }
+  @Post("plugins/:id/source")
+  source(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    return this.admin(req, (actor) =>
+      new StudioUpdates(this.identity.p).configure(actor, id, body),
+    );
+  }
+  @Post("plugins/:id/check")
+  check(@Req() req: Request, @Param("id") id: string) {
+    return this.admin(req, () => new StudioUpdates(this.identity.p).check(id));
+  }
+  @Post("plugins/:id/update")
+  updatePackage(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.admin(req, (actor) =>
+      new StudioUpdates(this.identity.p).check(id, {
+        actor,
+        ...z
+          .object({
+            revision: z.number().int(),
+            sha256: z.string(),
+            supplements: upgradeFields,
+          })
+          .parse(body),
+      }),
+    );
+  }
+  @Post("plugins/:id/rollback")
+  rollback(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.admin(req, async (actor) => {
+      const { revision } = z.object({ revision: z.number().int() }).parse(body);
+      const row = await one(
+        this.identity.p.db,
+        "SELECT r.package FROM studio_packages p JOIN studio_package_releases r ON r.id=p.id AND r.version=p.previous_version WHERE p.installed AND p.id=$1",
+        [id],
+      );
+      requireValue(row, 409, "没有可回退的版本");
+      return new StudioPackages(this.identity.p).install(
+        actor,
+        row.package,
+        revision,
+        true,
+      );
+    });
+  }
   @Post("plugins/activate")
   activate(@Req() req: Request, @Body() body: unknown) {
     return this.admin(req, async (actor) => {
@@ -128,48 +268,6 @@ export class OriginalProviderController {
     });
   }
 
-  @Post("plugins/builtin")
-  builtin(@Req() req: Request, @Body() body: unknown) {
-    return this.admin(req, async (actor) => {
-      const spec = z
-        .object({ id: z.string(), version: z.string() })
-        .parse(body);
-      const p = this.identity.p;
-      return p.db.transaction(async (sql) => {
-        const m = await p.registry.installStudioPackage(
-          sql,
-          spec.id,
-          spec.version,
-        );
-        if (
-          m.mode === "pull" &&
-          !(await one(
-            sql,
-            "SELECT id FROM connections WHERE plugin_id=$1 AND plugin_version=$2 AND NOT fmworker_resource_driver",
-            [m.id, m.version],
-          ))
-        ) {
-          const { id } = await p.createConnectionOn(
-            sql,
-            actor,
-            {
-              name: m.label,
-              pluginId: m.id,
-              version: m.version,
-              config: {},
-              concurrency: 1,
-            },
-            true,
-          );
-          await sql.query("UPDATE connections SET enabled=true WHERE id=$1", [
-            id,
-          ]);
-        }
-        return { id: m.id, version: m.version };
-      });
-    });
-  }
-
   @Post("plugins")
   install(@Req() req: Request, @Body() body: unknown) {
     return this.admin(req, async () => {
@@ -181,7 +279,7 @@ export class OriginalProviderController {
 
   @Get("connections")
   connections(@Req() req: Request) {
-    return this.admin(req, (actor) => this.identity.p.connections(actor));
+    return this.admin(req, (actor) => this.identity.p.studioConnections(actor));
   }
 
   @Post("connections")

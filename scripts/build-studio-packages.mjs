@@ -1,0 +1,98 @@
+import { build } from "esbuild";
+import { readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve, relative, join } from "node:path";
+import { gzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
+
+const hash = (b) => createHash("sha256").update(b).digest("hex");
+const json = (x) => JSON.stringify(x, null, 2) + "\n";
+async function expression(path) {
+  const source = await readFile(path, "utf8");
+  if (!/^export default /m.test(source))
+    throw Error("Missing default plugin expression in " + path);
+  return source
+    .replace(/^export default /m, "")
+    .trim()
+    .replace(/;$/, "");
+}
+const trusted = {};
+for (const id of ["flow", "muse", "gpu"]) {
+  const root = "plugins/" + id,
+    file = JSON.parse(await readFile(root + "/package/release.json", "utf8"));
+  const result = await build({
+    stdin: {
+      contents:
+        `export { ${id}Text as adapter } from "./src/text.js";` +
+        (id === "gpu"
+          ? 'export {gpuPairedAgent as protocol} from "./src/paired-agent.js";export {OriginalNodes as NodeManagement} from "./src/node-management.js";export {OriginalPairedAgent as Agent} from "./src/agent-dispatch.js";'
+          : ""),
+      resolveDir: resolve(root),
+    },
+    format: "esm",
+    platform: "node",
+    target: "node24",
+    bundle: true,
+    write: false,
+    plugins: [
+      {
+        name: "studio-sdk",
+        setup(b) {
+          b.onResolve(
+            {
+              filter:
+                /packages\/(plugin-sdk|platform|original-api|image-import)\/src\//,
+            },
+            (args) => ({
+              path:
+                "fumiao:" +
+                relative(resolve("."), resolve(args.resolveDir, args.path)),
+              external: true,
+            }),
+          );
+          b.onLoad({ filter: /plugins\/.*\.ts$/ }, async ({ path }) => {
+            let contents = await readFile(path, "utf8");
+            for (const m of contents.matchAll(
+              /readFileSync\(new URL\("([^"]+)", import\.meta\.url\), "utf8"\)/g,
+            )) {
+              const data = await readFile(join(dirname(path), m[1]), "utf8");
+              contents = contents.replace(m[0], () => JSON.stringify(data));
+            }
+            return { contents, loader: "ts", resolveDir: dirname(path) };
+          });
+        },
+      },
+    ],
+  });
+  const packed = gzipSync(result.outputFiles[0].contents);
+  trusted[id + "@" + file.adapterVersion] = hash(packed);
+  file.adapterModule = packed.toString("base64");
+  file.program = await expression(root + "/package/program.js");
+  if (id === "gpu") {
+    file.settingsPage = {
+      title: "GPU 节点",
+      render: await expression(root + "/package/panel.js"),
+    };
+    file.nodeClient = {};
+    for (const name of ["agent.tgz", "install.sh", "agent.tgz.sha256"])
+      file.nodeClient[name] = (
+        await readFile("plugins/gpu/distribution/" + name)
+      ).toString("base64");
+  }
+  const path = id + ".fmplugin.json",
+    data = json(file);
+  await writeFile(root + "/" + path, data);
+  await writeFile(
+    root + "/update.json",
+    json({
+      id,
+      version: file.version,
+      notes: "首次发布",
+      package: path,
+      sha256: hash(data),
+    }),
+  );
+}
+await writeFile(
+  "packages/platform/src/distribution/official-adapters.json",
+  json(trusted),
+);

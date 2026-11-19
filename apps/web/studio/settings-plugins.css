@@ -75,3 +75,18 @@
 .studio-plugins textarea {
   resize: vertical;
 }
+
+.studio-plugins .plugin-connection[data-expanded="true"] {
+  grid-column: 1 / -1;
+}
+.studio-plugins .plugin-connection > .plugin-actions > strong {
+  margin-inline-end: auto;
+}
+.studio-plugins .plugin-actions select {
+  width: auto;
+  min-width: 0;
+}
+.studio-plugins .plugin-connection .plugin-form,
+.studio-plugins .plugin-connection details[open] {
+  overflow-wrap: anywhere;
+}

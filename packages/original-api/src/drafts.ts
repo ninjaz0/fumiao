@@ -112,7 +112,10 @@ export function parseDraft(
             parent,
             uid,
           };
-  const parsed = parseBody(value, fields);
+  const parsed = parseBody(value, {
+    ...fields,
+    params: { kind: "dictionary", optional: true },
+  });
   return {
     refs: [],
     asset_packs: [],

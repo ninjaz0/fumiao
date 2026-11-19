@@ -86,6 +86,7 @@ export type Job = {
 export type Asset = {kind?:string;seconds?:number;has_audio?:boolean;name?:string; id: string; w: number; h: number; owner: number };
 export type FlowModel = {kind:string;label:string;provider?:string;family?:string;family_label?:string;hidden?:boolean;mode?:string;ratio?:string;seconds?:number;resolution?:string;min_refs?:number;max_refs?:number};
 export type Studio = {
+  model_forms: Record<string, import("../../../packages/plugin-sdk/src/model-form").ModelForm>;
   model_catalog: Record<string,FlowModel>;
   video_models: Record<string,string>;
   flow?: {configured:boolean;ready:boolean};

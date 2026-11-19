@@ -54,6 +54,7 @@ export async function attachJobResults(sql: Sql, jobs: Record<string, any>[]) {
  * Missing historical facts are a migration error; never synthesize their values. */
 export class OriginalStateRecords {
   async nodes(sql: Sql, user: OriginalActor, stamp: number) {
+    if (user.role !== "admin") return [];
     requireValue(
       !(await one(
         sql,

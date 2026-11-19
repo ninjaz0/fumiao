@@ -8,7 +8,7 @@ RUN node scripts/build-image-codecs.mjs
 FROM node:24-bookworm-slim AS dependencies
 WORKDIR /app
 ENV COREPACK_HOME=/opt/corepack
-RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends ffmpeg git ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
 RUN pnpm install --frozen-lockfile

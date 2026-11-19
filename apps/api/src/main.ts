@@ -1,3 +1,4 @@
+import { additionalBrowserOrigins } from "./browser-origins.js";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import {
@@ -517,6 +518,7 @@ class Api {
   }
 }
 export async function createApp(p: Platform) {
+  const aliases = additionalBrowserOrigins();
   @Module({
     controllers: [Api],
     providers: [{ provide: PLATFORM, useValue: p }],
@@ -534,7 +536,8 @@ export async function createApp(p: Platform) {
       if (
         !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
         req.headers.origin &&
-        req.headers.origin !== publicUrl
+        req.headers.origin !== publicUrl &&
+        !aliases.has(req.headers.origin)
       )
         throw new DomainError(403, "请求来源无效");
       const open = ["/health", "/api/login", "/api/register"];

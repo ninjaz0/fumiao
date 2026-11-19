@@ -27,7 +27,8 @@
     "test:studio:https": "tsx tests/integration/smoke-studio-nest.ts --https",
     "test:studio:restore": "tsx tests/integration/smoke-studio-nest.ts --restore",
     "images:prepare": "node scripts/build-image-codecs.mjs",
-    "test:studio": "tsx tests/integration/smoke-studio-nest.ts --routes"
+    "test:studio": "tsx tests/integration/smoke-studio-nest.ts --routes",
+    "plugins:pack": "node scripts/build-studio-packages.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
@@ -48,9 +49,10 @@
     "react-dom": "^19.2.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "sharp": "^0.34.0",
+    "sharp": "^0.35.5",
     "tsx": "^4.20.0",
-    "zod": "^4.0.0"
+    "zod": "^4.0.0",
+    "quickjs-emscripten": "^0.32.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.0",
@@ -61,6 +63,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "prettier": "^3.10.1",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "esbuild": "0.28.2"
   }
 }

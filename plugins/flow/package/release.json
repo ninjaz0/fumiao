@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "id": "flow",
+  "label": "Flow2API",
+  "version": "1.0.0",
+  "adapterVersion": "1.12.0",
+  "updateUrl": "https://raw.githubusercontent.com/ninjaz0/fumiao/main/plugins/flow/update.json"
+}

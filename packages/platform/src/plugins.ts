@@ -1,64 +1,14 @@
-import { gpuText } from "../../../plugins/gpu/src/text.js";
-import { gpuPairedAgent } from "../../../plugins/gpu/src/paired-agent.js";
+import { readFile } from "node:fs/promises";
+import { portablePlugin } from "./portable-plugin.js";
+import {
+  officialAdapter,
+  reservedAdapterId,
+  type OfficialAdapter,
+} from "./distribution/official-adapter.js";
 import type { PairedAgentProtocol } from "../../plugin-sdk/src/paired-agent.js";
-import { museText } from "../../../plugins/muse/src/text.js";
-import { flowText } from "../../../plugins/flow/src/text.js";
-import { imagesText } from "../../../plugins/images/src/text.js";
-import { storyboardHistory } from "../../../plugins/storyboard/src/history.js";
 import { validator } from "./schema.js";
 export { validator } from "./schema.js";
 import { registerStudioModels } from "./catalog.js";
-import { museCanvasRuns } from "../../../plugins/muse/src/canvas-runs.js";
-import { museCanvas } from "../../../plugins/muse/src/canvas.js";
-import { flowCanvasRuns } from "../../../plugins/flow/src/canvas-runs.js";
-import { flowCanvas } from "../../../plugins/flow/src/canvas.js";
-import { gpuCanvasRuns } from "../../../plugins/gpu/src/canvas-runs.js";
-import { gpuCanvas } from "../../../plugins/gpu/src/canvas.js";
-import { imagesCanvasRuns } from "../../../plugins/images/src/canvas-runs.js";
-import { imagesCanvas } from "../../../plugins/images/src/canvas.js";
-import { museStudio } from "../../../plugins/muse/src/studio.js";
-import { flowStudio } from "../../../plugins/flow/src/studio.js";
-import { gpuStudio } from "../../../plugins/gpu/src/studio.js";
-import { chatStudio } from "../../../plugins/chat/src/studio.js";
-import { chatStreaming } from "../../../plugins/chat/src/stream.js";
-import { imagesStudio } from "../../../plugins/images/src/studio.js";
-import { imagesTiming } from "../../../plugins/images/src/timing.js";
-import { museTiming } from "../../../plugins/muse/src/timing.js";
-import { flowTiming } from "../../../plugins/flow/src/timing.js";
-import { gpuTiming } from "../../../plugins/gpu/src/timing.js";
-import { gpuQueue } from "../../../plugins/gpu/src/queue.js";
-import { gpuReferences } from "../../../plugins/gpu/src/references.js";
-import { gpuNative } from "../../../plugins/gpu/src/native.js";
-import { gpuOriginal } from "../../../plugins/gpu/src/original.js";
-import { museOriginal } from "../../../plugins/muse/src/original.js";
-import { imagesOriginal } from "../../../plugins/images/src/original.js";
-import { flowOriginal } from "../../../plugins/flow/src/original.js";
-import { gpuEstimate } from "../../../plugins/gpu/src/estimate.js";
-import { museEstimate } from "../../../plugins/muse/src/estimate.js";
-import { imagesEstimate } from "../../../plugins/images/src/estimate.js";
-import { flowEstimate } from "../../../plugins/flow/src/estimate.js";
-import { gpuState } from "../../../plugins/gpu/src/state.js";
-import { museState } from "../../../plugins/muse/src/state.js";
-import { flowState } from "../../../plugins/flow/src/state.js";
-import { imagesState } from "../../../plugins/images/src/state.js";
-import { imagesLifecycle } from "../../../plugins/images/src/lifecycle.js";
-import { imagesSettings } from "../../../plugins/images/src/settings.js";
-import { museDownload } from "../../../plugins/muse/src/download.js";
-import { flowDownload } from "../../../plugins/flow/src/download.js";
-import { museArtifacts } from "../../../plugins/muse/src/artifacts.js";
-import { flowArtifacts } from "../../../plugins/flow/src/artifacts.js";
-import { museLifecycle } from "../../../plugins/muse/src/lifecycle.js";
-import { flowLifecycle } from "../../../plugins/flow/src/lifecycle.js";
-import { museQueue } from "../../../plugins/muse/src/queue.js";
-import { museClock } from "../../../plugins/muse/src/clock.js";
-import { flowQueue } from "../../../plugins/flow/src/queue.js";
-import { imagesQueue } from "../../../plugins/images/src/queue.js";
-import { muse } from "../../../plugins/muse/src/index.js";
-import { flow } from "../../../plugins/flow/src/index.js";
-import { gpu } from "../../../plugins/gpu/src/index.js";
-import { storyboard } from "../../../plugins/storyboard/src/index.js";
-import { images } from "../../../plugins/images/src/index.js";
-import { chat } from "../../../plugins/chat/src/index.js";
 import { remotePlugin } from "../../../plugins/remote/src/index.js";
 import { validOriginalRemoteModels } from "../../../plugins/remote/src/original.js";
 import {
@@ -70,103 +20,99 @@ import {
 import type { Database, Sql } from "./db.js";
 import { one } from "./db.js";
 import { DomainError, requireValue } from "./security.js";
-import { studioPluginProfile } from "./studio-plugin-profile.js";
-
-// Published Studio adapter versions. Older versions stay resolvable for accepted jobs.
-const studioReleases = [
-  [museStudio, museText, "Muse2API"],
-  [flowStudio, flowText, "Flow2API"],
-  [gpuStudio, gpuText, "本地实例接入"],
-  [imagesStudio, imagesText, "OpenAI 兼容图片"],
-  [chatStudio, chatStreaming, "兼容对话"],
-] as const;
+import {
+  studioPluginProfile,
+  hasStudioPackages,
+} from "./studio-plugin-profile.js";
 
 export class PluginRegistry {
   private builtins = new Map<string, ProviderPlugin>();
-  constructor(
-    plugins = [
-      muse,
-      flow,
-      gpu,
-      chat,
-      images,
-      storyboard,
-      storyboardHistory,
-      museStudio,
-      flowStudio,
-      gpuStudio,
-      chatStudio,
-      chatStreaming,
-      imagesStudio,
-      imagesTiming,
-      museTiming,
-      flowTiming,
-      gpuTiming,
-      gpuQueue,
-      museQueue,
-      flowQueue,
-      imagesQueue,
-      museClock,
-      gpuReferences,
-      gpuNative,
-      gpuOriginal,
-      museOriginal,
-      imagesOriginal,
-      flowOriginal,
-      gpuEstimate,
-      museEstimate,
-      imagesEstimate,
-      flowEstimate,
-      gpuState,
-      museState,
-      flowState,
-      imagesState,
-      museDownload,
-      flowDownload,
-      museArtifacts,
-      flowArtifacts,
-      museLifecycle,
-      flowLifecycle,
-      imagesLifecycle,
-      imagesSettings,
-      museCanvas,
-      museCanvasRuns,
-      flowCanvas,
-      flowCanvasRuns,
-      gpuCanvas,
-      gpuCanvasRuns,
-      imagesCanvas,
-      imagesCanvasRuns,
-      gpuText,
-      museText,
-      flowText,
-      imagesText,
-    ],
-    private readonly agentProtocols: readonly PairedAgentProtocol[] = [
-      gpuPairedAgent,
-    ],
-  ) {
-    for (const plugin of plugins)
-      this.builtins.set(
-        `${plugin.manifest.id}@${plugin.manifest.version}`,
-        plugin,
+  private protocols = new Map<string, PairedAgentProtocol>();
+  private extensions = new Map<string, OfficialAdapter>();
+  async nodeExtension(sql: Sql) {
+    if (await hasStudioPackages(sql)) {
+      const row = await one(
+        sql,
+        `SELECT p.id,r.package->>'adapterVersion' AS version FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE p.installed AND r.package ? 'settingsPage'`,
       );
+      if (row) {
+        if (!this.extensions.has(row.id + "@" + row.version)) {
+          const module = await one(
+            sql,
+            "SELECT code FROM studio_adapter_modules WHERE id=$1 AND version=$2",
+            [row.id, row.version],
+          );
+          requireValue(module, 503, "节点插件版本不可用");
+          await this.registerModule(row.id, row.version, module.code);
+        }
+        const binding = this.extensions.get(row.id + "@" + row.version);
+        requireValue(
+          binding?.NodeManagement && binding.Agent,
+          503,
+          "节点服务不可用",
+        );
+        return { NodeManagement: binding.NodeManagement, Agent: binding.Agent };
+      }
+      requireValue(
+        (await studioPluginProfile(sql)) !== "explicit",
+        404,
+        "尚未安装节点插件",
+      );
+    }
+    const [{ OriginalNodes: NodeManagement }, { OriginalPairedAgent: Agent }] =
+      await Promise.all([
+        import("../../original-api/src/nodes.js"),
+        import("../../original-api/src/paired-agent.js"),
+      ]);
+    return { NodeManagement, Agent };
   }
-  pairedAgent(provider: string) {
-    return this.agentProtocols.find(
-      (protocol) => protocol.provider === provider,
-    );
+  private custom: boolean;
+  constructor(
+    plugins?: ProviderPlugin[],
+    protocols: readonly PairedAgentProtocol[] = [],
+  ) {
+    this.custom = !!plugins;
+    for (const plugin of plugins ?? []) this.remember(plugin);
+    for (const p of protocols) this.protocols.set(p.provider, p);
+  }
+  private remember(p: ProviderPlugin) {
+    this.builtins.set(p.manifest.id + "@" + p.manifest.version, p);
+  }
+  private async historical() {
+    const history = await import("./historical-adapters.js");
+    if (!this.custom)
+      for (const p of history.historicalAdapters)
+        if (!this.builtins.has(p.manifest.id + "@" + p.manifest.version))
+          this.remember(p);
+    if (!this.protocols.has("gpu"))
+      this.protocols.set("gpu", history.gpuPairedAgent);
+    return history;
+  }
+  async pairedAgent(sql: Sql, provider: string, version: string) {
+    await this.resolve(sql, provider, version);
+    const bundled = this.extensions.get(provider + "@" + version)?.protocol;
+    if (bundled) return bundled;
+    if (!this.protocols.has(provider)) await this.historical();
+    return this.protocols.get(provider);
+  }
+  async registerModule(id: string, version: string, code: string) {
+    const loaded = await officialAdapter(id, version, code);
+    this.extensions.set(id + "@" + version, loaded);
+    this.remember(loaded.adapter);
+    return loaded.adapter;
   }
   async initializeStudio(db: Database, importing: boolean) {
     await db.transaction(async (sql) => {
       await sql.query(
         "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",
       );
+      if (await hasStudioPackages(sql))
+        await this.restoreConfiguredPackages(sql);
       if (await studioPluginProfile(sql)) return;
       const existing = await one(
         sql,
         `SELECT EXISTS (SELECT 1 FROM studio_catalog)
-        OR EXISTS (SELECT 1 FROM users) OR EXISTS (SELECT 1 FROM connections) AS present`,
+        OR EXISTS (SELECT 1 FROM connections) AS present`,
       );
       const compatible = importing || existing.present;
       if (compatible) {
@@ -178,14 +124,75 @@ export class PluginRegistry {
       ]);
     });
   }
-  studioPackages() {
+  private async restoreConfiguredPackages(sql: Sql) {
+    // Migration 034 names only services that already existed. Hydrate those
+    // releases without registering any extra provider, model or connection.
+    const rows = (
+      await sql.query(`SELECT p.id,p.version,r.package,v.manifest,v.endpoint FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+      JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
+      WHERE p.installed AND NOT (r.package ?| array['remote','adapterModule','manifest','restored'])`)
+    ).rows;
+    for (const row of rows) {
+      let release = { ...row.package, restored: true };
+      if (row.endpoint) {
+        release = {
+          ...row.package,
+          remote: { endpoint: row.endpoint, manifest: row.manifest },
+        };
+        await this.installOn(sql, row.manifest, row.endpoint, false);
+      } else if (reservedAdapterId(row.id)) {
+        const packaged = JSON.parse(
+          await readFile(
+            new URL(
+              "../../../plugins/" + row.id + "/" + row.id + ".fmplugin.json",
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+        );
+        if (packaged.adapterVersion === row.version) {
+          const adapter = await this.registerModule(
+            row.id,
+            row.version,
+            packaged.adapterModule,
+          );
+          await sql.query(
+            "INSERT INTO studio_adapter_modules VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+            [row.id, row.version, packaged.adapterModule],
+          );
+          await this.installOn(sql, adapter.manifest, undefined, false);
+          release = packaged;
+        }
+      }
+      if (release.restored) {
+        const old = await this.resolve(sql, row.id, row.version);
+        await this.installOn(sql, old.manifest, undefined, false);
+      }
+      await sql.query(
+        `INSERT INTO studio_package_releases(id,version,package) VALUES($1,$2,$3)
+        ON CONFLICT(id,version) DO UPDATE SET package=excluded.package`,
+        [row.id, release.version, JSON.stringify(release)],
+      );
+      await sql.query(
+        "UPDATE studio_packages SET version=$2,update_url=$3 WHERE id=$1",
+        [row.id, release.version, release.updateUrl ?? null],
+      );
+      await sql.query(
+        `INSERT INTO studio_model_service(model_id,connection_id) SELECT DISTINCT ON (m.catalog_id) m.catalog_id,c.id FROM models m JOIN connections c ON c.id=m.connection_id
+         WHERE m.catalog_id IS NOT NULL AND c.plugin_id=$1 AND c.enabled AND NOT c.fmworker_resource_driver ORDER BY m.catalog_id,c.id ON CONFLICT DO NOTHING`,
+        [row.id],
+      );
+    }
+  }
+  async studioPackages() {
+    const { studioReleases } = await this.historical();
     return studioReleases.map(([, plugin, label]) => ({
       manifest: plugin.manifest,
       label,
     }));
   }
   async installStudioPackage(sql: Sql, id: string, version: string) {
-    const release = this.studioPackages().find(
+    const release = (await this.studioPackages()).find(
       (p) => p.manifest.id === id && p.manifest.version === version,
     );
     requireValue(release, 404, "工作台插件版本不存在");
@@ -199,14 +206,29 @@ export class PluginRegistry {
     });
   }
   async installBuiltinsOn(sql: Sql) {
+    await this.historical();
     await sql.query("SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))");
     const fresh = !(await one(sql, "SELECT id FROM studio_catalog LIMIT 1"));
+    const formsReady = !!(
+      await one(sql, "SELECT to_regclass('plugin_model_forms') AS table_name")
+    )?.table_name;
     for (const plugin of this.builtins.values())
-      await this.installOn(sql, plugin.manifest, undefined, !fresh);
+      await this.installOn(sql, plugin.manifest, undefined, !fresh, formsReady);
+    // Backfill remote adapters that were installed before the UI contract existed.
+    if (formsReady) {
+      const missing =
+        await sql.query(`SELECT v.manifest,v.endpoint FROM plugin_versions v
+        LEFT JOIN plugin_model_forms f ON f.plugin_id=v.id AND f.plugin_version=v.version
+        WHERE f.plugin_id IS NULL AND v.endpoint IS NOT NULL AND v.manifest->'originalSubmission'->>'version' IN ('2','3')
+          AND NOT (v.manifest ? 'fmworkerResources')`);
+      for (const row of missing.rows)
+        await this.installOn(sql, row.manifest, row.endpoint, false);
+    }
   }
   private async prepareOriginalStudio(sql: Sql) {
     // Move the original seed catalog to the supported adapters without
     // changing any user-visible metadata, amounts, policy or pricing revision.
+    const { studioReleases } = await this.historical();
     for (const [seed, original] of studioReleases) {
       const from = seed.manifest,
         to = original.manifest;
@@ -236,11 +258,13 @@ export class PluginRegistry {
       return this.installOn(sql, value, endpoint, true);
     });
   }
-  private async installOn(
+  async installOn(
     sql: Sql,
     value: unknown,
     endpoint: string | undefined,
     bump: boolean,
+    formsReady = true,
+    portable = false,
   ) {
     requireValue(
       !(
@@ -384,11 +408,11 @@ export class PluginRegistry {
         400,
         "原提交契约需要已安装的本地适配器",
       );
-    if (manifest.originalSubmission?.version === 2) {
+    if ((manifest.originalSubmission?.version ?? 0) >= 2) {
       requireValue(
-        endpoint &&
-          validRemoteEndpoint(endpoint) &&
+        (portable || (endpoint && validRemoteEndpoint(endpoint))) &&
           manifest.mode === "request" &&
+          !reservedAdapterId(manifest.id) &&
           ![...this.builtins.values()].some(
             (p) => p.manifest.id === manifest.id,
           ) &&
@@ -457,7 +481,7 @@ export class PluginRegistry {
         if (model.preparedSchema) validator.compile(model.preparedSchema);
       }
     } catch (error) {
-      if (manifest.originalSubmission?.version === 2)
+      if ((manifest.originalSubmission?.version ?? 0) >= 2)
         throw new DomainError(400, "远程工作台插件的 JSON Schema 无效");
       throw error;
     }
@@ -469,6 +493,31 @@ export class PluginRegistry {
       );
     if (endpoint)
       requireValue(/^https?:\/\//.test(endpoint), 400, "插件地址无效");
+    const adapter =
+      local ??
+      (portable
+        ? portablePlugin(manifest)
+        : endpoint
+          ? remotePlugin(manifest, endpoint)
+          : undefined);
+    let forms;
+    try {
+      forms = Object.fromEntries(
+        manifest.models
+          .filter((m) => m.studio && adapter?.modelForm)
+          .map((m) => [
+            m.id,
+            {
+              ...adapter!.modelForm!(m),
+              canvas: !!manifest.canvasSubmission?.models.some(
+                (r) => r.model === m.id,
+              ),
+            },
+          ]),
+      );
+    } catch {
+      throw new DomainError(400, "模型表单、参数组合或计费条件无效");
+    }
     const existing = await one(
       sql,
       "SELECT * FROM plugin_versions WHERE id=$1 AND version=$2",
@@ -487,18 +536,34 @@ export class PluginRegistry {
         409,
         "同一插件版本的地址不可修改",
       );
-      await registerStudioModels(sql, manifest, bump);
-      return manifest;
+    } else
+      await sql.query(
+        "INSERT INTO plugin_versions(id,version,manifest,endpoint) VALUES($1,$2,$3,$4)",
+        [
+          manifest.id,
+          manifest.version,
+          JSON.stringify(manifest),
+          endpoint || null,
+        ],
+      );
+    if (formsReady && Object.keys(forms).length) {
+      const args = [manifest.id, manifest.version, JSON.stringify(forms)];
+      const inserted = await sql.query(
+        `INSERT INTO plugin_model_forms(plugin_id,plugin_version,forms) VALUES ($1,$2,$3)
+         ON CONFLICT DO NOTHING RETURNING plugin_id`,
+        args,
+      );
+      if (!inserted.rows.length)
+        requireValue(
+          await one(
+            sql,
+            "SELECT 1 FROM plugin_model_forms WHERE plugin_id=$1 AND plugin_version=$2 AND forms=$3::jsonb",
+            args,
+          ),
+          409,
+          "同一插件版本的模型表单不可修改",
+        );
     }
-    await sql.query(
-      "INSERT INTO plugin_versions(id,version,manifest,endpoint) VALUES($1,$2,$3,$4)",
-      [
-        manifest.id,
-        manifest.version,
-        JSON.stringify(manifest),
-        endpoint || null,
-      ],
-    );
     await registerStudioModels(sql, manifest, bump);
     return manifest;
   }
@@ -514,6 +579,25 @@ export class PluginRegistry {
       "SELECT * FROM plugin_versions WHERE id=$1 AND version=$2",
       [id, version],
     );
+    if (
+      row &&
+      !row.endpoint &&
+      !Object.hasOwn(row.manifest, "fmworkerResources")
+    ) {
+      if (await hasStudioPackages(db)) {
+        const native = await one(
+          db,
+          "SELECT code FROM studio_adapter_modules WHERE id=$1 AND version=$2",
+          [id, version],
+        );
+        if (native) return this.registerModule(id, version, native.code);
+      }
+      if ((row.manifest.originalSubmission?.version ?? 0) >= 2)
+        return portablePlugin(row.manifest);
+      await this.historical();
+      const prior = this.builtins.get(id + "@" + version);
+      if (prior) return prior;
+    }
     if (row && Object.hasOwn(row.manifest, "fmworkerResources")) {
       // Keep the stored manifest immutable. Old references may read its metadata
       // without exposing the retired capability or loading an execution driver.
@@ -534,7 +618,7 @@ export class PluginRegistry {
   async referenceImporter(db: Sql, id: string) {
     const versions = (
       await db.query(
-        "SELECT DISTINCT v.id,v.version,v.manifest FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE v.manifest ? 'referenceImports'",
+        `SELECT DISTINCT v.id,v.version,v.manifest FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE v.manifest ? 'referenceImports' ${(await hasStudioPackages(db)) ? "AND studio_plugin_accepts(v.id)" : ""}`,
       )
     ).rows;
     const candidates = versions.flatMap((v) =>

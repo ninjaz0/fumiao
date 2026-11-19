@@ -63,6 +63,7 @@ import {
   isH3,
   loadJob,
   modelAvailable,
+  normalizeParams,
   packReferences,
   promptLimit,
   referenceAsset,
@@ -253,7 +254,18 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           );
         }
         const priorDraft = currentDraft.current || readDraft(next);
-        const draft = ensureModel(next, priorDraft.draft);
+        const model = selectedModel(priorDraft.draft);
+        const changedForm =
+          previous &&
+          JSON.stringify(previous.model_forms?.[model]) !==
+            JSON.stringify(next.model_forms?.[model]);
+        const keepUnavailable=next.studio_plugins && model && !modelAvailable(next,model);
+        const draft = keepUnavailable ? priorDraft.draft : ensureModel(
+          next,
+          changedForm
+            ? normalizeParams(next, priorDraft.draft)
+            : priorDraft.draft,
+        );
         const refs = priorDraft.refs.filter((id) => referenceAsset(next, id));
         const hasParent = next.jobs.some(({ id }) => id === priorDraft.parent);
         const lostRef = refs.length !== priorDraft.refs.length;
@@ -745,7 +757,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     };
     updateDraft({
       ...previous,
-      draft: ensureModel(space, draft),
+      draft: normalizeParams(space, ensureModel(space, draft)),
       refs: [job.result],
       parent: null,
       retainedSeed: null,
@@ -797,8 +809,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       else if (!isH3(session.draft))
         throw new Error("请先选择 MiniMax H3 全能参考模式");
       else if (frames(session.draft)) next = assignFrame(space, session, id);
-      else if (session.refs.length >= 12)
-        throw new Error("最多选择 12 个参考素材");
+      else if (
+        session.refs.length >=
+        (space.model_forms?.[selectedModel(session.draft)]?.references.max ?? 9)
+      )
+        throw new Error(
+          `最多选择 ${(space.model_forms?.[selectedModel(session.draft)]?.references.max ?? 9)} 个参考素材`,
+        );
       else if (!session.refs.includes(id))
         next = { ...session, refs: [...session.refs, id] };
       if (next !== session) updateDraft(next);
@@ -1148,8 +1165,15 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             return;
           const h3 = isH3(current.draft);
           const frameMode = frames(current.draft);
-          if (!frameMode && current.refs.length >= (h3 ? 12 : 9)) {
-            notify(h3 ? "最多选择 12 个参考素材" : "最多上传 9 张参考图片");
+          const limit =
+            space.model_forms[selectedModel(current.draft)]?.references.max ??
+            0;
+          if (!frameMode && current.refs.length >= limit) {
+            notify(
+              h3
+                ? `最多选择 ${limit} 个参考素材`
+                : `最多上传 ${limit} 张参考图片`,
+            );
             break;
           }
           const kind = file.type.startsWith("video/")

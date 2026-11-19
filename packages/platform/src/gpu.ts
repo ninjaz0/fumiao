@@ -1,4 +1,7 @@
-import { pairedPluginAvailable } from "./studio-plugin-profile.js";
+import {
+  pairedPluginAvailable,
+  queuedModelPolicy,
+} from "./studio-plugin-profile.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Platform, type Actor, uuid } from "./platform.js";
@@ -77,7 +80,11 @@ export class GpuGateway {
     return id;
   }
   async enroll(value: unknown) {
-    requireValue(await pairedPluginAvailable(this.p.db), 404, "尚未安装实例接入插件");
+    requireValue(
+      await pairedPluginAvailable(this.p.db),
+      404,
+      "尚未安装实例接入插件",
+    );
     const input = z
       .object({
         code: z.string().min(1),
@@ -228,7 +235,7 @@ export class GpuGateway {
       );
       if (held) return { job: null };
       const candidates = `SELECT j.* FROM jobs j JOIN connections c ON c.id=j.connection_id JOIN models m ON m.id=j.model_id JOIN users u ON u.id=j.owner_id
-        LEFT JOIN model_permissions mp ON mp.model_id=m.id AND mp.workspace_id=j.workspace_id WHERE j.connection_id=$1 AND j.state='queued' AND c.enabled=true AND (m.catalog_id IS NOT NULL OR m.enabled=true) AND COALESCE(mp.enabled,true)=true AND u.active=true AND studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id)
+        LEFT JOIN model_permissions mp ON mp.model_id=m.id AND mp.workspace_id=j.workspace_id WHERE j.connection_id=$1 AND j.state='queued' AND c.enabled=true AND ${await queuedModelPolicy(sql)} AND COALESCE(mp.enabled,true) AND u.active=true
         AND j.provider_model=ANY($2::text[]) AND ${executableJob}`;
       // Scan FIFO without locking ineligible jobs. A plugin may reject the first
       // hundred jobs while accepting a later model; never starve that model.
@@ -430,7 +437,9 @@ export class GpuGateway {
         id: string,
         job: ArtifactJob,
         receipt: ArtifactReceipt,
-      ) => void;
+        sql: Sql,
+        version: string,
+      ) => Promise<void> | void;
       settled?: (sql: Sql, job: Record<string, any>) => Promise<void>;
     } = {},
   ) {
@@ -453,7 +462,13 @@ export class GpuGateway {
         const validateArtifact = !!version?.manifest.artifactValidation;
         if (options.preflight) {
           try {
-            options.preflight(job.plugin_id, artifactJob(job), receipt);
+            await options.preflight(
+              job.plugin_id,
+              artifactJob(job),
+              receipt,
+              sql,
+              job.plugin_version,
+            );
           } catch (error) {
             if (error instanceof ArtifactValidationError)
               throw new DomainError(error.status, error.message);

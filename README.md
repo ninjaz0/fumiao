@@ -22,11 +22,14 @@ docker compose up -d --wait
 
 打开 `http://localhost:3000/studio`，新实例的默认管理员用户名为 `admin`。Compose 将 Web 绑定在本机 3000 端口。对外服务通过 HTTPS 反向代理接入，`PUBLIC_URL` 应与浏览器地址一致。[部署、备份与恢复](docs/OPERATIONS.md)
 
-全新安装后，管理员可在工作台的「设置 → 插件」按需安装内置模型包或远程插件，配置并启用连接，再设置模型权限和生成定价。升级已有实例会保留当前模型目录和定价。
+1. 在「设置 → 插件」点「导入插件」。全新安装的列表为空。仓库提供 [Flow2API](plugins/flow/flow.fmplugin.json)、[Muse2API](plugins/muse/muse.fmplugin.json) 和 [GPU 节点](plugins/gpu/gpu.fmplugin.json) 三个独立文件。
+2. 确认插件及模型清单后，在卡片中打开「设置」，填写服务地址及密钥并测试连接。可以勾选模型，进入生成定价设置各档积分，或添加第二个服务。卡片开关对全平台生效。
+3. GPU 插件安装后，平台管理员可在「设置 → GPU 节点」配对服务器。关闭插件仍可管理节点，并继续处理已受理的任务。
+4. 在创作页选择模型并生成。管理员可在插件卡片检查更新、查看变更并确认安装。[插件包及更新源格式](docs/PLUGINS.md)
 
 ## 本地开发
 
-每个任务可在独立 Git worktree 运行 `python3 scripts/worktree.py up`。脚本创建专属端口、测试账号、数据库、队列和媒体卷，输出本任务的 Studio 地址。运行 `python3 scripts/worktree.py down` 可停止任务环境并保留数据。固定的本机 3000 端口供选定版本验收。分支约定、日志和验收命令见 [AGENTS.md](AGENTS.md)。
+每个任务可在独立 Git worktree 运行 `python3 scripts/worktree.py up`。脚本创建专属端口、测试账号、数据库、队列和媒体卷，输出本任务的 Studio 地址。开发者须在任务交付前运行 `python3 scripts/worktree.py down` 清理本任务的容器和网络，保留测试数据。固定的本机 3000 端口供选定版本验收。预览保留条件、收尾检查和验收命令见 [开发指南](AGENTS.md)。
 
 使用 Node.js 24、pnpm 10.32.1、PostgreSQL、Redis 和 FFmpeg。图片解码构建需要 CMake 3.20+、Ninja 和 C++ 编译器。先安装依赖，再按[本地工作台配置](docs/STUDIO.md)准备数据库、私有存储和管理员。
 

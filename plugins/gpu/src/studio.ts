@@ -1,11 +1,54 @@
+import { gpu, videoSeconds, videoQualities } from "./index.js";
+import { referenceLimits } from "./reference-limits.js";
+import {
+  choices,
+  displayRatios,
+  type FormField,
+  type ModelForm,
+} from "../../../packages/plugin-sdk/src/model-form.js";
 import { readFileSync } from "node:fs";
-import { gpu } from "./index.js";
+
 import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
 const runtime = JSON.parse(
   readFileSync(new URL("../models.json", import.meta.url), "utf8"),
 );
 export const gpuStudio: ProviderPlugin = {
   ...gpu,
+  modelForm(model): ModelForm {
+    const fields = model.inputSchema.properties as Record<string, FormField>;
+    const video = model.kind === "video";
+    const native = video && !!fields.h3;
+    return {
+      fields: video
+        ? {
+            ratio: choices(displayRatios, "16:9"),
+            quality: fields.quality,
+            seconds: fields.seconds,
+            sampling_steps: fields.sampling_steps,
+            seed: fields.seed,
+          }
+        : { instruction: fields.instruction, seed: fields.seed },
+      references: native
+        ? referenceLimits
+        : {
+            min: 0,
+            max: Number(
+              (model.inputSchema["x-references"] as { max: number }).max,
+            ),
+          },
+      ...(native ? { referenceModes: ["reference", "frames"] } : {}),
+      ...(video ? { fastSteps: 4 } : {}),
+      tiers: model.studio!.prices.map(({ tier, match }) => ({
+        tier,
+        when: Object.fromEntries(
+          Object.entries(match.properties ?? {}).map(([k, v]) => [
+            k,
+            [(v as { const: number }).const],
+          ]),
+        ),
+      })),
+    };
+  },
   manifest: {
     ...gpu.manifest,
     version: "1.1.0",
@@ -18,8 +61,8 @@ export const gpuStudio: ProviderPlugin = {
         runtime: runtime[model.id],
         prices:
           model.kind === "video"
-            ? [480, 768].flatMap((quality) =>
-                [5, 10, 15].map((seconds) => ({
+            ? videoQualities.flatMap((quality) =>
+                videoSeconds.map((seconds) => ({
                   tier: `${quality}|${seconds}`,
                   label: `${quality}P · ${seconds}s`,
                   amount: null,
