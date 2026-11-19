@@ -1,0 +1,68 @@
+name: Fumiao
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: fumiao-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    name: Studio PR checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U test" --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:8-bookworm
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql://test:test_password@127.0.0.1:5432/test
+      TEST_REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # The Studio suite starts its own password-protected PG/Redis instances.
+      # The service containers above are for platform tests with real concurrency.
+      - name: Prepare Studio test binaries
+        env:
+          REDIS_CONTAINER: ${{ job.services.redis.id }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg cmake ninja-build postgresql-common
+          if ! test -x /usr/lib/postgresql/18/bin/initdb; then
+            sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+            sudo apt-get install -y postgresql-18
+          fi
+          docker cp "$REDIS_CONTAINER:/usr/local/bin/redis-server" "$RUNNER_TEMP/redis-server"
+          "$RUNNER_TEMP/redis-server" --version
+          echo "REDIS_SERVER=$RUNNER_TEMP/redis-server" >> "$GITHUB_ENV"
+          echo "PG_BINDIR=/usr/lib/postgresql/18/bin" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm images:prepare
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm test:web
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Verify /studio with the production build
+        run: pnpm test:studio
+      - run: pnpm test:studio:remote-provider
+      - run: docker build -t fumiao:ci .

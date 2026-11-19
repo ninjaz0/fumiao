@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import type { Platform } from "../../platform/src/platform.js";
 import { one, type Sql } from "../../platform/src/db.js";
 import { requireValue } from "../../platform/src/security.js";
+import { studioPluginProfile } from "../../platform/src/studio-plugin-profile.js";
 import { StudioCatalog } from "../../platform/src/catalog.js";
 import { QueueForecasts } from "../../platform/src/queue-snapshot.js";
 import { elapsedDetail, type Run } from "../../platform/src/timing-math.js";
@@ -79,6 +80,7 @@ export class OriginalState {
             );
           const spaces = await identity.spaces(sql, actor);
           const out: Record<string, any> = {
+            ...(plugins.profile ? { studio_plugins: true } : {}),
             server_time: stamp,
             workspace_id: Number(workspace.public_id),
             legacy_workspace_id: Number(settings.public_id),
@@ -224,9 +226,47 @@ export class OriginalState {
       for (const m of plugin.manifest.models)
         if (catalog[m.id]) byModel.set(m.id, plugin);
     }
+    const profile = await studioPluginProfile(sql);
+    // The original wire format requires these sections even when their package is absent.
+    // Validate each installed adapter above before projecting the empty sections.
+    if (profile === "explicit") {
+      const images = Object.entries(catalog).filter(
+        ([, m]) => m.kind === "image" && !m.hidden,
+      );
+      Object.assign(fields, {
+        ratios: Object.keys(catalog).length
+          ? ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]
+          : [],
+        sizes: {},
+        gpu_models: {},
+        h3_limits: {
+          images: 0,
+          videos: 0,
+          audios: 0,
+          total: 0,
+          clip_seconds: 0,
+        },
+        images: {
+          configured: false,
+          enabled: imageEnabled,
+          default_model: images[0]?.[0] ?? "",
+          models: Object.fromEntries(images.map(([id, m]) => [id, m.label])),
+          sizes: {},
+        },
+        flow: { configured: false, ready: false, model_count: 0 },
+        muse: {
+          configured: false,
+          ready: false,
+          image_ratios: [],
+          video_ratios: [],
+          durations: [],
+        },
+        ...fields,
+      });
+    }
     const validated = stateProviderFieldsSchema.safeParse(fields);
     requireValue(validated.success, 503, "原状态插件未完整启用");
-    return { fields: validated.data!, byModel };
+    return { fields: validated.data!, byModel, profile };
   }
   /** A canvas uses the same global queue snapshot but retains the stored note
    * rather than the studio-only "waiting for model" display override. */
@@ -281,11 +321,7 @@ export class OriginalState {
     for (const j of rows)
       if (j.state === "queued") {
         const plugin = byModel.get(j.provider_model);
-        requireValue(
-          j.remote_studio || plugin,
-          503,
-          "任务模型缺少原状态插件",
-        );
+        requireValue(j.remote_studio || plugin, 503, "任务模型缺少原状态插件");
         const lane = j.remote_studio
           ? "remote:" + j.connection_id
           : plugin!.manifest.originalState!.queueLane === "kind"

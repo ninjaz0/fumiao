@@ -1,3 +1,4 @@
+import { pairedPluginAvailable } from "./studio-plugin-profile.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Platform, type Actor, uuid } from "./platform.js";
@@ -76,6 +77,7 @@ export class GpuGateway {
     return id;
   }
   async enroll(value: unknown) {
+    requireValue(await pairedPluginAvailable(this.p.db), 404, "尚未安装实例接入插件");
     const input = z
       .object({
         code: z.string().min(1),
