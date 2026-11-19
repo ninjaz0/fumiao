@@ -12,7 +12,6 @@ import {
   type PageAction,
   type PageScope,
   type ResolvedContributions,
-  type SettingsScope,
 } from "../../plugin-sdk/src/contributions.js";
 import { PluginSettingsStore } from "./plugin-settings.js";
 import { remotePlugin } from "../../../plugins/remote/src/index.js";
@@ -181,27 +180,6 @@ async function inspectPackage(file: PackageFile) {
       ? remotePlugin(manifest, file.remote.endpoint)
       : portablePlugin(manifest));
   return { adapter, contributions };
-}
-
-// The v1 settings store calls the shared Ajv compiler with these exact schema
-// objects. Prime its object cache without publishing package-local resource IDs.
-// Keep this synchronous so concurrent requests always see the original option.
-function prepareNamedSettingsSchemas(
-  declaration: ResolvedContributions["settings"],
-) {
-  if (!declaration) return;
-  const addUsedSchema = validator.opts.addUsedSchema;
-  try {
-    validator.opts.addUsedSchema = false;
-    for (const scope of settingsScopes) {
-      const schema = declaration[scope];
-      if (schema?.$id) validator.compile(schema);
-    }
-  } catch {
-    throw new DomainError(400, "插件设置迁移失败，无法编译目标版本的设置声明");
-  } finally {
-    validator.opts.addUsedSchema = addUsedSchema;
-  }
 }
 
 const scopeLabels: Record<PageScope, string> = {
@@ -718,23 +696,16 @@ export class StudioPackages {
           );
       }
       if (current?.installed) {
-        prepareNamedSettingsSchemas(contributions.settings);
-        if (rollback)
-          await this.rollbackSettings(
-            sql,
-            actor,
-            file,
-            current.version,
-            contributions.settings,
-          );
-        else
-          await this.settings.migrate(
-            sql,
-            file.id,
-            current.version,
-            file.version,
-            contributions.settings,
-          );
+        // Rollback first restores snapshots taken by the upgrade away from this
+        // version; migrate then carries rows still validated by the current one.
+        if (rollback) await this.settings.restore(sql, file.id, file.version);
+        await this.settings.migrate(
+          sql,
+          file.id,
+          current.version,
+          file.version,
+          contributions.settings,
+        );
         const added = Object.fromEntries(
           manifest.models
             .filter((m) => m.studio && !before.some((r) => r.id === m.id))
@@ -771,70 +742,6 @@ export class StudioPackages {
       await this.p.audit(sql, actor, "plugin.install", file.id);
       return { id: file.id, version: file.version };
     });
-  }
-  private async rollbackSettings(
-    sql: Sql,
-    actor: Actor,
-    file: PackageFile,
-    from: string,
-    declaration: ResolvedContributions["settings"],
-  ) {
-    if (!(await this.settings.restore(sql, file.id, file.version))) {
-      await this.settings.migrate(
-        sql,
-        file.id,
-        from,
-        file.version,
-        declaration,
-      );
-      return;
-    }
-    // A workspace may have saved settings for the first time after the upgrade.
-    // Only those rows still need migration; restored snapshots must be left intact.
-    const remaining = await sql.query<{
-      scope: SettingsScope;
-      workspace_id: string | null;
-      values: unknown;
-      revision: number;
-    }>(
-      `SELECT scope,workspace_id,"values",revision FROM studio_plugin_settings
-       WHERE plugin_id=$1 AND package_version<>$2 FOR UPDATE`,
-      [file.id, file.version],
-    );
-    if (!remaining.rows.length) return;
-    const run = declaration?.migrate
-      ? await loadProgram("({migrate:" + declaration.migrate + "\n})")
-      : null;
-    for (const row of remaining.rows) {
-      await sql.query(
-        `UPDATE studio_plugin_settings SET previous_values="values",previous_version=package_version,package_version=$2
-         WHERE plugin_id=$1 AND scope=$3 AND workspace_id IS NOT DISTINCT FROM $4`,
-        [file.id, file.version, row.scope, row.workspace_id],
-      );
-      if (!declaration?.[row.scope]) continue;
-      let values = row.values;
-      if (run) {
-        try {
-          values = run("migrate", values, {
-            scope: row.scope,
-            from,
-            to: file.version,
-          });
-        } catch {
-          throw new DomainError(400, "插件设置迁移失败");
-        }
-      }
-      await this.settings.write(sql, {
-        pluginId: file.id,
-        scope: row.scope,
-        workspaceId: row.workspace_id,
-        declaration,
-        packageVersion: file.version,
-        values,
-        revision: row.revision,
-        actorId: actor.id,
-      });
-    }
   }
   async list(actor: Actor) {
     this.p.admin(actor);

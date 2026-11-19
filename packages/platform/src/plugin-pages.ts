@@ -71,7 +71,7 @@ type Audit = {
   action: string;
   actor: string;
   workspace: string | null;
-  version: string;
+  version: string | null;
   kind?: PageAction["kind"];
   target: string | null;
 };
@@ -515,7 +515,7 @@ export class PluginPages {
       action,
       actor: actor.id,
       workspace: null,
-      version: "",
+      version: null,
       target:
         parsed.success && parsed.data.target !== undefined
           ? String(parsed.data.target)
@@ -566,8 +566,8 @@ export class PluginPages {
     outcome: string,
     detail: string | null,
   ) {
-    // v1 requires a kind even when the URL does not resolve to a declaration.
-    // Mark those host-side rejections explicitly, and never store payloads or pairing commands.
+    // kind / package_version stay NULL when the URL does not resolve to a declared
+    // action of an installed release. Never store payloads or pairing commands.
     await sql.query(
       `INSERT INTO studio_plugin_audit(plugin_id,package_version,page_id,action_id,kind,actor_id,workspace_id,target,outcome,detail)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
@@ -576,12 +576,12 @@ export class PluginPages {
         a.version,
         a.page,
         a.action,
-        a.kind ?? "host",
+        a.kind ?? null,
         a.actor,
         a.workspace,
         a.target,
         outcome,
-        a.kind ? detail : "未解析到操作声明：" + detail,
+        detail,
       ].map((v) => (typeof v === "string" ? v.replaceAll("\0", "�") : v)),
     );
   }

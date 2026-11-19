@@ -406,7 +406,7 @@ test("upgrade is atomic and rollback restores snapshots while migrating newly sa
   const beforeRollback = await rows();
   await assert.rejects(packages.install(actor, first, 2, true), {
     status: 400,
-    message: /设置不符合声明/,
+    message: /设置迁移结果不符合新版本声明/,
   });
   assert.deepEqual(await rows(), beforeRollback);
   assert.equal((await packages.list(actor))[0].version, second.version);

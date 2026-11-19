@@ -23,10 +23,11 @@ CREATE UNIQUE INDEX studio_plugin_settings_workspace
 CREATE TABLE studio_plugin_audit (
   id bigserial PRIMARY KEY,
   plugin_id text NOT NULL,
-  package_version text NOT NULL,
+  -- NULL when the URL does not resolve to an installed release / declared action.
+  package_version text,
   page_id text NOT NULL,
   action_id text NOT NULL,
-  kind text NOT NULL CHECK (kind IN ('host','settings','program')),
+  kind text CHECK (kind IN ('host','settings','program')),
   actor_id uuid NOT NULL REFERENCES users(id),
   workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
   target text,

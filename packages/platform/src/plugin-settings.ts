@@ -1,6 +1,6 @@
 import { loadProgram } from "./plugin-program.js";
 import { one, type Sql } from "./db.js";
-import { validator } from "./schema.js";
+import AjvModule from "ajv";
 import { DomainError, requireValue } from "./security.js";
 import type {
   SettingsDeclaration,
@@ -16,6 +16,15 @@ import type {
  */
 
 const MAX_BYTES = 64 * 1024;
+const Ajv = AjvModule.default || AjvModule;
+// Package-local validator: releases of one plugin may reuse a schema $id, so
+// compiled settings schemas must never be published to a shared registry.
+const validator = new Ajv({
+  allErrors: true,
+  useDefaults: true,
+  strict: false,
+  addUsedSchema: false,
+});
 
 function validate(schema: Record<string, unknown>, values: unknown) {
   const data = structuredClone(values ?? {});
@@ -139,8 +148,9 @@ export class PluginSettingsStore {
   ) {
     const rows = (
       await sql.query(
-        `SELECT scope,workspace_id,"values" FROM studio_plugin_settings WHERE plugin_id=$1 FOR UPDATE`,
-        [pluginId],
+        // Only rows validated by `from`; rows restored by a rollback are already current.
+        `SELECT scope,workspace_id,"values" FROM studio_plugin_settings WHERE plugin_id=$1 AND package_version=$2 FOR UPDATE`,
+        [pluginId, from],
       )
     ).rows;
     if (!rows.length) return;
@@ -182,7 +192,7 @@ export class PluginSettingsStore {
 
   /**
    * Rollback to `version`: restores values saved by the upgrade away from it.
-   * Returns false when nothing was saved (caller may then call `migrate`).
+   * Rows first saved after that upgrade are left for a following `migrate`.
    */
   async restore(sql: Sql, pluginId: string, version: string) {
     const result = await sql.query(
