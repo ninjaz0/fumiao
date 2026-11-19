@@ -212,3 +212,107 @@ export function videoSeconds(job?:Job){
   if(job?.model==='MiniMax H3')return ({5:124,10:243,15:362}[job.seconds]||job.seconds*24)/24;
   return job?.seconds||0;
 }
+
+export const PASTE_OFFSET = 56;
+
+export type CanvasClipboard = {
+  nodes: CanvasNode[];
+  edges: CanvasEdge[];
+  pasteCount: number;
+  anchor?: { x: number; y: number };
+};
+
+export function createClipboardSnapshot(
+  doc: Doc,
+  selectedIds: string[],
+): CanvasClipboard | null {
+  if (!selectedIds.length) return null;
+  const ids = new Set(selectedIds);
+  const nodes = doc.nodes.filter((n) => ids.has(n.id));
+  if (!nodes.length) return null;
+  const matched = new Set(nodes.map((n) => n.id));
+  const edges = doc.edges.filter(
+    (e) => matched.has(e.source) && matched.has(e.target),
+  );
+  return {
+    nodes: structuredClone(nodes),
+    edges: structuredClone(edges),
+    pasteCount: 0,
+  };
+}
+
+export function resolvePasteOffset(
+  nodes: CanvasNode[],
+  options: {
+    duplicate?: boolean;
+    point?: { x: number; y: number };
+    pasteCount?: number;
+    anchor?: { x: number; y: number };
+  } = {},
+): {
+  dx: number;
+  dy: number;
+  nextPasteCount: number;
+  nextAnchor?: { x: number; y: number };
+} {
+  if (options.duplicate || !nodes.length) {
+    return {
+      dx: PASTE_OFFSET,
+      dy: PASTE_OFFSET,
+      nextPasteCount: options.pasteCount ?? 0,
+      nextAnchor: options.anchor,
+    };
+  }
+  const minX = Math.min(...nodes.map((n) => n.x));
+  const minY = Math.min(...nodes.map((n) => n.y));
+  if (options.point) {
+    return {
+      dx: options.point.x - minX,
+      dy: options.point.y - minY,
+      nextPasteCount: 0,
+      nextAnchor: { x: options.point.x, y: options.point.y },
+    };
+  }
+  const nextPasteCount = (options.pasteCount ?? 0) + 1;
+  const baseX = options.anchor ? options.anchor.x : minX;
+  const baseY = options.anchor ? options.anchor.y : minY;
+  return {
+    dx: baseX - minX + nextPasteCount * PASTE_OFFSET,
+    dy: baseY - minY + nextPasteCount * PASTE_OFFSET,
+    nextPasteCount,
+    nextAnchor: options.anchor,
+  };
+}
+
+export function nextContextSelection(
+  selectedIds: string[],
+  nodeId: string,
+): string[] {
+  return selectedIds.includes(nodeId) ? selectedIds : [nodeId];
+}
+
+export function collectDownloadTargets(nodes: CanvasNode[], runs: Job[]) {
+  const media = nodes
+    .map((n) => resolveNode(n, runs).media)
+    .filter((id): id is string => Boolean(id));
+  const text = nodes.filter((n) => n.type === "text" || n.type === "sticky");
+  return {
+    media,
+    text,
+    hasDownloadable: media.length > 0 || text.length > 0,
+  };
+}
+
+export function hasDownloadableNodes(nodes: CanvasNode[], runs: Job[]): boolean {
+  return collectDownloadTargets(nodes, runs).hasDownloadable;
+}
+
+export function textDownloadFilename(
+  currentTitle: string | null | undefined,
+  fallbackTitle: string,
+): string {
+  const base = currentTitle?.trim()
+    ? currentTitle
+    : fallbackTitle || "未命名画布";
+  return base + ".txt";
+}
