@@ -1737,7 +1737,10 @@ export function CanvasWorkspace({
           panActivationKeyCode="Space"
           deleteKeyCode={null}
           colorMode={theme}
-          onlyRenderVisibleElements
+          // Keep loaded images mounted when dragging auto-pans the viewport.
+          onlyRenderVisibleElements={
+            !nodes.some(({ data }) => data.item.type === "image" && data.media)
+          }
           preventScrolling
           fitView={false}
           nodesDraggable={!hand && !editing}
