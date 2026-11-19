@@ -32,7 +32,9 @@ import { SettingsShell } from "./SettingsShell";
 import { StorageSettings } from "./SettingsStorage";
 import { Workspaces } from "./SettingsWorkspaces";
 import type { Member, Space, StudioState } from "./state";
-import { pluginTab, resolvePluginTab, type SettingsTab } from "./settings-tabs";
+import { extensionTab, pluginTab, resolvePluginTab, type SettingsTab } from "./settings-tabs";
+import { PluginSettingsPage } from "./PluginSettingsPage";
+
 
 const adminTabs = [
   ["plugins", "插件", "link", "services"],
@@ -213,29 +215,29 @@ export function Settings({
     (page) => admin || page.audience === "member",
   );
   const legacyPanel = admin && !!state.gpu_node_settings;
-  const tab = resolvePluginTab(requestedTab, pages, legacyPanel);
-  const selected = pages?.find((page) => pluginTab(page) === tab);
-  const legacy = pages?.find((page) => page.legacy);
-  const plugin = selected?.plugin,
-    pageId = selected?.page;
-  const client = useMemo(
-    () =>
-      plugin && pageId
-        ? pluginPageClient(workspace, plugin, pageId)
-        : undefined,
-    [workspace, plugin, pageId],
-  );
-  useEffect(() => {
-    if (requestedTab !== tab) navigate(tab);
-  }, [requestedTab, tab, navigate]);
-
+  const forms = admin ? (state.settings_pages ?? []) : [];
+  const titles = [
+    ...(pages?.map((p) => p.title) ?? [state.gpu_node_settings?.title]),
+    ...forms.map((p) => p.title),
+  ];
   const sections = [
     ["profile", "个人资料", "account", "account"],
     ["general", "常规", "settings", "account"],
     ["credits", "积分", "drive", "account"],
     ...(!pages && legacyPanel && state.gpu_node_settings
-      ? [["gpu", state.gpu_node_settings.title, "gpu", "account"] as const]
+      ? [["gpu", state.gpu_node_settings.title, "gpu", "extensions"] as const]
       : []),
+    ...forms.map(
+      (page) =>
+        [
+          extensionTab(page),
+          titles.filter((title) => title === page.title).length > 1
+            ? page.title + " · " + page.label + " (" + page.plugin + ")"
+            : page.title,
+          "settings",
+          "extensions",
+        ] as const,
+    ),
     ...(admin
       ? adminTabs.filter(([key]) =>
           key === "plugins"
@@ -252,9 +254,37 @@ export function Settings({
         )
       : []),
     ...(pages ?? []).map(
-      (page) => [pluginTab(page), page.title, page.icon, page.group] as const,
+      (page) => [
+        pluginTab(page),
+        titles.filter((title) => title === page.title).length > 1
+          ? page.title + " · " + page.plugin + " (" + page.page + ")"
+          : page.title,
+        page.icon,
+        page.legacy ? "extensions" : page.group,
+      ] as const,
     ),
   ] as const;
+  const resolved = resolvePluginTab(requestedTab, pages, legacyPanel);
+  const tab = sections.some(([key]) => key === resolved)
+    ? resolved
+    : admin && state.studio_plugins
+      ? "plugins"
+      : "profile";
+  useEffect(() => {
+    if (requestedTab !== tab) navigate(tab);
+  }, [requestedTab, tab, navigate]);
+  const selected = pages?.find((page) => pluginTab(page) === tab);
+  const legacy = pages?.find((page) => page.legacy);
+  const plugin = selected?.plugin,
+    pageId = selected?.page;
+  const client = useMemo(
+    () =>
+      plugin && pageId
+        ? pluginPageClient(workspace, plugin, pageId)
+        : undefined,
+    [workspace, plugin, pageId],
+  );
+  const extension = forms.find((p) => extensionTab(p) === tab);
   return (
     <SettingsShell
       state={state}
@@ -267,6 +297,15 @@ export function Settings({
       }}
     >
       <div className="settings-content" key={visit}>
+        {extension && (
+          <PluginSettingsPage
+            key={tab}
+            page={extension}
+            request={adminRequest}
+            refresh={refresh}
+            notify={notify}
+          />
+        )}
         {tab === "profile" && (
           <Profile
             state={state}

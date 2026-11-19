@@ -1,4 +1,5 @@
 import type { PluginPageEntry } from "../../../packages/plugin-sdk/src/contributions";
+import type { InstalledSettingsPage } from "../../../packages/plugin-sdk/src/settings-pages";
 import { resolve as resolveFlow } from "../canvas-editor/flowPicker";
 import {
   formError,
@@ -134,6 +135,7 @@ export type Job = {
   };
 };
 export type StudioState = {
+  settings_pages?: InstalledSettingsPage[];
   studio_plugins?: boolean;
   plugin_pages?: PluginPageEntry[];
   gpu_node_settings?: {id:string;version:string;title:string;enabled:boolean;pending:number}|null;

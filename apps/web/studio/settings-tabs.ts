@@ -22,7 +22,7 @@ const settingsTabs = [
 ] as const;
 
 type PluginTab = `plugin:${string}:${string}`;
-export type SettingsTab = (typeof settingsTabs)[number] | PluginTab;
+export type SettingsTab = (typeof settingsTabs)[number] | PluginTab | ExtensionTab;
 
 export function pluginTab({ plugin, page }: PluginPageEntry): PluginTab {
   return `plugin:${plugin}:${page}`;
@@ -45,3 +45,9 @@ export function resolvePluginTab(
     return "general";
   return tab;
 }
+export type ExtensionTab = `extension/${string}/${string}`;
+
+export const extensionTab = (page: {
+  plugin: string;
+  id: string;
+}): ExtensionTab => `extension/${page.plugin}/${page.id}`;

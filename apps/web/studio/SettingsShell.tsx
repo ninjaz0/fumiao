@@ -1,5 +1,5 @@
 import type { PageGroup } from "../../../packages/plugin-sdk/src/contributions";
-import { ChevronDown, Search, Ticket } from "lucide-react";
+import { ChevronDown, Ticket } from "lucide-react";
 import {
   useEffect,
   useId,
@@ -10,23 +10,23 @@ import {
   type ReactNode,
 } from "react";
 import { Icon } from "./Icon";
-import { Avatar } from "./Navigation";
 import type { SettingsTab } from "./settings-tabs";
-import { displayName, type StudioState } from "./state";
+import type { StudioState } from "./state";
 import "./settings-ledger.css";
 
 const groups = {
-  account: "账户",
-  services: "生成服务",
-  billing: "计费",
+  account: "个人",
   organization: "组织",
-} satisfies Record<PageGroup, string>;
+  billing: "计费",
+  services: "生成服务",
+  extensions: "插件设置",
+} satisfies Record<PageGroup | "extensions", string>;
 
 type Section = readonly [
   SettingsTab,
   string,
   ComponentProps<typeof Icon>["name"],
-  PageGroup,
+  keyof typeof groups,
 ];
 
 export function SettingsShell({
@@ -44,12 +44,11 @@ export function SettingsShell({
   children: ReactNode;
   legacyTab?: SettingsTab;
 }) {
-  const [query, setQuery] = useState("");
+  const member = state.me.role !== "admin";
   const [expanded, setExpanded] = useState(false);
   const panelId = useId();
   const panel = useRef<HTMLDivElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
-  const search = useRef<HTMLInputElement>(null);
   const active = sections.find(([key]) => key === tab);
   const workspace = state.workspaces.find(
     ({ id }) => id === state.workspace_id,
@@ -58,42 +57,18 @@ export function SettingsShell({
   const inviteCount = state.invite_codes?.filter(
     ({ enabled, expires }) => enabled && (expires === null || expires > now),
   ).length;
-  const normalized = query.trim().toLowerCase();
-  const filtered = Object.entries(groups).map(([id, name]) => ({
+  const grouped = Object.entries(groups).map(([group, name]) => ({
     name,
-    sections: sections.filter(
-      ([, label, , group]) =>
-        id === group && label.toLowerCase().includes(normalized),
-    ),
+    sections: sections.filter((section) => section[3] === group),
   }));
-
   useEffect(() => {
-    function shortcut(event: globalThis.KeyboardEvent) {
-      if (
-        event.defaultPrevented ||
-        event.key !== "/" ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        (event.target instanceof Element &&
-          event.target.closest("input, textarea, select, [contenteditable]")) ||
-        document.querySelector("dialog[open]")
-      )
-        return;
-      event.preventDefault();
-      if (search.current?.getClientRects().length) search.current.focus();
-      else setExpanded(true);
-    }
-    window.addEventListener("keydown", shortcut);
-    return () => window.removeEventListener("keydown", shortcut);
-  }, []);
-  useEffect(() => {
-    if (expanded && toggle.current?.getClientRects().length)
-      search.current?.focus();
+    if (expanded)
+      panel.current
+        ?.querySelector<HTMLButtonElement>('[aria-current="page"]')
+        ?.focus();
   }, [expanded]);
 
   function select(key: SettingsTab) {
-    setQuery("");
     setExpanded(false);
     if (toggle.current?.getClientRects().length) toggle.current.focus();
     navigate(key);
@@ -101,8 +76,7 @@ export function SettingsShell({
 
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
-      if (query && event.target === search.current) setQuery("");
-      else if (expanded) {
+      if (expanded) {
         setExpanded(false);
         toggle.current?.focus();
       } else return;
@@ -115,58 +89,33 @@ export function SettingsShell({
       ) ?? [],
     );
     if (!buttons.length) return;
-    if (event.target === search.current) {
-      if (event.key === "Enter") buttons[0].click();
-      else if (event.key === "ArrowDown") buttons[0].focus();
-      else return;
-    } else {
-      const current = buttons.indexOf(
-        document.activeElement as HTMLButtonElement,
-      );
-      if (current < 0) return;
-      const offset = event.key === "ArrowDown" ? 1 : -1;
-      switch (event.key) {
-        case "Home":
-          buttons[0].focus();
-          break;
-        case "End":
-          buttons.at(-1)?.focus();
-          break;
-        case "ArrowDown":
-        case "ArrowUp":
-          buttons[(current + offset + buttons.length) % buttons.length].focus();
-          break;
-        default:
-          return;
-      }
+    const current = buttons.indexOf(
+      document.activeElement as HTMLButtonElement,
+    );
+    if (current < 0) return;
+    const offset = event.key === "ArrowDown" ? 1 : -1;
+    switch (event.key) {
+      case "Home":
+        buttons[0].focus();
+        break;
+      case "End":
+        buttons.at(-1)?.focus();
+        break;
+      case "ArrowDown":
+      case "ArrowUp":
+        buttons[(current + offset + buttons.length) % buttons.length].focus();
+        break;
+      default:
+        return;
     }
     event.preventDefault();
   }
 
   return (
-    <div
-      className="settings-page ledger-settings"
-      data-plugin-page={tab.startsWith("plugin:") || undefined}
-    >
+    <div className="settings-page ledger-settings" data-member={member} data-plugin-page={tab.startsWith("plugin:") || undefined}>
       <header className="settings-title">
-        <div>
-          <h1>设置</h1>
-          {active && (
-            <p className="ledger-breadcrumb">
-              {groups[active[3]]} / <strong>{active[1]}</strong>
-            </p>
-          )}
-        </div>
-        <div className="ledger-account">
-          <Avatar member={state.me} current={false} />
-          <div>
-            <strong>{displayName(state.me)}</strong>
-            <small>
-              {state.me.role === "admin" ? "管理员" : "成员"}
-              {workspace && " · " + workspace.name}
-            </small>
-          </div>
-        </div>
+        <h1>设置</h1>
+        <span className="settings-space">{workspace?.name}</span>
       </header>
       <div className="settings-layout">
         <div className="ledger-navigation">
@@ -188,21 +137,8 @@ export function SettingsShell({
             ref={panel}
             onKeyDown={keyDown}
           >
-            <label className="ledger-search">
-              <Search aria-hidden="true" size={16} />
-              <input
-                type="search"
-                aria-label="搜索设置"
-                placeholder="搜索设置"
-                autoComplete="off"
-                value={query}
-                ref={search}
-                onChange={(event) => setQuery(event.currentTarget.value)}
-              />
-              <kbd aria-hidden="true">/</kbd>
-            </label>
             <nav className="settings-navigation" aria-label="设置分类">
-              {filtered.map(
+              {grouped.map(
                 ({ name, sections }) =>
                   sections.length > 0 && (
                     <section key={name} aria-label={name}>
@@ -222,11 +158,7 @@ export function SettingsShell({
                           ) : (
                             <Icon name={icon} />
                           )}
-                          <span
-                            data-value={key === legacyTab ? "gpu" : undefined}
-                          >
-                            {label}
-                          </span>
+                          <span data-value={key === legacyTab ? "gpu" : undefined}>{label}</span>
                           {key === "invites" && !!inviteCount && (
                             <span className="ledger-count" aria-hidden="true">
                               {inviteCount}
@@ -236,9 +168,6 @@ export function SettingsShell({
                       ))}
                     </section>
                   ),
-              )}
-              {filtered.every(({ sections }) => !sections.length) && (
-                <p className="ledger-nav-empty">没有匹配的设置项</p>
               )}
             </nav>
           </div>

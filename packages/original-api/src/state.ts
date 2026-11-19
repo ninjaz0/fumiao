@@ -5,6 +5,7 @@ import { one, type Sql } from "../../platform/src/db.js";
 import { requireValue } from "../../platform/src/security.js";
 import { studioPluginProfile, pairedPluginAvailable, listedStudioCatalog } from "../../platform/src/studio-plugin-profile.js";
 import { PluginPages } from "../../platform/src/plugin-pages.js";
+import { installedSettingsPages } from "../../platform/src/studio-packages.js";
 import { StudioCatalog } from "../../platform/src/catalog.js";
 import { QueueForecasts } from "../../platform/src/queue-snapshot.js";
 import { elapsedDetail, type Run } from "../../platform/src/timing-math.js";
@@ -109,6 +110,7 @@ export class OriginalState {
             assets: await records.assets(sql, workspace.id),
             nodes: actor.role === "admin" && await pairedPluginAvailable(sql) ? await records.nodes(sql, actor, stamp) : [],
             plugin_pages: await new PluginPages(this.p).list(sql, actor),
+            ...(actor.role === "admin" && { settings_pages: await installedSettingsPages(sql) }),
             gpu_node_settings: nodePage ?? null,
             ...plugins.fields,
             video_models: Object.fromEntries(
