@@ -30,7 +30,8 @@ import { SettingsShell } from "./SettingsShell";
 import { StorageSettings } from "./SettingsStorage";
 import { Workspaces } from "./SettingsWorkspaces";
 import type { Member, Space, StudioState } from "./state";
-import type { SettingsTab } from "./settings-tabs";
+import { PluginSettingsPage } from "./PluginSettingsPage";
+import { extensionTab, type SettingsTab } from "./settings-tabs";
 
 const adminTabs = [
   ["plugins", "插件", "link"],
@@ -89,7 +90,7 @@ function General() {
 
 export function Settings({
   state,
-  tab,
+  tab: requestedTab,
   visit,
   draft,
   modelPreferences,
@@ -207,6 +208,8 @@ export function Settings({
     else void openOrder(returnedOrder, null);
   }, []);
 
+  const pages = admin ? (state.settings_pages ?? []) : [];
+  const titles = [state.gpu_node_settings?.title, ...pages.map((p) => p.title)];
   const sections = [
     ["profile", "个人资料", "account"],
     ["general", "常规", "settings"],
@@ -214,6 +217,16 @@ export function Settings({
     ...(admin && state.gpu_node_settings
       ? [["gpu", state.gpu_node_settings.title, "gpu"] as const]
       : []),
+    ...pages.map(
+      (page) =>
+        [
+          extensionTab(page),
+          titles.filter((title) => title === page.title).length > 1
+            ? page.title + " · " + page.label + " (" + page.plugin + ")"
+            : page.title,
+          "settings",
+        ] as const,
+    ),
     ...(admin
       ? adminTabs.filter(([key]) =>
           key === "plugins"
@@ -230,6 +243,15 @@ export function Settings({
         )
       : []),
   ] as const;
+  const tab = sections.some(([key]) => key === requestedTab)
+    ? requestedTab
+    : admin && state.studio_plugins
+      ? "plugins"
+      : "profile";
+  useEffect(() => {
+    if (requestedTab !== tab) navigate(tab);
+  }, [requestedTab, tab, navigate]);
+  const extension = pages.find((p) => extensionTab(p) === tab);
   return (
     <SettingsShell
       state={state}
@@ -241,6 +263,15 @@ export function Settings({
       }}
     >
       <div className="settings-content" key={visit}>
+        {extension && (
+          <PluginSettingsPage
+            key={tab}
+            page={extension}
+            request={adminRequest}
+            refresh={refresh}
+            notify={notify}
+          />
+        )}
         {tab === "profile" && (
           <Profile
             state={state}

@@ -924,3 +924,77 @@ test("current installation upgrades its configured GPU service without requiring
     await f.cleanup();
   }
 });
+
+test("installed settings pages isolate values by package, reject stale saves and survive renames", async () => {
+  const f = await setup();
+  try {
+    const pages = [
+      {
+        id: "defaults",
+        title: "导出偏好",
+        view: "fields" as const,
+        fields: [{ id: "format", label: "格式", options: ["SRT", "WebVTT"] }],
+      },
+    ];
+    const first = { ...(await load("muse")), settingsPages: pages };
+    const second = { ...(await load("flow")), settingsPages: pages };
+    const state = new OriginalState(f.p);
+    const read = async () => (await state.read(f.actor)).settings_pages;
+    assert.deepEqual(await read(), []);
+    await assert.rejects(
+      f.packages.install(f.actor, {
+        ...first,
+        settingsPages: [...pages, ...pages],
+      }),
+    );
+    await f.packages.install(f.actor, first);
+    await f.packages.install(f.actor, second);
+    const save = (revision: number, value: string) =>
+      f.packages.savePage(f.actor, first.id, "defaults", revision, {
+        format: value,
+      });
+    await assert.rejects(
+      f.packages.savePage(
+        { ...f.actor, role: "member" },
+        first.id,
+        "defaults",
+        1,
+        { format: "SRT" },
+      ),
+      { status: 403 },
+    );
+    await assert.rejects(save(1, "unknown"), { status: 400 });
+    await save(1, "WebVTT");
+    await assert.rejects(save(1, "SRT"), { status: 409 });
+    const upgraded = {
+      ...first,
+      version: "1.1.0",
+      settingsPages: [
+        { ...pages[0], title: "字幕选项" },
+        { ...pages[0], id: "other" },
+      ],
+    };
+    await f.packages.install(f.actor, upgraded, 2);
+    assert.deepEqual(
+      (await read()).map(
+        (page: {
+          plugin: string;
+          title: string;
+          values: { format: string };
+        }) => [page.plugin, page.title, page.values.format],
+      ),
+      [
+        ["flow", "导出偏好", "SRT"],
+        ["muse", "字幕选项", "WebVTT"],
+        ["muse", "导出偏好", "SRT"],
+      ],
+    );
+    await f.packages.change(f.actor, first.id, 3, "remove");
+    await assert.rejects(save(4, "SRT"), { status: 404 });
+    assert.equal((await read()).length, 1);
+    await f.packages.install(f.actor, first);
+    assert.deepEqual((await read())[1].values, { format: "SRT" });
+  } finally {
+    await f.cleanup();
+  }
+});

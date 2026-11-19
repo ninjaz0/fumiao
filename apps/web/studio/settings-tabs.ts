@@ -19,4 +19,10 @@ const settingsTabs = [
   ...adminSettingsTabs,
 ] as const;
 
-export type SettingsTab = (typeof settingsTabs)[number];
+export type ExtensionTab = `extension/${string}/${string}`;
+export type SettingsTab = (typeof settingsTabs)[number] | ExtensionTab;
+
+export const extensionTab = (page: {
+  plugin: string;
+  id: string;
+}): ExtensionTab => `extension/${page.plugin}/${page.id}`;

@@ -79,6 +79,29 @@ export class OriginalProviderController {
       );
     });
   }
+  @Put("plugins/:id/pages/:page")
+  savePage(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Param("page") page: string,
+    @Body() body: unknown,
+  ) {
+    return this.admin(req, (actor) => {
+      const input = z
+        .object({
+          revision: z.number().int().positive(),
+          values: z.record(z.string().max(64), z.string().max(80)),
+        })
+        .parse(body);
+      return new StudioPackages(this.identity.p).savePage(
+        actor,
+        id,
+        page,
+        input.revision,
+        input.values,
+      );
+    });
+  }
   @Post("plugins/:id/panel")
   panel(@Req() req: Request, @Param("id") id: string, @Body() input: unknown) {
     return this.admin(req, async () => {

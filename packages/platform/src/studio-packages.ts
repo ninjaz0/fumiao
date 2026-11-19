@@ -9,6 +9,40 @@ import { one, type Sql } from "./db.js";
 import { canonical, connectionModels, validator } from "./plugins.js";
 import type { Platform, Actor } from "./platform.js";
 import { requireValue } from "./security.js";
+import {
+  settingsPagesSchema,
+  type InstalledSettingsPage,
+  type PluginSettingsPage,
+} from "../../plugin-sdk/src/settings-pages.js";
+
+export async function installedSettingsPages(
+  sql: Sql,
+): Promise<InstalledSettingsPage[]> {
+  const { rows } = await sql.query(`
+    SELECT p.id, p.version, p.revision, p.removing, p.page_values AS saved,
+           r.package->>'label' AS label, r.package->'settingsPages' AS pages
+      FROM studio_packages p JOIN studio_package_releases r USING (id,version)
+     WHERE p.installed AND r.package ? 'settingsPages' ORDER BY p.id`);
+  return rows.flatMap((pkg) =>
+    (pkg.pages as PluginSettingsPage[]).map((page) => ({
+      ...page,
+      plugin: pkg.id,
+      label: pkg.label,
+      version: pkg.version,
+      revision: pkg.revision,
+      removing: pkg.removing,
+      values: Object.fromEntries(
+        page.fields.map((field) => {
+          const saved = pkg.saved?.[page.id]?.[field.id];
+          return [
+            field.id,
+            field.options.includes(saved) ? saved : field.options[0],
+          ];
+        }),
+      ),
+    })),
+  );
+}
 
 export const releaseVersion = z
   .string()
@@ -54,6 +88,7 @@ export const packageFile = z
       .min(1)
       .max(256 * 1024)
       .optional(),
+    settingsPages: settingsPagesSchema.optional(),
     settingsPage: z
       .object({
         title: z.string().min(1).max(60),
@@ -91,6 +126,49 @@ export function newer(a: string, b: string) {
 
 export class StudioPackages {
   constructor(readonly p: Platform) {}
+  async savePage(
+    actor: Actor,
+    id: string,
+    pageId: string,
+    revision: number,
+    values: Record<string, string>,
+  ) {
+    this.p.admin(actor);
+    return this.p.db.transaction(async (sql) => {
+      const pkg = await one(
+        sql,
+        `SELECT p.revision, p.removing, r.package->'settingsPages' AS pages
+        FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+        WHERE p.id=$1 AND p.installed FOR UPDATE OF p`,
+        [id],
+      );
+      const page = (pkg?.pages as PluginSettingsPage[] | undefined)?.find(
+        (p) => p.id === pageId,
+      );
+      requireValue(pkg && page, 404, "此设置页已移除");
+      requireValue(
+        !pkg.removing && pkg.revision === revision,
+        409,
+        "插件设置已变化，请重新载入",
+      );
+      requireValue(
+        Object.keys(values).length === page.fields.length &&
+          page.fields.every(
+            (f) =>
+              Object.hasOwn(values, f.id) && f.options.includes(values[f.id]),
+          ),
+        400,
+        "设置项或选项无效",
+      );
+      await sql.query(
+        `UPDATE studio_packages SET page_values=jsonb_set(page_values, ARRAY[$2::text], $3::jsonb),
+        revision=revision+1 WHERE id=$1`,
+        [id, pageId, JSON.stringify(values)],
+      );
+      await this.p.audit(sql, actor, "plugin.settings", id + "/" + pageId);
+      return { revision: revision + 1 };
+    });
+  }
   async preview(actor: Actor, value: unknown) {
     this.p.admin(actor);
     const f = packageFile.parse(value),
@@ -130,6 +208,13 @@ export class StudioPackages {
         if (!m.models.some((x) => x.id === model.id))
           changes.push("移除模型：" + model.label);
     }
+    for (const page of f.settingsPages ?? [])
+      if (
+        !prior?.package.settingsPages?.some(
+          (old: PluginSettingsPage) => old.id === page.id,
+        )
+      )
+        changes.push("新增管理员设置：" + page.title);
     if (f.equivalentModels?.length)
       changes.push("共用模型：" + f.equivalentModels.join("、"));
     if (f.program && !prior?.package.program) changes.push("新增隔离后台程序");
@@ -670,7 +755,7 @@ export class StudioPackages {
       [id, this.p.vault.seal({})],
     );
     await sql.query(
-      "UPDATE studio_packages SET installed=false,removing=false,previous_version=NULL,update_url=NULL,update_auth=NULL,update_info=NULL WHERE id=$1",
+      "UPDATE studio_packages SET installed=false,removing=false,page_values='{}',previous_version=NULL,update_url=NULL,update_auth=NULL,update_info=NULL WHERE id=$1",
       [id],
     );
   }
