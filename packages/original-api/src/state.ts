@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import type { Platform } from "../../platform/src/platform.js";
 import { one, type Sql } from "../../platform/src/db.js";
 import { requireValue } from "../../platform/src/security.js";
-import { studioPluginProfile } from "../../platform/src/studio-plugin-profile.js";
+import { studioPluginProfile, pairedPluginAvailable } from "../../platform/src/studio-plugin-profile.js";
 import { StudioCatalog } from "../../platform/src/catalog.js";
 import { QueueForecasts } from "../../platform/src/queue-snapshot.js";
 import { elapsedDetail, type Run } from "../../platform/src/timing-math.js";
@@ -78,6 +78,9 @@ export class OriginalState {
               stamp,
               settings.image_enabled,
             );
+          const nodePage = actor.role === "admin" ? await one(sql,`SELECT p.id,p.version,p.enabled,(SELECT count(*)::int FROM jobs j WHERE j.plugin_id=p.id AND j.state NOT IN ('completed','failed','cancelled')) AS pending,r.package->'settingsPage'->>'title' AS title FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+            JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
+            WHERE p.installed AND v.manifest->>'mode'='pull' AND r.package ? 'settingsPage' LIMIT 1`) : null;
           const spaces = await identity.spaces(sql, actor);
           const out: Record<string, any> = {
             ...(plugins.profile ? { studio_plugins: true } : {}),
@@ -99,7 +102,8 @@ export class OriginalState {
               plugins.byModel,
             ),
             assets: await records.assets(sql, workspace.id),
-            nodes: await records.nodes(sql, actor, stamp),
+            nodes: actor.role === "admin" && await pairedPluginAvailable(sql) ? await records.nodes(sql, actor, stamp) : [],
+            gpu_node_settings: nodePage ?? null,
             ...plugins.fields,
             video_models: Object.fromEntries(
               Object.entries(models)
@@ -112,6 +116,14 @@ export class OriginalState {
                 .map(([id, s]) => [id, s.label]),
             ),
             model_catalog: models,
+            model_forms: Object.fromEntries(
+              (
+                await sql.query(
+                  `SELECT c.id, f.forms->c.id AS form FROM studio_catalog c
+               JOIN plugin_model_forms f ON f.plugin_id=c.plugin_id AND f.plugin_version=c.plugin_version`,
+                )
+              ).rows.map((r) => [r.id, r.form]),
+            ),
             model_groups: await catalog.groups(sql),
             model_policy: await catalog.policy(sql),
             model_access: await catalog.effective(sql, workspace.id),
@@ -161,6 +173,7 @@ export class OriginalState {
               credit_accounts: await credits.accountRows(sql),
             });
           }
+          if(actor.role!=="admin")for(const job of out.jobs)job.node=null;
           return out;
         });
       } catch (error: any) {
@@ -175,7 +188,7 @@ export class OriginalState {
   ) {
     const rows = (
       await sql.query(
-        `SELECT DISTINCT v.id,v.version,v.manifest FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE v.manifest->'originalState' IS NOT NULL`,
+        `SELECT DISTINCT v.id,v.version,v.manifest FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE v.manifest->'originalState' IS NOT NULL AND NOT EXISTS(SELECT 1 FROM studio_packages p WHERE p.id=v.id AND NOT p.installed)`,
       )
     ).rows;
     const fields: Record<string, unknown> = {},
@@ -187,11 +200,11 @@ export class OriginalState {
       requireValue(adapter, 503, "原状态插件尚未安装");
       const connections = (
         await sql.query(
-          "SELECT * FROM connections WHERE plugin_id=$1 AND plugin_version=$2 ORDER BY id",
+          "SELECT * FROM connections WHERE plugin_id=$1 AND plugin_version=$2 AND NOT removed ORDER BY enabled DESC,id",
           [v.id, v.version],
         )
       ).rows;
-      requireValue(connections.length <= 1, 503, "原状态提供方连接存在歧义");
+      requireValue(connections.length <= 1 || await one(sql,"SELECT id FROM studio_packages WHERE id=$1 AND installed",[v.id]), 503, "原状态提供方连接存在歧义");
       const connection = connections[0];
       const configured = connection
         ? adapter.configured(this.p.vault.open(connection.config))
@@ -307,7 +320,7 @@ export class OriginalState {
       await sql.query(`SELECT j.*,u.public_id AS owner_public_id,w.public_id AS workspace_public_id,
       COALESCE(NULLIF(u.nickname,''),u.name) AS author,n.public_id AS node_public_id,
       studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id) AS allowed,
-      v.endpoint IS NOT NULL AND v.manifest->'originalSubmission'->>'version'='2' AS remote_studio
+      v.manifest->'originalSubmission'->>'version' IN ('2','3') AS remote_studio
       FROM jobs j JOIN users u ON u.id=j.owner_id JOIN workspaces w ON w.id=j.workspace_id JOIN models m ON m.id=j.model_id
       JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
       LEFT JOIN gpu_nodes n ON n.id::text=j.remote_id
@@ -395,6 +408,9 @@ export class OriginalState {
       );
       const view = {
         ...Object.fromEntries(fields.map((k) => [k, j.original_view[k]])),
+        ...(j.remote_studio && j.original_view.params
+          ? { params: j.original_view.params }
+          : {}),
         actual: j.original_view.actual || {},
         ...Object.fromEntries(
           Object.entries(projection).filter(([, v]) => v !== undefined),

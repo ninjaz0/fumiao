@@ -1,3 +1,4 @@
+import { hasStudioPackages } from "./studio-plugin-profile.js";
 import type { Database, Sql } from "./db.js";
 import { one } from "./db.js";
 import { requireValue } from "./security.js";
@@ -34,7 +35,13 @@ export async function registerStudioModels(
     );
     if (existing) {
       requireValue(
-        existing.plugin_id === manifest.id,
+        existing.plugin_id === manifest.id ||
+          ((await hasStudioPackages(sql)) &&
+            (await one(
+              sql,
+              "SELECT 1 FROM studio_shared_models WHERE model_id=$1 AND plugin_id=$2",
+              [model.id, manifest.id],
+            ))),
         409,
         "公开模型编号已由其他插件注册",
       );
@@ -98,7 +105,7 @@ export async function registerStudioModels(
 export class StudioCatalog {
   constructor(readonly db: Database) {}
   /** Explicit activation changes future submissions; accepted jobs keep immutable snapshots. */
-  async activate(sql: Sql, manifest: Manifest) {
+  async activate(sql: Sql, manifest: Manifest, retireMissing = false) {
     await sql.query("SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))");
     await sql.query("SELECT * FROM studio_policy FOR UPDATE");
     const existing = (
@@ -109,7 +116,8 @@ export class StudioCatalog {
     ).rows;
     const specs = manifest.models.filter((m) => m.studio);
     requireValue(
-      existing.every((row) => specs.some((m) => m.id === row.id)),
+      retireMissing ||
+        existing.every((row) => specs.some((m) => m.id === row.id)),
       409,
       "目录升级必须保留已有模型编号；停用模型请标记隐藏",
     );
@@ -119,9 +127,28 @@ export class StudioCatalog {
     )
       return;
     const disabled: Record<string, boolean> = Object.create(null);
+    if (retireMissing)
+      for (const row of existing.filter(
+        (r) => !specs.some((m) => m.id === r.id),
+      )) {
+        disabled[row.id] = false;
+        await sql.query("UPDATE studio_catalog SET hidden=true WHERE id=$1", [
+          row.id,
+        ]);
+      }
     for (const model of specs) {
       const data = model.studio!,
         row = existing.find((r) => r.id === model.id);
+      if (
+        !row &&
+        retireMissing &&
+        (await one(
+          sql,
+          "SELECT 1 FROM studio_shared_models WHERE model_id=$1 AND plugin_id=$2",
+          [model.id, manifest.id],
+        ))
+      )
+        continue;
       requireValue(
         row && row.descriptor.kind === model.kind,
         409,
@@ -177,10 +204,19 @@ export class StudioCatalog {
     sql: Sql = this.db,
   ): Promise<Record<string, StudioModel["descriptor"] & { hidden: boolean }>> {
     const rows = (
-      await sql.query("SELECT * FROM studio_catalog ORDER BY position,id")
+      await sql.query(
+        `SELECT c.* FROM studio_catalog c ${(await hasStudioPackages(sql)) ? "WHERE NOT EXISTS(SELECT 1 FROM studio_packages p WHERE p.id=c.plugin_id AND NOT p.installed)" : ""} ORDER BY position,id`,
+      )
     ).rows;
     return Object.fromEntries(
-      rows.map((r) => [r.id, { ...r.descriptor, hidden: r.hidden }]),
+      rows.map((r) => [
+        r.id,
+        {
+          ...r.descriptor,
+          ...(r.display_label ? { label: r.display_label } : {}),
+          hidden: r.hidden,
+        },
+      ]),
     );
   }
   async groups(sql: Sql = this.db) {
@@ -235,7 +271,7 @@ export class StudioCatalog {
     return Object.fromEntries(
       (
         await sql.query(
-          "SELECT id,studio_model_allowed(id,$1) AS enabled FROM studio_catalog ORDER BY position,id",
+          `SELECT id,${(await hasStudioPackages(sql)) ? "studio_plugin_accepts(plugin_id) AND" : ""} studio_model_allowed(id,$1) AS enabled FROM studio_catalog ORDER BY position,id`,
           [wid],
         )
       ).rows.map((r) => [r.id, r.enabled]),
@@ -288,10 +324,10 @@ export class StudioCatalog {
     requireValue(
       Object.values(values).every(
         (v) =>
-          v === null || (Number.isSafeInteger(v) && v >= 1 && v <= 1000000000),
+          v === null || (Number.isSafeInteger(v) && v >= 0 && v <= 1000000000),
       ),
       400,
-      "价格需为正整数，留空表示尚未定价",
+      "价格需为非负整数，留空表示尚未定价",
     );
     for (const key of keys)
       await sql.query("UPDATE studio_prices SET amount=$2 WHERE key=$1", [
@@ -394,6 +430,12 @@ export class StudioCatalog {
     );
     requireValue(
       catalog &&
+        (!(await hasStudioPackages(sql)) ||
+          (
+            await one(sql, "SELECT studio_plugin_accepts($1) AS ok", [
+              catalog.plugin_id,
+            ])
+          ).ok) &&
         catalog.plugin_id === model.plugin_id &&
         catalog.plugin_version === model.plugin_version,
       409,

@@ -12,7 +12,6 @@ import {
 import type { Request, Response } from "express";
 import { sendFile } from "../../../packages/original-api/src/files.js";
 import { OriginalIdentity } from "../../../packages/original-api/src/identity.js";
-import { OriginalPairedAgent } from "../../../packages/original-api/src/paired-agent.js";
 import {
   type Field,
   type Fields,
@@ -164,13 +163,16 @@ async function resultBody(req: Request) {
 
 @Controller()
 export class OriginalAgentController {
-  private readonly agent: OriginalPairedAgent;
-  constructor(@Inject(OriginalIdentity) private identity: OriginalIdentity) {
-    this.agent = new OriginalPairedAgent(identity.p);
+  constructor(@Inject(OriginalIdentity) private identity: OriginalIdentity) {}
+  private async agent() {
+    const { Agent } = await this.identity.p.registry.nodeExtension(
+      this.identity.p.db,
+    );
+    return new Agent(this.identity.p);
   }
   @Post("agent/heartbeat")
   @HttpCode(200)
-  heartbeat(@Req() req: Request) {
+  async heartbeat(@Req() req: Request) {
     const { timing, ...beat } = req.body;
     // Heartbeat telemetry reports progress. Artifact-only fields travel in
     // X-Job-Timing and are checked by the job's installed plugin version.
@@ -185,20 +187,20 @@ export class OriginalAgentController {
             ),
         ),
       );
-    return this.agent.heartbeat(credentials(req), {
+    return (await this.agent()).heartbeat(credentials(req), {
       ...beat,
       timing: report,
     });
   }
   @Post("agent/claim")
   @HttpCode(200)
-  claim(@Req() req: Request) {
-    return this.agent.claim(credentials(req));
+  async claim(@Req() req: Request) {
+    return (await this.agent()).claim(credentials(req));
   }
   @Get("agent/jobs/:i/receipt")
-  receipt(@Req() req: Request, @Param("i") id: string) {
+  async receipt(@Req() req: Request, @Param("i") id: string) {
     const credential = credentials(req);
-    return this.agent.receipt(credential, pathId(id, "i"));
+    return (await this.agent()).receipt(credential, pathId(id, "i"));
   }
   @Get("agent/jobs/:i/ref/:key")
   async reference(
@@ -208,7 +210,9 @@ export class OriginalAgentController {
     @Res() res: Response,
   ) {
     const credential = credentials(req);
-    const asset = await this.agent.reference(credential, pathId(id, "i"), key);
+    const asset = await (
+      await this.agent()
+    ).reference(credential, pathId(id, "i"), key);
     const { storage } = this.identity.p;
     const mime = "application/octet-stream";
     if (storage.downloadUrl) {
@@ -231,17 +235,26 @@ export class OriginalAgentController {
   }
   @Post("agent/jobs/:i/error")
   @HttpCode(200)
-  error(@Req() req: Request, @Param("i") id: string) {
+  async error(@Req() req: Request, @Param("i") id: string) {
     const credential = credentials(req);
-    return this.agent.error(credential, pathId(id, "i"), req.body.detail);
+    return (await this.agent()).error(
+      credential,
+      pathId(id, "i"),
+      req.body.detail,
+    );
   }
   @Put("agent/jobs/:i/result")
-  complete(@Req() req: Request, @Param("i") id: string) {
+  async complete(@Req() req: Request, @Param("i") id: string) {
     const credential = credentials(req);
     const number = pathId(id, "i");
-    return this.agent.complete(credential, number, () => resultBody(req), {
-      sha256: header(req, "x-sha256"),
-      report: header(req, "x-job-timing"),
-    });
+    return (await this.agent()).complete(
+      credential,
+      number,
+      () => resultBody(req),
+      {
+        sha256: header(req, "x-sha256"),
+        report: header(req, "x-job-timing"),
+      },
+    );
   }
 }

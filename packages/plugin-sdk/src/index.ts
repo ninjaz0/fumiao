@@ -1,3 +1,4 @@
+import type { ModelForm } from "./model-form.js";
 import { z } from "zod";
 import {
   canvasPolicySchema,
@@ -143,6 +144,8 @@ export interface Input {
   references: { id: string; mime: string; url: string }[];
 }
 export interface Execution {
+  mapResult?: (raw: unknown) => unknown;
+  mappedRequest?: { path: string; body?: unknown };
   jobId: string;
   idempotencyKey: string;
   model: string;
@@ -171,6 +174,11 @@ export type Receipt =
     }
   | { state: "failed"; error: string };
 export interface ProviderPlugin {
+  inspectService?(
+    config: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<{ ready: boolean; models?: string[] }>;
+  modelForm?(model: ModelSpec): ModelForm;
   chatProvider?(config: Record<string, unknown>): string | undefined;
   chatConfigured?(config: Record<string, unknown>): boolean;
   chatConfigure?(
@@ -263,7 +271,7 @@ export const modelSchema = z.object({
           z.object({
             tier: z.string().min(1).max(100),
             label: z.string().min(1).max(200),
-            amount: z.number().int().min(1).max(1000000000).nullable(),
+            amount: z.number().int().min(0).max(1000000000).nullable(),
             match: z.record(z.string(), z.unknown()),
           }),
         )
@@ -318,6 +326,12 @@ export async function requestJson(
     path,
     String(execution.config.baseUrl).replace(/\/$/, "") + "/",
   );
+  if (
+    url.origin !== new URL(String(execution.config.baseUrl)).origin ||
+    url.username ||
+    url.password
+  )
+    throw new ProviderError("请求地址必须属于已配置的服务", "rejected");
   try {
     const response = await fetch(url, {
       method: body === undefined ? "GET" : "POST",
@@ -353,6 +367,45 @@ export async function requestJson(
   } catch (error) {
     if (error instanceof ProviderError) throw error;
     throw new ProviderError("提供方请求结果待确认", "uncertain");
+  }
+}
+export async function inspectModelList(
+  config: Record<string, unknown>,
+  signal: AbortSignal,
+) {
+  try {
+    const response = await fetch(
+      String(config.baseUrl).replace(/\/$/, "") + "/v1/models",
+      {
+        signal,
+        redirect: "error",
+        headers: { Authorization: "Bearer " + config.apiKey },
+      },
+    );
+    if (!response.ok) return { ready: false };
+    if (!response.body) return { ready: true };
+    const reader = response.body.getReader(),
+      chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > 256 * 1024) return { ready: true };
+        chunks.push(value);
+      }
+      const data = JSON.parse(Buffer.concat(chunks).toString("utf8")).data;
+      return Array.isArray(data) && data.every((m) => typeof m?.id === "string")
+        ? { ready: true, models: data.map((m) => String(m.id)) }
+        : { ready: true };
+    } catch {
+      return { ready: true };
+    } finally {
+      await reader.cancel();
+    }
+  } catch {
+    return { ready: false };
   }
 }
 export async function health(

@@ -10,11 +10,12 @@
 
 .settings-page.ledger-settings {
   container: settings-ledger / inline-size;
-  width: min(1220px, calc(100% - 40px));
+  width: calc(100% - 40px);
+  max-width: 1440px;
   margin: 8px auto 36px;
   padding: 0;
   color: var(--text);
-  background: var(--surface);
+  background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 20px;
 }
@@ -102,13 +103,15 @@
 }
 
 .ledger-settings .settings-content > :not(.invite-management) h2:first-child {
-  font-family: var(--ledger-serif);
-  font-size: 24px;
+  font: 700 26px/1.3 var(--ledger-serif);
+  letter-spacing: 0.04em;
 }
 
 .ledger-navigation {
   min-width: 0;
   padding: 17px 14px 22px;
+  border-bottom-left-radius: 20px;
+  background: var(--surface);
   border-right: 1px solid var(--line);
 }
 
@@ -159,8 +162,9 @@
 .ledger-settings .settings-navigation button.active {
   color: var(--text);
   font-weight: 600;
-  background: var(--selected);
+  background: var(--surface);
   border-color: var(--line);
+  box-shadow: 0 1px 2px var(--line);
 }
 
 .ledger-settings .settings-navigation button.active::before {
@@ -514,7 +518,7 @@
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--surface);
-  box-shadow: 0 8px 24px -20px var(--text);
+  box-shadow: 0 1px 3px var(--line);
 }
 
 .ledger-ticket:not([data-status="valid"]) {
@@ -538,7 +542,7 @@
   height: 15px;
   border: 1px solid var(--line);
   border-radius: 50%;
-  background: var(--surface);
+  background: var(--bg);
   content: "";
 }
 
@@ -556,12 +560,13 @@
   overflow-wrap: anywhere;
 }
 .ledger-ticket .invite-code-value {
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: start;
   gap: 7px;
 }
 
 .ledger-ticket .invite-code-value code {
-  font: 650 17px/1.4 var(--ledger-mono);
+  font: 650 clamp(17px, 2.3cqi, 19px) / 1.4 var(--ledger-mono);
   letter-spacing: 0.055em;
   overflow-wrap: anywhere;
 }
@@ -656,6 +661,142 @@
   color: var(--secondary);
 }
 
+/* Settings sections share the same surfaces as invitation tickets. */
+.ledger-settings :is(.ledger-card, .list-surface, .credit-summary > div) {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.ledger-card + .ledger-card,
+#price-form .ledger-card,
+.ledger-settings .model-group {
+  margin-top: 14px;
+}
+
+.ledger-card > .credit-heading,
+.ledger-card > .storage-total {
+  margin-top: 0;
+}
+
+.ledger-settings
+  :is(
+    .profile-field-row,
+    .price-row,
+    .credit-account-row,
+    .workspace-row,
+    .member-row,
+    .node-row
+  ):last-child {
+  border-bottom-width: 0;
+}
+.ledger-settings .model-group .setting-row:last-of-type {
+  border-bottom-width: 0;
+}
+
+.ledger-settings .profile-section {
+  max-width: none;
+}
+.ledger-profile-identity {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+.ledger-profile-identity .user-avatar {
+  width: 52px;
+  height: 52px;
+}
+.ledger-profile-identity small {
+  display: block;
+  color: var(--secondary);
+}
+.ledger-settings .profile-field-row {
+  grid-template-columns: minmax(44px, 0.28fr) minmax(0, 1fr) 80px;
+}
+.ledger-appearance .setting-label {
+  margin-bottom: 12px;
+  font-weight: 550;
+}
+.ledger-appearance .theme-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0;
+  background: transparent;
+}
+.ledger-appearance .theme-choices button {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 7px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--ledger-rule);
+  border-radius: 10px;
+}
+.ledger-appearance .theme-choices button.selected {
+  color: var(--text);
+  border-color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+.ledger-theme-swatch {
+  height: 52px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: linear-gradient(to right, #fff 38%, #f8f9fa 38%);
+}
+[data-value="dark"] .ledger-theme-swatch {
+  background: linear-gradient(to right, #1e1e1e 38%, #111 38%);
+}
+.ledger-settings .credit-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 0;
+  border: 0;
+}
+.ledger-settings .credit-summary strong {
+  font-family: var(--ledger-serif);
+  overflow-wrap: anywhere;
+}
+.ledger-settings .recharge-info {
+  margin-block: 14px;
+}
+@container settings-content (max-width: 420px) {
+  .ledger-settings :is(.ledger-card, .list-surface) {
+    padding: 12px;
+  }
+  .ledger-settings .credit-summary {
+    grid-template-columns: 1fr;
+  }
+  .ledger-settings .credit-account-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .ledger-settings .profile-field-row {
+    gap: 6px;
+  }
+  .ledger-profile-identity {
+    gap: 8px;
+  }
+  .ledger-invite-heading > .ledger-primary {
+    width: 100%;
+  }
+  .ledger-tally {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ledger-tally > div:last-child {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px dashed var(--ledger-rule);
+  }
+}
 @container settings-ledger (max-width: 760px) {
   .ledger-settings .settings-title {
     padding: 20px 22px 15px;
@@ -682,6 +823,7 @@
     padding: 17px 14px 24px;
   }
   .ledger-navigation {
+    border-radius: 0;
     padding: 10px 14px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
@@ -712,10 +854,18 @@
 }
 
 @container settings-content (max-width: 590px) {
+  .ledger-ticket-details {
+    position: static;
+  }
+  .ledger-facts {
+    padding-right: 0;
+  }
   .invite-code-row.ledger-ticket {
+    position: relative;
     grid-template-columns: minmax(0, 1fr);
   }
   .ledger-ticket-stub {
+    padding-right: 78px;
     border-right: 0;
     border-bottom: 1px dashed var(--ledger-rule);
   }

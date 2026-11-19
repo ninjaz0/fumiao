@@ -1,4 +1,11 @@
 import { resolve as resolveFlow } from "../canvas-editor/flowPicker";
+import {
+  formError,
+  matches,
+  normalizeForm,
+  type FormValues,
+  type ModelForm,
+} from "../../../packages/plugin-sdk/src/model-form";
 
 export type Member = {
   id: number;
@@ -69,6 +76,7 @@ export type GpuNode = {
   detail: string;
 };
 export type Job = {
+  params?: FormValues;
   id: number;
   author: string;
   owner: number;
@@ -126,6 +134,8 @@ export type Job = {
 };
 export type StudioState = {
   studio_plugins?: boolean;
+  gpu_node_settings?: {id:string;version:string;title:string;enabled:boolean;pending:number}|null;
+  model_forms: Record<string, ModelForm>;
   me: Member;
   avatars: { id: string; label: string; url: string }[];
   workspaces: Space[];
@@ -220,6 +230,7 @@ const initialDraft = {
   resolution: "1K",
 };
 export type Draft = typeof initialDraft & {
+  params?: FormValues;
   h3?: H3Options;
   packs?: Pack[];
   flowSourceJob?: number | null;
@@ -276,15 +287,11 @@ export function readDraft(state: StudioState): DraftSession {
     saved = JSON.parse(sessionStorage.getItem(key) ?? "null");
   } catch {}
   const draft = { ...initialDraft, ...saved?.draft };
-  if (saved?.draft) {
+  if (saved?.draft && !state.studio_plugins) {
     if (!["image", "audio"].includes(draft.kind)) draft.kind = "video";
     if (!state.images.models[draft.model])
       draft.model = state.images.default_model;
     if (!state.video_models[draft.videoModel]) draft.videoModel = H3;
-    if (!["low", "medium", "high"].includes(draft.imageQuality))
-      draft.imageQuality = "medium";
-    if (!state.ratios.includes(draft.ratio)) draft.ratio = "16:9";
-    if (!["480", "768"].includes(String(draft.quality))) draft.quality = "480";
   }
   return {
     parent: null,
@@ -294,7 +301,7 @@ export function readDraft(state: StudioState): DraftSession {
     refs: (saved?.refs || []).filter((id) =>
       state.assets.some((asset) => asset.id === id),
     ),
-    draft: saved?.draft ? normalizeParams(state, draft) : draft,
+    draft: saved?.draft && state.studio_plugins && !modelAvailable(state,selectedModel(draft)) ? draft : normalizeParams(state, saved?.draft ? draft : ensureModel(state,draft)),
     submitId: saved?.submitId || crypto.randomUUID(),
   };
 }
@@ -308,10 +315,9 @@ export const selectedModel = (draft: Draft) =>
     : draft.kind === "audio"
       ? draft.audioModel
       : draft.videoModel) || "";
-export const isH3 = (draft: Draft) =>
-  draft.kind === "video" && selectedModel(draft) === H3;
-export const isMuseDraft = (draft: Draft) =>
-  ["muse-image", "muse-video"].includes(selectedModel(draft));
+export const isH3 = (draft: Draft) => draft.kind === "video" && !!draft.h3;
+export const modelForm = (state: StudioState, draft: Draft) =>
+  state.model_forms?.[selectedModel(draft)];
 export const promptLimit = (draft: Draft) =>
   draft.kind === "audio" ? 300 : 12000;
 export const imageQualityLabels = { low: "草稿", medium: "标准", high: "高清" };
@@ -337,7 +343,6 @@ export function chooseModel(draft: Draft, model: string): Draft {
   return {
     ...draft,
     videoModel: model,
-    seconds: model === "muse-video" ? "6" : draft.seconds,
   };
 }
 export function ensureModel(state: StudioState, draft: Draft) {
@@ -351,29 +356,38 @@ export function ensureModel(state: StudioState, draft: Draft) {
     return draft;
   return normalizeParams(state, chooseModel(draft, models[0] || ""));
 }
-export function standardSteps(value?: number) {
-  const steps = Number(value);
-  return [16, 20, 32, 50].includes(steps) ? steps : 20;
+export function standardSteps(form: ModelForm | undefined, value?: number) {
+  const field = form?.fields.sampling_steps;
+  return value !== form?.fastSteps && field?.enum?.includes(Number(value))
+    ? Number(value)
+    : Number(field?.default ?? 20);
 }
-function effectiveSteps(draft: Pick<Draft, "sampling_steps" | "fast_mode">) {
-  return draft.fast_mode || Number(draft.sampling_steps) === 4
-    ? 4
-    : standardSteps(draft.sampling_steps);
+function effectiveSteps(
+  form: ModelForm | undefined,
+  draft: Pick<Draft, "sampling_steps" | "fast_mode">,
+) {
+  return form?.fastSteps &&
+    (draft.fast_mode || Number(draft.sampling_steps) === form.fastSteps)
+    ? form.fastSteps
+    : standardSteps(form, draft.sampling_steps);
 }
-export function videoDurations(draft: Draft) {
-  return isMuseDraft(draft) ? ["5", "6", "8", "10"] : ["5", "10", "15"];
-}
-export function ratiosFor(state: StudioState, draft: Draft) {
-  if (!isMuseDraft(draft)) return state.ratios;
-  return draft.kind === "image"
-    ? ["1:1", "16:9", "9:16", "4:3", "3:4"]
-    : ["16:9", "9:16"];
+export function draftValues(draft: Draft): FormValues {
+  return {
+    ratio: draft.ratio,
+    resolution: draft.resolution,
+    image_quality: draft.imageQuality,
+    quality: Number(draft.quality),
+    seconds: Number(draft.seconds),
+  };
 }
 export function normalizeParams(state: StudioState, draft: Draft): Draft {
+  const form = modelForm(state, draft);
   const flow = flowSpec(state, selectedModel(draft));
   if (flow) {
     return {
       ...draft,
+      h3: undefined,
+      params: undefined,
       ratio: flow.ratio || draft.ratio,
       seconds: String(flow.seconds ?? draft.seconds),
       resolution: flow.resolution === "原生" ? "1K" : flow.resolution || "1K",
@@ -384,30 +398,28 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
       flowSourceJob: flow.mode === "extend" ? draft.flowSourceJob : null,
     };
   }
-  const next = {
+  const values = form
+    ? normalizeForm(form, { ...draftValues(draft), ...draft.params })
+    : {};
+  return {
     ...draft,
+    h3: form?.referenceModes ? h3Options(draft.h3) : undefined,
     flowSourceJob: null,
-    resolution: ["1K", "2K"].includes(draft.resolution)
-      ? draft.resolution
-      : "1K",
-    fast_mode: draft.fast_mode === true || Number(draft.sampling_steps) === 4,
-    sampling_steps: standardSteps(draft.sampling_steps),
+    params: form?.parameterObject ? values : undefined,
+    ratio: String(values.ratio ?? draft.ratio),
+    quality: String(values.quality ?? draft.quality),
+    seconds: String(values.seconds ?? draft.seconds),
+    resolution: String(values.resolution ?? draft.resolution),
+    imageQuality: String(values.image_quality ?? draft.imageQuality),
+    fast_mode:
+      !!form?.fastSteps &&
+      (draft.fast_mode || draft.sampling_steps === form.fastSteps),
+    sampling_steps: standardSteps(form, draft.sampling_steps),
+    seed:
+      Number(draft.seed) > (form?.fields.seed?.maximum ?? Infinity)
+        ? ""
+        : draft.seed,
   };
-  if (draft.kind === "audio")
-    return { ...next, seed: Number(draft.seed) > 4294967295 ? "" : draft.seed };
-  if (!ratiosFor(state, draft).includes(draft.ratio)) next.ratio = "16:9";
-  if (!isMuseDraft(draft)) {
-    if (!["480", "768"].includes(String(draft.quality))) next.quality = "480";
-    if (!["low", "medium", "high"].includes(draft.imageQuality))
-      next.imageQuality = "medium";
-  }
-  if (
-    draft.kind === "video" &&
-    !videoDurations(draft).includes(String(draft.seconds))
-  ) {
-    next.seconds = isMuseDraft(draft) ? "6" : "5";
-  }
-  return next;
 }
 export function changeFlow(
   state: StudioState,
@@ -617,11 +629,14 @@ export function checkImages(
   )
     throw new Error("图片已移除或不在当前空间，请重新选择");
   const combined = [...new Set([...existing, ...images])];
+  const limits = modelForm(state, session.draft)?.references;
+  const pictures = limits?.counts?.image ?? limits?.max ?? 0;
   if (
-    combined.filter((id) => referenceType(state, id) === "Picture").length > 9
+    combined.filter((id) => referenceType(state, id) === "Picture").length >
+    pictures
   )
-    throw new Error("最多选择 9 张参考图片，请先移除部分图片");
-  if (combined.length > (isH3(session.draft) ? 12 : 9))
+    throw new Error(`最多选择 ${pictures} 张参考图片，请先移除部分图片`);
+  if (combined.length > (modelForm(state, session.draft)?.references.max ?? 0))
     throw new Error("参考素材已达上限，请先移除部分素材");
   return images.filter((id) => !existing.includes(id));
 }
@@ -646,8 +661,23 @@ export function referenceIssue(
   const keys = job ? job.refs : packReferences(session);
   const kind = job?.kind || draft.kind;
   const model = job ? job.model : selectedModel(draft);
+  const form = state.model_forms?.[model];
+  if (form?.parameterObject) {
+    const issue = formError(
+      form,
+      job ? normalizeForm(form, savedParameters(job)) : (draft.params ?? {}),
+    );
+    if (issue) return issue;
+  }
   if (kind === "audio") return "";
-  if (model !== H3) {
+  if (!state.model_forms?.[model]?.referenceModes) {
+    const limits = state.model_forms?.[model]?.references;
+    if (
+      limits &&
+      !flowSpec(state, model) &&
+      (keys.length < limits.min || keys.length > limits.max)
+    )
+      return `这个模型需要 ${limits.min}–${limits.max} 张参考图片`;
     return keys.some((id) => referenceType(state, id) !== "Picture")
       ? "这个模型只接收图片，请移除视频和音频参考"
       : "";
@@ -660,11 +690,13 @@ export function referenceIssue(
     )
       ? "请使用比例相同的首尾帧图片"
       : "";
-  if (keys.length > 12) return "最多选择 12 个参考素材";
+  if (keys.length > form.references.max)
+    return `最多选择 ${form.references.max} 个参考素材`;
+  const counts = form.references.counts!;
   for (const [type, max, label] of [
-    ["Picture", 9, "图片"],
-    ["Video", 3, "视频"],
-    ["Audio", 3, "音频"],
+    ["Picture", counts.image, "图片"],
+    ["Video", counts.video, "视频"],
+    ["Audio", counts.audio, "音频"],
   ] as const) {
     const files = keys
       .filter((id) => referenceType(state, id) === type)
@@ -672,9 +704,10 @@ export function referenceIssue(
     if (files.length > max) return `最多选择 ${max} 个${label}参考`;
     if (
       type !== "Picture" &&
-      files.reduce((total, asset) => total + (asset?.seconds || 0), 0) > 15.05
+      files.reduce((total, asset) => total + (asset?.seconds || 0), 0) >
+        form.references.maxSeconds! + 0.05
     )
-      return `参考${label}总时长不能超过 15 秒`;
+      return `参考${label}总时长不能超过 ${form.references.maxSeconds} 秒`;
     if (
       type === "Video" &&
       files.some(
@@ -706,7 +739,7 @@ export function flowIssue(
     : "";
 }
 
-export function estimateBody(session: DraftSession) {
+export function estimateBody(state: StudioState, session: DraftSession) {
   const { draft } = session;
   const audio = draft.kind === "audio";
   return {
@@ -715,7 +748,9 @@ export function estimateBody(session: DraftSession) {
     ratio: draft.ratio,
     quality: Number(draft.quality),
     seconds: Number(draft.seconds),
-    sampling_steps: isH3(draft) ? effectiveSteps(draft) : 20,
+    sampling_steps: isH3(draft)
+      ? effectiveSteps(modelForm(state, draft), draft)
+      : 20,
     resolution: draft.resolution,
     image_quality: draft.imageQuality,
     refs: audio ? [] : packReferences(session),
@@ -730,6 +765,19 @@ export function estimateBody(session: DraftSession) {
   };
 }
 
+function savedParameters(job: Job): FormValues {
+  return (
+    job.params ?? {
+      ratio: job.ratio,
+      seconds: job.seconds,
+      quality: job.quality,
+      resolution: job.quality === 2048 ? "2K" : "1K",
+      image_quality: job.image_quality ?? "medium",
+      instruction: job.audio_settings?.instruction ?? "",
+      ...(job.seed == null ? {} : { seed: job.seed }),
+    }
+  );
+}
 export function loadJob(
   state: StudioState,
   session: DraftSession,
@@ -739,7 +787,11 @@ export function loadJob(
   const audio = job.kind === "audio";
   const draft = normalizeParams(state, {
     ...initialDraft,
-    h3: job.kind === "video" && job.model === H3 ? jobH3(job) : undefined,
+    params: savedParameters(job),
+    h3:
+      job.kind === "video" && state.model_forms?.[job.model]?.referenceModes
+        ? jobH3(job)
+        : undefined,
     flowSourceJob: job.actual?.flow_source_job || null,
     audioModel: audio ? job.model : initialDraft.audioModel,
     voiceDescription: job.audio_settings?.instruction || "",
@@ -752,18 +804,21 @@ export function loadJob(
     ratio: job.ratio,
     quality: image ? "480" : String(job.quality),
     seconds: image ? "5" : String(job.seconds),
-    sampling_steps: standardSteps(job.sampling_steps),
-    fast_mode: Number(job.sampling_steps) === 4,
+    sampling_steps: standardSteps(
+      state.model_forms?.[job.model],
+      job.sampling_steps,
+    ),
+    fast_mode:
+      Number(job.sampling_steps) === state.model_forms?.[job.model]?.fastSteps,
   });
   return {
     ...session,
     draft: ensureModel(state, draft),
     refs: [...job.refs],
     parent: job.id,
-    retainedSeed:
-      image || isMuseDraft(draft) || flowSpec(state, job.model)
-        ? null
-        : (job.seed ?? null),
+    retainedSeed: !state.model_forms?.[job.model]?.fields.seed
+      ? null
+      : (job.seed ?? null),
   };
 }
 export function generationRequest(
@@ -783,6 +838,35 @@ export function generationRequest(
     uid: retryId ?? submitId,
     price_revision: state.pricing?.revision,
   };
+  if (state.model_forms?.[model]?.parameterObject) {
+    return {
+      kind,
+      path:
+        kind === "video"
+          ? "/api/jobs"
+          : kind === "image"
+            ? "/api/image-jobs"
+            : "/api/audio-jobs",
+      body: {
+        ...common,
+        model,
+        params: job
+          ? normalizeForm(state.model_forms?.[model], savedParameters(job))
+          : (draft.params ?? {}),
+        ...(kind === "audio"
+          ? {}
+          : {
+              refs: job?.refs ?? refs,
+              asset_packs: job
+                ? []
+                : (draft.packs ?? []).map(({ id, revision }) => ({
+                    id,
+                    revision,
+                  })),
+            }),
+      },
+    };
+  }
   const seed = job || draft.seed === "" ? null : Number(draft.seed);
   if (kind === "audio")
     return {
@@ -836,18 +920,19 @@ export function generationRequest(
       ratio: job?.ratio ?? draft.ratio,
       quality: job?.quality ?? Number(draft.quality),
       seconds: job?.seconds ?? Number(draft.seconds),
-      sampling_steps:
-        model === H3
-          ? job
-            ? effectiveSteps({
-                sampling_steps: job.sampling_steps ?? 20,
-                fast_mode: false,
-              })
-            : effectiveSteps(draft)
-          : 20,
+      sampling_steps: state.model_forms?.[model]?.referenceModes
+        ? job
+          ? effectiveSteps(state.model_forms?.[model], {
+              sampling_steps: job.sampling_steps ?? 20,
+              fast_mode: false,
+            })
+          : effectiveSteps(state.model_forms?.[model], draft)
+        : 20,
       flow_source_job:
         (job ? job.actual?.flow_source_job : draft.flowSourceJob) || null,
-      ...(model === H3 ? { h3: job ? jobH3(job) : h3Options(h3) } : {}),
+      ...(state.model_forms?.[model]?.referenceModes
+        ? { h3: job ? jobH3(job) : h3Options(h3) }
+        : {}),
     },
   };
 }
@@ -856,19 +941,17 @@ export const resultTab = (kind: Job["kind"]) =>
 
 export function quote(state: StudioState, draft: Draft) {
   const model = selectedModel(draft);
-  const tier =
-    flowSpec(state, model) || model === "muse-image"
-      ? "native"
-      : draft.kind === "audio"
-        ? "standard"
-        : model === "muse-video"
-          ? String(draft.seconds)
-          : draft.kind === "image"
-            ? `${draft.resolution}|${draft.imageQuality}`
-            : `${draft.quality}|${draft.seconds}`;
+  const form = state.model_forms?.[model];
+  const values = form?.parameterObject
+    ? (draft.params ?? {})
+    : draftValues(draft);
+  const tiers = form?.tiers.filter((t) => matches(t.when, values));
+  const tier = tiers?.length === 1 ? tiers[0].tier : undefined;
   const amount =
-    state.pricing?.items.find(({ key }) => key === `${model}|${tier}`)
-      ?.amount ?? undefined;
+    tier === undefined
+      ? undefined
+      : (state.pricing?.items.find(({ key }) => key === `${model}|${tier}`)
+          ?.amount ?? undefined);
   const available = state.credits?.available || 0;
   return {
     amount,

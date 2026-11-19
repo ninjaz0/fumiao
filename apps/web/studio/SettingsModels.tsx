@@ -177,7 +177,7 @@ export function ModelSettings({
         return (
           <section
             key={kind}
-            className="model-group"
+            className="model-group ledger-card"
             hidden={rows.every(({ hidden }) => hidden)}
           >
             <h3>{title}</h3>

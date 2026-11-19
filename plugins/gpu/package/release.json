@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "id": "gpu",
+  "label": "GPU 节点",
+  "version": "1.0.0",
+  "adapterVersion": "1.11.0",
+  "updateUrl": "https://raw.githubusercontent.com/ninjaz0/fumiao/main/plugins/gpu/update.json"
+}

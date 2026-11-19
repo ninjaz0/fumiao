@@ -1,3 +1,5 @@
+import {StudioPackages} from "../../../packages/platform/src/studio-packages.js";
+import { StudioUpdates } from "../../../packages/platform/src/studio-updates.js";
 import { StoryboardQueue } from "../../../packages/original-api/src/storyboard-queue.js";
 import { OriginalStoryboardExports } from "../../../packages/original-api/src/storyboard-exports.js";
 import { Queue, Worker } from "bullmq";
@@ -45,6 +47,7 @@ async function dispatch() {
   running = true;
   try {
     await executor.recover();
+    await new StudioPackages(p).finishRemovals();
     const rows = await executor.queueReady();
     for (const row of rows) {
       await queue.add(
@@ -78,12 +81,14 @@ const pollHealth = async () => {
 };
 const healthTimer = setInterval(() => void pollHealth(), 15000);
 void pollHealth();
+const updateTimer=setInterval(()=>void new StudioUpdates(p).due().catch(()=>console.error("Plugin update check unavailable")),60000);
 await dispatch();
 for (const event of ["SIGTERM", "SIGINT"])
   process.on(event, () => {
     stopping = true;
     clearInterval(timer);
     clearInterval(healthTimer);
+    clearInterval(updateTimer);
     void Promise.all([
       worker.close(),
       chatQueue.close(),

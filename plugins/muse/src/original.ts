@@ -1,3 +1,4 @@
+import { studioRatios, studioSeconds } from "./studio.js";
 import { museClock } from "./clock.js";
 import {
   OriginalSubmissionError,
@@ -38,11 +39,9 @@ export function createMuseOriginal(
           fail("该模型不支持这个分辨率");
         if (!strip(d.prompt)) fail("请检查 Muse 模型和提示词");
         const ratios =
-          d.kind === "image"
-            ? ["1:1", "16:9", "9:16", "4:3", "3:4"]
-            : ["16:9", "9:16"];
+          d.kind === "image" ? studioRatios.image : studioRatios.video;
         if (!ratios.includes(d.ratio)) fail("Muse 不支持这个画幅选项");
-        if (d.kind === "video" && ![5, 6, 8, 10].includes(d.seconds))
+        if (d.kind === "video" && !studioSeconds.includes(d.seconds))
           fail("Muse 时长可选 5、6、8、10 秒");
       },
       plan: (d) => ({

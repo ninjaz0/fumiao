@@ -1,3 +1,4 @@
+import { studioRatios, studioSeconds } from "./studio.js";
 import { museLifecycle } from "./lifecycle.js";
 import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
 export const museCanvas: ProviderPlugin = {
@@ -19,7 +20,7 @@ export const museCanvas: ProviderPlugin = {
           model: "muse-image",
           kind: "image",
           ratios: {
-            values: ["1:1", "16:9", "9:16", "4:3", "3:4"],
+            values: studioRatios.image,
             error: "Muse 画幅选项无效",
           },
         },
@@ -27,8 +28,8 @@ export const museCanvas: ProviderPlugin = {
           model: "muse-video",
           kind: "video",
           templatePriority: 1,
-          ratios: { values: ["16:9", "9:16"], error: "Muse 画幅选项无效" },
-          durations: { values: [5, 6, 8, 10], error: "Muse 时长选项无效" },
+          ratios: { values: studioRatios.video, error: "Muse 画幅选项无效" },
+          durations: { values: studioSeconds, error: "Muse 时长选项无效" },
         },
       ],
     },

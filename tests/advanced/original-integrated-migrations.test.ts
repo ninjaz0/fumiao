@@ -648,7 +648,7 @@ test("PostgreSQL contribution cutover preserves settled history and quarantines 
       assert.deepEqual(await rows(table), value, table);
     assert.deepEqual(
       await one(f.db, "SELECT * FROM jobs WHERE id=$1", [settled]),
-      settledBefore,
+      { ...settledBefore, package_version: null, studio_client_uid: null },
     );
     const ordinary = await one(f.db, "SELECT * FROM gpu_nodes WHERE id=$1", [
       paired,

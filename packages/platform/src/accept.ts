@@ -1,3 +1,4 @@
+import { hasStudioPackages } from "./studio-plugin-profile.js";
 import { randomUUID } from "node:crypto";
 import type { Platform, Actor } from "./platform.js";
 import { one, type Sql } from "./db.js";
@@ -22,6 +23,29 @@ export async function acceptTask(
   quote: { amount: number; key: string | null; revision: number | null },
   snapshots: unknown[] = [],
 ) {
+  const installation =
+    (await hasStudioPackages(sql)) &&
+    (await one(
+      sql,
+      "SELECT installed,enabled,version FROM studio_packages WHERE id=$1 FOR SHARE",
+      [model.plugin_id],
+    ));
+  requireValue(
+    !installation || (installation.installed && installation.enabled),
+    409,
+    "插件已停用",
+  );
+  requireValue(
+    !installation ||
+      (
+        await one(sql, "SELECT studio_service_selected($1,$2) AS ok", [
+          model.catalog_id,
+          model.connection_id,
+        ])
+      ).ok,
+    409,
+    "模型服务已切换",
+  );
   const heldWallet = await one(
     sql,
     "UPDATE wallets SET held=held+$2 WHERE workspace_id=$1 AND balance-held>=$2 RETURNING balance,held",
@@ -60,6 +84,11 @@ export async function acceptTask(
       JSON.stringify(snapshots),
     ],
   );
+  if (installation)
+    await sql.query("UPDATE jobs SET package_version=$2 WHERE id=$1", [
+      id,
+      installation.version,
+    ]);
   await sql.query(
     "INSERT INTO ledger(id,workspace_id,job_id,key,action,amount,actor_id,balance_snapshot,held_snapshot) VALUES($1,$2,$3,$4,'hold',$5,$6,$7,$8)",
     [

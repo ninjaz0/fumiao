@@ -40,8 +40,7 @@ export class OriginalEstimates {
             sql,
             `SELECT c.id FROM studio_catalog c
           JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
-          WHERE c.id=$1 AND c.descriptor->>'kind'=$2 AND v.endpoint IS NOT NULL
-            AND v.manifest->'originalSubmission'->>'version'='2'`,
+          WHERE c.id=$1 AND c.descriptor->>'kind'=$2 AND v.manifest->'originalSubmission'->>'version' IN ('2','3')`,
             [draft.model, draft.kind],
           ))
         ) {
@@ -154,7 +153,7 @@ export class OriginalEstimates {
         );
         const connections = (
           await sql.query(
-            `SELECT c.id,c.plugin_id,c.plugin_version,c.enabled,c.revision,c.queue_health,c.queue_health_revision,COALESCE(p.enabled,true) AS allowed FROM connections c JOIN models m ON m.connection_id=c.id LEFT JOIN model_permissions p ON p.model_id=m.id AND p.workspace_id=$2 WHERE m.catalog_id=$1 AND c.plugin_id=$3 AND c.plugin_version=$4 ORDER BY c.id`,
+            `SELECT c.id,c.plugin_id,c.plugin_version,c.enabled,c.revision,c.queue_health,c.queue_health_revision,COALESCE(p.enabled,true) AS allowed FROM connections c JOIN models m ON m.connection_id=c.id LEFT JOIN model_permissions p ON p.model_id=m.id AND p.workspace_id=$2 WHERE m.catalog_id=$1 AND studio_service_selected(m.catalog_id,c.id) AND c.plugin_id=$3 AND c.plugin_version=$4 ORDER BY c.id`,
             [
               prepared.model,
               workspace.id,

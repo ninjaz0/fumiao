@@ -1,3 +1,4 @@
+import { referenceLimits } from "./reference-limits.js";
 import { randomBytes } from "node:crypto";
 import {
   InputPreparationError,
@@ -96,11 +97,8 @@ export function prepareNative(
     }
     return item;
   });
-  for (const [kind, limit] of [
-    ["image", 9],
-    ["video", 3],
-    ["audio", 3],
-  ] as const) {
+  for (const kind of ["image", "video", "audio"] as const) {
+    const limit = referenceLimits.counts[kind];
     const selected = files.filter((f) => f.kind === kind);
     if (selected.length > limit)
       fail(
@@ -112,8 +110,15 @@ export function prepareNative(
       );
     if (
       kind !== "image" &&
-      (selected.some((f) => !(f.seconds >= 1.99 && f.seconds <= 15.05)) ||
-        selected.reduce((sum, f) => sum + f.seconds, 0) > 15.05)
+      (selected.some(
+        (f) =>
+          !(
+            f.seconds >= referenceLimits.minSeconds - 0.01 &&
+            f.seconds <= referenceLimits.maxSeconds + 0.05
+          ),
+      ) ||
+        selected.reduce((sum, f) => sum + f.seconds, 0) >
+          referenceLimits.maxSeconds + 0.05)
     )
       fail("同类参考视频或音频的总时长不能超过 15 秒");
     if (
@@ -124,7 +129,7 @@ export function prepareNative(
     )
       fail("生成时长不能短于参考视频，请调整时长或裁短参考视频");
   }
-  if (files.length > 12) fail("最多选择 12 个参考素材");
+  if (files.length > referenceLimits.max) fail("最多选择 12 个参考素材");
   if (
     options.video_audio.some(
       (id: string) =>

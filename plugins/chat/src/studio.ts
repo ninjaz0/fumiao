@@ -2,6 +2,11 @@ import { chat } from "./index.js";
 import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
 export const chatStudio: ProviderPlugin = {
   ...chat,
+  modelForm: (model) => ({
+    fields: {},
+    references: { min: 0, max: 0 },
+    tiers: model.studio!.prices.map(({ tier }) => ({ tier, when: {} })),
+  }),
   manifest: {
     ...chat.manifest,
     version: "1.1.0",

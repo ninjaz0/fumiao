@@ -135,8 +135,8 @@ export const museLifecycle: ProviderPlugin = {
     try {
       remote = await request(
         e,
-        e.kind === "image" ? "/v1/images/tasks" : "/v1/videos",
-        musePayload(e),
+        e.mappedRequest?.path ?? (e.kind === "image" ? "/v1/images/tasks" : "/v1/videos"),
+        e.mappedRequest?.body ?? musePayload(e),
       );
       id = truthy(remote.task_id) ? remote.task_id : remote.id;
       if (
@@ -173,7 +173,7 @@ export const museLifecycle: ProviderPlugin = {
     try {
       remote = await request(
         e,
-        (e.kind === "image" ? "/v1/images/tasks/" : "/v1/videos/") + id,
+        e.mappedRequest?.path ?? ((e.kind === "image" ? "/v1/images/tasks/" : "/v1/videos/") + id),
       );
     } catch (error) {
       if (error instanceof TransportFailure && error.status === 404)

@@ -25,8 +25,7 @@ for (const id of ["muse", "flow"]) {
         );
         const read = () => new OriginalState(f.p).read(actor);
         assert.deepEqual((await read()).model_catalog, {});
-        const pkg = registry
-          .studioPackages()
+        const pkg = (await registry.studioPackages())
           .find((p) => p.manifest.id === id)!;
         const version = pkg.manifest.version;
         const install = () =>

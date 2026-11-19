@@ -335,7 +335,7 @@ export const flowLifecycle: ProviderPlugin = {
     }
   },
   async submit(e) {
-    const payload = flowPayload(e),
+    const payload = e.mappedRequest?.body ?? flowPayload(e),
       controller = new AbortController(),
       timer = setTimeout(() => controller.abort(), 600000);
     let errorResponse = false;
@@ -344,7 +344,7 @@ export const flowLifecycle: ProviderPlugin = {
           String(e.config.publicUrl || "https://backend.nvmes.com/flow"),
         ),
         response = await fetch(
-          String(e.config.baseUrl).replace(/\/+$/, "") + "/v1/chat/completions",
+          String(e.config.baseUrl).replace(/\/+$/, "") + (e.mappedRequest?.path ?? "/v1/chat/completions"),
           {
             method: "POST",
             redirect: "manual",

@@ -1,3 +1,5 @@
+import { one } from "../../../packages/platform/src/db.js";
+import { hasStudioPackages } from "../../../packages/platform/src/studio-plugin-profile.js";
 import {
   Controller,
   Get,
@@ -12,11 +14,7 @@ import { pairedPluginAvailable } from "../../../packages/platform/src/studio-plu
 import type { Request, Response } from "express";
 import { resolve } from "node:path";
 import { OriginalIdentity } from "../../../packages/original-api/src/identity.js";
-import {
-  BoundNodeCredential,
-  defaultPairModels,
-  OriginalNodes,
-} from "../../../packages/original-api/src/nodes.js";
+
 import { readCanvasBody } from "../../../packages/original-api/src/canvas-http.js";
 import {
   parseBody,
@@ -40,7 +38,7 @@ const pairFields: Fields = {
     kind: "list",
     item: { kind: "string" },
     max: 20,
-    default: defaultPairModels,
+    default: ["MiniMax H3"],
   },
 };
 const enrollFields: Fields = {
@@ -80,7 +78,11 @@ export function originalNodeRequest(
     )
       return false;
     try {
-      requireValue(await pairedPluginAvailable(identity.p.db), 404, "尚未安装实例接入插件");
+      requireValue(
+        await pairedPluginAvailable(identity.p.db),
+        404,
+        "尚未安装实例接入插件",
+      );
       const route = routes.find((r) => r.path.test(path));
       if (
         !route &&
@@ -116,8 +118,10 @@ export function originalNodeRequest(
           throw error;
         }
       }
-      if ("session" in route && route.session)
+      if ("session" in route && route.session) {
         req.actor = await identity.actor(originalSessionToken(req));
+        identity.p.admin(req.actor);
+      }
       req.url =
         path.split("/").map(encodeURIComponent).join("/") +
         req.url.slice(req.path.length);
@@ -131,53 +135,68 @@ export function originalNodeRequest(
 
 @Controller()
 export class OriginalNodesController {
-  private nodes: OriginalNodes;
-  constructor(@Inject(OriginalIdentity) identity: OriginalIdentity) {
-    this.nodes = new OriginalNodes(identity.p);
+  constructor(@Inject(OriginalIdentity) private identity: OriginalIdentity) {}
+  private async nodes() {
+    const { NodeManagement } = await this.identity.p.registry.nodeExtension(
+      this.identity.p.db,
+    );
+    return new NodeManagement(this.identity.p);
   }
   @Get("api/pairs/default-name")
-  defaultName() {
-    return this.nodes.suggestedName();
+  async defaultName() {
+    return (await this.nodes()).suggestedName();
   }
   @Post("api/pairs")
   @HttpCode(200)
-  pair(@Req() req: OriginalAuthRequest) {
-    return this.nodes.pair(req.actor, req.body);
+  async pair(@Req() req: OriginalAuthRequest) {
+    return (await this.nodes()).pair(req.actor, req.body);
   }
   @Post("api/nodes/:i/:action")
   @HttpCode(200)
-  manage(
+  async manage(
     @Req() req: OriginalAuthRequest,
     @Param("i") id: string,
     @Param("action") action: string,
   ) {
-    return this.nodes.manage(req.actor, pathId(id, "i"), action);
+    return (await this.nodes()).manage(req.actor, pathId(id, "i"), action);
   }
   @Post("agent/enroll")
   @HttpCode(200)
   async enroll(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     try {
-      return await this.nodes.enroll(req.body);
+      return await (await this.nodes()).enroll(req.body);
     } catch (error) {
-      if (!(error instanceof BoundNodeCredential)) throw error;
+      if (!(error instanceof Error && error.name === "BoundNodeCredential"))
+        throw error;
       // Match the original duplicate-credential failure without exposing SQL.
       res.status(500).type("text/plain").end("Internal Server Error");
     }
   }
   @Get("agent/registration")
-  registration(@Req() req: Request) {
-    return this.nodes.registration(
+  async registration(@Req() req: Request) {
+    return (await this.nodes()).registration(
       req.headersDistinct.authorization?.[0] ?? "",
     );
   }
   @Get("connect/:file")
-  download(@Param("file") file: string, @Res() res: Response) {
+  async download(@Param("file") file: string, @Res() res: Response) {
     requireValue(
       ["install.sh", "agent.tgz", "agent.tgz.sha256"].includes(file),
       404,
       "文件不存在",
     );
     res.type("application/octet-stream");
+    if (await hasStudioPackages(this.identity.p.db)) {
+      const row = await one(
+        this.identity.p.db,
+        `SELECT r.package->'nodeClient'->>$1 AS bytes FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE p.installed AND r.package ? 'nodeClient' LIMIT 1`,
+        [file],
+      );
+      if (row?.bytes) {
+        res.send(Buffer.from(row.bytes, "base64"));
+        return;
+      }
+    }
     return new Promise<void>((done, reject) => {
       res.sendFile(file, { root: resolve("plugins/gpu/distribution") }, (error) =>
         error ? reject(error) : done(),

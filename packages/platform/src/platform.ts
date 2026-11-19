@@ -1,8 +1,8 @@
+import { hasStudioPackages } from "./studio-plugin-profile.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { one, type Database, type Sql } from "./db.js";
 import {
-  DomainError,
   requireValue,
   hash,
   secret,
@@ -448,9 +448,40 @@ export class Platform {
     this.admin(user);
     return (
       await this.db.query(
-        "SELECT id,name,plugin_id,plugin_version,revision,enabled,concurrency FROM connections WHERE NOT fmworker_resource_driver ORDER BY name",
+        "SELECT id,name,plugin_id,plugin_version,revision,enabled,concurrency FROM connections WHERE NOT removed AND NOT fmworker_resource_driver ORDER BY name",
       )
     ).rows;
+  }
+  async studioConnections(user: Actor) {
+    this.admin(user);
+    const rows = (
+      await this.db.query<{
+        id: string;
+        name: string;
+        plugin_id: string;
+        plugin_version: string;
+        revision: number;
+        enabled: boolean;
+        concurrency: number;
+        config: string;
+        fields: Record<string, { writeOnly?: boolean }>;
+      }>(`SELECT c.id,c.name,c.plugin_id,c.plugin_version,c.revision,c.enabled,c.concurrency,c.config,
+      v.manifest->'configSchema'->'properties' AS fields FROM connections c JOIN plugin_versions v ON (v.id,v.version)=(c.plugin_id,c.plugin_version)
+      WHERE NOT c.removed AND NOT c.fmworker_resource_driver ORDER BY c.name`)
+    ).rows;
+    return rows.map(({ config, fields, ...row }) => {
+      const saved = this.vault.open(config);
+      // Only expressly public service fields may be returned to a browser.
+      const values = Object.fromEntries(
+        ["baseUrl", "publicUrl", "artifactOrigins"]
+          .filter(
+            (k) =>
+              fields?.[k] && !fields[k].writeOnly && saved[k] !== undefined,
+          )
+          .map((k) => [k, saved[k]]),
+      );
+      return { ...row, values, configuredFields: Object.keys(saved) };
+    });
   }
   async createConnection(user: Actor, value: unknown, studio = false) {
     this.admin(user);
@@ -500,12 +531,32 @@ export class Platform {
       400,
       "连接配置不符合插件要求",
     );
-    if (studio && (plugin.originalState || plugin.manifest.chat)) {
+    const managed =
+      studio &&
+      (await hasStudioPackages(sql)) &&
+      (await one(
+        sql,
+        "SELECT installed,removing FROM studio_packages WHERE id=$1",
+        [input.pluginId],
+      ));
+    requireValue(
+      !managed || (managed.installed && !managed.removing),
+      409,
+      "请先导入插件",
+    );
+    if (
+      studio &&
+      ((plugin.originalState &&
+        (!managed ||
+          plugin.manifest.mode === "pull" ||
+          plugin.manifest.originalImageSettings)) ||
+        plugin.manifest.chat)
+    ) {
       await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
         "studio-connection:" + input.pluginId,
       ]);
       const { rows } = await sql.query(
-        "SELECT config FROM connections WHERE plugin_id=$1 AND plugin_version=$2 AND NOT fmworker_resource_driver",
+        "SELECT config FROM connections WHERE plugin_id=$1 AND plugin_version=$2 AND NOT removed AND NOT fmworker_resource_driver",
         [input.pluginId, input.version],
       );
       const conflict = plugin.manifest.chat
@@ -537,7 +588,13 @@ export class Platform {
           [model.id, input.pluginId],
         );
         requireValue(
-          active?.plugin_version === input.version,
+          active?.plugin_version === input.version ||
+            (managed &&
+              (await one(
+                sql,
+                "SELECT 1 FROM studio_shared_models WHERE model_id=$1 AND plugin_id=$2",
+                [model.id, input.pluginId],
+              ))),
           409,
           "连接版本与模型目录不一致，请先激活插件目录",
         );
@@ -555,6 +612,13 @@ export class Platform {
         ],
       );
     }
+    if (managed && plugin.manifest.mode === "request") {
+      await sql.query("UPDATE connections SET enabled=true WHERE id=$1", [id]);
+      await sql.query(
+        "INSERT INTO studio_model_service(model_id,connection_id) SELECT catalog_id,connection_id FROM models WHERE connection_id=$1 AND catalog_id IS NOT NULL ON CONFLICT DO NOTHING",
+        [id],
+      );
+    }
     await this.audit(sql, user, "connection.create", id);
     return { id };
   }
@@ -565,6 +629,7 @@ export class Platform {
       .object({
         revision: z.number().int().positive(),
         enabled: z.boolean(),
+        preserveCredentials: z.boolean().optional(),
         config: z.record(z.string(), z.unknown()).optional(),
         concurrency: z.number().int().min(1).max(100),
       })
@@ -572,12 +637,40 @@ export class Platform {
     const row = await one(this.db, "SELECT * FROM connections WHERE id=$1", [
       id,
     ]);
-    requireValue(row && !row.fmworker_resource_driver, 404, "连接不存在");
+    requireValue(
+      row && !row.removed && !row.fmworker_resource_driver,
+      404,
+      "连接不存在",
+    );
     const plugin = await this.registry.resolve(
       this.db,
       row.plugin_id,
       row.plugin_version,
     );
+    if (input.config && input.preserveCredentials) {
+      const saved = this.vault.open(row.config);
+      const fields = plugin.manifest.configSchema.properties as
+        Record<string, { writeOnly?: boolean }> | undefined;
+      const retained = Object.keys(saved).filter(
+        (k) => !Object.hasOwn(input.config!, k),
+      );
+      if (
+        input.config.baseUrl &&
+        saved.baseUrl &&
+        retained.some(
+          (k) =>
+            fields?.[k]?.writeOnly ||
+            !["baseUrl", "publicUrl", "artifactOrigins"].includes(k),
+        )
+      )
+        requireValue(
+          new URL(String(input.config.baseUrl)).origin ===
+            new URL(String(saved.baseUrl)).origin,
+          400,
+          "切换服务地址时请重新填写密钥",
+        );
+      input.config = { ...saved, ...input.config };
+    }
     if (input.config)
       requireValue(
         validator.validate(plugin.manifest.configSchema, input.config),
@@ -610,7 +703,7 @@ export class Platform {
     uuid.parse(id);
     const row = await one(
       this.db,
-      "SELECT * FROM connections WHERE id=$1 AND NOT fmworker_resource_driver",
+      "SELECT * FROM connections WHERE id=$1 AND NOT removed AND NOT fmworker_resource_driver",
       [id],
     );
     requireValue(row, 404, "连接不存在");
@@ -629,6 +722,32 @@ export class Platform {
           [id],
         )),
       };
+    if (
+      plugin.inspectService &&
+      (await hasStudioPackages(this.db)) &&
+      (await one(
+        this.db,
+        "SELECT id FROM studio_packages WHERE installed AND id=$1",
+        [row.plugin_id],
+      ))
+    ) {
+      const report = await plugin.inspectService(
+        this.vault.open(row.config),
+        AbortSignal.timeout(10000),
+      );
+      return {
+        ...report,
+        available:
+          report.models &&
+          plugin.manifest.models
+            .filter((m) =>
+              report.models!.includes(
+                String(m.studio?.descriptor.upstream ?? m.id),
+              ),
+            )
+            .map((m) => m.id),
+      };
+    }
     return {
       ready: await plugin.health(
         this.vault.open(row.config),
@@ -642,7 +761,7 @@ export class Platform {
       await this.db.query(
         `SELECT m.*,c.name AS provider,c.plugin_id FROM models m JOIN connections c ON c.id=m.connection_id
       LEFT JOIN model_permissions p ON p.model_id=m.id AND p.workspace_id=$1
-      WHERE c.enabled=true AND (m.catalog_id IS NOT NULL OR m.enabled=true) AND COALESCE(p.enabled,true)=true AND studio_model_allowed(m.catalog_id,$1) ORDER BY c.name,m.label`,
+      WHERE c.enabled=true AND studio_plugin_accepts(c.plugin_id) AND studio_service_selected(m.catalog_id,c.id) AND (m.catalog_id IS NOT NULL OR m.enabled=true) AND COALESCE(p.enabled,true)=true AND studio_model_allowed(m.catalog_id,$1) ORDER BY c.name,m.label`,
         [wid],
       )
     ).rows;

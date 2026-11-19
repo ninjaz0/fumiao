@@ -1,0 +1,14 @@
+.composer-parameters .model-parameter {
+  max-width: 100%;
+  gap: 0.4em;
+}
+.model-parameter select,
+.model-parameter input {
+  min-width: 0;
+  max-width: 12em;
+  font: inherit;
+  color: inherit;
+}
+.model-parameter input[type="number"] {
+  width: 6em;
+}

@@ -11,7 +11,6 @@ import {
 import { parseBody } from "./validation.js";
 import { discardAvatar } from "./avatar-storage.js";
 import { identityBodies } from "./contracts.js";
-import { OriginalNodes } from "./nodes.js";
 
 export const avatars = [
   "alpine",
@@ -784,7 +783,11 @@ export class OriginalIdentity {
         requireValue(row, 404, "成员不存在");
         requireValue(false, 403, "管理员账户请在个人资料中修改");
       }
-      await new OriginalNodes(this.p).removeOwned(sql, member.id);
+      if(await one(sql,"SELECT id FROM gpu_nodes WHERE owner_id=$1 AND enabled AND NOT archived",[member.id])){
+        const {NodeManagement}=await this.p.registry.nodeExtension(sql);
+        await new NodeManagement(this.p).removeOwned(sql, member.id);
+      }
+      await sql.query("UPDATE gpu_pairings SET expires_at=to_timestamp(0) WHERE owner_id=$1",[member.id]);
       await sql.query("DELETE FROM sessions WHERE user_id=$1", [member.id]);
       await sql.query(
         `UPDATE users SET active=false,deleted_at=now(),name=$2,nickname='已删除成员',avatar=$3,password=$4 WHERE id=$1`,

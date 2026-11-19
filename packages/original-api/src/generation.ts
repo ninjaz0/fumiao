@@ -1,3 +1,4 @@
+import { hasStudioPackages } from "../../platform/src/studio-plugin-profile.js";
 import { pythonStrip } from "../../plugin-sdk/src/python-text.js";
 import { randomUUID } from "node:crypto";
 import type { Platform } from "../../platform/src/platform.js";
@@ -131,10 +132,13 @@ export class OriginalGeneration {
         [workspace.id],
       );
       if (!draft.asset_packs.length) adapter.validate(draft, "before-retry");
+      const packages = await hasStudioPackages(sql);
       const previous = await one(
         sql,
-        "SELECT * FROM jobs WHERE original_uid=$1 AND deleted_at IS NULL",
-        [uid],
+        packages
+          ? `SELECT * FROM jobs WHERE deleted_at IS NULL AND (original_uid=$1 OR (owner_id=$2 AND catalog_id=$3 AND studio_client_uid=$4 AND EXISTS(SELECT 1 FROM studio_shared_models WHERE model_id=$3))) LIMIT 1`
+          : "SELECT * FROM jobs WHERE original_uid=$1 AND deleted_at IS NULL",
+        packages ? [uid, user.id, draft.model, draft.uid] : [uid],
       );
       if (previous) {
         await new OriginalLibrary(this.p).access(
@@ -217,7 +221,7 @@ export class OriginalGeneration {
         await sql.query(
           `SELECT m.*,c.plugin_id,c.plugin_version,c.config,c.enabled AS connection_enabled FROM models m JOIN connections c ON c.id=m.connection_id
           LEFT JOIN model_permissions p ON p.model_id=m.id AND p.workspace_id=$2
-          WHERE m.catalog_id=$1 AND c.plugin_id=$3 AND c.plugin_version=$4 AND COALESCE(p.enabled,true)=true ORDER BY c.id FOR SHARE OF c`,
+          WHERE m.catalog_id=$1 ${(await hasStudioPackages(sql)) ? "AND studio_service_selected(m.catalog_id,c.id)" : ""} AND c.plugin_id=$3 AND c.plugin_version=$4 AND COALESCE(p.enabled,true)=true ORDER BY c.id FOR SHARE OF c`,
           [
             draft.model,
             workspace.id,
@@ -236,7 +240,7 @@ export class OriginalGeneration {
             : "模型执行连接尚未启用"),
       );
       const model = enabled[0];
-      if (catalog.manifest.originalSubmission.version === 2)
+      if (catalog.manifest.originalSubmission.version >= 2)
         requireValue(
           validator.validate(
             plugin.manifest.configSchema,
@@ -413,6 +417,11 @@ export class OriginalGeneration {
           }),
         ],
       );
+      if (packages)
+        await sql.query("UPDATE jobs SET studio_client_uid=$2 WHERE id=$1", [
+          accepted.id,
+          draft.uid,
+        ]);
       await saveSubmissionForecast(this.p, sql, accepted.id);
       return { id: Number(row.public_id) };
     } catch (error) {

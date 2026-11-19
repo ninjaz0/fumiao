@@ -1,3 +1,4 @@
+import { remoteForm } from "./form.js";
 import {
   requestJson,
   type Manifest,
@@ -11,8 +12,12 @@ export function remotePlugin(
 ): ProviderPlugin {
   return {
     manifest,
-    ...(manifest.originalSubmission?.version === 2
-      ? { originalSubmission: originalRemoteSubmission(manifest) }
+    ...((manifest.originalSubmission?.version ?? 0) >= 2
+      ? {
+          originalSubmission: originalRemoteSubmission(manifest),
+          modelForm: (model) =>
+            remoteForm(model, manifest.originalSubmission?.version === 3),
+        }
       : {}),
     async health(config, signal) {
       try {
