@@ -6,6 +6,11 @@ export default function Home({ logo }: { logo: string }) {
   return (
     <>
       {"\n    "}
+      <span
+        id="top"
+        style={{ position: "absolute", top: 0, left: 0, scrollMarginTop: 0 }}
+        aria-hidden="true"
+      />
       {"\n    "}
       <a className="skip" href="#main">
         {"跳到主要内容"}
@@ -100,7 +105,7 @@ export default function Home({ logo }: { logo: string }) {
         {"\n    "}
       </svg>
       {"\n\n    "}
-      <Header id="top">
+      <Header>
         {"\n      "}
         <div className="wrap top-row">
           {"\n        "}

@@ -100,10 +100,12 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
   });
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [username, setUsername] = useState("");
   const [note, setNote] = useState("");
   const [toast, setToast] = useState("");
   const [toastVisible, setToastVisible] = useState(false);
   const revision = useRef(0);
+  const lastHash = useRef<string | null>(null);
   const busyRevision = useRef<number | null>(null);
   const form = useRef<HTMLFormElement>(null);
   const focusNext = useRef(false);
@@ -117,9 +119,11 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
     } catch {}
     const read = () => {
       const retired = new URLSearchParams(location.hash.slice(1)).has("invite");
+      if (lastHash.current === location.hash && !retired) return;
       const mode = location.hash === "#register" ? "register" : "login";
       if (retired)
         history.replaceState(null, "", location.pathname + location.search);
+      lastHash.current = location.hash;
       setLocationState({ mode, retired, revision: ++revision.current });
       setNote(retired ? "邀请链接已停用，请向管理员获取邀请码后注册。" : "");
       busyRevision.current = null;
@@ -128,8 +132,10 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
     };
     read();
     window.addEventListener("hashchange", read);
+    window.addEventListener("popstate", read);
     return () => {
       window.removeEventListener("hashchange", read);
+      window.removeEventListener("popstate", read);
       clearTimeout(toastTimer.current);
     };
   }, []);
@@ -142,7 +148,9 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
   const switchMode = (event: React.MouseEvent) => {
     event.preventDefault();
     const mode = registering ? "login" : "register";
-    history.replaceState(null, "", "#" + mode);
+    const nextHash = "#" + mode;
+    history.pushState(null, "", nextHash);
+    lastHash.current = nextHash;
     focusNext.current = true;
     setLocationState({ mode, retired: false, revision: ++revision.current });
     busyRevision.current = null;
@@ -215,7 +223,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
         ) : (
           <div className="auth">
             <header className="auth-top">
-              <Appearance key={locationState.revision} />
+              <Appearance />
             </header>
             {"\n    "}
             <main className="auth-body">
@@ -281,6 +289,8 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                       autoComplete="username"
                       minLength={registering ? 2 : 1}
                       maxLength={32}
+                      value={username}
+                      onChange={(event) => setUsername(event.target.value)}
                       {...(registering
                         ? { placeholder: "2–32 位中英文、数字或 _ . -" }
                         : {})}

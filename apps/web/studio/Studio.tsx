@@ -351,6 +351,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         setCollapsed(true);
         setSidebarChanged(true);
         closeMenu();
+      } else {
+        setCollapsed(localStorage.getItem("fm-sidebar") === "collapsed");
+        setSidebarChanged(true);
       }
     };
     narrow.addEventListener("change", onNarrow);
