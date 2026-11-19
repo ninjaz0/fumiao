@@ -1,0 +1,365 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-08T16:33:18.032651+00:00",
+  "title": "Design System: 弗淼 AIGC",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "displayName": "强调色",
+        "role": "primary",
+        "tonalRamp": [
+          "#285949"
+        ]
+      },
+      "bg": {
+        "displayName": "页面",
+        "role": "neutral",
+        "tonalRamp": [
+          "#ffffff"
+        ]
+      },
+      "panel": {
+        "displayName": "表面",
+        "role": "neutral",
+        "tonalRamp": [
+          "#ffffff"
+        ]
+      },
+      "raised": {
+        "displayName": "选项背景",
+        "role": "neutral",
+        "tonalRamp": [
+          "#f2f4f1"
+        ]
+      },
+      "line": {
+        "displayName": "分隔线",
+        "role": "neutral",
+        "tonalRamp": [
+          "#d9ded9"
+        ]
+      },
+      "text": {
+        "displayName": "正文",
+        "role": "neutral",
+        "tonalRamp": [
+          "#202522"
+        ]
+      },
+      "mute": {
+        "displayName": "辅助文字",
+        "role": "neutral",
+        "tonalRamp": [
+          "#606962"
+        ]
+      },
+      "warn": {
+        "displayName": "容量提醒",
+        "role": "semantic",
+        "tonalRamp": [
+          "#815716"
+        ]
+      },
+      "danger": {
+        "displayName": "错误",
+        "role": "semantic",
+        "tonalRamp": [
+          "#a03c32"
+        ]
+      },
+      "canvas-bg": {
+        "displayName": "画布工作区",
+        "role": "neutral"
+      },
+      "canvas-surface": {
+        "displayName": "画布操作面",
+        "role": "neutral"
+      },
+      "canvas-text": {
+        "displayName": "画布正文与操作",
+        "role": "neutral"
+      },
+      "canvas-muted": {
+        "displayName": "画布辅助文字",
+        "role": "neutral"
+      },
+      "canvas-line": {
+        "displayName": "画布边界",
+        "role": "neutral"
+      },
+      "canvas-hover": {
+        "displayName": "画布悬停",
+        "role": "neutral"
+      },
+      "canvas-selected": {
+        "displayName": "画布选中",
+        "role": "neutral"
+      },
+      "canvas-danger": {
+        "displayName": "画布错误",
+        "role": "semantic"
+      },
+      "canvas-dark-bg": {
+        "displayName": "深色画布工作区",
+        "role": "neutral"
+      },
+      "canvas-dark-surface": {
+        "displayName": "深色画布操作面",
+        "role": "neutral"
+      },
+      "canvas-dark-text": {
+        "displayName": "深色画布正文",
+        "role": "neutral"
+      },
+      "canvas-dark-muted": {
+        "displayName": "深色画布辅助文字",
+        "role": "neutral"
+      },
+      "canvas-dark-line": {
+        "displayName": "深色画布边界",
+        "role": "neutral"
+      },
+      "canvas-dark-hover": {
+        "displayName": "深色画布悬停",
+        "role": "neutral"
+      },
+      "canvas-dark-selected": {
+        "displayName": "深色画布选中",
+        "role": "neutral"
+      },
+      "canvas-dark-focus": {
+        "displayName": "深色画布焦点",
+        "role": "primary"
+      },
+      "canvas-dark-danger": {
+        "displayName": "深色画布错误",
+        "role": "semantic"
+      }
+    },
+    "shadows": [
+      {
+        "name": "chat-composer-separation",
+        "value": "0 2px 12px rgba(0,0,0,.035)",
+        "purpose": "Chat-only separation between the bottom composer and reading ground; source canvas/src/chat/chat.css. This does not refresh global elevation guidance."
+      },
+      {
+        "name": "chat-model-menu",
+        "value": "0 14px 45px rgba(0,0,0,.13)",
+        "purpose": "共享模型选择器与对话历史菜单的浮层分离；AI 分镜也使用此菜单，样式不依赖聊天页祖先。"
+      },
+      {
+        "name": "canvas-floating-light",
+        "value": "0 8px 32px #00000012",
+        "purpose": "既有浅色画布浮层与制作弹窗分离。"
+      },
+      {
+        "name": "canvas-floating-dark",
+        "value": "0 8px 32px #00000040",
+        "purpose": "既有深色画布浮层变量；本轮没有深色视觉验收。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "mobile-max",
+        "value": "760px"
+      },
+      {
+        "name": "chat-history-narrow-max",
+        "value": "1050px"
+      },
+      {
+        "name": "production-flow-narrow-max",
+        "value": "600px"
+      }
+    ],
+    "typographyMeta": {
+      "canvas-body": {
+        "displayName": "画布正文",
+        "purpose": "画布编辑内容与制作弹窗正文。"
+      },
+      "canvas-field-label": {
+        "displayName": "制作字段标签",
+        "purpose": "分镜及旁白字段标签与说明。"
+      }
+    }
+  },
+  "components": [
+    {
+      "name": "创建邀请码",
+      "kind": "button",
+      "description": "管理员邀请码列表的主要入口，沿用工作台主题按钮；此静态样例只展示外观。",
+      "html": "<button type=\"button\" class=\"ds-create-invite\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14 M5 12h14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>创建邀请码</button>",
+      "css": ".ds-create-invite{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:8px 16px;min-height:36px;border:0;border-radius:10px;background:var(--button,#000);color:var(--on-button,#fff);font:550 14px/1.55 -apple-system,BlinkMacSystemFont,\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",Arial,sans-serif;cursor:pointer;transition:background-color 100ms linear,color 100ms linear,opacity 100ms linear}.ds-create-invite:hover{opacity:.85}.ds-create-invite:focus-visible{outline:2px solid var(--focus,#3686ad);outline-offset:2px}.ds-create-invite:not(:disabled):active{filter:brightness(.96)}.ds-create-invite:disabled{cursor:default;opacity:.38}@media(max-width:650px){.ds-create-invite{padding:10px 12px;white-space:nowrap}}@media(prefers-reduced-motion:reduce){.ds-create-invite{transition:none}}"
+    },
+    {
+      "name": "生成视频",
+      "kind": "button",
+      "refersTo": "button-submit",
+      "description": "生成视频",
+      "html": "<button class=\"action\">生成视频 ↑</button>",
+      "css": ".action{background:#285949;color:white;padding:8px 15px;border:0;border-radius:6px;font:600 14px system-ui}"
+    },
+    {
+      "name": "取消",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "取消",
+      "html": "<button class=\"ghost\">取消</button>",
+      "css": ".ghost{font:14px system-ui;color:#515a54;border:0;background:transparent;padding:6px 10px}"
+    },
+    {
+      "name": "画幅",
+      "kind": "select",
+      "refersTo": "parameter",
+      "description": "画幅",
+      "html": "<span class=\"param\">自动画幅<svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><path d=\"m2.5 4.5 3.5 3 3.5-3\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.4\" fill=\"none\"/></svg></span>",
+      "css": ".param{display:inline-flex;align-items:center;gap:7px;color:#515a54;font:14px system-ui;padding:5px 9px}"
+    },
+    {
+      "name": "工作区：侧栏选择器",
+      "kind": "nav",
+      "description": "工作区局部样例：Logo 下方的个人空间入口；紫色徽标仅识别个人空间。收起侧栏时隐藏名称与切换图标，徽标不移位。范围见 surfaces/static-studio-workspaces.md。",
+      "html": "<button class=\"ds-workspace-switch\" aria-label=\"切换工作区，当前个人空间\" aria-haspopup=\"dialog\" aria-expanded=\"false\"><span class=\"ds-workspace-badge\" aria-hidden=\"true\">本</span><span class=\"ds-workspace-name\">个人空间</span><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 7h14l-3-3M19 17H5l3 3\"/></svg></button>",
+      "css": ".ds-workspace-switch{display:flex;align-items:center;gap:10px;width:216px;min-height:44px;padding:6px;border:0;border-radius:10px;background:var(--hover,rgba(0,0,0,.05));color:var(--text,#000);box-shadow:inset 0 0 0 1px var(--line,rgba(0,0,0,.05));overflow:hidden;text-align:left;cursor:pointer;font:14px/1.55 -apple-system,BlinkMacSystemFont,\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",Arial,sans-serif;transition:background-color 100ms linear,color 100ms linear,opacity 100ms linear}.ds-workspace-switch:hover,.ds-workspace-switch[aria-expanded=\"true\"]{background:var(--selected,rgba(0,0,0,.1))}.ds-workspace-switch:focus-visible{outline:2px solid var(--focus,#3686ad);outline-offset:2px}.ds-workspace-switch:active{filter:brightness(.96)}.ds-workspace-badge{display:grid;place-items:center;width:28px;height:28px;flex:none;border-radius:7px;font-size:15px;background:#8154db;color:#fff}.ds-workspace-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ds-workspace-switch svg{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;color:var(--secondary,#737373)}"
+    },
+    {
+      "name": "工作区：当前团队选项",
+      "kind": "nav",
+      "description": "工作区浮层浅色样例：当前行同时使用内描边、对勾及可见范围文字。说明色为本次局部对比度修正；实际深色继续使用现有 --secondary。此条不刷新其他全局组件。",
+      "html": "<div class=\"ds-workspace-light-sample\"><button class=\"ds-workspace-option\" role=\"option\" aria-selected=\"true\"><span class=\"ds-workspace-team\" aria-hidden=\"true\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M3 20v-2a5 5 0 0110 0v2 M17 13a4 4 0 014 4v3 M12 7a4 4 0 11-8 0 4 4 0 018 0z M16 4a3 3 0 010 6\"/></svg></span><span class=\"ds-workspace-option-name\"><strong>默认团队</strong><small>团队成员可见</small></span><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m5 12 4 4L19 6\"/></svg></button></div>",
+      "css": ".ds-workspace-light-sample{width:308px;max-width:100%;background:#fff;color:#000;font:14px/1.55 -apple-system,BlinkMacSystemFont,\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",Arial,sans-serif}.ds-workspace-option{display:flex;align-items:center;gap:12px;width:100%;min-height:66px;padding:12px;border:0;border-radius:12px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit;transition:background-color 100ms linear,color 100ms linear,opacity 100ms linear}.ds-workspace-option:hover{background:rgba(0,0,0,.05)}.ds-workspace-option[aria-selected=\"true\"]{box-shadow:inset 0 0 0 2px currentColor;background:rgba(0,0,0,.05)}.ds-workspace-option:focus-visible{outline:2px solid #3686ad;outline-offset:2px}.ds-workspace-option:active{filter:brightness(.96)}.ds-workspace-team{display:grid;place-items:center;width:36px;height:36px;flex:none;border-radius:9px;background:rgba(0,0,0,.1)}.ds-workspace-option svg{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.ds-workspace-option-name{display:grid;gap:2px;flex:1;min-width:0}.ds-workspace-option-name strong{font-size:14px;font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-workspace-option-name small{font-size:12px;color:#6b6b6b}"
+    },
+    {
+      "name": "Muse：主创作区模型入口",
+      "kind": "button",
+      "description": "沿用主创作区的参数按钮，图片和视频均显示 Muse。此样例只记录入口外观；完整参数与键盘行为见 surfaces/static-studio-muse.md。",
+      "html": "<button class=\"ds-muse-model\" aria-label=\"选择模型\" aria-expanded=\"false\"><span>Muse</span><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m6 9 6 6 6-6\"/></svg></button>",
+      "css": ".ds-muse-model{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;height:32px;min-height:32px;padding:0 8px;font:12px/1.55 -apple-system,BlinkMacSystemFont,\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",Arial,sans-serif;border:0;border-radius:8px;background:transparent;color:var(--text,#000);cursor:pointer;transition:background-color 100ms linear,color 100ms linear,opacity 100ms linear}.ds-muse-model svg{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.ds-muse-model:hover,.ds-muse-model[aria-expanded=\"true\"]{background:var(--selected,rgba(0,0,0,.1))}.ds-muse-model:focus-visible{outline:2px solid var(--focus,#3686ad);outline-offset:2px}.ds-muse-model:active{filter:brightness(.96)}"
+    },
+    {
+      "name": "Muse：画布模型菜单",
+      "kind": "custom",
+      "description": "画布视频模型菜单的局部外观：保留 MiniMax H3，当前 Muse 项显示对勾。实际菜单从触发器左侧向内展开，最小宽度 130px；不改动时长菜单锚点。此静态样例不实现键盘脚本。",
+      "html": "<div class=\"ds-muse-canvas-model\" role=\"listbox\" aria-label=\"选择模型\"><button role=\"option\" aria-selected=\"false\" tabindex=\"-1\">MiniMax H3</button><button role=\"option\" aria-selected=\"true\" tabindex=\"0\">Muse<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m5 12 4 4L19 6\"/></svg></button></div>",
+      "css": ".ds-muse-canvas-model{width:130px;min-width:130px;padding:6px;border-radius:12px;background:var(--cv-surface,#fff);color:var(--cv-text,#191919);box-shadow:0 8px 32px #00000020;font:14px/1.5 -apple-system,BlinkMacSystemFont,\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",Arial,sans-serif}.ds-muse-canvas-model button{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:36px;padding:8px 10px;border:0;border-radius:7px;background:transparent;color:inherit;font:13px/1.5 -apple-system,BlinkMacSystemFont,\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",Arial,sans-serif;text-align:left;cursor:pointer}.ds-muse-canvas-model button:hover{background:var(--cv-hover,#f0f0f0)}.ds-muse-canvas-model button:focus-visible{outline:2px solid var(--cv-focus,#3686ad);outline-offset:3px}.ds-muse-canvas-model svg{flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}"
+    },
+    {
+      "name": "对话：底部输入区",
+      "kind": "custom",
+      "description": "独立对话输入区样例：与生成区同族的自定义模型菜单、每条完整回复的四角星价格与发送保持同组。复用现有主题与 2px 容器焦点；展示菜单打开状态，实际键盘与关闭行为见 ModelSelect.tsx。此静态样例不调用模型。范围见 surfaces/static-chat-js.md。",
+      "html": "<div class=\"ds-chat-preview\"><div class=\"ds-chat-composer\"><textarea rows=\"2\" aria-label=\"发送消息\" placeholder=\"发送消息…\"></textarea><div class=\"ds-chat-bottom\"><div class=\"ds-chat-model\"><button type=\"button\" class=\"ds-chat-model-trigger\" aria-label=\"对话模型：DeepSeek Flash\" aria-haspopup=\"listbox\" aria-expanded=\"true\" aria-controls=\"ds-chat-model-options\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\"/><path d=\"m3.3 7 8.7 5 8.7-5M12 22V12\"/></svg><span>DeepSeek Flash</span><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m6 9 6 6 6-6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button><div id=\"ds-chat-model-options\" class=\"ds-chat-model-menu\" role=\"listbox\" aria-label=\"对话模型\"><button type=\"button\" role=\"option\" aria-selected=\"true\"><span>DeepSeek Flash</span><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m20 6-11 11-5-5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button><button type=\"button\" role=\"option\" aria-selected=\"false\" tabindex=\"-1\"><span>GPT-4.1</span></button></div></div><span class=\"ds-chat-price\" aria-label=\"每条完整回复 1 积分\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"currentColor\" d=\"M12 1c1.7 7 4 9.3 11 11-7 1.7-9.3 4-11 11C10.3 16 8 13.7 1 12 8 10.3 10.3 8 12 1Z\"/></svg>1</span><button type=\"button\" class=\"ds-chat-send\" aria-label=\"发送\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 19V5m-7 7 7-7 7 7\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button></div></div></div>",
+      "css": ".ds-chat-preview{padding-top:116px}.ds-chat-composer{--ds-chat-text:var(--text,var(--cv-text,#171717));--ds-chat-muted:var(--secondary,var(--cv-muted,#696969));--ds-chat-focus:var(--focus,var(--cv-focus,#3686ad));width:min(100%,724px);padding:16px;border-radius:16px;background:var(--surface,var(--cv-surface,#fff));color:var(--ds-chat-text);font:14px/1.6 -apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.035)}.ds-chat-composer:focus-within{outline:2px solid var(--ds-chat-focus);outline-offset:2px;box-shadow:inset 0 0 0 1px var(--line,var(--cv-line,rgba(120,120,120,.16))),0 2px 12px rgba(0,0,0,.035)}.ds-chat-composer textarea{display:block;width:100%;min-height:56px;max-height:180px;padding:0 0 12px;border:0;resize:none;background:transparent;color:inherit;font:inherit;line-height:1.7;outline:none}.ds-chat-composer textarea::placeholder{color:var(--ds-chat-muted);opacity:1}.ds-chat-bottom{display:flex;align-items:center;gap:12px}.ds-chat-model{position:relative;min-width:0;max-width:calc(100% - 90px)}.ds-chat-model button{display:inline-flex;align-items:center;border:0;background:none;color:inherit;cursor:pointer;font:inherit;line-height:1.4}.ds-chat-model .ds-chat-model-trigger{max-width:100%;min-height:34px;padding:8px 10px;gap:6px;border-radius:10px;font-size:13px;white-space:nowrap}.ds-chat-model-trigger>span{overflow:hidden;text-overflow:ellipsis}.ds-chat-model svg{flex-shrink:0}.ds-chat-model-trigger[aria-expanded=\"true\"],.ds-chat-model-menu>button[aria-selected=\"true\"]{background:var(--selected,var(--cv-selected,rgba(120,120,120,.16)))}.ds-chat-model button:hover:not(:disabled){background:var(--hover,var(--cv-hover,rgba(120,120,120,.08)))}.ds-chat-model button:disabled{cursor:default;opacity:.4}.ds-chat-model-menu{position:absolute;bottom:calc(100% + 8px);left:0;width:max-content;min-width:220px;max-width:min(300px,calc(100vw - 80px));padding:6px;border-radius:14px;background:var(--surface,var(--cv-surface,#fff));box-shadow:0 14px 45px rgba(0,0,0,.13);z-index:6}.ds-chat-model-menu>button{display:flex;width:100%;min-height:40px;justify-content:space-between;gap:24px;padding:10px 12px;border-radius:9px;font-size:14px;text-align:left;white-space:nowrap}.ds-chat-model-menu>button>span{overflow:hidden;text-overflow:ellipsis}.ds-chat-price{display:flex;align-items:center;gap:4px;margin-left:auto;color:var(--ds-chat-muted);font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}.ds-chat-send{display:grid;place-items:center;flex-shrink:0;width:36px;height:36px;padding:0;border:0;border-radius:50%;background:var(--button,var(--cv-text,#171717));color:var(--on-button,var(--cv-bg,#fff));cursor:pointer}.ds-chat-send:hover:not(:disabled){opacity:.85}.ds-chat-send:disabled{background:var(--selected,var(--cv-selected,rgba(120,120,120,.16)));color:var(--ds-chat-muted);opacity:.65;cursor:default}.ds-chat-send:focus-visible,.ds-chat-model button:focus-visible{outline:2px solid var(--ds-chat-focus);outline-offset:3px}"
+    },
+    {
+      "name": "画布：文本节点生成器",
+      "kind": "custom",
+      "description": "选中文本节点下方的局部生成器样例：复用图片／视频生成器的 520px 面板、16px 圆角与操作行，仅显示输入、模型、数字星价和生成／停止。实际位置使用测量高度并避让底部 80px，手机沿用 12px 侧边距和 68px 底部位置。没有聊天历史、消息区或采用按钮；此静态样例不调用模型，回写和移动行为见 main.tsx、ChatWorkspace.tsx 与 surfaces/static-chat-js.md。",
+      "html": "<div class=\"ds-text-preview\"><div class=\"ds-text-composer\"><textarea rows=\"3\" aria-label=\"文本生成要求\" placeholder=\"描述你想生成的文字，或说明修改要求\"></textarea><div class=\"ds-text-bottom\"><div class=\"ds-text-model\"><button type=\"button\" class=\"ds-text-model-trigger\" aria-label=\"对话模型：DeepSeek Flash\" aria-haspopup=\"listbox\" aria-expanded=\"true\" aria-controls=\"ds-text-model-options\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\"/><path d=\"m3.3 7 8.7 5 8.7-5M12 22V12\"/></svg><span>DeepSeek Flash</span><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m6 9 6 6 6-6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button><div id=\"ds-text-model-options\" class=\"ds-text-model-menu\" role=\"listbox\" aria-label=\"对话模型\"><button type=\"button\" role=\"option\" aria-selected=\"true\"><span>DeepSeek Flash</span><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m20 6-11 11-5-5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button><button type=\"button\" role=\"option\" aria-selected=\"false\" tabindex=\"-1\"><span>GPT-4.1</span></button></div></div><span class=\"ds-text-price\" aria-label=\"1 积分\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"currentColor\" d=\"M12 1c1.7 7 4 9.3 11 11-7 1.7-9.3 4-11 11C10.3 16 8 13.7 1 12 8 10.3 10.3 8 12 1Z\"/></svg>1</span><button type=\"button\" class=\"ds-text-send\" aria-label=\"生成文本\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 19V5m-7 7 7-7 7 7\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button></div></div></div>",
+      "css": ".ds-text-preview{padding-top:116px}.ds-text-composer{--ds-text-text:var(--text,var(--cv-text,#171717));--ds-text-muted:var(--secondary,var(--cv-muted,#696969));--ds-text-focus:var(--focus,var(--cv-focus,#3686ad));box-sizing:border-box;width:min(100%,520px);padding:16px 14px 12px;border-radius:16px;background:var(--surface,var(--cv-surface,#fff));color:var(--ds-text-text);font:14px/1.6 -apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",sans-serif;box-shadow:var(--cv-shadow,0 8px 32px #00000020)}.ds-text-composer textarea{display:block;width:100%;min-height:92px;max-height:140px;padding:4px 6px;border:0;resize:vertical;background:transparent;color:inherit;font:inherit;line-height:1.65;outline:none}.ds-text-composer textarea::placeholder{color:var(--ds-text-muted);opacity:1}.ds-text-bottom{display:flex;align-items:center;gap:8px;margin-top:10px;min-height:38px}.ds-text-model{position:relative;min-width:0;max-width:calc(100% - 90px)}.ds-text-model button{display:inline-flex;align-items:center;border:0;background:none;color:inherit;cursor:pointer;font:inherit;line-height:1.4}.ds-text-model .ds-text-model-trigger{max-width:100%;min-height:34px;padding:8px 6px;gap:6px;border-radius:10px;font-size:12px;white-space:nowrap}.ds-text-model-trigger>span{overflow:hidden;text-overflow:ellipsis}.ds-text-model svg{flex-shrink:0}.ds-text-model-trigger[aria-expanded=\"true\"],.ds-text-model-menu>button[aria-selected=\"true\"]{background:var(--selected,var(--cv-selected,rgba(120,120,120,.16)))}.ds-text-model button:hover:not(:disabled){background:var(--hover,var(--cv-hover,rgba(120,120,120,.08)))}.ds-text-model button:disabled{cursor:default;opacity:.4}.ds-text-model-menu{position:absolute;bottom:calc(100% + 8px);left:0;width:max-content;min-width:220px;max-width:min(300px,calc(100vw - 80px));padding:6px;border-radius:14px;background:var(--surface,var(--cv-surface,#fff));box-shadow:0 14px 45px rgba(0,0,0,.13);z-index:6}.ds-text-model-menu>button{display:flex;width:100%;min-height:40px;justify-content:space-between;gap:24px;padding:10px 12px;border-radius:9px;font-size:14px;text-align:left;white-space:nowrap}.ds-text-model-menu>button>span{overflow:hidden;text-overflow:ellipsis}.ds-text-price{display:flex;align-items:center;gap:4px;margin-left:auto;color:var(--ds-text-muted);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}.ds-text-send{display:grid;place-items:center;flex-shrink:0;width:36px;height:36px;padding:0;border:0;border-radius:50%;background:var(--button,var(--cv-text,#171717));color:var(--on-button,var(--cv-bg,#fff));cursor:pointer}.ds-text-send:hover:not(:disabled){opacity:.85}.ds-text-send:disabled{background:var(--selected,var(--cv-selected,rgba(120,120,120,.16)));color:var(--ds-text-muted);opacity:.65;cursor:default}.ds-text-send:focus-visible,.ds-text-model button:focus-visible{outline:2px solid var(--ds-text-focus);outline-offset:3px}@media(max-width:760px){.ds-text-composer{padding:12px 10px;border-radius:14px}.ds-text-composer textarea{min-height:62px;height:70px}.ds-text-bottom{gap:5px;margin-top:6px}.ds-text-send{width:32px;height:32px}}"
+    },
+    {
+      "name": "对话服务：凭据字段",
+      "kind": "input",
+      "description": "管理员对话服务的局部字段样例；只输入替换值，不回显凭据。沿用字段底色、辅助文字与 2px 焦点，配置状态不等于真实回复已验收。此空白静态样例不保存内容。",
+      "html": "<div class=\"ds-chat-credential\"><div class=\"ds-chat-credential-header\"><label for=\"ds-chat-key\">DeepSeek</label><span>未配置</span></div><input id=\"ds-chat-key\" type=\"password\" autocomplete=\"new-password\" placeholder=\"输入新密钥以替换\" aria-label=\"DeepSeek API 密钥\"></div>",
+      "css": ".ds-chat-credential{max-width:620px;color:var(--text,#000);font:14px/1.55 -apple-system,BlinkMacSystemFont,\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",Arial,sans-serif}.ds-chat-credential-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.ds-chat-credential-header label{font-size:16px;font-weight:550}.ds-chat-credential-header span{color:var(--secondary,#737373)}.ds-chat-credential input{width:100%;min-width:0;min-height:40px;padding:9px 12px;border:1px solid var(--line,rgba(0,0,0,.05));border-radius:8px;background:var(--field,#fff);font:inherit;color:var(--text,#000)}.ds-chat-credential input::placeholder{color:var(--secondary,#737373);opacity:1}.ds-chat-credential input:focus-visible{outline:2px solid var(--focus,#3686ad);outline-offset:2px}"
+    },
+    {
+      "name": "对话：历史操作菜单",
+      "kind": "custom",
+      "description": "历史行右键与 Shift+F10／ContextMenu 键打开的局部菜单样例，不显示省略号或额外行操作按钮，复用模型菜单的主题、圆角、间距与阴影。实际菜单按指针或入口位置约束在视口内，重命名使用行内表单；此静态样例仅展示菜单外观，不执行改名或删除。权限、正在回复状态与键盘行为见 ConversationList.tsx 和 surfaces/static-chat-js.md。",
+      "html": "<div class=\"ds-chat-history-menu\" role=\"menu\" aria-label=\"对话操作\"><button type=\"button\" role=\"menuitem\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.623l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4\"/></svg>重命名</button><button type=\"button\" role=\"menuitem\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6\"/></svg>删除</button></div>",
+      "css": ".ds-chat-history-menu{box-sizing:border-box;width:180px;max-width:calc(100vw - 16px);padding:6px;border-radius:14px;background:var(--surface,var(--cv-surface,#fff));color:var(--text,var(--cv-text,#171717));box-shadow:0 14px 45px rgba(0,0,0,.13);font:14px/1.6 -apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",sans-serif;animation:ds-chat-history-menu-in .14s ease-out}.ds-chat-history-menu>button{box-sizing:border-box;display:flex;align-items:center;justify-content:flex-start;gap:9px;width:100%;min-height:40px;padding:10px 12px;border:0;border-radius:9px;background:none;color:inherit;font:inherit;line-height:1.4;text-align:left;cursor:pointer}.ds-chat-history-menu>button:hover:not(:disabled){background:var(--hover,var(--cv-hover,rgba(120,120,120,.09)))}.ds-chat-history-menu>button:focus-visible{outline:2px solid var(--focus,var(--cv-focus,#3686ad));outline-offset:3px}.ds-chat-history-menu>button:disabled{cursor:default;opacity:.4}.ds-chat-history-menu svg{flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}@keyframes ds-chat-history-menu-in{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}@media(prefers-reduced-motion:reduce){.ds-chat-history-menu{animation:none}}"
+    },
+    {
+      "name": "制作流程：共享模型菜单",
+      "kind": "custom",
+      "description": "自包含模型菜单，沿用最终 36px 触发器和 40px 选项；此静态样例展示展开态，实际键盘行为见表面文档。",
+      "html": "<div class=\"ds-flow-model\"><div class=\"ds-flow-options\" role=\"listbox\" aria-label=\"对话模型\"><button role=\"option\" aria-selected=\"true\"><span>DeepSeek Flash</span><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m5 12 4 4L19 6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button><button role=\"option\" aria-selected=\"false\">GPT-4.1</button></div><button class=\"ds-flow-trigger\" aria-haspopup=\"listbox\" aria-expanded=\"true\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m12 3 9 5v8l-9 5-9-5V8l9-5zm0 10v8M3 8l9 5 9-5M7.5 5.5l9 5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\"/></svg><span>DeepSeek Flash</span><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m6 9 6 6 6-6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button></div>",
+      "css": ".ds-flow-model{color:var(--cv-text,#191919);font:14px/1.5 -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif;max-width:100%}.ds-flow-model button{font:inherit;color:inherit;border:0;cursor:pointer;background:none}.ds-flow-trigger{display:inline-flex;align-items:center;gap:7px;min-height:36px;padding:8px 10px;border-radius:8px;margin-top:8px}.ds-flow-options{display:flex;flex-direction:column;min-width:200px;width:max-content;max-width:calc(100vw - 48px);max-height:45dvh;overflow:auto;padding:6px;border-radius:14px;background:var(--cv-surface,#fff);box-shadow:0 14px 45px rgba(0,0,0,.13)}.ds-flow-options>button{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;min-height:40px;padding:10px 12px;border-radius:9px;text-align:left}.ds-flow-options>button:is(:hover,[aria-selected=true]){background:var(--cv-selected,#e5e5e5)}.ds-flow-trigger:hover{background:var(--cv-hover,#f0f0f0)}.ds-flow-model button:focus-visible{outline:2px solid var(--cv-focus,#3686ad);outline-offset:3px}.ds-flow-model button:disabled{opacity:.4;cursor:default}"
+    },
+    {
+      "name": "制作流程：有界提案与采用",
+      "kind": "custom",
+      "description": "分镜字段自身滚动，计数与明确采用动作独立于编辑区；样例字段来自实际组件结构。",
+      "html": "<div class=\"ds-flow-proposal\"><div class=\"ds-flow-scroll\"><section><label>镜头 1<input value=\"活动开场\"/></label><label>画面<textarea rows=\"3\">镜头缓缓推向活动入口。</textarea></label><label>旁白<textarea rows=\"2\">今天，我们一起走进校园。</textarea></label><div class=\"ds-flow-seconds\" role=\"group\" aria-label=\"镜头 1 时长\"><button aria-pressed=\"true\">5s</button><button aria-pressed=\"false\">10s</button><button aria-pressed=\"false\">15s</button></div></section></div><div class=\"ds-flow-adopt\"><span>1 个镜头 · 5 秒</span><button>采用分镜，不生成视频</button></div></div>",
+      "css": ".ds-flow-proposal{display:flex;flex-direction:column;max-height:calc(100dvh - 160px);min-height:0;max-width:520px;color:var(--cv-text,#191919);font:14px/1.5 -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif}.ds-flow-scroll{display:grid;gap:20px;min-height:120px;max-height:min(48dvh,calc(100dvh - 420px));overflow:auto;padding:4px;overscroll-behavior:contain}.ds-flow-scroll section{border-top:1px solid var(--cv-line,#e7e7e7);padding-top:16px;display:grid;gap:10px}.ds-flow-scroll label{display:grid;gap:6px;color:var(--cv-muted,#707070);font-size:13px}.ds-flow-scroll input,.ds-flow-scroll textarea{width:100%;padding:10px;border:1px solid var(--cv-line,#e7e7e7);border-radius:8px;background:var(--cv-surface,#fff);color:var(--cv-text,#191919);resize:vertical;font:inherit;font-size:14px;line-height:1.5}.ds-flow-proposal button{font:inherit;cursor:pointer;border:0;color:inherit}.ds-flow-seconds{display:flex;gap:4px}.ds-flow-seconds button{border-radius:7px;padding:5px 12px;background:transparent}.ds-flow-seconds button[aria-pressed=true],.ds-flow-seconds button:hover{background:var(--cv-selected,#e5e5e5)}.ds-flow-adopt{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex:none;margin-top:16px}.ds-flow-adopt span{margin-right:auto;color:var(--cv-muted,#707070);font-size:12px}.ds-flow-adopt button{min-height:38px;padding:9px 16px;border-radius:9px;background:var(--cv-button,#191919);color:var(--cv-on-button,#fff);font-weight:500;white-space:nowrap}.ds-flow-adopt button:hover{opacity:.88}.ds-flow-proposal :is(button,input,textarea):focus-visible{outline:2px solid var(--cv-focus,#3686ad);outline-offset:3px}@media(max-width:600px){.ds-flow-proposal{max-height:calc(100dvh - 152px)}.ds-flow-scroll{max-height:max(120px,calc(100dvh - 440px))}.ds-flow-adopt{flex-wrap:wrap;gap:8px}.ds-flow-adopt button{margin-left:auto}.ds-flow-adopt span{margin-right:0}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "团队视频创作工作台",
+    "overview": "默认浅色，设置页提供外观切换，浏览器保存选择。两种外观使用相同的布局、字号、控件尺寸和文字。正文使用系统中文字体，命令使用等宽字体。\n\n沿用用户认可的即梦式操作工作台：内容、参数和结果是视觉主体，制作流程复用现有中性表面、紧凑控件和线性图标。本次记录来自最终代码与本地浅色截图，不改变品牌或确立新的装饰语言。",
+    "rules": [
+      {
+        "name": "参数选择器",
+        "section": "components",
+        "body": "使用原生选择与独立的 12px 箭头，文字和箭头相隔 7px。"
+      },
+      {
+        "name": "Bounded Editor",
+        "section": "layout",
+        "body": "镜头列表和 AI 分镜的长内容在自身区域滚动；镜头总数、明确采用和成片合成操作不随内容末尾离开可见操作区。窄屏保留可编辑字段和可达焦点，不以压缩正文代替滚动。"
+      },
+      {
+        "name": "Model Control",
+        "section": "components",
+        "body": "参数随当前模型显示：Muse 图片保留五种比例，视频保留两种比例与 5／6／8／10 秒（默认 6 秒）；分辨率标为“原生”，隐藏固定像素、图片质量与随机种子控件。切回已有模型恢复其参数选项。模型浮层打开后聚焦当前可用项，上下方向键及 Home／End 移动焦点，Escape 关闭并返回触发器，选中模型后也返回触发器。"
+      },
+      {
+        "name": "Native Result",
+        "section": "components",
+        "body": "成品预览保留完整原生画面；详情用实际尺寸和实际时长描述输出，将“期望比例”“期望时长”单列，不能用请求值冒充实测值。Muse 详细信息在浅色下采用局部较深灰色修正，深色继续沿用辅助文字变量，不改写全局辅助文字规范。"
+      },
+      {
+        "name": "Chat Model Menu",
+        "section": "components",
+        "body": "独立对话、画布写作与 AI 分镜使用生成区同族的自定义模型菜单，不使用原生模型下拉框。菜单自身提供主题变量与控件样式，不依赖对话页祖先容器。触发器依次排列 15px 盒形图标、模型名（独立对话 13px、文本节点 12px）和 14px 下拉箭头，间距 7px，最小高度 36px、圆角 8px。菜单从触发器上方展开，间隔 8px、圆角 14px、内边距 6px；选项最小高度 40px、圆角 9px，当前项同时显示灰底与右侧 17px 对勾。菜单最小宽 200px、最大宽为视口减 48px，最大高 45dvh、超出时自身滚动；浅深外观沿用主题操作面、选中背景和焦点色。打开时聚焦当前项，上下方向键与 Home／End 移动焦点；选中或 Escape 关闭并返回触发器，点击外部或焦点移出组件时关闭。"
+      },
+      {
+        "name": "Chat History Menu",
+        "section": "components",
+        "body": "历史行的操作菜单与模型菜单共用圆角 14px、内边距 6px 和柔和偏移阴影；菜单宽 180px，四边至少留 8px 视口余量。操作项为最小高 40px、圆角 9px、14px 文字与 16px 线性图标，图文间距 9px。右键或 Shift+F10／ContextMenu 打开目标行菜单，不切换正在阅读的会话；不显示省略号或额外操作按钮。当前会话保留选中背景，菜单目标使用悬停背景。打开时聚焦首个可用项，方向键及 Home／End 导航，Escape／Tab 关闭并返回入口，外部点击、焦点移出、滚动或窗口缩放时关闭；140ms 进入动画遵守减少动态效果设置。"
+      },
+      {
+        "name": "Chat Focus",
+        "section": "components",
+        "body": "独立对话输入区获得焦点时，整个输入容器显示主题焦点色的 2px 外描边，偏移 2px；普通按钮、字段和链接保持可见键盘焦点。浅深外观使用相同反馈，不用低对比度分隔线代替焦点。文本节点生成器沿用画布生成器的焦点处理，模型及生成按钮保留 2px 可见键盘焦点。"
+      },
+      {
+        "name": "Canvas Text Composer",
+        "section": "components",
+        "body": "选中文本节点时在节点下方显示与图片／视频同族的生成器：桌面宽 520px、圆角 16px、内边距 16px 14px 12px，使用画布操作面与阴影。输入区后为模型、四角星数字价格和 36px 生成／停止按钮；模型名、价格和过程状态为 12px。面板跟随节点与视口，使用实际测量高度，节点显露与面板定位均为底部视口栏保留 80px 空间。760px 及以下沿用画布生成器布局：左右各留 12px、底部 68px、最大高度 46dvh、圆角 14px，生成按钮缩至 32px。生成器不显示右侧聊天栏、历史、消息列表或“替换文字”“新建文本节点”操作。"
+      },
+      {
+        "name": "Direct Canvas Writing",
+        "section": "components",
+        "body": "画布新发起的完整回复直接更新原文本节点，使用已有撤销流程；生成器只显示“生成中”“正在写入”、重连或错误等邻近状态。切换选择后，已受理的生成和回写继续，结果仍归原节点；选中及有活动任务的节点会话保持挂载，多节点回写按队列顺序处理。自动写入仅处理发起标签页保存的待写入回复，不采用旧历史；写入前对照发送时原文与当前文字，并检查画布版本。手动编辑冲突保留节点文字，提示“节点文字已被修改，未覆盖。请基于当前文字重新生成。”未完成、停止、失败或中断的回答不写入画布。独立对话保留阅读区、复制、失败重试、删除撤销和明确的“放入画布”操作。"
+      },
+      {
+        "name": "Explicit Adoption",
+        "section": "components",
+        "body": "采用提案、提交候选和采用成片版本是不同操作。候选数和总价紧邻生成入口，两个候选使用确认弹窗；每个候选显示自己的状态与采用／取消入口。当前采用版本用“已采用”文字标识，参考或参数变化提示放在现有生成器中，不替换已采用画面。"
+      },
+      {
+        "name": "Retained Result",
+        "section": "components",
+        "body": "替换任务的等待、失败和取消不移除已采用的视频或已有旁白；状态说明指出当前保留的结果，并提供明确重试。生成期间文稿变化时显示待采用音轨与“使用生成时的文稿与旁白”，不静默覆盖当前编辑内容。"
+      }
+    ],
+    "dos": [
+      "**Do** 用可读文字呈现排队、失败、保留旧结果、价格与重试原因。",
+      "**Do** 在长列表和窄屏弹窗中保留计数、采用与合成操作的可达性。",
+      "**Do** 复用中性主题、线性图标和有焦点反馈的共享模型菜单。"
+    ],
+    "donts": [
+      "**Don't** 将本地演示素材、测试回复或实验能力包装成真实生成或已上线功能。",
+      "**Don't** 用原片段连播代替最终成片预览，或把按句分配字幕称为逐字语音对齐。",
+      "**Don't** 将此次扩展改成品牌重设计，或让用户修复原始分镜 JSON。"
+    ],
+    "keyCharacteristics": [
+      "中性浅深操作面，彩色 Logo 保留品牌识别。",
+      "系统中文字体，正文、字段、参数和状态分级。",
+      "内容区域滚动，关键采用与合成操作保持可达。"
+    ]
+  }
+}

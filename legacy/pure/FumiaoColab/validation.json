@@ -1,0 +1,29 @@
+{
+  "date": "2026-11-10",
+  "platform": "macOS 13+, Apple Silicon",
+  "build": "passed",
+  "signature": "ad-hoc; codesign --verify --deep --strict passed",
+  "native_ui": "login accessible fields, gated Google binding, logs open/close verified",
+  "bridge_tests": 10,
+  "local_platform_integration": [
+    "login",
+    "server-owned instance attribution",
+    "cross-user isolation",
+    "heartbeat",
+    "claim",
+    "server-validated synthetic MP4",
+    "idempotent delivery receipt",
+    "Turbo excluded"
+  ],
+  "not_exercised": [
+    "live Google authorization",
+    "paid Colab allocation",
+    "full H3 download/load",
+    "real GPU generation",
+    "Drive persistence",
+    "live cloud auto-release"
+  ],
+  "production_server_modified": false,
+  "visual_review": "ship within reviewed UI scope; both material findings resolved",
+  "archive": "verified"
+}

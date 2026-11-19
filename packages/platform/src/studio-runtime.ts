@@ -13,7 +13,7 @@ export function studioConfiguration(env: NodeJS.ProcessEnv) {
     missing.push("MEDIA_DIRECTORY or S3_BUCKET");
   if (missing.length)
     throw new Error(
-      `Studio configuration is missing ${missing.join(", ")}. Set them in .env, STUDIO_ENV_FILE, or the process environment. See docs/STUDIO.md.`,
+      `Studio configuration is missing ${missing.join(", ")}. Set them in .env, STUDIO_ENV_FILE, or the process environment. See docs/ORIGINAL_NEST_STUDIO.md.`,
     );
   const encoded = env
     .ENCRYPTION_KEY!.replaceAll("-", "+")

@@ -7,7 +7,7 @@ export class CanvasSubmissionModels {
     const rows = (
       await sql.query(`SELECT c.id,c.descriptor->>'kind' AS kind,v.manifest->'canvasSubmission' AS policy
       FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
-      WHERE c.descriptor->>'kind' IN ('image','video','audio') ORDER BY c.position,c.id`)
+      WHERE (v.manifest->'originalSubmission'->>'version') IS DISTINCT FROM '2' AND c.descriptor->>'kind' IN ('image','video','audio') ORDER BY c.position,c.id`)
     ).rows;
     const rules = new Map<string, CanvasSubmissionRule>();
     for (const r of rows) {

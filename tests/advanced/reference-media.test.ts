@@ -13,6 +13,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { Readable } from "node:stream";
+import { loseUploadAcknowledgement } from "../helpers/upload-acknowledgement.js";
 import { databaseFixture } from "../helpers/database.js";
 import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
@@ -331,10 +332,19 @@ async function httpFixture() {
   const stages: string[] = [];
   const plugin: ProviderPlugin = {
     ...gpuReferences,
-    importReference: async (input, output) => {
+    importReference: async (input, output, kind) => {
       stages.push(dirname(input));
       await writeFile(output, "abc");
-      return info;
+      return kind === "video"
+        ? info
+        : {
+            ...info,
+            mime: "audio/wav",
+            w: 0,
+            h: 0,
+            fps: 0,
+            has_audio: true,
+          };
     },
   };
   f.p.registry = new PluginRegistry([plugin]);
@@ -353,13 +363,14 @@ async function httpFixture() {
         new StudioCatalog(f.db).activate(sql, gpuReferences.manifest),
       );
     },
-    async send() {
-      const r = await fetch(url + "/api/h3/references?kind=video", {
+    async send(kind: "video" | "audio" = "video") {
+      const r = await fetch(url + "/api/h3/references?kind=" + kind, {
         method: "POST",
         headers: {
           Cookie: "fm_session=" + token,
           "X-Workspace-Id": "1",
           "Content-Type": "application/octet-stream",
+          "X-File-Name": encodeURIComponent("clips/片段+1"),
         },
         body: "input",
       });
@@ -409,12 +420,86 @@ test("reference conversion is opt-in and versioned; only installed local capabil
   }
 });
 
+for (const kind of ["video", "audio"] as const) {
+  for (const offline of [false, true]) {
+    test(`committed ${kind} reference survives acknowledgement loss with database ${offline ? "offline" : "available"}`, async () => {
+      const f = await httpFixture();
+      try {
+        await f.activate();
+        const response = await loseUploadAcknowledgement(
+          f.db,
+          () => f.send(kind),
+          offline,
+        );
+        const { rows } = await f.db.query(
+          `SELECT a.public_id, a.object_key, a.original_kind, a.state,
+             r.name, r.plugin_id, r.plugin_version, u.public_id AS owner
+           FROM assets a JOIN asset_reference_media r ON r.asset_id=a.id
+           JOIN users u ON u.id=a.owner_id`,
+        );
+        assert.equal(rows.length, 1);
+        const [asset] = rows;
+        assert.equal(asset.state, "ready");
+        assert.equal(asset.original_kind, "ref_" + kind);
+        assert.equal(asset.name, "片段+1");
+        assert.equal(asset.plugin_id, f.plugin.manifest.id);
+        assert.equal(asset.plugin_version, f.plugin.manifest.version);
+        assert.deepEqual(
+          Buffer.from(await f.p.storage.read(asset.object_key)),
+          Buffer.from("abc"),
+        );
+        assert.deepEqual(
+          response,
+          offline
+            ? { status: 500, body: { detail: "请求处理失败" } }
+            : {
+                status: 200,
+                body: {
+                  id: asset.public_id,
+                  kind: "ref_" + kind,
+                  mime: kind === "video" ? "video/mp4" : "audio/wav",
+                  w: kind === "video" ? 96 : 0,
+                  h: kind === "video" ? 64 : 0,
+                  size: 3,
+                  seconds: 2,
+                  has_audio: kind === "audio",
+                  name: "片段+1",
+                  owner: Number(asset.owner),
+                },
+              },
+        );
+        const url = f.url + "/media/" + asset.public_id;
+        assert.equal((await fetch(url)).status, 401);
+        const media = await fetch(url, {
+          headers: { Cookie: "fm_session=" + f.token },
+        });
+        assert.equal(media.status, 200);
+        assert.equal(await media.text(), "abc");
+        assert.equal(f.stages.length, 1);
+        await assert.rejects(stat(f.stages[0]), { code: "ENOENT" });
+      } finally {
+        await f.finish();
+      }
+    });
+  }
+}
+
 test("reference uploads roll back private objects and metadata on partial writes, quota races, or invalid plugin output", async () => {
   const f = await httpFixture();
   try {
     await f.activate();
     const putFile = f.p.storage.putFile!.bind(f.p.storage),
       convert = f.plugin.importReference!;
+    await f.db.query(`
+      CREATE FUNCTION reject_reference() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'synthetic reference rejection'; END $$;
+      CREATE CONSTRAINT TRIGGER reject_reference AFTER INSERT ON asset_reference_media
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_reference()`);
+    assert.equal((await f.send("audio")).status, 500);
+    for (const table of ["assets", "asset_reference_media"])
+      assert.equal((await f.db.query("SELECT 1 FROM " + table)).rows.length, 0);
+    assert.deepEqual(await readdir(f.directory), []);
+    await f.db.query("DROP TRIGGER reject_reference ON asset_reference_media");
     f.p.storage.putFile = async (...args) => {
       await putFile(...args);
       throw Error("synthetic partial write");

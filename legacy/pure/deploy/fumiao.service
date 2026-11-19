@@ -1,0 +1,21 @@
+[Unit]
+Description=Fumiao AIGC team video studio
+After=network.target
+[Service]
+User=fumiao
+Group=fumiao
+WorkingDirectory=/srv/fumiao/app
+Environment=FUMIAO_DATA=/srv/fumiao/data
+Environment=FUMIAO_SITE=https://nvmes.com
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/srv/fumiao/venv/bin/uvicorn server:app --host 127.0.0.1 --port 18732 --timeout-graceful-shutdown 12 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/fumiao/data
+PrivateTmp=yes
+UMask=0077
+[Install]
+WantedBy=multi-user.target

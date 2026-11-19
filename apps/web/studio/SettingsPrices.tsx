@@ -51,6 +51,22 @@ function PriceForm({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
+  const labels = new Map<string, string>(sections);
+  const groups = new Map<string, StudioState["pricing"]["items"]>(
+    sections.map(([key]) => [key, []]),
+  );
+  for (const price of pricing.items) {
+    if (catalog[price.model]?.hidden) continue;
+    const key =
+      catalog[price.model]?.provider === "flow" &&
+      price.model.startsWith("flow:")
+        ? "flow:" + price.kind
+        : price.model;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(price);
+  }
+  for (const [key, prices] of groups) if (!prices.length) groups.delete(key);
+
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending.current) return;
@@ -83,17 +99,13 @@ function PriceForm({
 
   return (
     <form id="price-form" onSubmit={save}>
-      {sections.map(([id, label]) => {
-        const rows = pricing.items.filter(
-          ({ model, kind }) =>
-            !catalog?.[model]?.hidden &&
-            (id === "flow:image" || id === "flow:video"
-              ? model.startsWith("flow:") && id === "flow:" + kind
-              : model === id),
-        );
-        if (!rows.length) return null;
-        return <PriceSection key={id} label={label} rows={rows} />;
-      })}
+      {Array.from(groups, ([key, rows]) => (
+        <PriceSection
+          key={key}
+          label={labels.get(key) || catalog[key]?.label || key}
+          rows={rows}
+        />
+      ))}
       <p className="form-message" role="status">
         {message}
       </p>

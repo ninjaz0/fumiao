@@ -42,6 +42,23 @@ export class Postgres implements Database {
 export async function one(sql: Sql, statement: string, params: any[] = []) {
   return (await sql.query(statement, params)).rows[0];
 }
+/** Only a confirmed abort is safe to compensate after losing a COMMIT reply. */
+export async function transactionCommitted(
+  db: Sql,
+  xid: string,
+  error: unknown,
+) {
+  const {
+    rows: [transaction],
+  } = await db.query<{ status: string | null }>(
+    "SELECT pg_xact_status($1::xid8) AS status",
+    [xid],
+  );
+  if (transaction.status === "committed") return true;
+  if (transaction.status === "aborted") return false;
+  throw error;
+}
+
 export async function migrate(db: Database) {
   await db.transaction(async (sql) => {
     await sql.query("SELECT pg_advisory_xact_lock(2489731)");

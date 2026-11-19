@@ -1,0 +1,14 @@
+FumiaoColab
+
+Google Colab allocation and authentication helpers, and MiniMax H3 memory
+management routines are adapted from wy51ai/easycolab (Apache License 2.0).
+https://github.com/wy51ai/easycolab
+Source blobs inspected 2026-11-10:
+colab_bridge.py af982fa6d8df8d03b88ba488b6555dc957e77525
+app.py a679d2a072bba2f4242e700245f98f8c73e78448
+
+Changes: standalone Fumiao account ownership, H3-only native UI and worker,
+isolated Google credentials, managed-runtime-only release, cloud idle release,
+full-image prompt-cache fingerprints, pinned deployment engine revision.
+
+See LICENSE-EasyColab.txt for the upstream Apache License 2.0 text.

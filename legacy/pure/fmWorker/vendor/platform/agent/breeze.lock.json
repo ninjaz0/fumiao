@@ -1,0 +1,308 @@
+{
+  "repository": "BreezeBlue/Breeze-TTS-2",
+  "revision": "3e28c5151381a722f1d8661b4118c298caa77aa4",
+  "source_revision": "daa6cb2efe5471f09369229f322d20bb956cb3c3",
+  "source_url": "https://codeload.github.com/breezeblue-ai/breeze-tts/tar.gz/daa6cb2efe5471f09369229f322d20bb956cb3c3",
+  "source_sha256": "f5b739daec6291cd27d5e5a18539c33df2c8b101faf5aa7e0207a32bf3141463",
+  "files": [
+    {
+      "path": "LICENSE",
+      "bytes": 18719,
+      "sha256": "f158b88cd51473925e1ce8c39f4c7c9e419304ad71371896c4ff18fa1351dca2",
+      "git_blob": "91765f274e37e08a9fced19a6167ca9d0e52f799",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/08776587dba573020f8dee33ec53c0ba6e228207/LICENSE"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/LICENSE"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/LICENSE"
+        }
+      ]
+    },
+    {
+      "path": "audio_tokenizer/config.json",
+      "bytes": 2336,
+      "sha256": "ee65bb901c876664ab8707c487157aa1a6ee57c65969b28fb5ec9dc211e68167",
+      "git_blob": "06cc8dc4c5ec8a1929086b71b98c313020d9268b",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/71b71159141a6cd72ac6b992244ee656d5ea1577/audio_tokenizer/config.json"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/audio_tokenizer/config.json"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/audio_tokenizer/config.json"
+        }
+      ]
+    },
+    {
+      "path": "audio_tokenizer/configuration.json",
+      "bytes": 76,
+      "sha256": "6bc26d64eb5024b4d1dab5a52371958b429256d6c9d59787f1f5294a54e0cebd",
+      "git_blob": "ab58e2eaf53cd14a1a2a7527d9261ceea93a24cd",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/690fbcc8e035ce65473dbc152a606dc43a61cd9c/audio_tokenizer/configuration.json"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/audio_tokenizer/configuration.json"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/audio_tokenizer/configuration.json"
+        }
+      ]
+    },
+    {
+      "path": "audio_tokenizer/model.safetensors",
+      "bytes": 682293092,
+      "sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258",
+      "git_blob": "026d66bfb5d730dcfd56450c5e9e51b3ef4e0712",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/57c7163762d0e47e90880898d28388b5358ccdfd/audio_tokenizer/model.safetensors"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/audio_tokenizer/model.safetensors"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/audio_tokenizer/model.safetensors"
+        }
+      ]
+    },
+    {
+      "path": "audio_tokenizer/preprocessor_config.json",
+      "bytes": 234,
+      "sha256": "fcb3805e597e786d4067706e602f6688524640f8d3396790e2e09b5942fcbdfb",
+      "git_blob": "ba40914f4f49ab98a8ca545d4892ef7291a39592",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/358411c9950947b72483a0bbe95e01430a3b6851/audio_tokenizer/preprocessor_config.json"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/audio_tokenizer/preprocessor_config.json"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/audio_tokenizer/preprocessor_config.json"
+        }
+      ]
+    },
+    {
+      "path": "config.json",
+      "bytes": 10161,
+      "sha256": "57849eb756ca1602efe89afcc5c70379dd127f8deeb9f655204d4340190ea929",
+      "git_blob": "4b44ed4d6189c57b780cd73915579de059b3ba18",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/4baff50d1b226be95f891e3b7cf53d4a3626f89a/config.json"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/config.json"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/config.json"
+        }
+      ]
+    },
+    {
+      "path": "generation_config.json",
+      "bytes": 251,
+      "sha256": "2ef3f2c0ab8d9ad241059138a795433c5410fd9954efb9625674ecd2a9529434",
+      "git_blob": "da03eee098c41e30790890d4c998325ddc1bd0b9",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/ce97259461e6a24e3ee1a74de615654982a9f2a0/generation_config.json"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/generation_config.json"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/generation_config.json"
+        }
+      ]
+    },
+    {
+      "path": "model-00001-of-00002.safetensors",
+      "bytes": 4961989890,
+      "sha256": "abf813781256e10cbe81f2dbb415f897556225d4dfa0282d67aa8ea164e114a9",
+      "git_blob": "41fd609c2111cfd96e0438ae7796f46c9aaaea9a",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/f9733345fca7cdb1f2a2faed7fe13a2336fcf26f/model-00001-of-00002.safetensors"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/model-00001-of-00002.safetensors"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/model-00001-of-00002.safetensors"
+        }
+      ]
+    },
+    {
+      "path": "model-00002-of-00002.safetensors",
+      "bytes": 2004567152,
+      "sha256": "36aa73b1a11361e1774db90d9c63c63303b294c022de112aa51904d940edcef1",
+      "git_blob": "b6ff8b3dbb58d902d3d1c6cbd7db3f1c0daebb3e",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/bd7f4fd826ea0de9b0c6527aa06c68ddb0d784c8/model-00002-of-00002.safetensors"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/model-00002-of-00002.safetensors"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/model-00002-of-00002.safetensors"
+        }
+      ]
+    },
+    {
+      "path": "model.safetensors.index.json",
+      "bytes": 109004,
+      "sha256": "19977e3d96bb502ed3165b48adff094f6bd71ec3d349940d1a3ba6a0060bd5e3",
+      "git_blob": "b4467c038557531368ea999361e726fe61668ecf",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/ecc2146d653d91f7de45a20d8bb834bb91705641/model.safetensors.index.json"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/model.safetensors.index.json"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/model.safetensors.index.json"
+        }
+      ]
+    },
+    {
+      "path": "special_tokens_map.json",
+      "bytes": 886,
+      "sha256": "194f265bb588d142a16f27d9576104eb3dab3d7ba9961541d2d6e3d5e77e6470",
+      "git_blob": "1556c52ad39a242591f2dd6ed0401bd3582ba005",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/873d9384ca8ff5011c9caf00ad4c4f51f0fa95f9/special_tokens_map.json"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/special_tokens_map.json"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/special_tokens_map.json"
+        }
+      ]
+    },
+    {
+      "path": "tokenizer.json",
+      "bytes": 33386945,
+      "sha256": "d3ec9ac3eb2392389b9f5112e85d8b43316494addb587ba7b7a9d61eac23af96",
+      "git_blob": "fb1416c4de06b8c5a2dced4098f5c2aa101ba9cc",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/5b1bbfcc58bd39a49fbe23ad8ca1a3deb2d0b2b4/tokenizer.json"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/tokenizer.json"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/tokenizer.json"
+        }
+      ]
+    },
+    {
+      "path": "tokenizer_config.json",
+      "bytes": 1157960,
+      "sha256": "2c084fd6725c2284e8aa6da095a8d036d48fe79665595bfcd50371821b620e44",
+      "git_blob": "466af463b97cdd1e912320df115ce3bdd54d1a85",
+      "sources": [
+        {
+          "id": "modelscope",
+          "name": "\u9b54\u642d",
+          "url": "https://modelscope.cn/models/BreezeBlue/Breeze-TTS-2/resolve/d770d9606fe12f920ea1401ffa03e21cb74c3f22/tokenizer_config.json"
+        },
+        {
+          "id": "huggingface",
+          "name": "Hugging Face",
+          "url": "https://huggingface.co/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/tokenizer_config.json"
+        },
+        {
+          "id": "hf-mirror",
+          "name": "HF \u955c\u50cf",
+          "url": "https://hf-mirror.com/BreezeBlue/Breeze-TTS-2/resolve/3e28c5151381a722f1d8661b4118c298caa77aa4/tokenizer_config.json"
+        }
+      ]
+    }
+  ]
+}

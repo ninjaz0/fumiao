@@ -816,7 +816,75 @@ test(
     }
   },
 );
-
+test("pinned original function differential: rejection order and real composition/subtitles", async () => {
+  const f = await fixture();
+  try {
+    const oracle = JSON.parse(
+      (
+        await exec(process.env.STUDIO_PYTHON || "python3", [
+          "scripts/storyboard-export-fixtures.py",
+          join(f.directory, f.video.id),
+          join(f.directory, f.voice.id),
+        ])
+      ).stdout,
+    );
+    const cases: any[] = [];
+    async function attempt(doc: any, revision = 1) {
+      await f.db.query(
+        "UPDATE canvas_documents SET document=$2 WHERE project_id=$1",
+        [f.projectId, Buffer.from(JSON.stringify(doc))],
+      );
+      try {
+        await f.service.create(f.admin, f.project.id, {
+          uid: randomUUID(),
+          expected_revision: revision,
+        });
+        cases.push({ status: 200 });
+      } catch (e: any) {
+        cases.push({ status: e.status, error: e.message });
+      }
+    }
+    const node = { ...f.doc.nodes[0], narration_job: null, narration_text: "" };
+    const doc = (n: any = node) => ({ nodes: [n], edges: [], shots: ["shot"] });
+    await attempt(doc(), 2);
+    await attempt({ nodes: [], edges: [], shots: [] });
+    await attempt(doc({ ...node, media_id: null }));
+    await attempt(doc({ ...node, narration_text: "旁白" }));
+    assert.deepEqual(cases, oracle.cases);
+    await f.db.query(
+      "UPDATE canvas_documents SET document=$2 WHERE project_id=$1",
+      [f.projectId, Buffer.from(JSON.stringify(f.doc))],
+    );
+    const created = await f.service.create(f.admin, f.project.id, {
+      uid: randomUUID(),
+      expected_revision: 1,
+    });
+    await f.service.execute(
+      (
+        await one(
+          f.db,
+          "SELECT id FROM storyboard_exports WHERE public_id=$1",
+          [created.id],
+        )
+      ).id,
+    );
+    const result = (await f.service.list(f.admin, f.project.id)).exports[0];
+    assert.equal(result.state, "done", result.error);
+    assert.equal(
+      (await f.service.subtitles(f.admin, result.id)).body,
+      oracle.srt,
+    );
+    const a = await one(
+      f.db,
+      "SELECT metadata FROM assets WHERE public_id=$1",
+      [result.result],
+    );
+    assert.deepEqual([a.metadata.width, a.metadata.height], oracle.size);
+    assert.equal(a.metadata.duration, oracle.seconds);
+  } finally {
+    await f.cleanup();
+  }
+});
 test("acceptance retains permission, revision, readiness, narration, UID, global queue and quota error order", async () => {
   const f = await fixture();
   try {

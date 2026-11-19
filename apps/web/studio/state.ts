@@ -1,4 +1,4 @@
-import { resolve as resolveFlow } from "../canvas-editor/flowPicker";
+import { resolve as resolveFlow } from "../../../legacy/pure/canvas/src/flowPicker";
 
 export type Member = {
   id: number;
@@ -125,6 +125,7 @@ export type Job = {
   };
 };
 export type StudioState = {
+  studio_plugins?: boolean;
   me: Member;
   avatars: { id: string; label: string; url: string }[];
   workspaces: Space[];

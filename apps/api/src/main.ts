@@ -38,6 +38,7 @@ import { packInUse } from "../../../packages/platform/src/packs.js";
 import { Operations } from "../../../packages/platform/src/operations.js";
 import { GpuGateway } from "../../../packages/platform/src/gpu.js";
 import { OriginalSettings } from "../../../packages/original-api/src/settings.js";
+import { browserOrigins, secureSessionCookie } from "./browser-origins.js";
 const PLATFORM = Symbol("platform");
 type AuthRequest = Request & { actor: Actor };
 function token(req: Request) {
@@ -72,7 +73,7 @@ class Api {
     const value = await this.p.login(body, req.ip || "unknown");
     res.cookie("fm_session", value, {
       httpOnly: true,
-      secure: process.env.PUBLIC_URL?.startsWith("https:"),
+      secure: secureSessionCookie(req.headers.origin),
       sameSite: "strict",
       maxAge: 30 * 86400000,
       path: "/",
@@ -517,6 +518,9 @@ class Api {
   }
 }
 export async function createApp(p: Platform) {
+  const origins = browserOrigins(
+    process.env.PUBLIC_URL || "http://localhost:3000",
+  );
   @Module({
     controllers: [Api],
     providers: [{ provide: PLATFORM, useValue: p }],
@@ -530,11 +534,10 @@ export async function createApp(p: Platform) {
     res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
     try {
-      const publicUrl = process.env.PUBLIC_URL || "http://localhost:3000";
       if (
         !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
         req.headers.origin &&
-        req.headers.origin !== publicUrl
+        !origins.has(req.headers.origin)
       )
         throw new DomainError(403, "请求来源无效");
       const open = ["/health", "/api/login", "/api/register"];

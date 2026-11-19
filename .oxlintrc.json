@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": { "correctness": "error" },
+  "rules": {
+    "no-control-regex": "warn",
+    "no-unused-vars": "warn",
+    "no-useless-escape": "warn",
+    "require-yield": "warn",
+    "unicorn/no-useless-spread": "warn"
+  }
+}

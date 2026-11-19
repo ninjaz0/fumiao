@@ -1,0 +1,23 @@
+tree d0185e72854a10df148afa0ef41dcd7283bf8836
+parent 0e70b969c6951816430044401ce90a86241d0e4b
+author Comfy Org PR Bot <snomiao+comfy-pr@gmail.com> 1790826276 +0900
+committer GitHub <noreply@github.com> 1790826276 -0700
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqvdckCRC1aQ7uu5UhlAAAcMgQABw/PK3EHasmrjEeD+naP/CL
+ yWGWPuVcyWwxm1Vv6tu5lhEZtT0W3ogm58y892ZWAS08W5YbTuX2btacNQ49wH+r
+ o331KokCslQ/kxHt1uA0RRGjF9Pw+3hySbf88CYTz6PrH8WkfqJbSbyH/8yjPRtw
+ zCyQuUeXiyau30MwsmurC6UpPO+eY79lBYTqX14txjkZFePWOSpKIUCaCqFKrMwy
+ wWUa/f4AjmegxrAVUkKlzzEsQOe7F+mALOSD0tiEDfbka51sHteuPrXN1QiImYxZ
+ lcf0gVU29HXKqLwrlNiPe9P5oNCKNmAc9koUk1E93pds2BeyB1rnDa4cy8fRg6ML
+ 7ztNbUXdfewziHroJBbedxyqpZ4JInCf/k6JZxNZ8cPK8jUDvx0tW4r9QeoobZmd
+ i5njYMOmhcGmyKsT/bEIz1xzK5N/yCEzQnriB8VT6FvVqma2pcHveJ/92LtCihh4
+ zrsP5AnS7CNY5euqIM1JCTiJXSum2j41GjbUcjUj+P6Od6tqzFqm53SWDFLIy6rI
+ UYqp94HTbJZEFkweNoK9JiVAeI3fd/Pct2aKLfD3hDdAef1HARTedxfLQ4dxRwfE
+ vO2zZSAECbmdloqR8rWUtNJ3YdTKl8JVt/dAM1xPPAQAvIqpSOk8nCI4/KKbw3il
+ hUiwltnGzRfuj3b33C+s
+ =0Gmb
+ -----END PGP SIGNATURE-----
+ 
+
+Bump comfyui-frontend-package to 1.53.10 (#16456)

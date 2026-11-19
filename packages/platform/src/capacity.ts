@@ -6,6 +6,15 @@ export const JOB_RESERVE = 64 << 20;
 export const EXPORT_RESERVE = 256 << 20;
 export const capacityMessage = "空间不足，请先清理素材或作品";
 
+export function isCapacityRejection(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "P1001" || error.code === "P1002")
+  );
+}
+
 /** A cheap preflight; the deferred database constraint is the authoritative
  * concurrent quota check. Include this transaction's uncommitted deltas. */
 export async function capacity(sql: Sql, storage: Storage, extra: number) {

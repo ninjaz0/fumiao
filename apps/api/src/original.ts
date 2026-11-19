@@ -82,6 +82,7 @@ import {
   originalWorkspace,
   type OriginalAuthRequest,
 } from "./original-request.js";
+import { browserOrigins, secureSessionCookie } from "./browser-origins.js";
 type AuthRequest = OriginalAuthRequest & { draft: OriginalDraft };
 function failure(error: any, res: Response) {
   if (res.headersSent || res.destroyed) {
@@ -549,10 +550,10 @@ class OriginalApi {
   @Head("health") healthHeaders() {
     return this.health();
   }
-  private signedIn(res: Response, value: string) {
+  private signedIn(req: Request, res: Response, value: string) {
     res.cookie("fm_session", value, {
       httpOnly: true,
-      secure: process.env.PUBLIC_URL?.startsWith("https:"),
+      secure: secureSessionCookie(req.headers.origin),
       sameSite: "strict",
       maxAge: 30 * 86400000,
       path: "/",
@@ -566,7 +567,11 @@ class OriginalApi {
     @Body() body: unknown,
     @Res() res: Response,
   ) {
-    this.signedIn(res, await this.identity.login(body, req.ip || "unknown"));
+    this.signedIn(
+      req,
+      res,
+      await this.identity.login(body, req.ip || "unknown"),
+    );
   }
   @Post("api/register")
   @HttpCode(200)
@@ -575,7 +580,11 @@ class OriginalApi {
     @Body() body: unknown,
     @Res() res: Response,
   ) {
-    this.signedIn(res, await this.identity.register(body, req.ip || "unknown"));
+    this.signedIn(
+      req,
+      res,
+      await this.identity.register(body, req.ip || "unknown"),
+    );
   }
   @Post("api/logout")
   @HttpCode(200)
@@ -663,6 +672,7 @@ class OriginalApi {
 export async function createOriginalApp(p: Platform) {
   const identity = new OriginalIdentity(p);
   const site = process.env.PUBLIC_URL || "http://localhost:3000";
+  const origins = browserOrigins(site);
   const recharge = new OriginalRecharge(identity, site);
   @Module({
     controllers: [
@@ -685,7 +695,11 @@ export async function createOriginalApp(p: Platform) {
   });
   app.use((req: Request, res: Response, next: () => void) => {
     const origin = req.headers.origin;
-    if (!["GET", "HEAD"].includes(req.method) && origin && origin !== site) {
+    if (
+      !["GET", "HEAD"].includes(req.method) &&
+      origin &&
+      !origins.has(origin)
+    ) {
       originalJson(res, { detail: "来源无效" }, 403);
       return;
     }

@@ -37,4 +37,4 @@ createServer(async (req, res) => {
   } catch {
     res.writeHead(400).end('{"error":"Invalid request"}');
   }
-}).listen(Number(process.env.PORT || 4100), "127.0.0.1");
+}).listen(Number(process.env.PORT || 4100), process.env.PLUGIN_HOST || "127.0.0.1");

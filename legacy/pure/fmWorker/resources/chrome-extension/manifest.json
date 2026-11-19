@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "fmWorker 连接助手",
+  "version": "0.3.3",
+  "description": "将当前 Chrome 用户的 Flow 连接到本机 fmWorker。",
+  "minimum_chrome_version": "120",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArmtKKseoeYCr7dTI2kbjc5kj8k5NLnyLytpbVAnUu7oEYWlupEcs0RX9BtTwxNnavqXsIX2MHIuhKbHRJfIHiIinKupGCPeUdjOjn+/WLIY5bH0OM59rcgYR6GCQZ16diQ+55x7IRSpos0WhK2aKIRL2poQlOpBNn5yIPFcF/lQzaxukrOAHLQbf+hFCqoydcrxq2H9u7+3w02n4pUklGJyf216457eBpwXeBNI31nwex9HSBDpGZfEWgcNL1XTrcNP54Qa3u5HuLCijXLosnbYKMZfi7MZvrdUdOlH5AIGieBIDYbtN5/vxbc8iWJPFbtZ47dV3DShaKiq60FnAgQIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "storage",
+    "alarms",
+    "cookies",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://flow.google.com/*",
+    "https://labs.google/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

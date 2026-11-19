@@ -31,6 +31,7 @@ import {
 } from "../../packages/platform/src/importer.js";
 import { sign, fen, zpay } from "../../plugins/payments/src/index.js";
 import { createApp } from "../../apps/api/src/main.js";
+import { loseUploadAcknowledgement } from "../helpers/upload-acknowledgement.js";
 import { OriginalCredits } from "../../packages/original-api/src/credits.js";
 import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
 
@@ -367,6 +368,84 @@ test("asset references and optimistic document saves enforce workspace boundarie
     await f.cleanup();
   }
 });
+for (const offline of [false, true]) {
+  test(`Advanced upload survives lost commit acknowledgement with database ${offline ? "offline" : "available"}`, async () => {
+    const f = await fixture();
+    const app = await createApp(f.p);
+    try {
+      await app.listen(0, "127.0.0.1");
+      const url = await app.getUrl();
+      const workspace = await one(
+        f.db,
+        "SELECT id FROM workspaces WHERE kind='personal' AND owner_id=$1",
+        [f.member.id],
+      );
+      const token = await f.p.login(
+        { name: "member", password: "safe-test-password" },
+        "local",
+      );
+      const cookie = "fm_session=" + token;
+      const bytes = await sharp({
+        create: { width: 11, height: 17, channels: 3, background: "#234567" },
+      })
+        .png()
+        .toBuffer();
+      const response = await loseUploadAcknowledgement(
+        f.db,
+        () =>
+          fetch(url + "/api/assets", {
+            method: "POST",
+            headers: {
+              cookie,
+              "Content-Type": "image/png",
+              "X-Workspace-Id": workspace.id,
+            },
+            body: new Uint8Array(bytes),
+          }),
+        offline,
+      );
+      const { rows } = await f.db.query(
+        "SELECT id, public_id, owner_id, workspace_id, state, object_key FROM assets",
+      );
+      assert.equal(rows.length, 1);
+      const [asset] = rows;
+      assert.equal(asset.state, "ready");
+      assert.equal(asset.workspace_id, workspace.id);
+      assert.equal(asset.owner_id, f.member.id);
+      assert.notEqual(asset.id, asset.public_id);
+      assert.deepEqual(
+        Buffer.from(await f.p.storage.read(asset.object_key)),
+        bytes,
+      );
+      assert.equal(response.status, offline ? 500 : 201);
+      assert.deepEqual(
+        await response.json(),
+        offline ? { message: "请求处理失败" } : { id: asset.id },
+      );
+      const media = url + "/media/" + asset.id;
+      assert.equal((await fetch(media)).status, 401);
+      const denied = await fetch(media, {
+        headers: { cookie: "fm_session=" + f.token },
+        redirect: "manual",
+      });
+      assert.equal(denied.status, 404);
+      assert.equal(denied.headers.get("location"), null);
+      const authorized = await fetch(media, { headers: { cookie } });
+      assert.equal(authorized.status, 200);
+      assert.deepEqual(Buffer.from(await authorized.bytes()), bytes);
+      const usage = await one(
+        f.db,
+        "SELECT storage_used FROM workspaces WHERE id=$1",
+        [workspace.id],
+      );
+      assert.equal(Number(usage.storage_used), bytes.length);
+    } finally {
+      await app.close();
+      await f.cleanup();
+    }
+  });
+}
+
 test("Nest entry points enforce session authentication, CSRF and input validation", async () => {
   const f = await fixture(mock);
   const app = await createApp(f.p);
@@ -917,6 +996,7 @@ test("storage quota is enforced in the database and failed uploads leave no meta
       /quota/,
     );
     assert.equal((await f.p.assets(f.member, f.wid)).length, 0);
+    assert.deepEqual(await readdir(f.directory), []);
     assert.equal(
       Number(
         (
@@ -927,6 +1007,38 @@ test("storage quota is enforced in the database and failed uploads leave no meta
       ),
       0,
     );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("Advanced upload cleans up its own bytes when a deferred check rejects COMMIT", async () => {
+  const f = await fixture();
+  try {
+    const png = await sharp({
+      create: { width: 11, height: 17, channels: 3, background: "#345678" },
+    })
+      .png()
+      .toBuffer();
+    const first = await f.p.upload(f.member, f.wid, png, "image/png");
+    await f.db.query(`
+      CREATE FUNCTION reject_upload() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'synthetic commit rejection'; END $$;
+      CREATE CONSTRAINT TRIGGER reject_upload AFTER INSERT ON assets
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_upload()`);
+    await assert.rejects(
+      f.p.upload(f.member, f.wid, png, "image/png"),
+      /synthetic commit rejection/,
+    );
+    assert.deepEqual((await f.db.query("SELECT id FROM assets")).rows, [first]);
+    assert.deepEqual(await readdir(f.directory), [first.id]);
+    assert.deepEqual(Buffer.from(await f.p.storage.read(first.id)), png);
+    const workspace = await one(
+      f.db,
+      "SELECT storage_used FROM workspaces WHERE id=$1",
+      [f.wid],
+    );
+    assert.equal(Number(workspace.storage_used), png.length);
   } finally {
     await f.cleanup();
   }

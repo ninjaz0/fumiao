@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-09T17:39:30.234800+00:00",
+  "title": "H3 原生输入表面记录",
+  "extensions": {
+    "typographyMeta": {
+      "media-label": {
+        "displayName": "素材标签",
+        "purpose": "素材类型与编号；继承现有中文字体。"
+      }
+    },
+    "shadows": [
+      {
+        "name": "canvas-preview",
+        "value": "var(--cv-shadow)",
+        "purpose": "原生预览对话框复用画布阴影；不增加卡片阴影。"
+      }
+    ],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "composer-wrap",
+        "value": "760px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "画布 H3 模式入口",
+      "kind": "button",
+      "description": "MiniMax H3 模型之后、格式之前；沿用现有参数控件。",
+      "html": "<button class=\"ds-mode\" aria-haspopup=\"listbox\" aria-expanded=\"false\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/></svg>全能参考<svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m6 9 6 6 6-6\"/></svg></button>",
+      "css": ".ds-mode{display:inline-flex;align-items:center;gap:5px;padding:8px 7px;min-height:34px;border:0;border-radius:8px;background:transparent;color:var(--cv-text);font-family:inherit;font-size:12px;white-space:nowrap}.ds-mode:hover{background:var(--cv-hover)}.ds-mode:focus-visible,.ds-add:focus-visible,.ds-slot:focus-visible,.ds-swap:focus-visible,.ds-preview button:focus-visible{outline:2px solid var(--cv-focus);outline-offset:3px;}"
+    },
+    {
+      "name": "画布添加参考",
+      "kind": "button",
+      "refersTo": "reference-card",
+      "description": "参考条末尾的虚线添加入口。",
+      "html": "<button class=\"ds-add\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"/></svg><span>参考内容</span></button>",
+      "css": ".ds-add{width:72px;height:78px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;border:1px dashed var(--cv-line);border-radius:10px;background:transparent;color:var(--cv-text);font-family:inherit;font-size:12px}.ds-mode:focus-visible,.ds-add:focus-visible,.ds-slot:focus-visible,.ds-swap:focus-visible,.ds-preview button:focus-visible{outline:2px solid var(--cv-focus);outline-offset:3px;}"
+    },
+    {
+      "name": "画布首尾帧空槽",
+      "kind": "custom",
+      "refersTo": "frame-slot",
+      "description": "两个固定角色，中间交换；已填充的槽位显示实际媒体并可预览。",
+      "html": "<div class=\"ds-frames\"><button class=\"ds-slot\" aria-label=\"上传首帧\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"/></svg><span>首帧</span></button><button class=\"ds-swap\" aria-label=\"交换首尾帧\" disabled><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M8 3 4 7l4 4M4 7h16M16 13l4 4-4 4M20 17H4\"/></svg></button><button class=\"ds-slot\" aria-label=\"上传尾帧\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"/></svg><span>尾帧</span></button></div>",
+      "css": ".ds-frames{display:flex;align-items:center;gap:10px}.ds-slot{position:relative;flex:none;width:72px;height:78px;display:flex;align-items:center;justify-content:center;border:1px solid var(--cv-line);border-radius:10px;background:var(--cv-surface);color:var(--cv-text);overflow:hidden}.ds-slot>span{position:absolute;bottom:0;left:0;right:0;font-family:inherit;font-size:12px;background:var(--cv-surface);color:var(--cv-text)}.ds-swap{display:grid;place-items:center;width:28px;height:32px;border:0;background:transparent;color:var(--cv-text)}.ds-mode:focus-visible,.ds-add:focus-visible,.ds-slot:focus-visible,.ds-swap:focus-visible,.ds-preview button:focus-visible{outline:2px solid var(--cv-focus);outline-offset:3px;}"
+    },
+    {
+      "name": "画布引用 chip",
+      "kind": "chip",
+      "description": "素材 ID 维持身份，按类型重新编号；示例为无图片缩略图的视频引用。",
+      "html": "<span class=\"ds-token\" contenteditable=\"false\"><span>视频1</span></span>",
+      "css": ".ds-token{display:inline-flex;align-items:center;gap:4px;background:var(--cv-hover);color:var(--cv-text);border-radius:4px;padding:1px 4px;vertical-align:middle;white-space:nowrap;font-family:inherit;font-size:14px}"
+    },
+    {
+      "name": "画布媒体预览",
+      "kind": "custom",
+      "description": "原生 dialog 使用 showModal 打开；静态片段展示无媒体源的音频控件及关闭按钮，不模拟业务事件。",
+      "html": "<dialog open class=\"ds-preview\" aria-label=\"参考素材预览\"><audio controls></audio><button>关闭预览</button></dialog>",
+      "css": ".ds-preview{width:min(960px,calc(100vw - 32px));max-height:calc(100dvh - 32px);border:0;border-radius:14px;padding:20px;background:var(--cv-surface);color:var(--cv-text);box-shadow:var(--cv-shadow);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px}.ds-preview::backdrop{background:#0009}.ds-preview audio{width:min(100%,560px)}.ds-preview>button{padding:8px 16px;border:0;border-radius:8px;background:var(--cv-hover);color:var(--cv-text);font:inherit}.ds-mode:focus-visible,.ds-add:focus-visible,.ds-slot:focus-visible,.ds-swap:focus-visible,.ds-preview button:focus-visible{outline:2px solid var(--cv-focus);outline-offset:3px;}"
+    }
+  ],
+  "narrative": {
+    "northStar": "既有即梦式创作区中的明确输入角色",
+    "overview": "这是现有中性创作区的局部扩展：先选择 MiniMax H3，再选择“全能参考”或“首尾帧”，添加素材并描述画面，最后设置格式、时长和提交。沿用 [DESIGN.md](../../DESIGN.md) 的字体、主题与线性图标，不建立新页面或独立视觉系统。方向依据是 [static/index.html](../../static/index.html) 的 `H3 DIRECTION`；本文件只记录本轮发布代码体现的表面。",
+    "keyCharacteristics": [
+      "模型之后、格式之前的紧凑模式菜单。",
+      "按类型标记的参考素材，或位置明确的首帧／尾帧槽位。",
+      "同一编辑器内完成引用、移除、交换与预览，窄屏保留这些操作。"
+    ],
+    "rules": [
+      {
+        "name": "The Visible Roles Rule",
+        "body": "首帧和尾帧由明确槽位表达；全能参考由素材类型与类型内编号表达。素材数量不能替代用户选择的模式。",
+        "section": "layout"
+      },
+      {
+        "name": "The Stable Reference Rule",
+        "body": "编号可以随删除或顺序变化更新，已有引用不能因此指向另一份素材。",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do 继承现有中性表面、中文字体、主题变量与线性图标。",
+      "Do 保持模型之后的模式入口，以及明确的素材类型与帧位置。",
+      "Do 保留素材 ID 与引用身份，比例冲突时保留已选的有效帧。",
+      "Do 将本地验证、历史 GPU 实验与公网部署状态分别记录。"
+    ],
+    "donts": [
+      "Don't 在本次表面加入智能多帧、智能编辑或超长视频组合流程。",
+      "Don't 把即梦的五十素材或三分钟上限移植为 H3 限制。",
+      "Don't 将这次局部尺寸、既有检测警告或未验证状态提升为全站设计规则。"
+    ]
+  }
+}

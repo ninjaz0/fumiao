@@ -1,0 +1,13 @@
+# Original chat HTTP and SSE
+
+`API_PROTOCOL=original` serves the original `/api/chats` contracts through NestJS and PostgreSQL. The controller covers list, create, detail, rename, delete, restore, send, stop, events and adoption. It accepts the original public conversation, message and workspace identifiers and uses sessions issued by the NestJS original identity API. The existing original chat settings endpoints provide model availability, revision and wallet data.
+
+The streaming chat catalog version and canvas validation plugins must be active in the target database. The HTTP controller does not change catalog activation or provider configuration.
+
+Sending atomically saves messages, reserves credits and records a PostgreSQL outbox entry. The worker uses BullMQ and the versioned provider adapter pinned to the turn. Replaying a send UID returns the current snapshot with no additional reservation. Stop retains the persisted partial reply and refunds the hold. Provider transport failure settles as `failed`, and an expired worker lease settles as `interrupted`. Both release the hold and leave the last reply eligible for retry.
+
+The event stream sends the current full snapshot on connect and new snapshots on changes, with a keepalive after 15 seconds of inactivity. Reconnect starts with the current snapshot. The stream rechecks the original session and selected workspace on every poll. If access is lost or the conversation is deleted, it sends `unavailable` and closes. Closing the browser stream leaves any active turn running.
+
+Run `STUDIO_PYTHON=<original venv python> pnpm test:chat-http` to compare real HTTP and SSE from the manifest-verified FastAPI/SQLite app and NestJS. Set `TEST_DATABASE_URL` and `TEST_REDIS_URL` to isolated test instances to exercise PostgreSQL and BullMQ. Without those settings the test uses PGlite and dispatches from the SQL outbox in-process. Both backends use the same loopback provider simulator. The test compares response status, JSON payloads, SSE headers and frames, provider requests and credit history. It pairs independently allocated public identifiers and normalizes timestamps while checking their types. Intermediate snapshot timing can vary with polling.
+
+The opt-in `/studio?studio_ui=react` compiles the chat panel in Next and uses these same session, workspace and SSE contracts. `pnpm test:studio-chat` compares the pinned browser UI with the React panel over both Python and Nest, using isolated PostgreSQL, Redis and a local provider. The default authenticated `/studio` still uses the pinned Studio and the Python compatibility service by default.

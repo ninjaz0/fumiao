@@ -35,8 +35,11 @@ export class OriginalUI {
     let cached = this.cache.get(name);
     if (!cached) {
       cached = (async () => {
+        const overlay = join(this.root, "baseline/production/static", name);
         const bytes = await readFile(
-          join(this.root, "baseline/production/static", name),
+          existsSync(overlay)
+            ? overlay
+            : join(this.root, "legacy/pure/static", name),
         );
         if (
           bytes.length !== expected.size ||

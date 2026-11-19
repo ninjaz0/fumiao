@@ -6,3 +6,42 @@ node_modules
 .venv
 .env*
 .runtime-advanced
+services
+agent
+fmWorker
+FumiaoColab
+static
+canvas
+
+legacy
+
+# Package the pinned original UI, without legacy services, models or user data.
+!baseline/
+!baseline/**
+!legacy/
+legacy/**
+!legacy/pure/
+legacy/pure/**
+!legacy/pure/static/
+!legacy/pure/static/**
+!legacy/pure/agent/
+legacy/pure/agent/**
+!legacy/pure/agent/install.sh
+!legacy/pure/agent/agent.tgz
+!legacy/pure/agent/agent.tgz.sha256
+
+# Next compiles these shared Studio controls.
+!legacy/pure/canvas/
+legacy/pure/canvas/**
+!legacy/pure/canvas/src/
+legacy/pure/canvas/src/**
+!legacy/pure/canvas/src/AssetPacks.tsx
+!legacy/pure/canvas/src/asset-packs.css
+!legacy/pure/canvas/src/flowPicker.ts
+
+# Keep local runtime state and private configuration out of the context.
+**/.runtime-advanced
+**/.env
+**/.env.*
+**/*.sqlite*
+**/*.pem

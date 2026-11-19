@@ -1,0 +1,99 @@
+# Hot-reload overlay for the local Docker test stack (localhost:3000).
+# Usage:
+#   FUMIAO_SRC=/path/to/worktree docker compose -f compose.yaml -f compose.dev.yaml up -d --wait
+
+x-dev-mounts: &dev_mounts
+  - ${FUMIAO_SRC:-.}/apps:/app/apps
+  - ${FUMIAO_SRC:-.}/packages/image-import/src:/app/packages/image-import/src
+  - ${FUMIAO_SRC:-.}/packages/original-api:/app/packages/original-api
+  - ${FUMIAO_SRC:-.}/packages/platform:/app/packages/platform
+  - ${FUMIAO_SRC:-.}/packages/plugin-sdk:/app/packages/plugin-sdk
+  - ${FUMIAO_SRC:-.}/packages/web-compat:/app/packages/web-compat
+  - ${FUMIAO_SRC:-.}/plugins:/app/plugins
+  - ${FUMIAO_SRC:-.}/migrations:/app/migrations:ro
+  - ${FUMIAO_SRC:-.}/scripts:/app/scripts:ro
+  - ${FUMIAO_SRC:-.}/tests:/app/tests:ro
+  - ${FUMIAO_SRC:-.}/tsconfig.json:/app/tsconfig.json:ro
+  - ${FUMIAO_SRC:-.}/.oxlintrc.json:/app/.oxlintrc.json:ro
+
+services:
+  migrate:
+    environment:
+      NODE_ENV: development
+    volumes: *dev_mounts
+
+  api:
+    command: [node, --watch, --import, tsx, apps/api/src/main.ts]
+    environment:
+      NODE_ENV: development
+    volumes:
+      - media:/app/media
+      - ${FUMIAO_SRC:-.}/apps:/app/apps
+      - ${FUMIAO_SRC:-.}/packages/image-import/src:/app/packages/image-import/src
+      - ${FUMIAO_SRC:-.}/packages/original-api:/app/packages/original-api
+      - ${FUMIAO_SRC:-.}/packages/platform:/app/packages/platform
+      - ${FUMIAO_SRC:-.}/packages/plugin-sdk:/app/packages/plugin-sdk
+      - ${FUMIAO_SRC:-.}/packages/web-compat:/app/packages/web-compat
+      - ${FUMIAO_SRC:-.}/plugins:/app/plugins
+      - ${FUMIAO_SRC:-.}/migrations:/app/migrations:ro
+      - ${FUMIAO_SRC:-.}/scripts:/app/scripts:ro
+      - ${FUMIAO_SRC:-.}/tsconfig.json:/app/tsconfig.json:ro
+
+  api-v2:
+    command: [node, --watch, --import, tsx, apps/api/src/main.ts]
+    environment:
+      NODE_ENV: development
+    volumes:
+      - media:/app/media
+      - ${FUMIAO_SRC:-.}/apps:/app/apps
+      - ${FUMIAO_SRC:-.}/packages/image-import/src:/app/packages/image-import/src
+      - ${FUMIAO_SRC:-.}/packages/original-api:/app/packages/original-api
+      - ${FUMIAO_SRC:-.}/packages/platform:/app/packages/platform
+      - ${FUMIAO_SRC:-.}/packages/plugin-sdk:/app/packages/plugin-sdk
+      - ${FUMIAO_SRC:-.}/packages/web-compat:/app/packages/web-compat
+      - ${FUMIAO_SRC:-.}/plugins:/app/plugins
+      - ${FUMIAO_SRC:-.}/migrations:/app/migrations:ro
+      - ${FUMIAO_SRC:-.}/scripts:/app/scripts:ro
+      - ${FUMIAO_SRC:-.}/tsconfig.json:/app/tsconfig.json:ro
+
+  worker:
+    command: [node, --watch, --import, tsx, apps/worker/src/main.ts]
+    environment:
+      NODE_ENV: development
+    volumes:
+      - media:/app/media
+      - ${FUMIAO_SRC:-.}/apps:/app/apps
+      - ${FUMIAO_SRC:-.}/packages/image-import/src:/app/packages/image-import/src
+      - ${FUMIAO_SRC:-.}/packages/original-api:/app/packages/original-api
+      - ${FUMIAO_SRC:-.}/packages/platform:/app/packages/platform
+      - ${FUMIAO_SRC:-.}/packages/plugin-sdk:/app/packages/plugin-sdk
+      - ${FUMIAO_SRC:-.}/packages/web-compat:/app/packages/web-compat
+      - ${FUMIAO_SRC:-.}/plugins:/app/plugins
+      - ${FUMIAO_SRC:-.}/migrations:/app/migrations:ro
+      - ${FUMIAO_SRC:-.}/scripts:/app/scripts:ro
+      - ${FUMIAO_SRC:-.}/tsconfig.json:/app/tsconfig.json:ro
+
+  web:
+    command: [node_modules/next/dist/bin/next, dev, apps/web, -H, 0.0.0.0, -p, "3000"]
+    environment:
+      NODE_ENV: development
+      WATCHPACK_POLLING: "${WATCHPACK_POLLING:-false}"
+    volumes:
+      - ${FUMIAO_SRC:-.}/apps:/app/apps
+      - web_dev_next:/app/apps/web/.next
+      - ${FUMIAO_SRC:-.}/packages/image-import/src:/app/packages/image-import/src
+      - ${FUMIAO_SRC:-.}/packages/original-api:/app/packages/original-api
+      - ${FUMIAO_SRC:-.}/packages/platform:/app/packages/platform
+      - ${FUMIAO_SRC:-.}/packages/plugin-sdk:/app/packages/plugin-sdk
+      - ${FUMIAO_SRC:-.}/packages/web-compat:/app/packages/web-compat
+      - ${FUMIAO_SRC:-.}/plugins:/app/plugins
+      - ${FUMIAO_SRC:-.}/tsconfig.json:/app/tsconfig.json:ro
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:3000/studio", {redirect:"manual"}).then(r => { if (r.status !== 200) process.exitCode = 1 }).catch(() => process.exitCode = 1)']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+volumes:
+  web_dev_next:

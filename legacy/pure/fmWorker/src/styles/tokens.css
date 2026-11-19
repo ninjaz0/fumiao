@@ -1,0 +1,31 @@
+/* fmWorker · 设计 token（与 design/DESIGN-SPEC.md §3 一致） */
+:root{
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --fs-xs:11px; --fs-sm:12px; --fs-md:13px; --fs-lg:15px; --fs-xl:18px; --fs-num:24px;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:20px; --s6:24px;
+  --r-sm:6px; --r-md:8px; --r-lg:10px; --r-pill:999px;
+  --topbar:48px; --statusbar:28px; --rail:264px; --control:32px; --control-sm:26px;
+  --ease:cubic-bezier(.2,.7,.2,1);
+
+  --bg-canvas:#f6f8fb; --bg-rail:#edf1f7; --surface:#ffffff; --surface-2:#f8fafc; --hover:#eef2f7;
+  --border:#d9e0ea; --divider:#cfd7e2; --text:#172033; --text-2:#5a6577; --text-3:#667286;
+  --accent:#2563eb; --accent-hover:#1d4ed8; --accent-soft:rgba(37,99,235,.10); --accent-line:rgba(37,99,235,.45); --on-accent:#fff;
+  --ok:#08764c; --work:#2563eb; --paused:#8a5200; --error:#cc3434; --on-danger:#fff; --off:#98a2b3;
+  --ok-soft:rgba(19,138,90,.11); --work-soft:rgba(37,99,235,.10); --paused-soft:rgba(178,107,0,.11); --error-soft:rgba(204,52,52,.09); --off-soft:rgba(120,130,150,.10);
+  --terminal:#12151b; --terminal-text:#cfd6e2; --terminal-dim:#7c8799;
+  --shadow:0 1px 2px rgba(16,24,40,.04); --shadow-pop:0 18px 50px rgba(16,24,40,.22);
+  --focus:0 0 0 2px var(--surface),0 0 0 4px var(--accent);
+  --demo:#fff4d6; --demo-text:#7a5200;
+  color-scheme:light;
+}
+[data-theme=dark]{
+  --bg-canvas:#121418; --bg-rail:#1b1e24; --surface:#202229; --surface-2:#17191e; --hover:#2a2e37;
+  --border:#333843; --divider:#2c313b; --text:#eef2f7; --text-2:#a3adbd; --text-3:#9aa5b7;
+  --accent:#6b9cff; --accent-hover:#8bb2ff; --accent-soft:rgba(107,156,255,.14); --accent-line:rgba(107,156,255,.5); --on-accent:#0d1424;
+  --ok:#3cc98f; --work:#6b9cff; --paused:#e3a94b; --error:#f17474; --on-danger:#240f12; --off:#6b7486;
+  --ok-soft:rgba(60,201,143,.13); --work-soft:rgba(107,156,255,.14); --paused-soft:rgba(227,169,75,.13); --error-soft:rgba(241,116,116,.12); --off-soft:rgba(140,150,170,.10);
+  --terminal:#0f1217; --shadow:0 1px 2px rgba(0,0,0,.3); --shadow-pop:0 18px 50px rgba(0,0,0,.55);
+  --demo:#3a2f12; --demo-text:#f2cf7a;
+  color-scheme:dark;
+}

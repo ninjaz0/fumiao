@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>登录 - Muse2API</title>
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0}body{background:#fff;color:#0a0a0a;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}button,input,select{font:inherit}::selection{background:#e5e5e5}main{min-height:100%;display:flex;flex-direction:column;justify-content:center;padding:48px 16px}.intro,.form-wrap{width:100%;max-width:448px;margin:0 auto}.intro{text-align:center}h1{font-size:36px;line-height:40px;font-weight:700;margin:0}.intro p{font-size:14px;line-height:20px;color:#737373;margin:8px 0 0}.form-wrap{padding:32px 16px;border-radius:8px}.field{margin-bottom:24px}label{display:block;font-size:14px;font-weight:500;line-height:20px;margin-bottom:8px}input{display:block;width:100%;height:40px;border:1px solid #e3e3e3;border-radius:6px;background:#fff;color:#0a0a0a;padding:8px 12px;font-size:14px;line-height:20px}input::placeholder{color:#737373}input:focus-visible,button:focus-visible,select:focus-visible{outline:2px solid #0a0a0a;outline-offset:2px}button{display:flex;align-items:center;justify-content:center;width:100%;height:40px;border:0;border-radius:6px;background:#171717;color:#fafafa;font-weight:500;cursor:pointer;transition:background .15s}button:hover{background:#2e2e2e}button:disabled{opacity:.5;cursor:wait}.footer{margin:24px 0 0;text-align:center;color:#737373;font-size:12px;line-height:16px}.language{position:fixed;top:16px;right:16px;height:32px;padding:0 8px;font-size:12px;border:1px solid #e3e3e3;border-radius:6px;background:#fff;color:#0a0a0a}.error{font-size:14px;line-height:20px;color:#b91c1c;margin:16px 0 0}.error:empty{display:none}@media(min-width:640px){main{padding-left:24px;padding-right:24px}.form-wrap{padding-left:40px;padding-right:40px}}
+</style>
+</head>
+<body>
+<!-- THESIS: Muse administrator access follows the existing Flow2API console.
+OWN-WORLD: White canvas, black primary control, neutral borders, system sans.
+STORY: Enter account and password, access existing Muse management, sign out.
+FIRST VIEWPORT: Centered 448px login area; 36px title; 40px fields and button.
+FORM: Code-led reproduction of backend.nvmes.com/flow/; user-specified reference.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance -->
+<select class="language" aria-label="Language" id="language"><option value="zh">中文</option><option value="en">English</option></select>
+<main>
+<div class="intro"><h1>Muse2API</h1><p data-copy="subtitle">管理员控制台</p></div>
+<div class="form-wrap">
+<form id="loginForm" action="./auth/login" method="post">
+<div class="field"><label for="username" data-copy="account">账户</label><input id="username" name="username" autocomplete="username" required maxlength="128" placeholder="请输入账户"></div>
+<div class="field"><label for="password" data-copy="password">密码</label><input type="password" id="password" name="password" autocomplete="current-password" required maxlength="1024" placeholder="请输入密码"></div>
+<button type="submit" id="loginButton" data-copy="login">登录</button>
+<p id="error" class="error" role="alert" aria-live="polite"></p>
+</form>
+<p class="footer">Muse2API</p>
+</div>
+</main>
+<script>
+const form=document.getElementById('loginForm'),btn=document.getElementById('loginButton'),error=document.getElementById('error'),lang=document.getElementById('language');
+const copy={zh:{subtitle:'管理员控制台',account:'账户',password:'密码',login:'登录',busy:'登录中…',accountHint:'请输入账户',passwordHint:'请输入密码',network:'网络错误，请稍后重试',invalid:'账户或密码错误',limited:'登录尝试过多，请 15 分钟后重试'},en:{subtitle:'Administrator console',account:'Account',password:'Password',login:'Sign in',busy:'Signing in…',accountHint:'Enter account',passwordHint:'Enter password',network:'Network error. Please try again.',invalid:'Incorrect account or password',limited:'Too many attempts. Please try again in 15 minutes.'}};
+function words(){return copy[lang.value]||copy.zh}function translate(){document.documentElement.lang=lang.value==='en'?'en':'zh-CN';document.querySelectorAll('[data-copy]').forEach(e=>e.textContent=words()[e.dataset.copy]);form.username.placeholder=words().accountHint;form.password.placeholder=words().passwordHint;try{localStorage.setItem('muse2api_lang',lang.value)}catch{}}
+try{lang.value=localStorage.getItem('muse2api_lang')||'zh';localStorage.removeItem('muse2api_key')}catch{}translate();lang.onchange=translate;
+form.addEventListener('submit',async e=>{e.preventDefault();btn.disabled=true;btn.textContent=words().busy;error.textContent='';try{const r=await fetch('./auth/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:form.username.value,password:form.password.value})});const d=await r.json();if(r.ok&&d.success){location.replace('./manage');return}error.textContent=r.status===401?words().invalid:r.status===429?words().limited:d.detail||words().network;form.password.focus()}catch{error.textContent=words().network}finally{btn.disabled=false;btn.textContent=words().login}});
+fetch('./auth/session',{credentials:'same-origin',cache:'no-store'}).then(r=>{if(r.ok)location.replace('./manage')}).catch(()=>{});
+</script>
+</body>
+</html>

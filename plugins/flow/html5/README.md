@@ -11,3 +11,5 @@ Path('plugins/flow/html5/html5-entities.json').write_text(
     json.dumps(html.entities.html5, ensure_ascii=True, sort_keys=True, separators=(',', ':')) + '\n'
 )
 ```
+
+`pnpm test:flow-lifecycle` compares the mapping's decoding behavior with the original Python standard library, including numeric and invalid character references.
