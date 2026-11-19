@@ -1,13 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { canvasRunsFixture, canvasRunPlugins } from "../helpers/canvas-runs.js";
 import { one } from "../../packages/platform/src/db.js";
 import { canvasText } from "../../packages/original-api/src/canvas-values.js";
 import { uuid5 } from "../../packages/platform/src/uuid.js";
 import { CanvasSubmissionModels } from "../../packages/platform/src/canvas-submission.js";
+import { StudioPackages } from "../../packages/platform/src/studio-packages.js";
+import { OriginalCanvasRuns } from "../../packages/original-api/src/canvas-runs.js";
+import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
+import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
 import { gpuCanvas } from "../../plugins/gpu/src/canvas.js";
 import { OriginalJobs } from "../../packages/original-api/src/jobs.js";
+import { databaseFixture } from "../helpers/database.js";
 
 test("Canvas candidates freeze two plugin tasks, holds and links atomically; retries preserve their original identity and inputs", async () => {
   const f = await canvasRunsFixture();
@@ -301,5 +307,89 @@ test("Canvas submission policies are versioned, validated and never activated by
     );
   } finally {
     await f.cleanup();
+  }
+});
+
+test("Listing canvas runs succeeds on blank canvases and partial canvasSubmission setups without relaxing submission checks", async () => {
+  const f = await canvasRunsFixture();
+  try {
+    const flowModel = canvasRunPlugins[2].manifest.models.find(
+      (m) => m.kind === "video" && !m.hidden,
+    )!;
+    const project = await f.project([
+      { id: "v", type: "video", x: 0, y: 0, prompt: "GPU 画面" },
+      { id: "v2", type: "video", x: 0, y: 300, prompt: "待提交画面" },
+      {
+        id: "f",
+        type: "video",
+        x: 400,
+        y: 0,
+        prompt: "Flow 画面",
+        params: { model: flowModel.id },
+      },
+    ]);
+    const gpuRun = await f.runs.generate(f.admin, project, "v", f.body());
+    const flowRun = await f.runs.generate(f.admin, project, "f", f.body());
+    const blank = await f.canvases.create(f.admin, { title: "空白画布" });
+
+    // Downgrade gpu to a version without canvasSubmission while flow keeps its submission policy.
+    await f.db.transaction((sql) =>
+      f.catalog.activate(sql, gpuCanvas.manifest),
+    );
+    await assert.rejects(
+      CanvasSubmissionModels.read(f.db),
+      /原画布生成插件尚未完整启用/,
+    );
+    await assert.rejects(
+      f.runs.generate(f.admin, project, "v2", f.body()),
+      /原画布生成插件尚未完整启用/,
+    );
+    assert.deepEqual(await f.runs.list(f.admin, blank.id), { runs: [] });
+    await assert.rejects(f.runs.list(f.member, blank.id), { status: 404 });
+
+    const listed = await f.runs.list(f.admin, project);
+    assert.equal(listed.runs.length, 2);
+    const byId = new Map(listed.runs.map((r: any) => [r.id, r]));
+    assert.equal(byId.get(gpuRun.id)?.model_label, null);
+    assert.equal(
+      byId.get(flowRun.id)?.model_label,
+      flowModel.studio!.descriptor.label,
+    );
+  } finally {
+    await f.cleanup();
+  }
+
+  // v3 remote/portable plugins do not declare canvasSubmission and must not trigger 503.
+  const v3 = await databaseFixture();
+  try {
+    await v3.p.registry.initializeStudio(v3.db, false);
+    const identity = new OriginalIdentity(v3.p);
+    await identity.bootstrap({
+      name: "admin",
+      nickname: "管理员",
+      password: "v3-runs-password",
+    });
+    const actor = await identity.actor(
+      await identity.login(
+        { name: "admin", password: "v3-runs-password" },
+        "fixture",
+      ),
+    );
+    const packages = new StudioPackages(v3.p);
+    const ext = JSON.parse(
+      await readFile(
+        "plugins/example-extension/example-extension.fmplugin.json",
+        "utf8",
+      ),
+    );
+    await packages.install(actor, ext);
+    const bindings = await CanvasSubmissionModels.read(v3.db);
+    assert.equal(bindings.rules.size, 0);
+    const canvases = new OriginalCanvases(v3.p);
+    const runs = new OriginalCanvasRuns(v3.p);
+    const blank = await canvases.create(actor, { title: "仅安装扩展" });
+    assert.deepEqual(await runs.list(actor, blank.id), { runs: [] });
+  } finally {
+    await v3.cleanup();
   }
 });

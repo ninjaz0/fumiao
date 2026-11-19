@@ -48,11 +48,6 @@ export class OriginalCanvasRuns {
         return await this.p.db.transaction(async (sql) => {
           await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
           const p = await this.canvases.project(sql, user, project);
-          const jobs = await new OriginalState(this.p).canvasJobs(
-            sql,
-            p.workspace_id,
-          );
-          const byId = new Map(jobs.map((j) => [j.id, j]));
           const links = (
             await sql.query(
               `SELECT l.id::text,l.node,l.inputs,j.public_id AS job FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
@@ -60,6 +55,12 @@ export class OriginalCanvasRuns {
               [p.id],
             )
           ).rows;
+          if (!links.length) return { runs: [] };
+          const jobs = await new OriginalState(this.p).canvasJobs(
+            sql,
+            p.workspace_id,
+          );
+          const byId = new Map(jobs.map((j) => [j.id, j]));
           const batches = (
             await sql.query(
               "SELECT uid,result FROM canvas_run_batches WHERE project_id=$1 ORDER BY owner_id,uid",
@@ -80,7 +81,9 @@ export class OriginalCanvasRuns {
               });
           }
           const models = await new StudioCatalog(this.p.db).catalog(sql),
-            bindings = await CanvasSubmissionModels.read(sql);
+            bindings = await CanvasSubmissionModels.read(sql, {
+              strict: false,
+            });
           const fields = [
             "id",
             "owner",

@@ -1,5 +1,8 @@
 import type { CanvasModelRule } from "../../plugin-sdk/src/index.js";
-import { studioPluginProfile } from "./studio-plugin-profile.js";
+import {
+  listedStudioCatalog,
+  studioPluginProfile,
+} from "./studio-plugin-profile.js";
 import type { Sql } from "./db.js";
 import { requireValue } from "./security.js";
 
@@ -10,6 +13,7 @@ export class CanvasModels {
   constructor(
     rules: CanvasModelRule[],
     private readonly partialCatalog = false,
+    private readonly incomplete = new Map<string, string>(),
   ) {
     for (const rule of rules) {
       requireValue(!this.models.has(rule.model), 503, "画布模型规则存在歧义");
@@ -30,23 +34,33 @@ export class CanvasModels {
       "原画布插件尚未完整启用",
     );
   }
-  static async read(sql: Sql) {
+  static async read(sql: Sql, options?: { allowIncomplete?: boolean }) {
+    const allowIncomplete = options?.allowIncomplete ?? false;
     const rows = (
       await sql.query(`SELECT c.id,c.descriptor->>'kind' AS kind,v.manifest->'canvas' AS policy, v.manifest->'originalSubmission'->>'version' AS submission
-      FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
+      FROM ${await listedStudioCatalog(sql, "models")} c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
       WHERE c.descriptor->>'kind' IN ('image','video') ORDER BY c.position,c.id`)
     ).rows;
-    const rules = rows.map((r) => {
-      const rule = r.policy?.models.find(
+    const rules: CanvasModelRule[] = [];
+    const incomplete = new Map<string, string>();
+    for (const r of rows) {
+      const rule = r.policy?.models?.find(
         (m: CanvasModelRule) => m.model === r.id && m.kind === r.kind,
       );
-      if (!rule && r.submission === "2") return { model: r.id, kind: r.kind };
-      requireValue(rule, 503, "原画布插件尚未完整启用");
-      return rule as CanvasModelRule;
-    });
+      if (rule) {
+        rules.push(rule as CanvasModelRule);
+      } else if (r.submission === "2" || r.submission === "3") {
+        rules.push({ model: r.id, kind: r.kind });
+      } else if (allowIncomplete) {
+        incomplete.set(r.id, r.kind);
+      } else {
+        requireValue(rule, 503, "原画布插件尚未完整启用");
+      }
+    }
     return new CanvasModels(
       rules,
-      (await studioPluginProfile(sql)) === "explicit",
+      allowIncomplete || Boolean(await studioPluginProfile(sql)),
+      incomplete,
     );
   }
   validate(
@@ -54,6 +68,14 @@ export class CanvasModels {
     params: { model: string; ratio: string; seconds: number },
   ) {
     if (kind !== "image" && kind !== "video") return;
+    if (params.model && this.incomplete.has(params.model)) {
+      requireValue(
+        this.incomplete.get(params.model) === kind,
+        400,
+        "节点模型与生成类型不匹配",
+      );
+      requireValue(false, 503, "原画布插件尚未完整启用");
+    }
     const rule = params.model
       ? this.models.get(params.model)
       : this.defaults.get(kind);

@@ -1,20 +1,26 @@
 import type { CanvasSubmissionRule } from "../../plugin-sdk/src/index.js";
 import type { Sql } from "./db.js";
 import { requireValue } from "./security.js";
+import { listedStudioCatalog } from "./studio-plugin-profile.js";
+
 export class CanvasSubmissionModels {
   constructor(readonly rules: Map<string, CanvasSubmissionRule>) {}
-  static async read(sql: Sql) {
+  static async read(sql: Sql, options?: { strict?: boolean }) {
+    const strict = options?.strict ?? true;
     const rows = (
       await sql.query(`SELECT c.id,c.descriptor->>'kind' AS kind,v.manifest->'canvasSubmission' AS policy
-      FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
-      WHERE (v.manifest->'originalSubmission'->>'version') IS DISTINCT FROM '2' AND c.descriptor->>'kind' IN ('image','video','audio') ORDER BY c.position,c.id`)
+      FROM ${await listedStudioCatalog(sql, "models")} c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
+      WHERE COALESCE(v.manifest->'originalSubmission'->>'version','') NOT IN ('2','3') AND c.descriptor->>'kind' IN ('image','video','audio') ORDER BY c.position,c.id`)
     ).rows;
     const rules = new Map<string, CanvasSubmissionRule>();
     for (const r of rows) {
-      const rule = r.policy?.models.find(
+      const rule = r.policy?.models?.find(
         (m: CanvasSubmissionRule) => m.model === r.id && m.kind === r.kind,
       );
-      requireValue(rule, 503, "原画布生成插件尚未完整启用");
+      if (!rule) {
+        if (strict) requireValue(rule, 503, "原画布生成插件尚未完整启用");
+        continue;
+      }
       rules.set(r.id, rule);
     }
     return new CanvasSubmissionModels(rules);

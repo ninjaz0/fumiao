@@ -1,8 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { databaseFixture } from "../helpers/database.js";
 import { StudioCatalog } from "../../packages/platform/src/catalog.js";
 import { CanvasModels } from "../../packages/platform/src/canvas-models.js";
+import { StudioPackages } from "../../packages/platform/src/studio-packages.js";
+import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
+import { migrate } from "../../packages/platform/src/db.js";
 import { museCanvas } from "../../plugins/muse/src/canvas.js";
 import { flowCanvas } from "../../plugins/flow/src/canvas.js";
 import { gpuCanvas } from "../../plugins/gpu/src/canvas.js";
@@ -215,5 +219,177 @@ test("Invalid canvas declarations fail installation without registering a partia
     }
   } finally {
     await f.cleanup();
+  }
+});
+
+test("CanvasModels respects compatible/explicit profiles, listed packages, v3 submissions and allowIncomplete", async () => {
+  // 1. Compatible profile hides unconfigured legacy seeds and allows partial catalogs.
+  const compat = await databaseFixture(
+    "032_quarantine_retired_flow_sources.sql",
+  );
+  try {
+    await compat.p.registry.installBuiltins(compat.db, true);
+    await migrate(compat.db);
+    await compat.p.registry.initializeStudio(compat.db, false);
+    const empty = await CanvasModels.read(compat.db);
+    empty.validate("sticky", { model: "", ratio: "16:9", seconds: 5 });
+    empty.validate("image", { model: "", ratio: "16:9", seconds: 5 });
+    empty.validate("video", { model: "", ratio: "16:9", seconds: 5 });
+    assert.throws(
+      () =>
+        empty.validate("video", {
+          model: "muse-video",
+          ratio: "16:9",
+          seconds: 5,
+        }),
+      /节点模型与生成类型不匹配/,
+    );
+    const identity = new OriginalIdentity(compat.p);
+    await identity.bootstrap({
+      name: "admin",
+      nickname: "管理员",
+      password: "compat-password",
+    });
+    const actor = await identity.actor(
+      await identity.login(
+        { name: "admin", password: "compat-password" },
+        "fixture",
+      ),
+    );
+    const packages = new StudioPackages(compat.p);
+    const museFile = JSON.parse(
+      await readFile("plugins/muse/muse.fmplugin.json", "utf8"),
+    );
+    await packages.install(actor, museFile);
+    const partial = await CanvasModels.read(compat.db);
+    partial.validate("image", { model: "", ratio: "16:9", seconds: 5 });
+    partial.validate("video", { model: "", ratio: "16:9", seconds: 5 });
+    partial.validate("video", {
+      model: "muse-video",
+      ratio: "16:9",
+      seconds: 5,
+    });
+    assert.throws(
+      () =>
+        partial.validate("video", {
+          model: "muse-video",
+          ratio: "1:1",
+          seconds: 5,
+        }),
+      /Muse 画幅选项无效/,
+    );
+    assert.throws(
+      () =>
+        partial.validate("video", {
+          model: "MiniMax H3",
+          ratio: "16:9",
+          seconds: 5,
+        }),
+      /节点模型与生成类型不匹配/,
+    );
+  } finally {
+    await compat.cleanup();
+  }
+
+  // 2. Explicit profile accepts v3 remote plugins without canvas policy and excludes removed packages.
+  const explicit = await databaseFixture();
+  try {
+    await explicit.p.registry.initializeStudio(explicit.db, false);
+    const identity = new OriginalIdentity(explicit.p);
+    await identity.bootstrap({
+      name: "admin",
+      nickname: "管理员",
+      password: "explicit-password",
+    });
+    const actor = await identity.actor(
+      await identity.login(
+        { name: "admin", password: "explicit-password" },
+        "fixture",
+      ),
+    );
+    const packages = new StudioPackages(explicit.p);
+    const extFile = JSON.parse(
+      await readFile(
+        "plugins/example-extension/example-extension.fmplugin.json",
+        "utf8",
+      ),
+    );
+    await packages.install(actor, extFile);
+    const withV3 = await CanvasModels.read(explicit.db);
+    withV3.validate("image", {
+      model: "example-extension-image",
+      ratio: "16:9",
+      seconds: 5,
+    });
+    assert.throws(
+      () =>
+        withV3.validate("video", {
+          model: "example-extension-image",
+          ratio: "16:9",
+          seconds: 5,
+        }),
+      /节点模型与生成类型不匹配/,
+    );
+    const [pkg] = await packages.list(actor);
+    await packages.change(actor, extFile.id, pkg.revision, "remove");
+    const afterRemove = await CanvasModels.read(explicit.db);
+    afterRemove.validate("image", { model: "", ratio: "16:9", seconds: 5 });
+    assert.throws(
+      () =>
+        afterRemove.validate("image", {
+          model: "example-extension-image",
+          ratio: "16:9",
+          seconds: 5,
+        }),
+      /节点模型与生成类型不匹配/,
+    );
+  } finally {
+    await explicit.cleanup();
+  }
+
+  // 3. allowIncomplete lets blank/non-model nodes pass while strictly rejecting incomplete explicit models.
+  const incomplete = await databaseFixture();
+  try {
+    await incomplete.p.registry.installBuiltins(incomplete.db);
+    await assert.rejects(
+      CanvasModels.read(incomplete.db),
+      /原画布插件尚未完整启用/,
+    );
+    const tolerant = await CanvasModels.read(incomplete.db, {
+      allowIncomplete: true,
+    });
+    tolerant.validate("sticky", { model: "", ratio: "16:9", seconds: 5 });
+    tolerant.validate("text", { model: "", ratio: "16:9", seconds: 5 });
+    tolerant.validate("image", { model: "", ratio: "16:9", seconds: 5 });
+    tolerant.validate("video", { model: "", ratio: "16:9", seconds: 5 });
+    assert.throws(
+      () =>
+        tolerant.validate("video", {
+          model: "muse-video",
+          ratio: "16:9",
+          seconds: 5,
+        }),
+      { status: 503, message: "原画布插件尚未完整启用" },
+    );
+    assert.throws(
+      () =>
+        tolerant.validate("image", {
+          model: "muse-video",
+          ratio: "16:9",
+          seconds: 5,
+        }),
+      { status: 400, message: "节点模型与生成类型不匹配" },
+    );
+    assert.throws(
+      () =>
+        tolerant.validate("video", {
+          model: "unknown-model",
+          ratio: "16:9",
+          seconds: 5,
+        }),
+      { status: 400, message: "节点模型与生成类型不匹配" },
+    );
+  } finally {
+    await incomplete.cleanup();
   }
 });
