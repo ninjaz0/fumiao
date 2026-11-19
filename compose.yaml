@@ -25,7 +25,7 @@ services:
   migrate:
     build: .
     command: [pnpm, 'db:migrate']
-    env_file: .env
+    env_file: '${FUMIAO_SERVICE_ENV:-.env}'
     environment: &environment
       API_PROTOCOL: original
       API_HOST: '0.0.0.0'
@@ -39,7 +39,7 @@ services:
   api: &api
     build: .
     command: [pnpm, 'start:api']
-    env_file: .env
+    env_file: '${FUMIAO_SERVICE_ENV:-.env}'
     environment: *environment
     volumes: ['media:/app/media']
     depends_on:
@@ -59,7 +59,7 @@ services:
   worker:
     build: .
     command: [pnpm, worker]
-    env_file: .env
+    env_file: '${FUMIAO_SERVICE_ENV:-.env}'
     environment: *environment
     volumes: ['media:/app/media']
     depends_on:
@@ -74,7 +74,7 @@ services:
       STUDIO_MODE: '${STUDIO_MODE:-original}'
       STUDIO_CANVAS_EDITOR: '${STUDIO_CANVAS_EDITOR:-}'
       STUDIO_MEDIA_ORIGIN: '${STUDIO_MEDIA_ORIGIN:-}'
-    ports: ['127.0.0.1:3000:3000']
+    ports: ['127.0.0.1:${FUMIAO_WEB_PORT:-3000}:3000']
     depends_on:
       api: {condition: service_healthy}
       api-v2: {condition: service_healthy}

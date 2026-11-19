@@ -1,0 +1,46 @@
+# Applied by scripts/worktree.py with an explicit project, port and private env.
+x-dev: &dev
+  build:
+    context: .
+    target: development
+  image: ${COMPOSE_PROJECT_NAME}-dev:local
+  pull_policy: never
+  volumes:
+    - ./apps:/app/apps
+    # Keep Linux dependencies and the Next cache inside this Compose project.
+    - /app/apps/web/node_modules
+    - next:/app/apps/web/.next
+    - ./packages/image-import/src:/app/packages/image-import/src:ro
+    - ./packages/original-api:/app/packages/original-api:ro
+    - ./packages/platform:/app/packages/platform:ro
+    - ./packages/plugin-sdk:/app/packages/plugin-sdk:ro
+    - ./packages/web-compat:/app/packages/web-compat:ro
+    - ./plugins:/app/plugins:ro
+    - ./migrations:/app/migrations:ro
+    - ./scripts:/app/scripts:ro
+    - ./baseline:/app/baseline:ro
+    - ./tsconfig.json:/app/tsconfig.json:ro
+
+services:
+  migrate:
+    <<: *dev
+  api:
+    <<: *dev
+    command: [node, --watch, --import, tsx, apps/api/src/main.ts]
+  api-v2:
+    <<: *dev
+    command: [node, --watch, --import, tsx, apps/api/src/main.ts]
+  worker:
+    <<: *dev
+    command: [node, --watch, --import, tsx, apps/worker/src/main.ts]
+  web:
+    <<: *dev
+    command: [node, node_modules/next/dist/bin/next, dev, apps/web, -H, 0.0.0.0, -p, '3000']
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:3000/studio").then(r => { if (!r.ok) process.exitCode = 1 }).catch(() => process.exitCode = 1)']
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+volumes:
+  next:

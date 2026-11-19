@@ -11,6 +11,7 @@
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "bootstrap": "node --env-file-if-exists=.env --import tsx scripts/bootstrap.ts",
     "typecheck": "tsc --noEmit",
+    "typecheck:web": "next typegen apps/web && tsc -p apps/web/tsconfig.json --noEmit",
     "test": "tsx --test tests/advanced/*.test.ts",
     "build": "pnpm typecheck && next build apps/web",
     "start:api": "node --env-file-if-exists=.env --import tsx apps/api/src/main.ts",

@@ -26,6 +26,8 @@ docker compose up -d --wait
 
 ## 本地开发
 
+每个任务可在独立 Git worktree 运行 `python3 scripts/worktree.py up`。脚本创建专属端口、测试账号、数据库、队列和媒体卷，输出本任务的 Studio 地址。运行 `python3 scripts/worktree.py down` 可停止任务环境并保留数据。固定的本机 3000 端口供选定版本验收。分支约定、日志和验收命令见 [AGENTS.md](AGENTS.md)。
+
 使用 Node.js 24、pnpm 10.32.1、PostgreSQL、Redis 和 FFmpeg。图片解码构建需要 CMake 3.20+、Ninja 和 C++ 编译器。先安装依赖，再按[本地工作台配置](docs/STUDIO.md)准备数据库、私有存储和管理员。
 
 ```sh
@@ -57,4 +59,4 @@ pnpm test:studio
 
 `test:studio` 从正式版入口验证登录、生成、支付回跳、画布、私有媒体、任务结算、服务重启和路由响应。需要可执行的 `initdb`、`postgres` 和 `redis-server`，可通过 `PG_BINDIR` 和 `REDIS_SERVER` 指定路径。GPU 和数据导出工具使用 Python 3；工作台只运行新版服务。
 
-向 `main` 提 PR 或推送到 `main` 时，[Studio PR checks](.github/workflows/ci.yml) 使用 PG 18 和 Redis 8、构建生产前端、验证正式入口并构建 Docker 镜像。
+向 `main` 提 PR 或推送到 `main` 时，[verify](.github/workflows/ci.yml) 使用 PG 18 和 Redis 8、构建生产前端、验证正式入口并构建 Docker 镜像。
