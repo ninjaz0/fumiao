@@ -61,12 +61,14 @@ function PanelForm({
   form,
   workspace,
   name,
+  suggestionError,
   pair,
   notify,
 }: {
   form: Form;
   workspace: string;
   name: string;
+  suggestionError?: string;
   pair?: (name: string, models: FormDataEntryValue[]) => Promise<ActionResult>;
   notify: (s: string) => void;
 }) {
@@ -166,8 +168,19 @@ function PanelForm({
       <form id="pair" onSubmit={submit}>
         <label className="formlabel">
           {form.nameLabel}
-          <input name="node" defaultValue={name} required maxLength={45} />
+          <input
+            name="node"
+            defaultValue={name}
+            required
+            maxLength={45}
+            placeholder={suggestionError ? "请手动填写实例名称" : undefined}
+          />
         </label>
+        {suggestionError && (
+          <p className="form-message" role="status">
+            {suggestionError}
+          </p>
+        )}
         <fieldset className="install-models">
           <legend>{form.group}</legend>
           {form.options.map((o) => (
@@ -267,12 +280,22 @@ export function PluginPanel({
   async function add(button: HTMLButtonElement, form: Form) {
     setBusy(true);
     try {
-      const name = await suggestedName(form);
+      let name = "";
+      let suggestionError = "";
+      try {
+        name = await suggestedName(form);
+      } catch (e) {
+        const detail = e instanceof Error ? e.message.trim() : "";
+        suggestionError = detail
+          ? `未能获取默认名称（${detail}），可手动填写实例名称`
+          : "未能获取默认名称，可手动填写实例名称";
+      }
       if (button.isConnected)
         open(
           <PanelForm
             form={form}
             name={name}
+            suggestionError={suggestionError}
             pair={
               client &&
               (async (name, models) => {
@@ -289,8 +312,6 @@ export function PluginPanel({
           />,
           button,
         );
-    } catch (e) {
-      notify((e as Error).message);
     } finally {
       setBusy(false);
     }

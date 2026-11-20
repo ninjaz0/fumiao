@@ -223,9 +223,32 @@ export async function studioBrowser(
     await open(page, "/studio", true, workspace);
     await settings(page);
     await setTab(page, "prices");
-    await page
-      .locator('[data-price="gpt-image-2.6-sunburst|1K|medium"]')
-      .fill("7");
+    const priceInput = page.locator('[data-price="gpt-image-2.6-sunburst|1K|medium"]');
+    // A slow save must preserve edits from the administrator's next visit.
+    let releaseSave!: () => void;
+    const delayedSave = new Promise<void>((resolve) => { releaseSave = resolve; });
+    await page.route("**/api/settings/prices", async (route) => {
+      await delayedSave;
+      await route.continue();
+    }, { times: 1 });
+    await priceInput.fill("10");
+    try {
+      await Promise.all([
+        page.waitForRequest((r) => new URL(r.url()).pathname === "/api/settings/prices" && r.method() === "PUT"),
+        page.locator("#price-form button").click(),
+      ]);
+      await setTab(page, "general");
+      await setTab(page, "prices");
+      await expect(priceInput).toHaveValue("10");
+      await priceInput.fill("7");
+    } finally {
+      releaseSave();
+    }
+    await expect(page.locator("#toast")).toHaveText("价格已保存");
+    await setTab(page, "general");
+    await setTab(page, "prices");
+    await expect(priceInput).toHaveValue("7");
+    await expect(page.getByText("有未保存的修改", { exact: true })).toBeVisible();
     const pricing = await request(page, "/api/settings/prices", "PUT", () =>
       page.locator("#price-form button").click(),
     );

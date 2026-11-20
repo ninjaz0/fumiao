@@ -198,10 +198,12 @@ export function PluginSettings({
   refresh: () => Promise<void>;
   navigate: (tab: "models" | "prices") => void;
 }) {
-  const [data, setData] = useState<{
-    plugins: Plugin[];
-    services: Service[];
-  }>();
+  const [plugins, setPlugins] = useState<Plugin[]>();
+  const [services, setServices] = useState<Service[]>();
+  const [pluginsError, setPluginsError] = useState("");
+  const [servicesError, setServicesError] = useState("");
+  const [loadingPlugins, setLoadingPlugins] = useState(true);
+  const [loadingServices, setLoadingServices] = useState(true);
   const [reports, setReports] = useState<
     Record<string, { ready: boolean; models?: string[]; available?: string[] }>
   >({});
@@ -218,23 +220,67 @@ export function PluginSettings({
     [busy, setBusy] = useState(false);
   const active = useRef(false),
     locked = useRef(false),
+    pluginsReq = useRef(0),
+    servicesReq = useRef(0),
     picker = useRef<HTMLInputElement>(null);
   const call = <T,>(path: string, body?: object, method?: string) =>
     api<T>(String(workspace), "/api/admin/" + path, body, method);
+  function clearReport(id: string) {
+    setReports((old) => {
+      if (!(id in old)) return old;
+      const next = { ...old };
+      delete next[id];
+      return next;
+    });
+  }
+  async function loadPlugins() {
+    const seq = ++pluginsReq.current;
+    if (active.current) setLoadingPlugins(true);
+    try {
+      const list = await call<Plugin[]>("plugins");
+      if (active.current && seq === pluginsReq.current) {
+        setPlugins(list);
+        setPluginsError("");
+      }
+    } catch (e) {
+      if (active.current && seq === pluginsReq.current) {
+        setPluginsError((e as Error).message || "读取插件列表失败");
+      }
+    } finally {
+      if (active.current && seq === pluginsReq.current) {
+        setLoadingPlugins(false);
+      }
+    }
+  }
+  async function loadServices() {
+    const seq = ++servicesReq.current;
+    if (active.current) setLoadingServices(true);
+    try {
+      const list = await call<Service[]>("connections");
+      if (active.current && seq === servicesReq.current) {
+        setServices(list);
+        setServicesError("");
+      }
+    } catch (e) {
+      if (active.current && seq === servicesReq.current) {
+        setServicesError((e as Error).message || "读取服务清单失败");
+      }
+    } finally {
+      if (active.current && seq === servicesReq.current) {
+        setLoadingServices(false);
+      }
+    }
+  }
   async function load() {
-    const [plugins, services] = await Promise.all([
-      call<Plugin[]>("plugins"),
-      call<Service[]>("connections"),
-    ]);
-    if (active.current) setData({ plugins, services });
+    await Promise.allSettled([loadPlugins(), loadServices()]);
   }
   useEffect(() => {
     active.current = true;
-    void load().catch((e) => {
-      if (active.current) setError(e.message);
-    });
+    void load();
     return () => {
       active.current = false;
+      ++pluginsReq.current;
+      ++servicesReq.current;
     };
   }, [workspace]);
   async function run(
@@ -257,14 +303,20 @@ export function PluginSettings({
     } catch (e) {
       if (active.current) {
         setError((e as Error).message);
-        if (reload) await load().catch(() => {});
+        if (reload) await load();
       }
     } finally {
       locked.current = false;
       if (active.current) setBusy(false);
     }
   }
-  const existing = data?.plugins.find((p) => p.id === pending?.preview.id);
+  const existing = plugins?.find((p) => p.id === pending?.preview.id);
+  const sameVersion =
+    Boolean(pending) && existing?.version === pending?.preview.version;
+  const expandedPlugin = plugins?.find((p) => p.id === opened);
+  const showingInlineServiceError = Boolean(
+    expandedPlugin && expandedPlugin.mode !== "pull",
+  );
   return (
     <section className="settings-section studio-plugins">
       <h2>插件</h2>
@@ -303,11 +355,11 @@ export function PluginSettings({
                 );
             }}
           />
-          {data?.plugins.some((p) => p.updateUrl) && (
+          {plugins?.some((p) => p.updateUrl) && (
             <button
               onClick={() =>
                 void run(async () => {
-                  for (const p of data.plugins.filter((x) => x.updateUrl))
+                  for (const p of plugins.filter((x) => x.updateUrl))
                     await call("plugins/" + p.id + "/check", {});
                 }, "已检查更新")
               }
@@ -321,6 +373,7 @@ export function PluginSettings({
             className="ledger-card plugin-overview plugin-form"
             onSubmit={(e) => {
               e.preventDefault();
+              if (sameVersion) return;
               const form = new FormData(e.currentTarget);
               void run(
                 async () => {
@@ -401,23 +454,50 @@ export function PluginSettings({
                 ))}
               </fieldset>
             ))}
-            <button type="submit">
-              {existing?.version === pending.preview.version
-                ? "已安装"
-                : existing
-                  ? "确认更新"
-                  : "确认导入"}
-            </button>{" "}
-            <button type="button" onClick={() => setPending(undefined)}>
-              取消
-            </button>
+            {sameVersion && (
+              <p className="muted" role="status">
+                当前已安装相同版本，无需重复导入
+              </p>
+            )}
+            <div className="plugin-actions">
+              <button type="submit" disabled={sameVersion}>
+                {sameVersion ? "已安装" : existing ? "确认更新" : "确认导入"}
+              </button>
+              <button type="button" onClick={() => setPending(undefined)}>
+                取消
+              </button>
+            </div>
           </form>
         )}
-        {data && !data.plugins.length && !pending && <p>暂无已安装的插件</p>}
+        {pluginsError && (
+          <div className="ledger-card plugin-alert" role="alert">
+            <span>插件列表读取失败：{pluginsError}</span>
+            <button
+              type="button"
+              disabled={loadingPlugins}
+              onClick={() => void (servicesError ? load() : loadPlugins())}
+            >
+              {loadingPlugins ? "重试中…" : "重试"}
+            </button>
+          </div>
+        )}
+        {servicesError && plugins !== undefined && !showingInlineServiceError && (
+          <div className="ledger-card plugin-alert" role="alert">
+            <span>服务清单读取失败：{servicesError}</span>
+            <button
+              type="button"
+              disabled={loadingServices}
+              onClick={() => void loadServices()}
+            >
+              {loadingServices ? "重试中…" : "重试"}
+            </button>
+          </div>
+        )}
+        {plugins && !plugins.length && !pending && <p>暂无已安装的插件</p>}
         <div className="plugin-connections">
-          {data?.plugins.map((p) => {
+          {plugins?.map((p) => {
             const base = "plugins/" + p.id + "/",
-              services = data.services.filter(
+              pluginServices = (services ?? []).filter(
                 (s) =>
                   s.plugin_id === p.id && s.plugin_version === p.adapterVersion,
               );
@@ -488,85 +568,109 @@ export function PluginSettings({
                     {p.mode !== "pull" && (
                       <>
                         <h3>服务设置</h3>
-                        {services.map((s) => (
-                          <div key={s.id}>
-                            <div className="plugin-actions">
-                              <span>{s.name}</span>
-                              <button
-                                onClick={() =>
-                                  setEditing(editing === s.id ? "" : s.id)
-                                }
-                              >
-                                修改设置
-                              </button>
-                              <button
-                                onClick={() =>
-                                  void run(
-                                    async () => {
-                                      const health = await call<{
-                                        ready: boolean;
-                                        models?: string[];
-                                        available?: string[];
-                                      }>("connections/" + s.id + "/health", {});
-                                      setReports((old) => ({
-                                        ...old,
-                                        [s.id]: health,
-                                      }));
-                                      if (!health.ready)
-                                        throw Error(
-                                          "连接检查未通过，请核对地址和密钥",
+                        {servicesError && (
+                          <div className="plugin-alert" role="alert">
+                            <span>服务清单读取失败：{servicesError}</span>
+                            <button
+                              type="button"
+                              disabled={loadingServices}
+                              onClick={() => void loadServices()}
+                            >
+                              {loadingServices ? "重试中…" : "重试"}
+                            </button>
+                          </div>
+                        )}
+                        {loadingServices && services === undefined && !servicesError ? (
+                          <p role="status">正在读取服务…</p>
+                        ) : services !== undefined ? (
+                          <>
+                            {pluginServices.map((s) => (
+                              <div key={s.id}>
+                                <div className="plugin-actions">
+                                  <span>{s.name}</span>
+                                  <button
+                                    onClick={() =>
+                                      setEditing(editing === s.id ? "" : s.id)
+                                    }
+                                  >
+                                    修改设置
+                                  </button>
+                                  <button
+                                    onClick={() =>
+                                      void run(
+                                        async () => {
+                                          clearReport(s.id);
+                                          const health = await call<{
+                                            ready: boolean;
+                                            models?: string[];
+                                            available?: string[];
+                                          }>(
+                                            "connections/" + s.id + "/health",
+                                            {},
+                                          );
+                                          if (!health.ready)
+                                            throw Error(
+                                              "连接检查未通过，请核对地址和密钥",
+                                            );
+                                          if (active.current)
+                                            setReports((old) => ({
+                                              ...old,
+                                              [s.id]: health,
+                                            }));
+                                        },
+                                        "",
+                                        false,
+                                      )
+                                    }
+                                  >
+                                    测试连接
+                                  </button>
+                                </div>
+                                {reports[s.id]?.ready && (
+                                  <p role="status">
+                                    {reports[s.id].models
+                                      ? "连接成功，服务报告 " +
+                                        reports[s.id].models!.length +
+                                        " 个模型"
+                                      : "服务可达，密钥权限请以服务端为准"}
+                                  </p>
+                                )}
+                                {editing === s.id && (
+                                  <ServiceForm
+                                    plugin={p}
+                                    service={s}
+                                    save={(body) =>
+                                      run(async () => {
+                                        await call(
+                                          "connections/" + s.id,
+                                          body,
+                                          "PUT",
                                         );
-                                    },
-                                    "",
-                                    false,
-                                  )
-                                }
-                              >
-                                测试连接
-                              </button>
-                            </div>
-                            {reports[s.id]?.ready && (
-                              <p role="status">
-                                {reports[s.id].models
-                                  ? "连接成功，服务报告 " +
-                                    reports[s.id].models!.length +
-                                    " 个模型"
-                                  : "服务可达，密钥权限请以服务端为准"}
-                              </p>
-                            )}
-                            {editing === s.id && (
+                                        clearReport(s.id);
+                                        setEditing("");
+                                      }, "服务设置已保存")
+                                    }
+                                  />
+                                )}
+                              </div>
+                            ))}
+                            {pluginServices.length === 0 || editing === "add" ? (
                               <ServiceForm
                                 plugin={p}
-                                service={s}
                                 save={(body) =>
                                   run(async () => {
-                                    await call(
-                                      "connections/" + s.id,
-                                      body,
-                                      "PUT",
-                                    );
+                                    await call("connections", body);
                                     setEditing("");
                                   }, "服务设置已保存")
                                 }
                               />
+                            ) : (
+                              <button onClick={() => setEditing("add")}>
+                                添加服务
+                              </button>
                             )}
-                          </div>
-                        ))}
-                        {services.length === 0 || editing === "add" ? (
-                          <ServiceForm
-                            plugin={p}
-                            save={(body) =>
-                              run(async () => {
-                                await call("connections", body);
-                                setEditing("");
-                              }, "服务设置已保存")
-                            }
-                          />
-                        ) : (
-                          <button onClick={() => setEditing("add")}>
-                            添加服务
-                          </button>
-                        )}
+                          </>
+                        ) : null}
                       </>
                     )}
                     <details>
@@ -586,7 +690,7 @@ export function PluginSettings({
                             />
                             {m.label}
                           </label>
-                          {services
+                          {pluginServices
                             .filter((s) => reports[s.id]?.available)
                             .map((s) => (
                               <small key={s.id}>
@@ -600,7 +704,7 @@ export function PluginSettings({
                             (other) =>
                               other.id !== m.id && other.label === m.label,
                           ) ||
-                          data.plugins.some(
+                          plugins.some(
                             (other) =>
                               other.id !== p.id &&
                               other.choices.some(
@@ -735,7 +839,7 @@ export function PluginSettings({
             );
           })}
         </div>
-        {!data && !error && <p>正在读取插件…</p>}
+        {loadingPlugins && !plugins && !pluginsError && <p>正在读取插件…</p>}
       </fieldset>
       {error && <p role="alert">{error}</p>}
       {message && <p role="status">{message}</p>}

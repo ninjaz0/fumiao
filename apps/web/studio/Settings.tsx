@@ -301,7 +301,17 @@ export function Settings({
         navigate(key);
       }}
     >
-      <div className="settings-content" key={visit}>
+      {admin && (
+        <PriceSettings
+          key={`${state.me.id}:${workspace}`}
+          visible={tab === "prices"}
+          state={state}
+          request={adminRequest}
+          refresh={refresh}
+          notify={notify}
+        />
+      )}
+      {tab !== "prices" && <div className="settings-content" key={visit}>
         {extension && (
           <PluginSettingsPage
             key={tab}
@@ -386,14 +396,6 @@ export function Settings({
             notify={notify}
           />
         )}
-        {admin && tab === "prices" && (
-          <PriceSettings
-            state={state}
-            request={adminRequest}
-            refresh={refresh}
-            notify={notify}
-          />
-        )}
         {admin && tab === "creditAdmin" && state.credit_accounts && (
           <CreditAdmin
             accounts={state.credit_accounts}
@@ -444,7 +446,7 @@ export function Settings({
         {admin && tab === "storage" && (
           <StorageSettings state={state} viewLibrary={viewLibrary} />
         )}
-      </div>
+      </div>}
     </SettingsShell>
   );
 }

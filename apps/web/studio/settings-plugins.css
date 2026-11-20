@@ -69,6 +69,19 @@
   background: var(--surface);
   color: inherit;
 }
+.studio-plugins button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.studio-plugins .plugin-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .studio-plugins li {
   overflow-wrap: anywhere;
 }
