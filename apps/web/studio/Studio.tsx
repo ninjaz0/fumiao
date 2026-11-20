@@ -691,8 +691,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         writeDraft(active.current, currentDraft.current);
       await api(workspaceId.current, `/api/workspaces/${id}/select`, {});
       leaving.current = true;
-      const path = page === "settings" ? "/studio?settings=" + encodeURIComponent(settingsTab) : "/studio";
-      location.assign(workspaceURL(path, String(id)));
+      location.assign(workspaceURL("/studio", String(id)));
     });
   }
 
@@ -1299,7 +1298,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                   ? "shell"
                   : "shell "
             }
-            data-console={page === "settings" && !job && !image || undefined}
             ref={shell}
           >
             <Sidebar
@@ -1395,8 +1393,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     refresh={refreshSettings}
                     notify={notify}
                     viewLibrary={() => navigate("library")}
-                    workspaceMenu={menu === "workspaces" && !menuHidden}
-                    openWorkspaceMenu={button => openMenu("workspaces", button)}
                     showWorkspace={showWorkspace}
                     selectWorkspace={selectWorkspace}
                     openAdmin={openAdminDialog}
@@ -1609,7 +1605,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           !menuHidden && (
             <MenuContents
               kind={menu}
-              searchable={page === "settings"}
               state={state}
               select={selectWorkspace}
               create={showWorkspace}

@@ -112,8 +112,6 @@ export function Settings({
   viewLibrary,
   showWorkspace,
   selectWorkspace,
-  workspaceMenu,
-  openWorkspaceMenu,
   openAdmin,
   confirmAdmin,
   adminRequest,
@@ -132,8 +130,6 @@ export function Settings({
   viewLibrary: () => void;
   showWorkspace: (opener: HTMLButtonElement, space?: Space) => void;
   selectWorkspace: (id: number) => void;
-  workspaceMenu: boolean;
-  openWorkspaceMenu: (button: HTMLButtonElement) => void;
   openAdmin: AdminOpen;
   confirmAdmin: AdminConfirm;
   adminRequest: AdminRequest;
@@ -301,8 +297,6 @@ export function Settings({
       state={state}
       tab={tab}
       sections={sections}
-      workspaceMenu={workspaceMenu}
-      openWorkspaceMenu={openWorkspaceMenu}
       legacyTab={legacy && pluginTab(legacy)}
       navigate={(key) => {
         ++request.current;

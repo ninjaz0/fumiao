@@ -1,5 +1,5 @@
-:root:has(.shell[data-console]) {
-  --console-rail: #f4f4f5;
+.ledger-settings,
+body:has(.ledger-settings) #modal {
   --side: #fafafa;
   --bg: #fff;
   --surface: #fff;
@@ -15,8 +15,8 @@
   --focus: var(--blue);
   --accent-soft: #e7f7ef;
 }
-:root[data-theme="dark"]:has(.shell[data-console]) {
-  --console-rail: #0c0d0e;
+[data-theme="dark"] .ledger-settings,
+[data-theme="dark"] body:has(.ledger-settings) #modal {
   --side: #111214;
   --bg: #141619;
   --surface: #181b1f;
@@ -28,77 +28,6 @@
   --selected: #262b33;
   --blue: #3ecf8e;
   --accent-soft: #1a342b;
-}
-.shell[data-console] {
-  --rail: 54px;
-}
-.shell[data-console] .side {
-  position: sticky;
-  align-items: center;
-  width: var(--rail);
-  min-width: var(--rail);
-  padding: 12px 0;
-  border-right: 1px solid var(--line);
-  background: var(--console-rail);
-  box-shadow: none;
-}
-.shell[data-console] .side-head {
-  width: 34px;
-  height: 34px;
-  margin-bottom: 12px;
-}
-.shell[data-console] .brand-button {
-  inset: 0;
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border-radius: 9px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-}
-.shell[data-console] .brand img {
-  width: 25px;
-  height: 25px;
-}
-.shell[data-console]
-  :is(
-    .side .nav-label,
-    .brand > span,
-    .collapse-button,
-    .expand-button,
-    .rail-backdrop
-  ) {
-  display: none;
-}
-.shell[data-console] .workspace {
-  margin-left: 0;
-}
-.shell[data-console] .side nav button,
-.console-rail-current {
-  display: grid;
-  place-items: center;
-  padding: 0;
-  width: 36px;
-  height: 36px;
-  margin: 0;
-  color: var(--secondary);
-}
-.console-rail-current {
-  position: relative;
-  border-radius: 8px;
-  background: var(--selected);
-}
-.console-rail-current::before {
-  content: "";
-  position: absolute;
-  inset: 9px auto 9px -9px;
-  width: 3px;
-  background: var(--blue);
-  border-radius: 3px;
-}
-.shell[data-console] .account {
-  padding: 4px;
 }
 .ledger-settings {
   --ledger-serif: inherit;
@@ -125,19 +54,6 @@
   padding: 12px;
   background: var(--side);
 }
-.ledger-settings .console-workspace {
-  display: flex;
-  flex: none;
-  gap: 9px;
-  margin: 0 0 12px;
-  padding: 7px 9px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: none;
-  color: var(--secondary);
-}
-.console-space-mark,
 .plugin-mark {
   flex: none;
   display: grid;
@@ -148,25 +64,6 @@
   color: var(--blue);
   background: var(--accent-soft);
   font-weight: 650;
-}
-.console-space-meta {
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-}
-.console-space-meta strong,
-.console-space-meta small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.console-space-meta strong {
-  font-size: 13px;
-  color: var(--text);
-}
-.console-space-meta small {
-  font-size: 11px;
 }
 .ledger-navigation-panel {
   position: static;
@@ -367,9 +264,6 @@
     height: auto;
     position: static;
     padding: 10px 12px;
-  }
-  .ledger-settings .console-workspace {
-    margin-bottom: 7px;
   }
   .ledger-settings .settings-title {
     min-height: 42px;

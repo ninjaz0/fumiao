@@ -1,7 +1,6 @@
 import type { PageGroup } from "../../../packages/plugin-sdk/src/contributions";
 import {
   ChevronDown,
-  ChevronsUpDown,
   Search,
   SunMoon,
   Ticket,
@@ -43,8 +42,6 @@ export function SettingsShell({
   navigate,
   children,
   legacyTab,
-  workspaceMenu,
-  openWorkspaceMenu,
 }: {
   state: StudioState;
   tab: SettingsTab;
@@ -52,8 +49,6 @@ export function SettingsShell({
   navigate: (tab: SettingsTab) => void;
   children: ReactNode;
   legacyTab?: SettingsTab;
-  workspaceMenu: boolean;
-  openWorkspaceMenu: (button: HTMLButtonElement) => void;
 }) {
   const [search, setSearch] = useState("");
   const searchBox = useRef<HTMLInputElement>(null);
@@ -63,9 +58,6 @@ export function SettingsShell({
   const panel = useRef<HTMLDivElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
   const active = sections.find(([key]) => key === tab);
-  const workspace = state.workspaces.find(
-    ({ id }) => id === state.workspace_id,
-  );
   const now = Date.now() / 1000;
   const inviteCount = state.invite_codes?.filter(
     ({ enabled, expires }) => enabled && (expires === null || expires > now),
@@ -158,29 +150,6 @@ export function SettingsShell({
     >
       <div className="settings-layout">
         <div className="ledger-navigation">
-          {workspace && (
-            <button
-              type="button"
-              className="console-workspace workspace-switch"
-              data-menu="workspaces"
-              aria-haspopup="dialog"
-              aria-expanded={workspaceMenu}
-              aria-label={`切换工作区，当前${workspace.name}`}
-              onClick={(event) => openWorkspaceMenu(event.currentTarget)}
-            >
-              <span className="console-space-mark" aria-hidden="true">
-                {Array.from(workspace.name)[0]}
-              </span>
-              <span className="console-space-meta">
-                <strong>{workspace.name}</strong>
-                <small>
-                  {workspace.kind === "personal" ? "个人空间" : "团队空间"} ·{" "}
-                  {state.me.role === "admin" ? "管理员" : "成员"}
-                </small>
-              </span>
-              <ChevronsUpDown size={14} aria-hidden="true" />
-            </button>
-          )}
           <button
             className="ledger-navigation-toggle"
             type="button"
