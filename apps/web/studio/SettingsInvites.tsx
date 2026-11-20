@@ -462,11 +462,32 @@ function InviteCopy({
   );
 }
 
+const maxInitialCredits = 1000000000;
+
 function localDate(seconds: number) {
   const date = new Date(seconds * 1000);
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
     .toISOString()
     .slice(0, 16);
+}
+
+function minLocalDate(nowSeconds: number) {
+  return localDate(Math.floor(nowSeconds / 60) * 60 + 60);
+}
+
+function parseExpiresSeconds(value: string): number | null {
+  if (!value) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+function parseInviteCredits(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^[1-9]\d*$/.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed <= maxInitialCredits
+    ? parsed
+    : null;
 }
 
 function InviteDialog({
@@ -496,8 +517,17 @@ function InviteDialog({
   );
   const [saving, setSaving] = useState(false);
   const pending = useRef(false);
+  const nameField = useRef<HTMLInputElement>(null);
+  const expiresField = useRef<HTMLInputElement>(null);
+  const amountField = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState("");
   const custom = expiry === "custom";
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const minDate = minLocalDate(nowSeconds);
+  const customExpires = custom ? parseExpiresSeconds(date) : null;
+  const customExpiresInvalid =
+    custom && (customExpires === null || customExpires <= nowSeconds);
+  const validCredits = grant ? parseInviteCredits(amount) : null;
   const expiryOptions = [
     ["7", "7 天"],
     ["30", "30 天"],
@@ -505,23 +535,81 @@ function InviteDialog({
     ["never", "长期有效"],
   ];
 
+  function selectExpiry(next: string) {
+    setExpiry(next);
+    if (next === "custom") {
+      const parsed = parseExpiresSeconds(date);
+      if (date && (parsed === null || parsed <= Math.floor(Date.now() / 1000)))
+        setMessage("到期时间需要晚于当前时间");
+      else if (message === "到期时间需要晚于当前时间") setMessage("");
+    } else if (message === "到期时间需要晚于当前时间") {
+      setMessage("");
+    }
+  }
+
+  function changeDate(next: string) {
+    setDate(next);
+    const parsed = parseExpiresSeconds(next);
+    if (next && (parsed === null || parsed <= Math.floor(Date.now() / 1000)))
+      setMessage("到期时间需要晚于当前时间");
+    else if (message === "到期时间需要晚于当前时间") setMessage("");
+  }
+
+  function changeAmount(next: string) {
+    setAmount(next);
+    if (
+      (message === "赠送积分需为正整数" ||
+        message === "赠送积分不能超过 1,000,000,000") &&
+      parseInviteCredits(next) !== null
+    )
+      setMessage("");
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending.current) return;
     const form = event.currentTarget;
-    const fields = new FormData(form);
-    const expires =
-      expiry === "never"
-        ? null
-        : custom
-          ? Math.floor(new Date(String(fields.get("expires"))).getTime() / 1000)
-          : Math.floor(Date.now() / 1000) + Number(expiry) * day;
+    const label = name.trim();
+    if (!label) {
+      setMessage("请填写邀请码名称");
+      nameField.current?.focus();
+      return;
+    }
+    const currentSeconds = Math.floor(Date.now() / 1000);
+    let expires: number | null;
+    if (expiry === "never") {
+      expires = null;
+    } else if (custom) {
+      const parsed = parseExpiresSeconds(date);
+      if (parsed === null || parsed <= currentSeconds) {
+        setMessage("到期时间需要晚于当前时间");
+        expiresField.current?.focus();
+        return;
+      }
+      expires = parsed;
+    } else {
+      expires = currentSeconds + Number(expiry) * day;
+    }
+    let initialCredits = 0;
+    if (grant) {
+      const parsed = parseInviteCredits(amount);
+      if (parsed === null) {
+        setMessage(
+          /^[1-9]\d*$/.test(amount.trim())
+            ? "赠送积分不能超过 1,000,000,000"
+            : "赠送积分需为正整数",
+        );
+        amountField.current?.focus();
+        return;
+      }
+      initialCredits = parsed;
+    }
     const body = {
-      name: String(fields.get("label")).trim(),
+      name: label,
       expires,
       grant_credits: grant,
-      initial_credits: grant ? Number(fields.get("amount")) : 0,
-      team_id: Number(fields.get("team")) || null,
+      initial_credits: initialCredits,
+      team_id: Number(team) || null,
       ...(item ? { expected_revision: item.revision } : {}),
     };
     pending.current = true;
@@ -545,7 +633,7 @@ function InviteDialog({
   }
 
   return (
-    <form id="invite-form" onSubmit={submit}>
+    <form id="invite-form" onSubmit={submit} noValidate>
       <header className="ledger-sheet-heading">
         <span>组织 / 邀请码</span>
         <h2 id="modal-heading">{item ? "编辑邀请码" : "创建邀请码"}</h2>
@@ -556,13 +644,21 @@ function InviteDialog({
           <strong>{name.trim() || "未命名邀请码"}</strong>
           <code>{item?.code || "创建后自动生成"}</code>
           <ul>
-            <li>
-              {custom && date
-                ? date.replace("T", " ")
+            <li className={customExpiresInvalid ? "is-invalid" : undefined}>
+              {custom
+                ? !date
+                  ? "未设置到期时间"
+                  : customExpiresInvalid
+                    ? `${date.replace("T", " ")}（已过期）`
+                    : date.replace("T", " ")
                 : expiryOptions.find(([value]) => value === expiry)?.[1]}
             </li>
-            {grant && Number(amount) > 0 && (
-              <li>{Number(amount).toLocaleString()} 积分 / 人</li>
+            {grant && (
+              <li className={validCredits === null ? "is-invalid" : undefined}>
+                {validCredits !== null
+                  ? `${validCredits.toLocaleString()} 积分 / 人`
+                  : "—"}
+              </li>
             )}
             <li>
               {teams.find(({ id }) => String(id) === team)?.name ||
@@ -581,11 +677,16 @@ function InviteDialog({
             名称 <small aria-hidden="true">{name.length} / 40</small>
           </span>
           <input
+            ref={nameField}
             name="label"
             maxLength={40}
             placeholder="如：创作体验、项目组"
             value={name}
-            onChange={(event) => setName(event.currentTarget.value)}
+            onChange={(event) => {
+              const next = event.currentTarget.value;
+              setName(next);
+              if (message === "请填写邀请码名称" && next.trim()) setMessage("");
+            }}
             required
           />
         </label>
@@ -599,7 +700,7 @@ function InviteDialog({
                   name="expiry"
                   value={value}
                   checked={value === expiry}
-                  onChange={() => setExpiry(value)}
+                  onChange={() => selectExpiry(value)}
                 />
                 <span>{label}</span>
               </label>
@@ -609,10 +710,12 @@ function InviteDialog({
         <label className="formlabel" id="invite-date" hidden={!custom}>
           到期时间
           <input
+            ref={expiresField}
             name="expires"
             type="datetime-local"
+            min={minDate}
             value={date}
-            onChange={(event) => setDate(event.currentTarget.value)}
+            onChange={(event) => changeDate(event.currentTarget.value)}
             required={custom}
             disabled={!custom}
           />
@@ -626,7 +729,16 @@ function InviteDialog({
               name="grant"
               aria-labelledby="invite-grant-label"
               checked={grant}
-              onChange={(event) => setGrant(event.currentTarget.checked)}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setGrant(checked);
+                if (
+                  !checked &&
+                  (message === "赠送积分需为正整数" ||
+                    message === "赠送积分不能超过 1,000,000,000")
+                )
+                  setMessage("");
+              }}
             />
             <span aria-hidden="true"></span>
           </label>
@@ -635,13 +747,14 @@ function InviteDialog({
           <label className="formlabel">
             每人积分
             <input
+              ref={amountField}
               name="amount"
               type="number"
               min={1}
-              max={1000000000}
+              max={maxInitialCredits}
               step={1}
               value={amount}
-              onChange={(event) => setAmount(event.currentTarget.value)}
+              onChange={(event) => changeAmount(event.currentTarget.value)}
               disabled={!grant}
               required={grant}
             />
@@ -657,7 +770,7 @@ function InviteDialog({
                 key={preset}
                 className="ledger-button"
                 type="button"
-                onClick={() => setAmount(String(preset))}
+                onClick={() => changeAmount(String(preset))}
               >
                 {preset.toLocaleString()}
               </button>

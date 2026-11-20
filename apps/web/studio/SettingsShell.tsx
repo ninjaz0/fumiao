@@ -158,7 +158,11 @@ export function SettingsShell({
                           onClick={() => select(key)}
                         >
                           {key === "invites" ? (
-                            <Ticket aria-hidden="true" size={17} />
+                            <Ticket
+                              className="icon"
+                              aria-hidden="true"
+                              size={17}
+                            />
                           ) : (
                             <Icon name={icon} />
                           )}

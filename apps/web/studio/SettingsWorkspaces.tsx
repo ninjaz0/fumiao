@@ -77,6 +77,7 @@ export function WorkspaceDialog({
   );
   const [saving, setSaving] = useState(false);
   const pending = useRef(false);
+  const nameField = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState("");
   const searchText = (member: (typeof members)[number]) =>
     (displayName(member) + " " + member.name).toLowerCase();
@@ -88,13 +89,20 @@ export function WorkspaceDialog({
     if (pending.current) return;
     const form = event.currentTarget;
     const fields = new FormData(form);
+    const name = String(fields.get("name") ?? "").trim();
+    if (!name) {
+      setMessage("请输入团队名称");
+      nameField.current?.focus();
+      return;
+    }
     const body = {
-      name: String(fields.get("name")).trim(),
+      name,
       members: fields.getAll("member").map(Number),
       ...(space ? { expected_revision: space.revision } : {}),
     };
     pending.current = true;
     setSaving(true);
+    setMessage("");
     try {
       await request(
         space ? "/api/workspaces/" + space.id : "/api/workspaces",
@@ -113,17 +121,25 @@ export function WorkspaceDialog({
   }
 
   return (
-    <form id="workspace-form" onSubmit={submit}>
+    <form id="workspace-form" onSubmit={submit} noValidate>
       <h2 id="modal-heading">{space ? "管理团队空间" : "创建团队空间"}</h2>
       <label className="formlabel">
         团队名称
         <input
+          ref={nameField}
           name="name"
           required
           maxLength={40}
           defaultValue={space?.name || ""}
           placeholder="输入团队名称"
           autoComplete="off"
+          onChange={(event) => {
+            if (
+              message === "请输入团队名称" &&
+              event.currentTarget.value.trim()
+            )
+              setMessage("");
+          }}
         />
       </label>
       <div className="workspace-member-heading">
