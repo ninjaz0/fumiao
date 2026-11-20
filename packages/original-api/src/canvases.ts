@@ -197,7 +197,9 @@ export class OriginalCanvases {
         ];
         raw.edges = [];
         raw.shots = [];
-        const model = (await CanvasModels.read(sql)).template(
+        const model = (
+          await CanvasModels.read(sql, { allowIncomplete: true })
+        ).template(
           await new StudioCatalog(this.p.db).effective(sql, workspace.id),
         );
         for (const [i, [name, text]] of template[2].entries()) {
@@ -435,7 +437,7 @@ export class OriginalCanvases {
     await this.lockResources(sql, document);
     const refs = await validateCanvasDocument(
       document,
-      await CanvasModels.read(sql),
+      await CanvasModels.read(sql, { allowIncomplete: true }),
       this.resources(sql, user, row),
     );
     await sql.query("DELETE FROM canvas_media_refs WHERE project_id=$1", [

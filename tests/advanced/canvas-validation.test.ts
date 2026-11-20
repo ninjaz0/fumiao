@@ -279,3 +279,46 @@ test("Template flags require an own entry even for a plugin named like an Object
   assert.equal(special.template({}), "");
   assert.equal(special.template({ constructor: true }), "constructor");
 });
+test("Partial canvas model catalog allows manual sticky/text/blank nodes while preserving strict model and resource checks", async () => {
+  const partial = new CanvasModels([], true);
+  assert.deepEqual(
+    await validateCanvasDocument(
+      parseCanvasDocument({
+        nodes: [
+          node("s", "sticky", { text: "便签内容", color: "yellow" }),
+          node("t", "text", { text: "纯文本" }),
+          node("i", "image"),
+          node("v", "video"),
+        ],
+        edges: [{ id: "e1", source: "t", target: "v" }],
+      }),
+      partial,
+      resources,
+    ),
+    [],
+  );
+  await assert.rejects(
+    validateCanvasDocument(
+      parseCanvasDocument({
+        nodes: [node("v", "video", { params: { model: "muse-video" } })],
+      }),
+      partial,
+      resources,
+    ),
+    { status: 400, message: "节点模型与生成类型不匹配" },
+  );
+  await assert.rejects(
+    validateCanvasDocument(
+      parseCanvasDocument({
+        nodes: [
+          node("s", "sticky", {
+            asset_packs: [{ id: "a".repeat(32), revision: 1 }],
+          }),
+        ],
+      }),
+      partial,
+      resources,
+    ),
+    { status: 404, message: "内容不存在或无权访问" },
+  );
+});

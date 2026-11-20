@@ -24,6 +24,8 @@ import { wavFixture } from "../helpers/timing.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 import { secret } from "../../packages/platform/src/security.js";
 import { OriginalNodes } from "../../packages/original-api/src/nodes.js";
+import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
+import { OriginalCanvasRuns } from "../../packages/original-api/src/canvas-runs.js";
 import { OriginalChatSettings } from "../../packages/original-api/src/chat-settings.js";
 import { OriginalChats } from "../../packages/original-api/src/chats.js";
 import { ChatExecution } from "../../packages/original-api/src/chat-execution.js";
@@ -994,6 +996,107 @@ test("installed settings pages isolate values by package, reject stale saves and
     assert.equal((await read()).length, 1);
     await f.packages.install(f.actor, first);
     assert.deepEqual((await read())[1].values, { format: "SRT" });
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("blank canvases save sticky edits and list runs across zero-plugin, v3 package and removed-package states", async () => {
+  const f = await setup();
+  try {
+    const canvases = new OriginalCanvases(f.p);
+    const runs = new OriginalCanvasRuns(f.p);
+    const ext = await load("example-extension");
+    const canvas = await canvases.create(f.actor, { title: "未命名画布" });
+    assert.deepEqual(await runs.list(f.actor, canvas.id), { runs: [] });
+
+    const r2 = await canvases.save(f.actor, canvas.id, {
+      expected_revision: 1,
+      title: "零插件便签画布",
+      document: {
+        nodes: [
+          { id: "sticky-1", type: "sticky", x: 0, y: 0, text: "记录想法" },
+        ],
+      },
+    });
+    assert.equal(r2.revision, 2);
+
+    await f.packages.install(f.actor, ext);
+    assert.deepEqual(await runs.list(f.actor, canvas.id), { runs: [] });
+    const r3 = await canvases.save(f.actor, canvas.id, {
+      expected_revision: 2,
+      title: "安装 v3 扩展后保存",
+      document: {
+        nodes: [
+          { id: "sticky-1", type: "sticky", x: 0, y: 0, text: "已更新便签" },
+          {
+            id: "img-1",
+            type: "image",
+            x: 320,
+            y: 0,
+            params: { model: "example-extension-image" },
+          },
+        ],
+      },
+    });
+    assert.equal(r3.revision, 3);
+    await assert.rejects(
+      canvases.save(f.actor, canvas.id, {
+        expected_revision: 3,
+        title: "错误节点类型",
+        document: {
+          nodes: [
+            {
+              id: "vid-1",
+              type: "video",
+              x: 0,
+              y: 0,
+              params: { model: "example-extension-image" },
+            },
+          ],
+        },
+      }),
+      { status: 400, message: "节点模型与生成类型不匹配" },
+    );
+
+    const [installed] = await f.packages.list(f.actor);
+    await f.packages.change(f.actor, ext.id, installed.revision, "remove");
+    assert.deepEqual(await runs.list(f.actor, canvas.id), { runs: [] });
+    const r4 = await canvases.save(f.actor, canvas.id, {
+      expected_revision: 3,
+      title: "移除插件后仍可编辑便签",
+      document: {
+        nodes: [
+          {
+            id: "sticky-1",
+            type: "sticky",
+            x: 0,
+            y: 0,
+            text: "卸载后继续编辑",
+          },
+          { id: "img-blank", type: "image", x: 320, y: 0 },
+        ],
+      },
+    });
+    assert.equal(r4.revision, 4);
+    await assert.rejects(
+      canvases.save(f.actor, canvas.id, {
+        expected_revision: 4,
+        title: "引用已移除模型",
+        document: {
+          nodes: [
+            {
+              id: "img-1",
+              type: "image",
+              x: 0,
+              y: 0,
+              params: { model: "example-extension-image" },
+            },
+          ],
+        },
+      }),
+      { status: 400, message: "节点模型与生成类型不匹配" },
+    );
   } finally {
     await f.cleanup();
   }

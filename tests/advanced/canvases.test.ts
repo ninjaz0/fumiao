@@ -11,6 +11,12 @@ import {
   canvasVoiceIds,
 } from "../../packages/original-api/src/canvas-values.js";
 import { parseCanvasDocument } from "../../packages/original-api/src/canvas-draft.js";
+import { museLifecycle } from "../../plugins/muse/src/lifecycle.js";
+import { databaseFixture } from "../helpers/database.js";
+import {
+  OriginalIdentity,
+  type OriginalActor,
+} from "../../packages/original-api/src/identity.js";
 const node = (id: string, type = "text", other: any = {}) => ({
   id,
   type,
@@ -385,3 +391,118 @@ test(
     }
   },
 );
+
+test("Manual canvas edits save without full canvas plugins while keeping optimistic locks, explicit model rules and isolation", async () => {
+  // Case 1: Builtins installed without activating any canvas plugin versions.
+  const bare = await databaseFixture();
+  try {
+    await bare.p.registry.installBuiltins(bare.db);
+    const identity = new OriginalIdentity(bare.p);
+    await identity.bootstrap({
+      name: "admin",
+      nickname: "管理员",
+      password: "bare-canvas-password",
+    });
+    const admin = (await one(
+      bare.db,
+      "SELECT * FROM users WHERE name='admin'",
+    )) as OriginalActor;
+    const canvases = new OriginalCanvases(bare.p, () => 1800000000);
+    const created = await canvases.create(admin, { title: "空白画布" });
+    const saved = await canvases.save(admin, created.id, {
+      expected_revision: 1,
+      title: "仅改名加便签",
+      document: {
+        nodes: [
+          node("s1", "sticky", {
+            title: "便签",
+            text: "纯手工记录",
+            color: "yellow",
+          }),
+          node("t1", "text", { title: "文本", text: "分镜草稿" }),
+          node("i1", "image"),
+          node("v1", "video"),
+        ],
+      },
+    });
+    assert.equal(saved.revision, 2);
+    assert.equal(saved.title, "仅改名加便签");
+    assert.equal(saved.document.nodes.length, 4);
+    assert.equal((await canvases.get(admin, created.id)).title, "仅改名加便签");
+    await assert.rejects(
+      canvases.save(admin, created.id, {
+        expected_revision: 1,
+        title: "过期版本",
+        document: {},
+      }),
+      { status: 409 },
+    );
+    await assert.rejects(
+      canvases.save(admin, created.id, {
+        expected_revision: 2,
+        title: "未启用模型",
+        document: {
+          nodes: [node("v1", "video", { params: { model: "muse-video" } })],
+        },
+      }),
+      { status: 503, message: "原画布插件尚未完整启用" },
+    );
+    await assert.rejects(
+      canvases.save(admin, created.id, {
+        expected_revision: 2,
+        title: "未知模型",
+        document: {
+          nodes: [node("v1", "video", { params: { model: "missing-model" } })],
+        },
+      }),
+      { status: 400, message: "节点模型与生成类型不匹配" },
+    );
+  } finally {
+    await bare.cleanup();
+  }
+
+  // Case 2: One plugin lacks canvas policy while others remain active; resource/media isolation still enforced.
+  const f = await canvasesFixture();
+  try {
+    await f.db.transaction((sql) =>
+      f.catalog.activate(sql, museLifecycle.manifest),
+    );
+    const privateAsset = await f.asset(
+      "c".repeat(32),
+      "ref",
+      f.memberSpace,
+      f.member,
+    );
+    const p = await f.canvases.create(f.admin, { title: "初始画布" });
+    const saved = await f.canvases.save(f.admin, p.id, {
+      expected_revision: 1,
+      title: "重命名画布",
+      document: {
+        nodes: [node("s1", "sticky", { text: "只放便签" })],
+      },
+    });
+    assert.equal(saved.revision, 2);
+    await assert.rejects(
+      f.canvases.save(f.admin, p.id, {
+        expected_revision: 2,
+        title: "跨空间素材",
+        document: {
+          nodes: [node("i1", "image", { media_id: privateAsset.public_id })],
+        },
+      }),
+      { status: 404 },
+    );
+    await assert.rejects(
+      f.canvases.save(f.admin, p.id, {
+        expected_revision: 2,
+        title: "默认视频参数仍受校验",
+        document: {
+          nodes: [node("v1", "video", { params: { model: "", seconds: 6 } })],
+        },
+      }),
+      { status: 400, message: "MiniMax H3 时长选项无效" },
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
