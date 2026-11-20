@@ -1,5 +1,11 @@
 import type { PageGroup } from "../../../packages/plugin-sdk/src/contributions";
-import { ChevronDown, Ticket } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronsUpDown,
+  Search,
+  SunMoon,
+  Ticket,
+} from "lucide-react";
 import {
   useEffect,
   useId,
@@ -13,12 +19,13 @@ import { Icon } from "./Icon";
 import type { SettingsTab } from "./settings-tabs";
 import type { StudioState } from "./state";
 import "./settings-ledger.css";
+import "./settings-console.css";
 
 const groups = {
-  account: "个人",
-  organization: "组织",
-  billing: "计费",
+  account: "账户",
   services: "生成服务",
+  billing: "计费",
+  organization: "组织",
   extensions: "插件设置",
 } satisfies Record<PageGroup | "extensions", string>;
 
@@ -36,6 +43,8 @@ export function SettingsShell({
   navigate,
   children,
   legacyTab,
+  workspaceMenu,
+  openWorkspaceMenu,
 }: {
   state: StudioState;
   tab: SettingsTab;
@@ -43,8 +52,12 @@ export function SettingsShell({
   navigate: (tab: SettingsTab) => void;
   children: ReactNode;
   legacyTab?: SettingsTab;
+  workspaceMenu: boolean;
+  openWorkspaceMenu: (button: HTMLButtonElement) => void;
 }) {
-  const member = state.me.role !== "admin";
+  const [search, setSearch] = useState("");
+  const searchBox = useRef<HTMLInputElement>(null);
+  const term = search.trim().toLowerCase();
   const [expanded, setExpanded] = useState(false);
   const panelId = useId();
   const panel = useRef<HTMLDivElement>(null);
@@ -59,7 +72,11 @@ export function SettingsShell({
   ).length;
   const grouped = Object.entries(groups).map(([group, name]) => ({
     name,
-    sections: sections.filter((section) => section[3] === group),
+    sections: sections.filter(
+      (section) =>
+        section[3] === group &&
+        (name.includes(term) || section[1].toLowerCase().includes(term)),
+    ),
   }));
   useEffect(() => {
     if (expanded)
@@ -68,7 +85,30 @@ export function SettingsShell({
         ?.focus();
   }, [expanded]);
 
+  useEffect(() => {
+    function shortcut(event: globalThis.KeyboardEvent) {
+      const target = event.target;
+      if (
+        event.key !== "/" ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        document.querySelector("dialog[open]") ||
+        !(target instanceof HTMLElement) ||
+        target.closest("input, textarea, select, [contenteditable=true]")
+      )
+        return;
+      event.preventDefault();
+      if (toggle.current?.getClientRects().length) setExpanded(true);
+      requestAnimationFrame(() => searchBox.current?.focus());
+    }
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
+  }, []);
+
   function select(key: SettingsTab) {
+    setSearch("");
+    window.scrollTo(0, 0);
     setExpanded(false);
     if (toggle.current?.getClientRects().length) toggle.current.focus();
     navigate(key);
@@ -114,15 +154,33 @@ export function SettingsShell({
   return (
     <div
       className="settings-page ledger-settings"
-      data-member={member}
       data-plugin-page={tab.startsWith("plugin:") || undefined}
     >
-      <header className="settings-title">
-        <h1>设置</h1>
-        <span className="settings-space">{workspace?.name}</span>
-      </header>
       <div className="settings-layout">
         <div className="ledger-navigation">
+          {workspace && (
+            <button
+              type="button"
+              className="console-workspace workspace-switch"
+              data-menu="workspaces"
+              aria-haspopup="dialog"
+              aria-expanded={workspaceMenu}
+              aria-label={`切换工作区，当前${workspace.name}`}
+              onClick={(event) => openWorkspaceMenu(event.currentTarget)}
+            >
+              <span className="console-space-mark" aria-hidden="true">
+                {Array.from(workspace.name)[0]}
+              </span>
+              <span className="console-space-meta">
+                <strong>{workspace.name}</strong>
+                <small>
+                  {workspace.kind === "personal" ? "个人空间" : "团队空间"} ·{" "}
+                  {state.me.role === "admin" ? "管理员" : "成员"}
+                </small>
+              </span>
+              <ChevronsUpDown size={14} aria-hidden="true" />
+            </button>
+          )}
           <button
             className="ledger-navigation-toggle"
             type="button"
@@ -141,6 +199,18 @@ export function SettingsShell({
             ref={panel}
             onKeyDown={keyDown}
           >
+            <label className="ledger-search console-search">
+              <Search size={15} aria-hidden="true" />
+              <input
+                ref={searchBox}
+                type="search"
+                aria-label="搜索设置项"
+                placeholder="搜索设置项…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <kbd aria-hidden="true">/</kbd>
+            </label>
             <nav className="settings-navigation" aria-label="设置分类">
               {grouped.map(
                 ({ name, sections }) =>
@@ -181,10 +251,42 @@ export function SettingsShell({
                     </section>
                   ),
               )}
+              {grouped.every((group) => !group.sections.length) && (
+                <p className="console-empty" role="status">
+                  没有匹配的设置项
+                </p>
+              )}
             </nav>
           </div>
         </div>
-        {children}
+        <div className="console-main">
+          <header className="settings-title">
+            <div className="console-breadcrumb">
+              <h1>设置</h1>
+              <span>/</span>
+              <span>{active && groups[active[3]]}</span>
+              <span>/</span>
+              <strong>{active?.[1]}</strong>
+            </div>
+            <button
+              type="button"
+              className="console-theme"
+              aria-label="切换外观主题"
+              onClick={() =>
+                window.setFumiaoTheme?.(
+                  document.documentElement.dataset.theme === "dark"
+                    ? "light"
+                    : "dark",
+                )
+              }
+            >
+              <SunMoon size={15} aria-hidden="true" />
+              <span className="switch-to-dark">深色模式</span>
+              <span className="switch-to-light">浅色模式</span>
+            </button>
+          </header>
+          {children}
+        </div>
       </div>
     </div>
   );

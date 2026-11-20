@@ -9,12 +9,18 @@ export function Workspaces({
   state,
   show,
   select,
+  editModels,
 }: {
   state: StudioState;
   show: (opener: HTMLButtonElement, space?: Space) => void;
   select: (id: number) => void;
+  editModels: (id: number) => void;
 }) {
   const teams = state.workspaces.filter(({ kind }) => kind === "team");
+  const [search, setSearch] = useState("");
+  const matches = teams.filter((space) =>
+    space.name.toLowerCase().includes(search.trim().toLowerCase()),
+  );
   return (
     <section className="management-view">
       <div className="page-heading">
@@ -28,15 +34,39 @@ export function Workspaces({
           创建团队
         </button>
       </div>
+      <div className="console-toolbar">
+        <input
+          type="search"
+          aria-label="搜索团队空间"
+          placeholder="搜索团队空间"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <small>
+          {matches.length} / {teams.length} 个团队
+        </small>
+      </div>
       <div className="list-surface">
-        {teams.length ? (
-          teams.map((space) => (
+        {matches.length ? (
+          matches.map((space) => (
             <div key={space.id} className="workspace-row">
               <WorkspaceBadge space={space} member={state.me} />
               <div className="workspace-row-name">
-                <strong>{space.name}</strong>
+                <strong>
+                  {space.name}{" "}
+                  {space.id === state.workspace_id && (
+                    <small className="console-current">当前空间</small>
+                  )}
+                </strong>
                 <span>{space.member_count + " 位成员"}</span>
               </div>
+              <button
+                type="button"
+                className="quiet-button"
+                onClick={() => editModels(space.id)}
+              >
+                模型策略
+              </button>
               <button
                 className="quiet-button"
                 data-act="edit-workspace"
@@ -56,7 +86,9 @@ export function Workspaces({
             </div>
           ))
         ) : (
-          <p className="empty-note">还没有团队空间</p>
+          <p className="empty-note">
+            {teams.length ? "没有匹配的团队空间" : "还没有团队空间"}
+          </p>
         )}
       </div>
     </section>

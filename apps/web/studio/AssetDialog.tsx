@@ -158,7 +158,8 @@ export function AssetDialog({
       className={
         content?.kind === "settings" && content.presentation === "invite-sheet"
           ? "ledger-invite-sheet"
-          : undefined
+          : content?.kind === "settings" && content.presentation === "account-sheet"
+            ? "console-account-sheet" : undefined
       }
       ref={ref}
       onCancel={() => stopDialogMedia(ref.current)}

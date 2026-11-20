@@ -1,0 +1,483 @@
+:root:has(.shell[data-console]) {
+  --console-rail: #f4f4f5;
+  --side: #fafafa;
+  --bg: #fff;
+  --surface: #fff;
+  --field: var(--surface);
+  --pop: var(--surface);
+  --text: #09090b;
+  --secondary: #52525b;
+  --muted: #71717a;
+  --line: #e4e4e7;
+  --hover: #f0f0f2;
+  --selected: #ececef;
+  --blue: #047857;
+  --focus: var(--blue);
+  --accent-soft: #e7f7ef;
+}
+:root[data-theme="dark"]:has(.shell[data-console]) {
+  --console-rail: #0c0d0e;
+  --side: #111214;
+  --bg: #141619;
+  --surface: #181b1f;
+  --text: #f4f5f7;
+  --secondary: #a1a8b3;
+  --muted: #959daa;
+  --line: #30353d;
+  --hover: #22262d;
+  --selected: #262b33;
+  --blue: #3ecf8e;
+  --accent-soft: #1a342b;
+}
+.shell[data-console] {
+  --rail: 54px;
+}
+.shell[data-console] .side {
+  position: sticky;
+  align-items: center;
+  width: var(--rail);
+  min-width: var(--rail);
+  padding: 12px 0;
+  border-right: 1px solid var(--line);
+  background: var(--console-rail);
+  box-shadow: none;
+}
+.shell[data-console] .side-head {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 12px;
+}
+.shell[data-console] .brand-button {
+  inset: 0;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.shell[data-console] .brand img {
+  width: 25px;
+  height: 25px;
+}
+.shell[data-console]
+  :is(
+    .side .nav-label,
+    .brand > span,
+    .collapse-button,
+    .expand-button,
+    .rail-backdrop
+  ) {
+  display: none;
+}
+.shell[data-console] .workspace {
+  margin-left: 0;
+}
+.shell[data-console] .side nav button,
+.console-rail-current {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  color: var(--secondary);
+}
+.console-rail-current {
+  position: relative;
+  border-radius: 8px;
+  background: var(--selected);
+}
+.console-rail-current::before {
+  content: "";
+  position: absolute;
+  inset: 9px auto 9px -9px;
+  width: 3px;
+  background: var(--blue);
+  border-radius: 3px;
+}
+.shell[data-console] .account {
+  padding: 4px;
+}
+.ledger-settings {
+  --ledger-serif: inherit;
+  font:
+    13.5px/1.5 Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "PingFang SC",
+    sans-serif;
+}
+.ledger-settings .settings-layout {
+  grid-template-columns: clamp(205px, 20cqi, 252px) minmax(0, 1fr);
+  align-items: start;
+}
+.console-main {
+  min-width: 0;
+}
+.ledger-settings .ledger-navigation {
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  background: var(--side);
+}
+.ledger-settings .console-workspace {
+  display: flex;
+  flex: none;
+  gap: 9px;
+  margin: 0 0 12px;
+  padding: 7px 9px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: none;
+  color: var(--secondary);
+}
+.console-space-mark,
+.plugin-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  color: var(--blue);
+  background: var(--accent-soft);
+  font-weight: 650;
+}
+.console-space-meta {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+.console-space-meta strong,
+.console-space-meta small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.console-space-meta strong {
+  font-size: 13px;
+  color: var(--text);
+}
+.console-space-meta small {
+  font-size: 11px;
+}
+.ledger-navigation-panel {
+  position: static;
+  min-height: 0;
+  overflow: auto;
+}
+.console-search {
+  margin: 0 1px 14px;
+  border-radius: 7px;
+}
+.console-search kbd,
+.plugin-card-head code,
+.plugin-checklist summary small {
+  color: var(--secondary);
+  font: 11px/1.6 var(--ledger-mono);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0 5px;
+}
+.console-empty {
+  text-align: center;
+  color: var(--secondary);
+}
+.ledger-settings .settings-navigation h2 {
+  font-size: 11px;
+  letter-spacing: 0.035em;
+  padding: 0 8px;
+}
+.ledger-settings .settings-navigation button {
+  min-height: 32px;
+  margin: 1px 0;
+  border: 0;
+  border-radius: 7px;
+}
+.ledger-settings .settings-navigation .icon {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+.ledger-settings .settings-navigation button.active {
+  background: var(--selected);
+}
+.ledger-settings .settings-navigation button.active::before {
+  content: none;
+}
+.ledger-settings .settings-navigation button.active svg {
+  color: var(--blue);
+}
+.ledger-settings .settings-title {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-height: 52px;
+  padding: 8px clamp(14px, 3cqi, 28px);
+  background: var(--bg);
+}
+.console-breadcrumb,
+.console-theme {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.console-breadcrumb {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--secondary);
+}
+.ledger-settings .settings-title h1 {
+  margin: 0;
+  font: inherit;
+}
+.console-breadcrumb strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.console-theme {
+  flex: none;
+  border: 1px solid var(--line);
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--surface);
+}
+.switch-to-light,
+[data-theme="dark"] .switch-to-dark {
+  display: none;
+}
+[data-theme="dark"] .switch-to-light {
+  display: inline;
+}
+.ledger-settings .settings-content {
+  max-width: 940px;
+  margin-inline: auto;
+  padding: 26px clamp(16px, 3cqi, 28px) 64px;
+}
+.ledger-settings
+  .settings-content
+  :is(
+    .settings-section > h2,
+    .page-heading h2,
+    .recharge-heading h2,
+    .ledger-invite-heading h2,
+    .plugin-heading h2
+  ) {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.ledger-settings .settings-section > h2 {
+  margin-bottom: 16px;
+}
+.ledger-settings
+  :is(.ledger-card, .list-surface, .credit-summary > div, .ledger-tally) {
+  border-radius: 10px;
+}
+.ledger-settings :is(.profile-section, .extension-settings) {
+  max-width: none;
+}
+.ledger-settings .ledger-card h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+.ledger-settings .ledger-appearance .theme-choices button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  text-align: start;
+  padding: 10px;
+}
+.ledger-settings .ledger-theme-swatch {
+  grid-column: 1/-1;
+  height: 80px;
+}
+.ledger-appearance .theme-choices button.selected {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 1px var(--blue);
+}
+.ledger-appearance .theme-choices small {
+  color: var(--blue);
+}
+.console-description,
+.plugin-heading p {
+  margin: 5px 0 18px;
+  color: var(--secondary);
+  font-size: 13px;
+}
+.ledger-settings .settings-section > h2:has(+ .console-description) {
+  margin-bottom: 0;
+}
+.console-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  margin: 15px 0;
+}
+.console-toolbar input,
+.console-toolbar select {
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--field);
+}
+.console-toolbar small {
+  color: var(--secondary);
+}
+.console-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+.console-stats div {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  padding: 14px 16px;
+}
+.console-stats dt {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.console-stats dd {
+  font: 600 22px/1.5 var(--ledger-mono);
+  margin: 4px 0 0;
+}
+@container settings-ledger (max-width: 640px) {
+  .ledger-settings .settings-layout {
+    display: block;
+  }
+  .ledger-settings .ledger-navigation {
+    height: auto;
+    position: static;
+    padding: 10px 12px;
+  }
+  .ledger-settings .console-workspace {
+    margin-bottom: 7px;
+  }
+  .ledger-settings .settings-title {
+    min-height: 42px;
+  }
+  .ledger-settings .settings-content {
+    padding: 18px 12px 40px;
+  }
+  .ledger-navigation-panel {
+    max-height: 55dvh;
+  }
+  .console-theme span {
+    display: none;
+  }
+  .console-breadcrumb {
+    gap: 5px;
+    font-size: 12px;
+  }
+}
+.console-current {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: 5px;
+  color: var(--blue);
+  background: var(--accent-soft);
+}
+#modal.console-account-sheet {
+  inset: 0 0 0 auto;
+  margin: 0;
+  width: min(480px, 100%);
+  max-width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  border-radius: 0;
+  padding: 22px;
+}
+.console-model-toolbar,
+.console-model-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.console-model-toolbar .model-search {
+  margin: 0;
+  flex: 1 1 170px;
+  max-width: 310px;
+}
+.console-scope {
+  min-width: 0;
+  max-width: 100%;
+  position: relative;
+}
+.console-scope summary,
+.console-scope-panel {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.console-scope summary {
+  cursor: pointer;
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+}
+.console-scope summary strong {
+  margin-left: 5px;
+  color: var(--text);
+}
+.console-scope-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  width: min(260px, 100cqi);
+  max-height: 45vh;
+  overflow: auto;
+  z-index: 2;
+  display: grid;
+  gap: 4px;
+  box-shadow: var(--shadow);
+}
+.console-scope-panel input[type="search"] {
+  width: 100%;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--field);
+}
+.console-scope-panel label {
+  font-size: 12px;
+  color: var(--secondary);
+}
+.console-scope-panel button {
+  padding: 6px;
+  text-align: left;
+  border-radius: 4px;
+}
+.console-scope-panel button:is(:hover, [aria-pressed="true"]) {
+  background: var(--selected);
+}
+.console-model-heading small {
+  font: 12px var(--ledger-mono);
+  color: var(--secondary);
+}
+.ledger-settings .model-switch input:checked + span {
+  background: var(--blue);
+}
+.ledger-settings .model-switch input:checked + span::before {
+  background: white;
+}

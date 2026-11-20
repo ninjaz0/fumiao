@@ -60,6 +60,7 @@ export async function verifyChatPackage(page: Page) {
     provider.setWire("stream", {
       raw: 'data: {"choices":[{"delta":{"content":"插件回复"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
     });
+    await page.getByRole("button", { name: "关闭插件设置" }).click();
     await page.locator('nav [data-nav="chat"]').click();
     await page
       .getByRole("textbox", { name: "发送消息" })

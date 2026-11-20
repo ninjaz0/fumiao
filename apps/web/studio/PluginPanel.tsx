@@ -330,6 +330,11 @@ export function PluginPanel({
           {view.add.label}
         </button>
       </div>
+      <dl className="console-stats">
+        <div><dt>已配对节点</dt><dd>{state.nodes.length}</dd></div>
+        <div><dt>就绪</dt><dd>{state.nodes.filter(node => node.stage === "ready").length}</dd></div>
+        <div><dt>运行中</dt><dd>{state.nodes.filter(node => node.stage === "busy").length}</dd></div>
+      </dl>
       {view.notice && <p role="status">{view.notice}</p>}
       <div className="list-surface">
         {view.rows.length ? (

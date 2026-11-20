@@ -24,7 +24,7 @@ function ModelSearch({
       className="model-search"
       id="model-policy-search"
       aria-label="搜索模型管理"
-      placeholder="搜索模型"
+      placeholder="搜索模型或提供方"
       defaultValue={initial}
       disabled={disabled}
       onInput={(event) => change(event.currentTarget.value)}
@@ -48,6 +48,9 @@ export function ModelSettings({
   const [selected, setSelected] = useState(preferences.scope);
   const [search, setSearch] = useState(preferences.search);
   const [pending, setPending] = useState<{ id: string; enabled: boolean }>();
+  const [teamSearch, setTeamSearch] = useState("");
+  const [customOnly, setCustomOnly] = useState(false);
+  const scopeMenu = useRef<HTMLDetailsElement>(null);
   const submit = useRef(false);
   const focus = useRef("");
   const section = useRef<HTMLElement>(null);
@@ -107,40 +110,88 @@ export function ModelSettings({
   return (
     <section className="settings-section model-settings" ref={section}>
       <h2>模型管理</h2>
-      <ModelSearch
-        key={JSON.stringify([scope, policy?.revision, global.revision])}
-        search={search}
-        disabled={!!pending}
-        change={(value) => {
-          preferences.search = value;
-          setSearch(value);
-        }}
-      />
-      <label className="settings-scope">
-        应用范围
-        <select
-          id="model-policy-scope"
-          value={scope}
-          disabled={!!pending}
-          onChange={(event) => {
-            preferences.scope = event.currentTarget.value;
-            setSelected(preferences.scope);
+      <p className="console-description">
+        设置全站和各团队空间可使用的生成模型。
+      </p>
+      <div className="console-model-toolbar">
+        <details
+          ref={scopeMenu}
+          className="console-scope"
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget))
+              event.currentTarget.open = false;
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector("summary")?.focus();
+            }
           }}
         >
-          <option value="global">全站</option>
-          {teams.map(({ id, name }) => (
-            <option
-              key={id}
-              value={id}
-              ref={(option) => {
-                if (option) option.defaultSelected = String(id) === scope;
-              }}
-            >
-              {name}
-            </option>
-          ))}
-        </select>
-      </label>
+          <summary>
+            应用范围{" "}
+            <strong>
+              {teams.find((team) => String(team.id) === scope)?.name ||
+                "全站默认"}
+            </strong>
+          </summary>
+          <div className="console-scope-panel">
+            <input
+              type="search"
+              placeholder="搜索团队空间"
+              aria-label="搜索策略范围"
+              value={teamSearch}
+              onChange={(e) => setTeamSearch(e.target.value)}
+            />
+            <label>
+              <input
+                type="checkbox"
+                checked={customOnly}
+                onChange={(e) => setCustomOnly(e.target.checked)}
+              />{" "}
+              仅看已单独配置的团队
+            </label>
+            {[
+              { id: "global", name: "全站默认" },
+              ...teams.filter(
+                (team) =>
+                  team.name
+                    .toLowerCase()
+                    .includes(teamSearch.trim().toLowerCase()) &&
+                  (!customOnly ||
+                    (state.team_model_policies?.[team.id]?.revision ?? 0) > 0),
+              ),
+            ].map((option) => (
+              <button
+                type="button"
+                key={option.id}
+                disabled={!!pending}
+                aria-pressed={String(option.id) === scope}
+                onClick={() => {
+                  preferences.scope = String(option.id);
+                  setSelected(preferences.scope);
+                  if (scopeMenu.current) {
+                    scopeMenu.current.open = false;
+                    scopeMenu.current.querySelector("summary")?.focus();
+                  }
+                  setTeamSearch("");
+                }}
+              >
+                {option.name}
+              </button>
+            ))}
+          </div>
+        </details>
+        <ModelSearch
+          key={JSON.stringify([scope, policy?.revision, global.revision])}
+          search={search}
+          disabled={!!pending}
+          change={(value) => {
+            preferences.search = value;
+            setSearch(value);
+          }}
+        />
+      </div>
       {sections.map(([kind, title]) => {
         const rows = Object.entries(state.model_groups || {})
           .filter(([, group]) => group.kind === kind)
@@ -171,7 +222,16 @@ export function ModelSettings({
               open,
               partial,
               notes,
-              hidden: !(group.label + notes).toLowerCase().includes(term),
+              hidden: ![
+                group.label,
+                notes,
+                ...group.models.map(
+                  (model) => state.model_catalog[model]?.provider,
+                ),
+              ]
+                .join(" ")
+                .toLowerCase()
+                .includes(term),
             };
           });
         return (
@@ -180,7 +240,13 @@ export function ModelSettings({
             className="model-group ledger-card"
             hidden={rows.every(({ hidden }) => hidden)}
           >
-            <h3>{title}</h3>
+            <h3 className="console-model-heading">
+              {title}
+              <small>
+                {rows.filter((row) => !row.hidden && row.open > 0).length} /{" "}
+                {rows.filter((row) => !row.hidden).length} 开放
+              </small>
+            </h3>
             {rows.map(({ id, label, open, partial, notes, hidden }) => (
               <div key={id} className="setting-row" hidden={hidden}>
                 <div className="model-setting-name">

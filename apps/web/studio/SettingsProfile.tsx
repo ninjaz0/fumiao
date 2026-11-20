@@ -66,7 +66,9 @@ export function Profile({
   return (
     <div className="settings-section profile-section">
       <h2>个人资料</h2>
+      <p className="console-description">管理你的显示名称、头像与登录凭证。</p>
       <div className="ledger-card">
+        <h3>基础信息</h3>
         <div className="ledger-profile-identity">
           <Avatar member={state.me} />
           <div>
@@ -126,6 +128,7 @@ export function Profile({
         </div>
       </div>
       <div className="ledger-card">
+        <h3>账户安全</h3>
         <div className="profile-field-row profile-password-row">
           <span className="profile-field-label">
             登录密码<small>新密码至少 10 位</small>

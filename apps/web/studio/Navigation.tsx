@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import { Chevron, Icon } from "./Icon";
 import {
   displayName,
@@ -80,8 +80,8 @@ export function Sidebar({
             className="brand-button"
             data-nav="home"
             aria-label="去首页"
-            tabIndex={collapsed ? -1 : 0}
-            aria-hidden={collapsed}
+            tabIndex={collapsed && page !== "settings" ? -1 : 0}
+            aria-hidden={collapsed && page !== "settings"}
             onClick={() => navigate("home")}
           >
             <span className="brand">
@@ -114,27 +114,30 @@ export function Sidebar({
             </span>
           </button>
         </div>
-        <button
-          className="workspace-switch"
-          data-menu="workspaces"
-          aria-label={`切换工作区，当前${space.name}`}
-          aria-haspopup="dialog"
-          aria-expanded={menu === "workspaces"}
-          title={space.name}
-          onClick={(event) => open("workspaces", event.currentTarget)}
-        >
-          <WorkspaceBadge space={space} member={state.me} />
-          <span className="space-button-name nav-label">{space.name}</span>
-          <span className="space-switch-icon nav-label">
-            <Icon name="switch" />
-          </span>
-        </button>
+        {page !== "settings" && (
+          <button
+            className="workspace-switch"
+            data-menu="workspaces"
+            aria-label={`切换工作区，当前${space.name}`}
+            aria-haspopup="dialog"
+            aria-expanded={menu === "workspaces"}
+            title={space.name}
+            onClick={(event) => open("workspaces", event.currentTarget)}
+          >
+            <WorkspaceBadge space={space} member={state.me} />
+            <span className="space-button-name nav-label">{space.name}</span>
+            <span className="space-switch-icon nav-label">
+              <Icon name="switch" />
+            </span>
+          </button>
+        )}
         <nav aria-label="主导航">
           {nav.map(([id, label, icon]) => (
             <button
               key={id}
               data-nav={id}
               title={label}
+              aria-label={label}
               className={page === id ? "active" : ""}
               aria-current={page === id ? "page" : undefined}
               onClick={() => navigate(id)}
@@ -143,6 +146,16 @@ export function Sidebar({
               <span className="nav-label">{label}</span>
             </button>
           ))}
+          {page === "settings" && (
+            <span
+              className="console-rail-current"
+              aria-current="page"
+              aria-label="设置"
+              title="设置"
+            >
+              <Icon name="settings" />
+            </span>
+          )}
         </nav>
         <div className="side-bottom">
           <button
@@ -178,6 +191,7 @@ export function MenuContents({
   create,
   settings,
   logout,
+  searchable,
 }: {
   kind: SidebarMenu;
   state: StudioState;
@@ -185,8 +199,10 @@ export function MenuContents({
   create: (opener: HTMLButtonElement) => void;
   settings: () => void;
   logout: () => void;
+  searchable: boolean;
 }) {
   const name = displayName(state.me);
+  const [query, setQuery] = useState("");
   if (kind === "account")
     return (
       <>
@@ -209,7 +225,10 @@ export function MenuContents({
         </button>
       </>
     );
-  const teams = state.workspaces.filter((space) => space.kind === "team");
+  const filtered = state.workspaces.filter((space) =>
+    space.name.toLowerCase().includes(query.trim().toLowerCase()),
+  );
+  const teams = filtered.filter((space) => space.kind === "team");
   const option = (space: Space) => (
     <button
       key={space.id}
@@ -237,11 +256,19 @@ export function MenuContents({
   );
   return (
     <>
+      {searchable && (
+        <input
+          className="workspace-member-search"
+          type="search"
+          aria-label="搜索工作区"
+          placeholder="搜索工作区…"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      )}
       <div className="space-menu-label">个人空间</div>
       <div role="listbox" aria-label="个人空间">
-        {state.workspaces
-          .filter((space) => space.kind === "personal")
-          .map(option)}
+        {filtered.filter((space) => space.kind === "personal").map(option)}
       </div>
       <div className="space-menu-label space-team-label">
         <span>团队空间</span>
@@ -260,7 +287,9 @@ export function MenuContents({
         {teams.length ? (
           teams.map(option)
         ) : (
-          <p className="space-empty">尚未加入团队空间</p>
+          <p className="space-empty">
+            {query ? "没有匹配的团队空间" : "尚未加入团队空间"}
+          </p>
         )}
       </div>
     </>

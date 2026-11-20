@@ -1,4 +1,14 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import { Boxes, Check, ChevronDown, Circle, Plus, X } from "lucide-react";
+import type { SettingsTab } from "./settings-tabs";
 import { api } from "./api";
 import "./settings-plugins.css";
 
@@ -189,14 +199,62 @@ function ServiceForm({
     </form>
   );
 }
+function PluginDrawer({
+  title,
+  close,
+  children,
+}: {
+  title: string;
+  close: () => void;
+  children: ReactNode;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const heading = useId();
+  useLayoutEffect(() => {
+    const element = dialog.current!;
+    element.showModal();
+    return () => element.close();
+  }, []);
+  return (
+    <dialog
+      ref={dialog}
+      className="plugin-drawer"
+      aria-labelledby={heading}
+      onCancel={(event) => {
+        event.preventDefault();
+        close();
+      }}
+      onClick={(event) => {
+        if (event.target !== event.currentTarget) return;
+        const box = event.currentTarget.getBoundingClientRect();
+        if (event.clientX < box.left || event.clientX > box.right) close();
+      }}
+    >
+      <header>
+        <h3 id={heading}>{title} · 设置</h3>
+        <button type="button" aria-label="关闭插件设置" onClick={close}>
+          <X size={16} />
+        </button>
+      </header>
+      <div className="plugin-drawer-body">{children}</div>
+    </dialog>
+  );
+}
+
 export function PluginSettings({
   workspace,
   refresh,
   navigate,
+  gpuTab,
+  nodesPaired,
+  hasPricing,
 }: {
   workspace: number;
   refresh: () => Promise<void>;
-  navigate: (tab: "models" | "prices") => void;
+  navigate: (tab: SettingsTab) => void;
+  gpuTab?: SettingsTab;
+  nodesPaired: boolean;
+  hasPricing: boolean;
 }) {
   const [plugins, setPlugins] = useState<Plugin[]>();
   const [services, setServices] = useState<Service[]>();
@@ -317,57 +375,126 @@ export function PluginSettings({
   const showingInlineServiceError = Boolean(
     expandedPlugin && expandedPlugin.mode !== "pull",
   );
+  const enabled = plugins?.filter((p) => p.enabled).length ?? 0;
+  const steps = [
+    {
+      label: "导入插件包",
+      done: !!plugins?.length,
+      act: () => picker.current?.click(),
+    },
+    {
+      label: "启用生成服务",
+      done: enabled > 0,
+      act: () => {
+        const plugin = plugins?.find((p) => !p.enabled) ?? plugins?.[0];
+        if (plugin) {
+          setOpened(plugin.id);
+          setEditing("");
+        } else picker.current?.click();
+      },
+    },
+    ...(gpuTab
+      ? [
+          {
+            label: "配对 GPU 节点",
+            done: nodesPaired,
+            act: () => navigate(gpuTab),
+          },
+        ]
+      : []),
+    { label: "查看生成定价", done: hasPricing, act: () => navigate("prices") },
+  ];
   return (
     <section className="settings-section studio-plugins">
-      <h2>插件</h2>
       <fieldset disabled={busy}>
-        <div className="plugin-actions">
-          <button onClick={() => picker.current?.click()}>导入插件</button>
-          <input
-            ref={picker}
-            hidden
-            type="file"
-            accept=".json,application/json"
-            aria-label="选择插件文件"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              e.target.value = "";
-              setPending(undefined);
-              if (file)
-                void run(
-                  async () => {
-                    if (file.size > 3 * 1024 * 1024)
-                      throw Error("插件文件过大");
-                    let content;
-                    try {
-                      content = JSON.parse(await file.text());
-                    } catch {
-                      throw Error("无法读取插件文件");
-                    }
-                    const preview = await call<Preview>(
-                      "plugins/preview",
-                      content,
-                    );
-                    setPending({ file: content, preview });
-                  },
-                  "",
-                  false,
-                );
-            }}
-          />
-          {plugins?.some((p) => p.updateUrl) && (
+        <header className="plugin-heading">
+          <div>
+            <h2>插件</h2>
+            <p>管理生成服务的版本、连接和可用模型。开关对全平台生效。</p>
+          </div>
+          <div className="plugin-actions">
             <button
-              onClick={() =>
-                void run(async () => {
-                  for (const p of plugins.filter((x) => x.updateUrl))
-                    await call("plugins/" + p.id + "/check", {});
-                }, "已检查更新")
-              }
+              className="console-primary"
+              onClick={() => picker.current?.click()}
             >
-              检查更新
+              <Plus size={15} />
+              导入插件
             </button>
-          )}
-        </div>
+            <input
+              ref={picker}
+              hidden
+              type="file"
+              accept=".json,application/json"
+              aria-label="选择插件文件"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                setPending(undefined);
+                if (file)
+                  void run(
+                    async () => {
+                      if (file.size > 3 * 1024 * 1024)
+                        throw Error("插件文件过大");
+                      let content;
+                      try {
+                        content = JSON.parse(await file.text());
+                      } catch {
+                        throw Error("无法读取插件文件");
+                      }
+                      const preview = await call<Preview>(
+                        "plugins/preview",
+                        content,
+                      );
+                      setPending({ file: content, preview });
+                    },
+                    "",
+                    false,
+                  );
+              }}
+            />
+            {plugins?.some((p) => p.updateUrl) && (
+              <button
+                onClick={() =>
+                  void run(async () => {
+                    for (const p of plugins.filter((x) => x.updateUrl))
+                      await call("plugins/" + p.id + "/check", {});
+                  }, "已检查更新")
+                }
+              >
+                检查更新
+              </button>
+            )}
+          </div>
+        </header>
+        {plugins && (
+          <details className="plugin-checklist" open>
+            <summary>
+              <strong>平台部署清单</strong>
+              <small>
+                {steps.filter((step) => step.done).length} / {steps.length}{" "}
+                已就绪
+              </small>
+              <ChevronDown size={15} />
+            </summary>
+            <progress
+              aria-label="部署进度"
+              value={steps.filter((step) => step.done).length}
+              max={steps.length}
+            />
+            <div>
+              {steps.map((step) => (
+                <button type="button" key={step.label} onClick={step.act}>
+                  {step.done ? (
+                    <Check size={15} className="check-done" />
+                  ) : (
+                    <Circle size={14} />
+                  )}{" "}
+                  {step.label}
+                </button>
+              ))}
+            </div>
+          </details>
+        )}
         {pending && (
           <form
             className="ledger-card plugin-overview plugin-form"
@@ -481,19 +608,27 @@ export function PluginSettings({
             </button>
           </div>
         )}
-        {servicesError && plugins !== undefined && !showingInlineServiceError && (
-          <div className="ledger-card plugin-alert" role="alert">
-            <span>服务清单读取失败：{servicesError}</span>
-            <button
-              type="button"
-              disabled={loadingServices}
-              onClick={() => void loadServices()}
-            >
-              {loadingServices ? "重试中…" : "重试"}
-            </button>
+        {servicesError &&
+          plugins !== undefined &&
+          !showingInlineServiceError && (
+            <div className="ledger-card plugin-alert" role="alert">
+              <span>服务清单读取失败：{servicesError}</span>
+              <button
+                type="button"
+                disabled={loadingServices}
+                onClick={() => void loadServices()}
+              >
+                {loadingServices ? "重试中…" : "重试"}
+              </button>
+            </div>
+          )}
+        {plugins && !plugins.length && !pending && (
+          <div className="plugins-empty">
+            <Boxes size={30} />
+            <h3>暂无已安装的插件</h3>
+            <p>导入 .fmplugin.json 插件包后，可在这里配置服务和模型。</p>
           </div>
         )}
-        {plugins && !plugins.length && !pending && <p>暂无已安装的插件</p>}
         <div className="plugin-connections">
           {plugins?.map((p) => {
             const base = "plugins/" + p.id + "/",
@@ -506,34 +641,66 @@ export function PluginSettings({
                 () => call(base + path, { revision: p.revision, ...body }),
                 success,
               );
+            const toggle = (
+              <label className="plugin-inline">
+                <input
+                  type="checkbox"
+                  role="switch"
+                  aria-label={p.label + "开关"}
+                  checked={p.enabled}
+                  disabled={p.removing}
+                  onChange={(e) =>
+                    void action("state", {
+                      action: e.target.checked ? "enable" : "disable",
+                    })
+                  }
+                />
+                {p.removing
+                  ? "等待已受理任务结束后移除"
+                  : p.enabled
+                    ? "已开启"
+                    : "已关闭"}
+              </label>
+            );
             return (
-              <article
-                className="ledger-card plugin-connection"
-                data-expanded={opened === p.id}
-                key={p.id}
-              >
-                <div className="plugin-actions">
-                  <strong>{p.label}</strong>
-                  <span>{p.version}</span>
-                  <label className="plugin-inline">
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      aria-label={p.label + "开关"}
-                      checked={p.enabled}
-                      disabled={p.removing}
-                      onChange={(e) =>
-                        void action("state", {
-                          action: e.target.checked ? "enable" : "disable",
-                        })
-                      }
-                    />
+              <article className="ledger-card plugin-connection" key={p.id}>
+                <div className="plugin-card-head">
+                  <span className="plugin-mark" aria-hidden="true">
+                    {p.id.slice(0, 2).toUpperCase()}
+                  </span>
+                  <div>
+                    <strong>{p.label}</strong> <code>{p.version}</code>
+                    <small>
+                      {p.choices.length} 个模型 ·{" "}
+                      {p.mode === "pull" ? "节点服务" : "接口服务"}
+                    </small>
+                  </div>
+                  {opened !== p.id && toggle}
+                </div>
+                <div className="plugin-card-status">
+                  <span data-enabled={p.enabled}>
                     {p.removing
-                      ? "等待已受理任务结束后移除"
+                      ? "等待任务结束后移除"
                       : p.enabled
-                        ? "已开启"
-                        : "已关闭"}
-                  </label>
+                        ? "已启用"
+                        : "已停用"}
+                  </span>
+                  {p.updateInfo?.version && <span>有可用更新</span>}
+                </div>
+                <div className="plugin-card-foot">
+                  <small>
+                    {p.mode === "pull"
+                      ? "由配对节点处理任务"
+                      : servicesError
+                        ? "服务清单读取失败"
+                        : !services
+                          ? "正在读取服务…"
+                          : pluginServices.length
+                            ? pluginServices
+                                .map((service) => service.name)
+                                .join("、")
+                            : "尚未配置服务"}
+                  </small>
                   <button
                     aria-expanded={opened === p.id}
                     onClick={() => {
@@ -564,7 +731,19 @@ export function PluginSettings({
                   )}
                 </div>
                 {opened === p.id && (
-                  <>
+                  <PluginDrawer
+                    title={p.label}
+                    close={() => {
+                      setOpened("");
+                      setEditing("");
+                    }}
+                  >
+                    <div className="plugin-drawer-state">
+                      <span>插件状态</span>
+                      {toggle}
+                    </div>
+                    {error && <p role="alert">{error}</p>}
+                    {message && <p role="status">{message}</p>}
                     {p.mode !== "pull" && (
                       <>
                         <h3>服务设置</h3>
@@ -580,7 +759,9 @@ export function PluginSettings({
                             </button>
                           </div>
                         )}
-                        {loadingServices && services === undefined && !servicesError ? (
+                        {loadingServices &&
+                        services === undefined &&
+                        !servicesError ? (
                           <p role="status">正在读取服务…</p>
                         ) : services !== undefined ? (
                           <>
@@ -654,7 +835,8 @@ export function PluginSettings({
                                 )}
                               </div>
                             ))}
-                            {pluginServices.length === 0 || editing === "add" ? (
+                            {pluginServices.length === 0 ||
+                            editing === "add" ? (
                               <ServiceForm
                                 plugin={p}
                                 save={(body) =>
@@ -833,7 +1015,7 @@ export function PluginSettings({
                     >
                       移除插件
                     </button>
-                  </>
+                  </PluginDrawer>
                 )}
               </article>
             );
@@ -841,8 +1023,8 @@ export function PluginSettings({
         </div>
         {loadingPlugins && !plugins && !pluginsError && <p>正在读取插件…</p>}
       </fieldset>
-      {error && <p role="alert">{error}</p>}
-      {message && <p role="status">{message}</p>}
+      {!expandedPlugin && error && <p role="alert">{error}</p>}
+      {!expandedPlugin && message && <p role="status">{message}</p>}
     </section>
   );
 }
