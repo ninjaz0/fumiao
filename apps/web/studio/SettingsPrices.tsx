@@ -140,6 +140,7 @@ export function PriceSettings({
     <div className="settings-content">
       <section className="settings-section">
         <h2>生成定价</h2>
+      <p className="console-description">设置每种生成规格消耗的积分，保存后对新任务生效。</p>
         {dirty && (
           <div
             className="ledger-card"

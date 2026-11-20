@@ -28,6 +28,16 @@ export function CreditAdmin({
   useLayoutEffect(() => {
     if (!dialogOpen) setVisibleAccounts(accounts);
   }, [accounts, dialogOpen]);
+  const [kindFilter, setKindFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const term = search.trim().toLowerCase();
+  const matching = visibleAccounts.filter(
+    (account) =>
+      (kindFilter === "all" || account.kind === kindFilter) &&
+      [account.name, account.username].some((name) =>
+        name?.toLowerCase().includes(term),
+      ),
+  );
   const historyRead = useRef(0);
 
   async function history(account: CreditAccount, opener: HTMLButtonElement) {
@@ -45,6 +55,7 @@ export function CreditAdmin({
           notify={notify}
         />,
         opener,
+        "account-sheet",
       );
     } catch (error) {
       if (opener.isConnected && version === historyRead.current)
@@ -55,53 +66,103 @@ export function CreditAdmin({
   return (
     <section className="settings-section credit-admin">
       <h2>积分管理</h2>
-      {accountKinds.map(([kind, label]) => (
-        <section className="ledger-card" key={kind}>
-          <h3 className="credit-heading">{label}</h3>
-          {visibleAccounts
-            .filter((account) => account.kind === kind)
-            .map((account) => (
-              <div key={account.workspace} className="credit-account-row">
-                <div>
-                  <strong>{account.name}</strong>
-                  {account.username && account.username !== account.name && (
-                    <small>{account.username}</small>
-                  )}
+      <p className="console-description">
+        按空间核对可用积分、冻结金额与账本流水。
+      </p>
+      <dl className="console-stats">
+        <div>
+          <dt>可用积分合计</dt>
+          <dd>
+            {visibleAccounts
+              .reduce((sum, a) => sum + a.available, 0)
+              .toLocaleString()}
+          </dd>
+        </div>
+        <div>
+          <dt>任务冻结积分</dt>
+          <dd>
+            {visibleAccounts
+              .reduce((sum, a) => sum + a.reserved, 0)
+              .toLocaleString()}
+          </dd>
+        </div>
+        <div>
+          <dt>空间账户</dt>
+          <dd>{visibleAccounts.length}</dd>
+        </div>
+      </dl>
+      <div className="console-toolbar">
+        <select
+          aria-label="账户类型"
+          value={kindFilter}
+          onChange={(e) => setKindFilter(e.target.value)}
+        >
+          <option value="all">全部账户</option>
+          {accountKinds.map(([kind, label]) => (
+            <option key={kind} value={kind}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <input
+          type="search"
+          placeholder="搜索空间或用户名"
+          aria-label="搜索积分账户"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+      {!matching.length && <p role="status">没有匹配的空间账户</p>}
+      {accountKinds
+        .filter(([kind]) => matching.some((a) => a.kind === kind))
+        .map(([kind, label]) => (
+          <section className="ledger-card" key={kind}>
+            <h3 className="credit-heading">{label}</h3>
+            {matching
+              .filter((account) => account.kind === kind)
+              .map((account) => (
+                <div key={account.workspace} className="credit-account-row">
+                  <div>
+                    <strong>{account.name}</strong>
+                    {account.username && account.username !== account.name && (
+                      <small>{account.username}</small>
+                    )}
+                  </div>
+                  <span>
+                    {account.available.toLocaleString()}
+                    <small>{`可用 · 冻结 ${account.reserved.toLocaleString()}`}</small>
+                  </span>
+                  <button
+                    className="quiet-button"
+                    data-act="credit-history"
+                    data-id={account.workspace}
+                    onClick={(event) =>
+                      void history(account, event.currentTarget)
+                    }
+                  >
+                    明细
+                  </button>
+                  <button
+                    className="profile-secondary"
+                    data-act="credit-adjust"
+                    data-id={account.workspace}
+                    onClick={(event) => {
+                      ++historyRead.current;
+                      open(
+                        <CreditAdjustment
+                          {...{ account, request, refresh, notify }}
+                        />,
+                        event.currentTarget,
+                        "account-sheet",
+                      );
+                    }}
+                  >
+                    调整
+                  </button>
                 </div>
-                <span>
-                  {account.available.toLocaleString()}
-                  <small>{`可用 · 冻结 ${account.reserved.toLocaleString()}`}</small>
-                </span>
-                <button
-                  className="quiet-button"
-                  data-act="credit-history"
-                  data-id={account.workspace}
-                  onClick={(event) =>
-                    void history(account, event.currentTarget)
-                  }
-                >
-                  明细
-                </button>
-                <button
-                  className="profile-secondary"
-                  data-act="credit-adjust"
-                  data-id={account.workspace}
-                  onClick={(event) => {
-                    ++historyRead.current;
-                    open(
-                      <CreditAdjustment
-                        {...{ account, request, refresh, notify }}
-                      />,
-                      event.currentTarget,
-                    );
-                  }}
-                >
-                  调整
-                </button>
-              </div>
-            ))}
-        </section>
-      ))}
+              ))}
+          </section>
+        ))}
     </section>
   );
 }

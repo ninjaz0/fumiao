@@ -66,12 +66,15 @@ export function Sidebar({
   collapsed: boolean;
   menu: Menu | null;
   accountOpened: boolean;
-  navigate: (page: Destination) => void;
+  navigate: (page: Destination | "settings") => void;
   collapse: (event: MouseEvent<HTMLButtonElement>) => void;
   open: (kind: Menu, anchor: HTMLButtonElement) => void;
 }) {
   const space = state.workspaces.find(({ id }) => id === state.workspace_id)!;
   const name = displayName(state.me);
+  const destinations = page === "settings"
+    ? [...nav, ["settings", "设置", "settings"] as const]
+    : nav;
   return (
     <>
       <aside className="side">
@@ -130,11 +133,12 @@ export function Sidebar({
           </span>
         </button>
         <nav aria-label="主导航">
-          {nav.map(([id, label, icon]) => (
+          {destinations.map(([id, label, icon]) => (
             <button
               key={id}
               data-nav={id}
               title={label}
+              aria-label={label}
               className={page === id ? "active" : ""}
               aria-current={page === id ? "page" : undefined}
               onClick={() => navigate(id)}

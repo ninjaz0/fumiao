@@ -1089,60 +1089,6 @@
     overflow-y: auto;
   }
 }
-.ledger-settings[data-member="true"] .settings-layout {
-  display: block;
-}
-.ledger-settings[data-member="true"]
-  :is(.ledger-navigation, .settings-content) {
-  max-width: 740px;
-  width: 100%;
-  margin-inline: auto;
-}
-.ledger-settings[data-member="true"] .ledger-navigation {
-  padding: 0 18px;
-  border: 0;
-  background: transparent;
-}
-.ledger-settings[data-member="true"] .ledger-navigation-panel {
-  display: block;
-  padding: 0;
-  position: static;
-}
-.ledger-settings[data-member="true"]
-  :is(
-    .ledger-navigation-toggle,
-    .settings-navigation h2,
-    .settings-navigation svg
-  ) {
-  display: none;
-}
-.ledger-settings[data-member="true"] .settings-navigation section {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  border-bottom: 1px solid var(--line);
-}
-.ledger-settings[data-member="true"] .settings-navigation button {
-  width: auto;
-  min-height: 42px;
-  margin: 0;
-  padding: 6px 2px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  box-shadow: none;
-  background: transparent;
-  white-space: nowrap;
-}
-.ledger-settings[data-member="true"] .settings-navigation button.active {
-  border-bottom-color: var(--blue);
-  color: var(--text);
-}
-.ledger-settings[data-member="true"]
-  .settings-navigation
-  button.active::before {
-  display: none;
-}
 .ledger-settings .settings-navigation button.active {
   background: var(--hover);
   border-color: transparent;
@@ -1317,10 +1263,4 @@
   .member-search {
     font-size: 16px;
   }
-}
-
-.ledger-settings[data-member="true"] .settings-navigation button[data-value^="plugin:"] {
-  max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
 }

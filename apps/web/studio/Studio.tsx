@@ -120,7 +120,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const [session, setSession] = useState<DraftSession | null>(null);
   const [expired, setExpired] = useState(false);
   const [page, setPage] = useState<Page>("home");
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("profile");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("plugins");
   const [settingsVisit, setSettingsVisit] = useState(0);
   const profileDraft = useRef<string | null>(null);
   const modelPreferences = useRef({ scope: "global", search: "" });
@@ -194,8 +194,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const ready = !!state && !!session;
   useLayoutEffect(() => {
     // Let the shell measure the initial composer before moving to the receipt.
-    if (!ready || !new URLSearchParams(location.search).get("recharge")) return;
-    setSettingsTab("credits");
+    if (!ready) return;
+    const url = new URL(location.href);
+    if (url.searchParams.get("recharge")) setSettingsTab("credits");
+    else if (url.searchParams.has("settings")) {
+      setSettingsTab((url.searchParams.get("settings") || "plugins") as SettingsTab);
+      url.searchParams.delete("settings");
+      history.replaceState(null, "", url);
+    } else return;
     setPage("settings");
   }, [ready]);
 

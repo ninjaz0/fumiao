@@ -5,6 +5,8 @@ export function tab(page: Page, name: string) {
   return page.locator(`.settings-navigation [data-value="${name}"]`);
 }
 export async function setTab(page: Page, name: string) {
+  const drawerClose = page.getByRole("button", { name: "关闭插件设置" });
+  if (await drawerClose.isVisible()) await drawerClose.click();
   const toggle = page.locator(".ledger-navigation-toggle");
   if (await toggle.isVisible() && await toggle.getAttribute("aria-expanded") === "false")
     await toggle.click();

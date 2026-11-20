@@ -69,8 +69,9 @@ function General() {
   return (
     <div className="settings-section">
       <h2>常规</h2>
+      <p className="console-description">选择工作台的外观主题。</p>
       <div className="ledger-card ledger-appearance">
-        <div className="setting-label">外观</div>
+        <h3>外观主题</h3>
         <div className="theme-choices" role="radiogroup" aria-label="外观">
           {(["light", "dark"] as const).map((theme) => {
             const selected = dark === (theme === "dark");
@@ -85,7 +86,8 @@ function General() {
                 onClick={() => window.setFumiaoTheme?.(theme)}
               >
                 <span className="ledger-theme-swatch" aria-hidden="true" />
-                {theme === "dark" ? "深色" : "浅色"}
+                <strong>{theme === "dark" ? "深色模式" : "浅色模式"}</strong>
+                {selected && <small>当前使用</small>}
               </button>
             );
           })}
@@ -229,7 +231,7 @@ export function Settings({
     ["general", "常规", "settings", "account"],
     ["credits", "积分", "drive", "account"],
     ...(!pages && legacyPanel && state.gpu_node_settings
-      ? [["gpu", state.gpu_node_settings.title, "gpu", "extensions"] as const]
+      ? [["gpu", state.gpu_node_settings.title, "gpu", "account"] as const]
       : []),
     ...forms.map(
       (page) =>
@@ -265,7 +267,7 @@ export function Settings({
             ? page.title + " · " + page.plugin + " (" + page.page + ")"
             : page.title,
           page.icon,
-          page.legacy ? "extensions" : page.group,
+          page.legacy ? "account" : page.group,
         ] as const,
     ),
   ] as const;
@@ -383,6 +385,9 @@ export function Settings({
           <PluginSettings
             key={workspace}
             workspace={workspace}
+            gpuTab={legacy ? pluginTab(legacy) : !pages && legacyPanel ? "gpu" : undefined}
+            nodesPaired={state.nodes.length > 0}
+            hasPricing={state.pricing.items.length > 0}
             refresh={refresh}
             navigate={navigate}
           />
@@ -421,6 +426,10 @@ export function Settings({
             state={state}
             show={showWorkspace}
             select={selectWorkspace}
+            editModels={id => {
+              modelPreferences.scope = String(id);
+              navigate("models");
+            }}
           />
         )}
         {admin && tab === "team" && (

@@ -12,7 +12,7 @@ export type AdminSave = {
   notify: (message: string) => void;
 };
 
-export type SettingsDialogPresentation = "invite-sheet";
+export type SettingsDialogPresentation = "invite-sheet" | "account-sheet";
 
 export type AdminOpen = (
   body: ReactNode,

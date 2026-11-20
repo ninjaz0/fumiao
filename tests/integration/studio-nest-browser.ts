@@ -235,6 +235,25 @@ export async function studioBrowser(
     const nav = (name: string) =>
       page.locator(`nav [data-nav="${name}"]`).click();
     const available = (await state()).credits.available;
+    const sidebar = page.locator(".side");
+    const currentSettings = sidebar.locator('nav [data-nav="settings"]');
+    await expect(currentSettings).toHaveCount(0);
+    await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
+    await settings(page);
+    await expect(currentSettings).toHaveAttribute("aria-current", "page");
+    await expect(sidebar.locator(".workspace-switch")).toBeVisible();
+    await expect.poll(() => sidebar.evaluate((rail) => {
+      const bounds = rail.getBoundingClientRect();
+      const center = bounds.x + bounds.width / 2;
+      const icons = rail.querySelectorAll(".brand img, .expand-button svg, .space-badge, nav svg, .account img");
+      return Math.max(...Array.from(icons, (icon) => {
+        const box = icon.getBoundingClientRect();
+        return Math.abs(box.x + box.width / 2 - center);
+      }));
+    })).toBeLessThanOrEqual(0.5);
+    await sidebar.getByRole("button", { name: "展开侧边栏" }).click();
+    await nav("home");
+    await expect(currentSettings).toHaveCount(0);
     await settings(page);
     await setTab(page, "credits");
     await page.locator('[data-act="recharge"]').click();
