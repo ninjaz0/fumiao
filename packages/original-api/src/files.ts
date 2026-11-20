@@ -7,6 +7,7 @@ export type PrivateFile = {
   size: number;
   mime: string;
   modified: number;
+  revalidate?: boolean;
   open: (start?: number, end?: number) => Promise<Readable>;
 };
 export class RangeFailure extends Error {
@@ -98,6 +99,25 @@ export async function sendFile(
       .update(seconds + "-" + file.size)
       .digest("hex") +
     '"';
+  const validators = { "Last-Modified": lastModified, ETag: etag };
+  if (file.revalidate) {
+    const tags = req.headers["if-none-match"];
+    const modifiedSince = req.headers["if-modified-since"];
+    const unchanged =
+      tags !== undefined
+        ? tags.trim() === "*" ||
+          tags.split(",").some((tag) => tag.trim().replace(/^W\//, "") === etag)
+        : modifiedSince !== undefined &&
+          Date.parse(lastModified) <= Date.parse(modifiedSince);
+    if (unchanged) {
+      res
+        .set(validators)
+        .set("Cache-Control", "private, no-cache")
+        .status(304)
+        .end();
+      return;
+    }
+  }
   let ranges: [number, number][] = [];
   try {
     if (
@@ -121,8 +141,8 @@ export async function sendFile(
   res.set({
     "Content-Type": file.mime,
     "Accept-Ranges": "bytes",
-    "Last-Modified": lastModified,
-    ETag: etag,
+    ...validators,
+    ...(file.revalidate ? { "Cache-Control": "private, no-cache" } : {}),
   });
   if (filename) res.setHeader("Content-Disposition", disposition(filename));
   let active: Readable | undefined,

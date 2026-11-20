@@ -73,7 +73,17 @@ export async function forward(
     for (const cookie of response.headers.getSetCookie())
       out.append("set-cookie", cookie);
     out.set("x-fumiao-web", "next");
-    if (
+    const privateMedia =
+      incoming.pathname.startsWith("/media/") &&
+      ["GET", "HEAD"].includes(request.method) &&
+      [200, 206, 304].includes(response.status) &&
+      out.get("cache-control") === "private, no-cache";
+    if (privateMedia) {
+      // A byte range must keep the length of the identity representation.
+      const length = response.headers.get("content-length");
+      if (length && !response.headers.has("content-encoding"))
+        out.set("content-length", length);
+    } else if (
       incoming.pathname.startsWith("/api/") ||
       incoming.pathname.startsWith("/media/")
     )

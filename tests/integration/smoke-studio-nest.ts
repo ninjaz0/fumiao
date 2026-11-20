@@ -525,6 +525,41 @@ async function verifyStudio(
     assert.equal(anonymous.headers.get("location"), null);
     await json(anonymous, 401);
 
+    const preview = { "sec-fetch-dest": "image" };
+    const first = await request(path, "GET", undefined, preview);
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get("cache-control"), "private, no-cache");
+    assert.deepEqual(Buffer.from(await first.bytes()), png);
+    const etag = first.headers.get("etag");
+    assert.ok(etag);
+    const conditional = { ...preview, "if-none-match": etag };
+    const cached = await request(path, "GET", undefined, conditional);
+    assert.equal(cached.status, 304);
+    assert.equal(cached.headers.get("cache-control"), "private, no-cache");
+    assert.equal(cached.headers.get("etag"), etag);
+    assert.equal((await cached.bytes()).length, 0);
+    const partial = await request(path, "GET", undefined, {
+      ...preview,
+      "if-none-match": '"older-version"',
+      "if-modified-since": first.headers.get("last-modified")!,
+      range: "bytes=2-5",
+    });
+    assert.equal(partial.status, 206);
+    assert.equal(partial.headers.get("content-range"), `bytes 2-5/${png.length}`);
+    assert.deepEqual(Buffer.from(await partial.bytes()), png.subarray(2, 6));
+    assert.ok(memberCookie);
+    for (const [session, status] of [
+      ["", 401],
+      [memberCookie, 404],
+    ] as const) {
+      const denied = await request(path, "GET", undefined, {
+        ...conditional,
+        cookie: session,
+      });
+      assert.equal(denied.status, status);
+      assert.equal(denied.headers.get("cache-control"), "private, no-store");
+      await denied.body?.cancel();
+    }
     const headers = { range: "bytes=0-7" };
     let range = await request(path, "GET", undefined, headers);
     if (s3) {

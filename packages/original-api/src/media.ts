@@ -44,16 +44,21 @@ export class OriginalMedia {
     const filename = download
       ? "弗淼-" + key.slice(0, 8) + (extension[asset.mime] || "")
       : undefined;
-    if (this.p.storage.downloadUrl) {
-      res
-        .status(307)
-        .setHeader(
-          "Location",
-          await this.p.storage.downloadUrl(asset.object_key, {
-            mime: asset.mime,
-            filename,
-          }),
-        );
+    // Keep embedded S3 media on its stable same-origin URL across refreshes.
+    // Explicit downloads and API clients still receive a short-lived signed URL.
+    const embedded = ["image", "audio", "video"].includes(
+      req.get("Sec-Fetch-Dest") ?? "",
+    );
+    res.vary("Cookie");
+    if (this.p.storage.downloadUrl) res.vary("Sec-Fetch-Dest");
+    if (this.p.storage.downloadUrl && (download || !embedded)) {
+      res.status(307).setHeader(
+        "Location",
+        await this.p.storage.downloadUrl(asset.object_key, {
+          mime: asset.mime,
+          filename,
+        }),
+      );
       res.setHeader("Content-Length", "0");
       res.end();
       return;
@@ -63,6 +68,7 @@ export class OriginalMedia {
       req,
       res,
       {
+        revalidate: !download,
         size: info.size,
         mime: asset.mime,
         modified: asset.object_modified,

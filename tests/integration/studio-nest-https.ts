@@ -201,7 +201,7 @@ async function verifyPrivateMedia(page: Page) {
   assert.deepEqual(result, {
     status: 206,
     contentRange: "bytes 0-7/" + png.length,
-    cache: "private, no-store",
+    cache: "private, no-cache",
     gateway: "next",
     bytes: [...png.subarray(0, 8)],
     anonymous: 401,
