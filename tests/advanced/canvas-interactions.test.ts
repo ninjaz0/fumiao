@@ -1,13 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   PASTE_OFFSET,
   collectDownloadTargets,
   createClipboardSnapshot,
+  formatRunsError,
+  hasCanvasSelectionToolbar,
   hasDownloadableNodes,
+  isCanvasComposerOpen,
+  matchViewportFocusShortcut,
   newNode,
   nextContextSelection,
+  resolveFocusTargets,
+  resolveHistoryModalState,
   resolvePasteOffset,
+  shouldRedirectRunsError,
   textDownloadFilename,
   type Doc,
   type Job,
@@ -222,5 +231,307 @@ test("#109 downloadable detection matches single/multi/context rules across medi
   assert.deepEqual(
     mixed.text.map((n) => n.id),
     [textNode.id, stickyNode.id],
+  );
+});
+
+test("#26 history modal distinguishes loading, error, empty and list states without faking empty on 503", () => {
+  // Redirect classification: only 401/403/404 redirect, 503/500/network errors surface inline
+  assert.equal(shouldRedirectRunsError({ status: 401 }), true);
+  assert.equal(shouldRedirectRunsError({ status: 403 }), true);
+  assert.equal(shouldRedirectRunsError({ status: 404 }), true);
+  assert.equal(shouldRedirectRunsError({ status: 503 }), false);
+  assert.equal(shouldRedirectRunsError({ status: 500 }), false);
+  assert.equal(shouldRedirectRunsError(new Error("Failed to fetch")), false);
+  assert.equal(shouldRedirectRunsError(null), false);
+
+  assert.equal(
+    formatRunsError(new Error("  画布运行记录服务暂不可用  ")),
+    "画布运行记录服务暂不可用",
+  );
+  assert.equal(formatRunsError(new Error("")), "加载生成历史失败，请重试");
+  assert.equal(formatRunsError("unexpected"), "加载生成历史失败，请重试");
+
+  // Initial loading state must never render empty copy
+  assert.deepEqual(
+    resolveHistoryModalState({
+      runs: [],
+      loading: true,
+      loaded: false,
+      error: "",
+    }),
+    { kind: "loading", items: [], error: "" },
+  );
+  assert.deepEqual(
+    resolveHistoryModalState({
+      runs: [],
+      loading: false,
+      loaded: false,
+      error: "",
+    }),
+    { kind: "loading", items: [], error: "" },
+  );
+
+  // 503 / failure before or after load shows explicit error state, never empty state
+  assert.deepEqual(
+    resolveHistoryModalState({
+      runs: [],
+      loading: false,
+      loaded: false,
+      error: "后端暂时不可用",
+    }),
+    { kind: "error", items: [], error: "后端暂时不可用" },
+  );
+  assert.deepEqual(
+    resolveHistoryModalState({
+      runs: [],
+      loading: false,
+      loaded: true,
+      error: "服务暂时不可用",
+    }),
+    { kind: "error", items: [], error: "服务暂时不可用" },
+  );
+
+  // Only a clean successful load with no non-audio runs shows empty state
+  assert.deepEqual(
+    resolveHistoryModalState({
+      runs: [],
+      loading: false,
+      loaded: true,
+      error: "",
+    }),
+    { kind: "empty", items: [], error: "" },
+  );
+  const audioRun = makeJob({ id: 21, kind: "audio", result: "voice-1" });
+  assert.deepEqual(
+    resolveHistoryModalState({
+      runs: [audioRun],
+      loading: false,
+      loaded: true,
+      error: "",
+    }),
+    { kind: "empty", items: [], error: "" },
+  );
+
+  // Successful runs render as list (filtering out audio) and keep surfacing poll errors if they occur later
+  const imgRun = makeJob({ id: 22, kind: "image", result: "img-22" });
+  assert.deepEqual(
+    resolveHistoryModalState({
+      runs: [audioRun, imgRun],
+      loading: false,
+      loaded: true,
+      error: "",
+    }),
+    { kind: "list", items: [imgRun], error: "" },
+  );
+  assert.deepEqual(
+    resolveHistoryModalState({
+      runs: [imgRun],
+      loading: false,
+      loaded: true,
+      error: "后端暂时不可用",
+    }),
+    { kind: "list", items: [imgRun], error: "后端暂时不可用" },
+  );
+});
+
+test("#106 viewport focus shortcuts prefer physical Digit1/Digit2 codes and ignore empty selections", () => {
+  const n1 = newNode("image", 100, 100, 1);
+  const n2 = newNode("video", 500, 100, 1);
+
+  assert.deepEqual(resolveFocusTargets([n1, n2], []), []);
+  assert.deepEqual(resolveFocusTargets([n1, n2], ["deleted-node"]), []);
+  assert.deepEqual(resolveFocusTargets([n1, n2], [n2.id, n2.id, "missing", n1.id]), [
+    n2.id,
+    n1.id,
+  ]);
+
+  // US keyboard layout
+  assert.equal(
+    matchViewportFocusShortcut({
+      shiftKey: true,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      code: "Digit1",
+      key: "!",
+    }),
+    "fit-all",
+  );
+  assert.equal(
+    matchViewportFocusShortcut({
+      shiftKey: true,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      code: "Digit2",
+      key: "@",
+    }),
+    "fit-selected",
+  );
+
+  // Chinese IME / non-US layouts where e.key is full-width, Process, or '"'
+  assert.equal(
+    matchViewportFocusShortcut({
+      shiftKey: true,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      code: "Digit1",
+      key: "！",
+    }),
+    "fit-all",
+  );
+  assert.equal(
+    matchViewportFocusShortcut({
+      shiftKey: true,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      code: "Digit2",
+      key: '"',
+    }),
+    "fit-selected",
+  );
+  assert.equal(
+    matchViewportFocusShortcut({
+      shiftKey: true,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      code: "Digit2",
+      key: "Process",
+    }),
+    "fit-selected",
+  );
+
+  // Fallback compatibility when synthetic events only provide e.key
+  assert.equal(
+    matchViewportFocusShortcut({
+      shiftKey: true,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      key: "!",
+    }),
+    "fit-all",
+  );
+  assert.equal(
+    matchViewportFocusShortcut({
+      shiftKey: true,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      key: "@",
+    }),
+    "fit-selected",
+  );
+
+  // Reject modifier combinations and non-Shift presses
+  for (const extra of [
+    { metaKey: true, ctrlKey: false, altKey: false },
+    { metaKey: false, ctrlKey: true, altKey: false },
+    { metaKey: false, ctrlKey: false, altKey: true },
+  ]) {
+    assert.equal(
+      matchViewportFocusShortcut({
+        shiftKey: true,
+        ...extra,
+        code: "Digit1",
+        key: "!",
+      }),
+      null,
+    );
+    assert.equal(
+      matchViewportFocusShortcut({
+        shiftKey: true,
+        ...extra,
+        code: "Digit2",
+        key: "@",
+      }),
+      null,
+    );
+  }
+  assert.equal(
+    matchViewportFocusShortcut({
+      shiftKey: false,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      code: "Digit2",
+      key: "2",
+    }),
+    null,
+  );
+});
+
+test("#108 narration text/instruction inputs coalesce keystrokes via edit-session hooks while discrete actions keep undo entries", async () => {
+  const root = process.cwd();
+  const narrationSource = await readFile(
+    join(root, "apps/web/canvas-editor/Narration.tsx"),
+    "utf8",
+  );
+  const workspaceSource = await readFile(
+    join(root, "apps/web/canvas-editor/CanvasWorkspace.tsx"),
+    "utf8",
+  );
+
+  // Verify Narration wires focus/change(history=false)/blur/unmount and commits session before discrete actions
+  assert.match(narrationSource, /onFocus=\{\(\) => onEditStart\?\.\(\)\}/);
+  assert.match(
+    narrationSource,
+    /onChange=\{\(e\) => onChange\(\{ narration_text: e\.target\.value \}, false\)\}/,
+  );
+  assert.match(
+    narrationSource,
+    /onChange=\{\(e\) =>\s*onChange\(\{ narration_instruction: e\.target\.value \}, false\)\s*\}/,
+  );
+  assert.match(narrationSource, /onBlur=\{\(\) => onEditEnd\?\.\(\)\}/);
+  assert.match(narrationSource, /onEditEndRef\.current\?\.\(\)/);
+  assert.match(workspaceSource, /onEditStart=\{doc\.begin\}/);
+  assert.match(workspaceSource, /onEditEnd=\{doc\.end\}/);
+  assert.match(
+    workspaceSource,
+    /onChange=\{\(patch,history\)=>edit\(shot\.id,patch,history\)\}/,
+  );
+});
+
+test("#110 #111 mobile composer/toolbar flags and canvas-overrides.css rules are wired without modifying pinned canvas.css", async () => {
+  const textNode = newNode("text", 0, 0, 1);
+  const imageNode = newNode("image", 0, 0, 1);
+  const videoNode = newNode("video", 0, 0, 1);
+  const stickyNode = newNode("sticky", 0, 0, 1);
+
+  assert.equal(isCanvasComposerOpen(null, null), false);
+  assert.equal(isCanvasComposerOpen(stickyNode, null), false);
+  assert.equal(isCanvasComposerOpen(imageNode, null), true);
+  assert.equal(isCanvasComposerOpen(videoNode, null), true);
+  assert.equal(isCanvasComposerOpen(textNode, null), true);
+  assert.equal(isCanvasComposerOpen(textNode, textNode.id), false);
+
+  assert.equal(hasCanvasSelectionToolbar(null, null), false);
+  assert.equal(hasCanvasSelectionToolbar(stickyNode, null), true);
+  assert.equal(hasCanvasSelectionToolbar(imageNode, null), true);
+  assert.equal(hasCanvasSelectionToolbar(textNode, textNode.id), false);
+
+  const root = process.cwd();
+  const overridesCss = await readFile(
+    join(root, "apps/web/canvas-editor/canvas-overrides.css"),
+    "utf8",
+  );
+  const editorSource = await readFile(
+    join(root, "apps/web/canvas-editor/CanvasEditor.tsx"),
+    "utf8",
+  );
+
+  assert.match(editorSource, /import "\.\/canvas-overrides\.css";/);
+  assert.match(overridesCss, /@media \(max-width: 760px\)/);
+  assert.match(
+    overridesCss,
+    /\.canvas-workspace\[data-composer-open="true"\] \.insert-toolbar/,
+  );
+  assert.match(overridesCss, /\.react-flow__panel\.react-flow__minimap/);
+  assert.match(
+    overridesCss,
+    /\.canvas-workspace \.selection-toolbar \.color-menu\s*\{[\s\S]*left:\s*auto;[\s\S]*right:\s*0;[\s\S]*max-width:\s*calc\(100vw - 24px\);/,
   );
 });
