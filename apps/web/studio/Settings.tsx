@@ -26,7 +26,7 @@ import { PluginPanel } from "./PluginPanel";
 import { Members } from "./SettingsMembers";
 import { ModelSettings, type ModelSettingsPreferences } from "./SettingsModels";
 import { PluginSettings } from "./SettingsPlugins";
-import { PriceSettings, type PriceDraft } from "./SettingsPrices";
+import { PriceSettings } from "./SettingsPrices";
 import { ChatSettings, OpenAISettings } from "./SettingsServices";
 import { SettingsShell } from "./SettingsShell";
 import { StorageSettings } from "./SettingsStorage";
@@ -135,7 +135,6 @@ export function Settings({
   const admin = state.me.role === "admin";
   const workspace = state.workspace_id;
   const request = useRef(0);
-  const priceDraft = useRef<PriceDraft | null>(null);
   const [creditState, setCreditState] = useState(state);
   useLayoutEffect(() => {
     if (!dialogOpen) setCreditState(state);
@@ -143,7 +142,6 @@ export function Settings({
   useLayoutEffect(
     () => () => {
       ++request.current;
-      priceDraft.current = null;
     },
     [workspace, state.me.id],
   );
@@ -303,7 +301,17 @@ export function Settings({
         navigate(key);
       }}
     >
-      <div className="settings-content" key={visit}>
+      {admin && (
+        <PriceSettings
+          key={`${state.me.id}:${workspace}`}
+          visible={tab === "prices"}
+          state={state}
+          request={adminRequest}
+          refresh={refresh}
+          notify={notify}
+        />
+      )}
+      {tab !== "prices" && <div className="settings-content" key={visit}>
         {extension && (
           <PluginSettingsPage
             key={tab}
@@ -388,16 +396,6 @@ export function Settings({
             notify={notify}
           />
         )}
-        {admin && tab === "prices" && (
-          <PriceSettings
-            key={`${state.me.id}:${workspace}`}
-            state={state}
-            draft={priceDraft}
-            request={adminRequest}
-            refresh={refresh}
-            notify={notify}
-          />
-        )}
         {admin && tab === "creditAdmin" && state.credit_accounts && (
           <CreditAdmin
             accounts={state.credit_accounts}
@@ -448,7 +446,7 @@ export function Settings({
         {admin && tab === "storage" && (
           <StorageSettings state={state} viewLibrary={viewLibrary} />
         )}
-      </div>
+      </div>}
     </SettingsShell>
   );
 }
