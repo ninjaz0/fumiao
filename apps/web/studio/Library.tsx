@@ -158,8 +158,7 @@ export function useLibrary(
       setRedraw((value) => value + 1);
     },
     refreshGrid: () => {
-      // The pinned non-image poll replaces the grid with job cards only.
-      setUploadsVisible(filter.tab === "images");
+      setUploadsVisible(true);
       setHighlight(null);
       setGridRevision((value) => value + 1);
     },
@@ -411,11 +410,12 @@ export function Library({
             ))}
         </div>
         <div id="library-grid" key={library.gridRevision}>
-          {!groups.length && (!images || !visibleAssets.length) && (
-            <div className="empty-state">
-              {filter.scope === "favorites" ? "暂无收藏" : "暂无相关资产"}
-            </div>
-          )}
+          {!groups.length &&
+            !(library.uploadsVisible && visibleAssets.length) && (
+              <div className="empty-state">
+                {filter.scope === "favorites" ? "暂无收藏" : "暂无相关资产"}
+              </div>
+            )}
           {groups.map(({ date, jobs }) => (
             <JobGroup
               key={jobs[0].id}
@@ -508,15 +508,19 @@ function UploadCard({
             ? referenceAdded
               ? "已添加为参考图片"
               : "添加为参考图片"
-            : images
-              ? "预览图片"
-              : "预览参考素材"
+            : selecting
+              ? images
+                ? "选择图片 " + asset.id.slice(0, 6)
+                : "选择参考素材"
+              : images
+                ? "预览图片"
+                : "预览参考素材"
         }
         aria-pressed={referenceAdded}
         onClick={(event) => {
           if (referencePicking) actions.use(asset.id);
-          else if (!images) actions.preview(asset.id, event.currentTarget);
           else if (selecting) library.toggle(key);
+          else if (!images) actions.preview(asset.id, event.currentTarget);
           else actions.image(asset.id);
         }}
         onMouseEnter={selecting ? undefined : playPreview}
@@ -528,17 +532,39 @@ function UploadCard({
           <ReferenceMedia id={asset.id} kind={asset.kind} />
         )}
       </button>
-      <div className="asset-actions">
-        <button
-          data-act="use"
-          data-key={asset.id}
-          title={images ? "用作参考图" : "用作参考"}
-          onClick={() => actions.use(asset.id)}
-        >
-          <Icon name="plus" />
-        </button>
-        <Download id={asset.id} />
-        <Favorite id={key} saved={saved} change={actions.favorite} />
+      <div
+        className="asset-actions"
+        style={
+          !images && selecting ? { display: "flex", opacity: 1 } : undefined
+        }
+      >
+        {!images && (
+          <button
+            type="button"
+            data-act="h3-preview"
+            data-key={asset.id}
+            title="预览"
+            aria-label="预览参考素材"
+            style={selecting ? { display: "grid" } : undefined}
+            onClick={(event) => actions.preview(asset.id, event.currentTarget)}
+          >
+            <Icon name="play" />
+          </button>
+        )}
+        {!selecting && (
+          <>
+            <button
+              data-act="use"
+              data-key={asset.id}
+              title={images ? "用作参考图" : "用作参考"}
+              onClick={() => actions.use(asset.id)}
+            >
+              <Icon name="plus" />
+            </button>
+            <Download id={asset.id} />
+            <Favorite id={key} saved={saved} change={actions.favorite} />
+          </>
+        )}
       </div>
     </article>
   );
