@@ -1,5 +1,6 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {Check,Plus,Pencil,Trash2,ArrowLeft,Upload,ChevronRight} from 'lucide-react';
+import {mergeAssetPackAssets} from '../studio/state';
 export type Pack = {id:string;name:string;purpose:string;description:string;media:string[];revision:number;owner:number};
 type Ref = {id:string;revision:number};
 export type AssetPacksProps = {
@@ -7,33 +8,64 @@ export type AssetPacksProps = {
  onImportImages:(ids:string[],pack:Pack)=>void|Promise<void>;
  onImportPack:(pack:Pack)=>void|Promise<void>;
  onRemovePack:(id:string)=>void|Promise<void>;
+ onDeletePack?:(id:string)=>void|Promise<void>;
 };
 const purposes:Record<string,string>={subject:'人物外观',outfit:'服装',scene:'场景',style:'风格',product:'产品细节'};
 const blank=()=>({name:'',purpose:'subject',description:'',media:[] as string[]});
-export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[],onImportImages,onImportPack,onRemovePack}:AssetPacksProps){
+export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[],onImportImages,onImportPack,onRemovePack,onDeletePack}:AssetPacksProps){
  const [packs,setPacks]=useState<Pack[]>([]),[assets,setAssets]=useState<{id:string}[]>([]),[opened,setOpened]=useState<string|null>(null),[chosen,setChosen]=useState<string[]>([]),[editing,setEditing]=useState<Pack|null|undefined>(),[draft,setDraft]=useState(blank),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[removing,setRemoving]=useState<string|null>(null);
+ const mountedRef=useRef(true);
+ const workspaceRef=useRef(workspace);
+ workspaceRef.current=workspace;
+ const loadSeqRef=useRef(0);
+ const uploadSeqRef=useRef(0);
+ const recentUploadsRef=useRef<{seq:number;asset:{id:string}}[]>([]);
+ useEffect(()=>{mountedRef.current=true;return()=>{mountedRef.current=false;++loadSeqRef.current}},[]);
  const request=async(path:string,body?:unknown,method=body===undefined?'GET':'POST',signal?:AbortSignal)=>{
   const r=await fetch(path,{method,signal,headers:{'X-Workspace-Id':String(workspace),...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body)});
   const data=await r.json();if(!r.ok)throw new Error(typeof data.detail==='string'?data.detail:'请求失败，请重试');return data;
  };
  const load=async(signal?:AbortSignal)=>{
-  setLoading(true);setError('');try{const [p,s]=await Promise.all([request('/api/asset-packs',undefined,'GET',signal),request('/api/state',undefined,'GET',signal)]);if(!signal?.aborted){setPacks(p.packs);setAssets(s.assets.filter((a:{kind?:string})=>!a.kind||a.kind==='ref'));}}catch(e){if(!signal?.aborted)setError((e as Error).message)}finally{if(!signal?.aborted)setLoading(false)}
+  const seq=++loadSeqRef.current;
+  const snapshotUploadSeq=uploadSeqRef.current;
+  setLoading(true);setError('');
+  try{
+   const [p,s]=await Promise.all([request('/api/asset-packs',undefined,'GET',signal),request('/api/state',undefined,'GET',signal)]);
+   if(!mountedRef.current||signal?.aborted||seq!==loadSeqRef.current)return;
+   const loaded=s.assets.filter((a:{kind?:string})=>!a.kind||a.kind==='ref') as {id:string}[];
+   const loadedIds=new Set(loaded.map(a=>a.id));
+   const pending=recentUploadsRef.current.filter(entry=>entry.seq>snapshotUploadSeq).map(entry=>entry.asset);
+   recentUploadsRef.current=recentUploadsRef.current.filter(entry=>entry.seq>snapshotUploadSeq&&!loadedIds.has(entry.asset.id));
+   setPacks(p.packs);
+   setAssets(mergeAssetPackAssets(loaded,pending));
+  }catch(e){
+   if(mountedRef.current&&!signal?.aborted&&seq===loadSeqRef.current)setError((e as Error).message);
+  }finally{
+   if(mountedRef.current&&!signal?.aborted&&seq===loadSeqRef.current)setLoading(false);
+  }
  };
- useEffect(()=>{const controller=new AbortController();setOpened(null);setChosen([]);setEditing(undefined);void load(controller.signal);return()=>controller.abort()},[workspace]);
+ useEffect(()=>{const controller=new AbortController();recentUploadsRef.current=[];setOpened(null);setChosen([]);setEditing(undefined);setRemoving(null);void load(controller.signal);return()=>{++loadSeqRef.current;controller.abort()}},[workspace]);
  const save=async()=>{
   setBusy(true);setError('');try{
    await request('/api/asset-packs'+(editing?'/'+editing.id:''),{...draft,expected_revision:editing?.revision},editing?'PUT':'POST');
+   if(!mountedRef.current)return;
    setEditing(undefined);await load();
-  }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  }catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}
  };
  const upload=async(file?:File)=>{
-  if(!file)return;setBusy(true);setError('');try{
-   const r=await fetch('/api/assets',{method:'POST',headers:{'X-Workspace-Id':String(workspace)},body:file});const a=await r.json();
+  if(!file)return;
+  const targetWorkspace=workspace;
+  setBusy(true);setError('');try{
+   const r=await fetch('/api/assets',{method:'POST',headers:{'X-Workspace-Id':String(targetWorkspace)},body:file});const a=await r.json();
    if(!r.ok)throw new Error(typeof a.detail==='string'?a.detail:'上传失败');
-   setAssets(items=>[a,...items]);setDraft(d=>({...d,media:[...d.media,a.id].slice(0,9)}));
-  }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+   if(!mountedRef.current||workspaceRef.current!==targetWorkspace)return;
+   const seq=++uploadSeqRef.current;
+   recentUploadsRef.current=[{seq,asset:a},...recentUploadsRef.current.filter(entry=>entry.asset.id!==a.id)];
+   setAssets(items=>mergeAssetPackAssets(items,[a]));
+   setDraft(d=>({...d,media:d.media.includes(a.id)?d.media:[...d.media,a.id].slice(0,9)}));
+  }catch(e){if(mountedRef.current&&workspaceRef.current===targetWorkspace)setError((e as Error).message)}finally{if(mountedRef.current&&workspaceRef.current===targetWorkspace)setBusy(false)}
  };
- const apply=async(action:()=>void|Promise<void>)=>{setBusy(true);setError('');try{await action()}catch(e){setError((e as Error).message)}finally{setBusy(false)}};
+ const apply=async(action:()=>void|Promise<void>)=>{setBusy(true);setError('');try{await action()}catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}};
  const toggle=(id:string)=>setDraft(d=>({...d,media:d.media.includes(id)?d.media.filter(m=>m!==id):d.media.length<9?[...d.media,id]:d.media}));
  const pack=packs.find(p=>p.id===opened), imported=selected.find(p=>p.id===opened);
  return <div className="fm-packs" aria-busy={busy||loading}>
@@ -45,7 +77,7 @@ export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[
     <fieldset><legend>用途</legend><div className="fm-pack-purpose">{Object.entries(purposes).map(([key,label])=><button key={key} aria-pressed={draft.purpose===key} onClick={()=>setDraft({...draft,purpose:key})}>{label}</button>)}</div></fieldset>
     <label>说明<textarea value={draft.description} maxLength={2000} rows={3} placeholder="人物特征、服装或场景中需要保留的细节" onChange={e=>setDraft({...draft,description:e.target.value})}/></label>
    </div>
-   <div className="fm-pack-heading"><span>参考图片 · {draft.media.length}/9</span><label className="fm-pack-button"><Upload size={16}/>上传图片<input type="file" hidden accept="image/*,.heic,.heif" disabled={busy||draft.media.length>=9} onChange={e=>void upload(e.target.files?.[0])}/></label></div>
+   <div className="fm-pack-heading"><span>参考图片 · {draft.media.length}/9</span><label className="fm-pack-button"><Upload size={16}/>上传图片<input type="file" hidden accept="image/*,.heic,.heif" disabled={busy||draft.media.length>=9} onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value='';void upload(file)}}/></label></div>
    <div className="fm-pack-images">{assets.map(a=><button key={a.id} disabled={busy} aria-label={'选择参考图 '+a.id.slice(0,6)} aria-pressed={draft.media.includes(a.id)} onClick={()=>toggle(a.id)}><img loading="lazy" src={'/media/'+a.id} alt="参考图"/>{draft.media.includes(a.id)&&<span>{draft.media.indexOf(a.id)+1}</span>}</button>)}</div>
    {!assets.length&&<p>上传图片，建立这个素材包。</p>}
    <div className="fm-pack-footer"><button className="fm-pack-primary" disabled={busy||!draft.name.trim()||!draft.media.length} onClick={()=>void save()}>{busy?'保存中…':'保存素材包'}</button></div>
@@ -58,14 +90,14 @@ export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[
    })}</div>
    <div className="fm-pack-import-footer"><div className="fm-pack-whole-actions"><button className="fm-pack-button" disabled={busy||loading||imported?.revision===pack.revision} onClick={()=>void apply(()=>onImportPack(pack))}>{imported?imported.revision===pack.revision?'已导入整包':'更新整包引用':'导入整个素材包'}</button>{imported&&<button className="fm-pack-button" disabled={busy} onClick={()=>void apply(()=>onRemovePack(pack.id))}>移除整包引用</button>}</div><button className="fm-pack-primary" disabled={busy||!chosen.length} onClick={()=>void apply(()=>onImportImages(chosen,pack))}>导入所选图片{chosen.length?` · ${chosen.length}`:''}</button></div>
   </>:<>
-   <div className="fm-pack-heading"><span>选择素材包</span><button className="fm-pack-button" disabled={busy} onClick={()=>{setDraft(blank());setEditing(null);setError('')}}><Plus size={16}/>新建素材包</button></div>
+   <div className="fm-pack-heading"><span>选择素材包</span><button className="fm-pack-button" disabled={busy||loading} onClick={()=>{setDraft(blank());setEditing(null);setError('')}}><Plus size={16}/>新建素材包</button></div>
    {loading?<p role="status">正在加载素材包…</p>:packs.length===0?<p className="fm-pack-empty">暂无素材包</p>:<div className="fm-pack-list">{packs.map(pack=><article key={pack.id}>
     <button className="fm-pack-select" disabled={busy} aria-label={'打开素材包 '+pack.name} onClick={()=>{setOpened(pack.id);setChosen([]);setRemoving(null);setError('')}}>
      <img loading="lazy" src={'/media/'+pack.media[0]} alt=""/><span><strong>{pack.name}</strong><small>{purposes[pack.purpose]} · {pack.media.length} 张图片{selected.some(p=>p.id===pack.id)?' · 已导入整包':''}</small>{pack.description&&<p>{pack.description}</p>}</span><ChevronRight size={18}/>
     </button>
     <div className="fm-pack-row-actions"><button className="fm-pack-button" disabled={busy} aria-label={'编辑 '+pack.name} onClick={()=>{setEditing(pack);setDraft({name:pack.name,purpose:pack.purpose,description:pack.description,media:pack.media});setError('')}}><Pencil size={16}/></button>
      {(admin||pack.owner===userId)&&<button className="fm-pack-button" disabled={busy} aria-label={'删除 '+pack.name} onClick={()=>setRemoving(pack.id)}><Trash2 size={16}/></button>}</div>
-    {removing===pack.id&&<div className="fm-pack-delete"><span>删除“{pack.name}”？原图片会保留。</span><button disabled={busy} onClick={async()=>{setBusy(true);try{await request('/api/asset-packs/'+pack.id,undefined,'DELETE');setRemoving(null);await load()}catch(e){setError((e as Error).message)}finally{setBusy(false)}}}>删除素材包</button><button disabled={busy} onClick={()=>setRemoving(null)}>取消</button></div>}
+    {removing===pack.id&&<div className="fm-pack-delete"><span>删除“{pack.name}”？原图片会保留。</span><button disabled={busy} onClick={async()=>{setBusy(true);setError('');try{const wasSelected=selected.some(p=>p.id===pack.id);await request('/api/asset-packs/'+pack.id,undefined,'DELETE');if(!mountedRef.current)return;setRemoving(null);if(onDeletePack)await onDeletePack(pack.id);else if(wasSelected)await onRemovePack(pack.id);if(mountedRef.current)await load()}catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}}}>删除素材包</button><button disabled={busy} onClick={()=>setRemoving(null)}>取消</button></div>}
    </article>)}</div>}
   </>}
  </div>

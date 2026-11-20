@@ -261,6 +261,7 @@ export function ComposerMenuContents({
   preview,
   insert,
   changeRefs,
+  removePack,
   pickAssets,
   openPacks,
   notify,
@@ -275,6 +276,7 @@ export function ComposerMenuContents({
   preview: (id: string) => void;
   insert: (id: string) => void;
   changeRefs: (refs: string[], removed?: string) => void;
+  removePack: (id: string) => void;
   pickAssets: () => void;
   openPacks: () => void;
   notify: (message: string) => void;
@@ -291,6 +293,11 @@ export function ComposerMenuContents({
   const [search, setSearch] = useState("");
   const voice = useRef<HTMLTextAreaElement>(null);
   const dragged = useRef<string | null>(null);
+  const selectedReferences = packReferences(session);
+  const packCount = draft.packs?.length ?? 0;
+  useLayoutEffect(() => {
+    if (kind === "references" || kind === "mention") reposition();
+  }, [kind, selectedReferences.length, packCount, reposition]);
   const available = (id: string) => modelAvailable(state, id);
   const flowOptions = flow?.family
     ? FlowPicker.options(state.model_catalog, model, available)
@@ -621,7 +628,8 @@ export function ComposerMenuContents({
     case "mention":
     case "references": {
       const manage = kind === "references";
-      const selected = manage ? packReferences(session) : refs;
+      const selected = selectedReferences;
+      const packs = draft.packs || [];
       function moveReference(id: string, index: number) {
         const from = refs.indexOf(id);
         if (from < 0 || index < 0 || from === index) return;
@@ -640,9 +648,8 @@ export function ComposerMenuContents({
               {selected.map((id) => {
                 const direct = refs.includes(id);
                 const asset = referenceAsset(state, id);
-                const label = direct
-                  ? referenceLabel(state, id, refs)
-                  : "素材包图片";
+                const refLabel = referenceLabel(state, id, selected);
+                const label = direct ? refLabel : `${refLabel} · 素材包`;
                 const options = h3Options(draft.h3);
                 return (
                   <Fragment key={id}>
@@ -676,18 +683,20 @@ export function ComposerMenuContents({
                         <ReferenceMedia id={id} kind={asset?.kind} />
                         <span>{label}</span>
                       </button>
+                      {manage && (
+                        <button
+                          className="icon-button"
+                          data-act="mention"
+                          data-key={id}
+                          aria-label={"引用" + label}
+                          title="引用"
+                          onClick={() => insert(id)}
+                        >
+                          <Icon name="at" />
+                        </button>
+                      )}
                       {manage && direct && (
                         <>
-                          <button
-                            className="icon-button"
-                            data-act="mention"
-                            data-key={id}
-                            aria-label={"引用" + label}
-                            title="引用"
-                            onClick={() => insert(id)}
-                          >
-                            <Icon name="at" />
-                          </button>
                           <button
                             className="icon-button"
                             data-act="ref-left"
@@ -737,7 +746,7 @@ export function ComposerMenuContents({
                             })
                           }
                         />
-                        同时参考{referenceLabel(state, id, refs)}的声音
+                        同时参考{refLabel}的声音
                       </label>
                     )}
                   </Fragment>
@@ -746,6 +755,65 @@ export function ComposerMenuContents({
             </div>
           ) : (
             <p className="empty-note">暂无参考内容</p>
+          )}
+          {manage && !!packs.length && (
+            <>
+              <div className="popover-label" style={{ marginTop: 12 }}>
+                已导入素材包
+                <span>{packs.length}</span>
+              </div>
+              <div className="reference-list">
+                {packs.map((pack) => {
+                  const packName = pack.name || "素材包";
+                  const cover = pack.media[0];
+                  return (
+                    <div
+                      key={pack.id}
+                      className="reference-row"
+                      data-pack={pack.id}
+                    >
+                      <button
+                        type="button"
+                        className="ref-entry"
+                        data-act="asset-packs"
+                        title={packName}
+                        onClick={openPacks}
+                      >
+                        {cover ? (
+                          <ReferenceMedia
+                            id={cover}
+                            kind={referenceAsset(state, cover)?.kind}
+                          />
+                        ) : (
+                          <Icon name="library" />
+                        )}
+                        <span
+                          style={{
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {packName} · {pack.media.length} 张
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="quiet-button"
+                        data-act="remove-pack"
+                        data-key={pack.id}
+                        aria-label={`移除整包 ${packName}`}
+                        title="移除整包"
+                        style={{ whiteSpace: "nowrap", flex: "none" }}
+                        onClick={() => removePack(pack.id)}
+                      >
+                        移除整包
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           )}
           {manage && (
             <>

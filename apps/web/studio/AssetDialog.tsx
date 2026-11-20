@@ -24,6 +24,7 @@ export type DialogContent =
       importImages: (ids: string[]) => Promise<void>;
       importPack: (pack: Pack) => Promise<void>;
       removePack: (id: string) => Promise<void>;
+      deletePack?: (id: string) => Promise<void>;
     }
   | { kind: "preview"; id: string; mediaKind: Asset["kind"] }
   | {
@@ -204,6 +205,7 @@ export function AssetDialog({
                   onImportImages={content.importImages}
                   onImportPack={content.importPack}
                   onRemovePack={content.removePack}
+                  onDeletePack={content.deletePack}
                 />
               )}
             </div>
