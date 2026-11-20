@@ -78,8 +78,14 @@ import {
   resolveNode,
   videoSeconds,
   connectionError,
+  createClipboardSnapshot,
+  resolvePasteOffset,
+  nextContextSelection,
+  collectDownloadTargets,
+  hasDownloadableNodes,
+  textDownloadFilename,
+  type CanvasClipboard,
   type CanvasNode,
-  type Doc,
   type Kind,
   type Project,
   type Job,
@@ -520,10 +526,16 @@ export function CanvasWorkspace({
     modelButtonRef = useRef<HTMLButtonElement>(null),
     modelMenuRef = useRef<HTMLDivElement>(null),
     fileTarget = useRef<string | null>(null),
-    clipboard = useRef<{ nodes: CanvasNode[]; edges: Doc["edges"] } | null>(
-      null,
-    ),
+    clipboard = useRef<CanvasClipboard | null>(null),
     dragging = useRef(false);
+  const selectedNodes = useMemo(
+    () => doc.value.document.nodes.filter((n) => selected.includes(n.id)),
+    [doc.value.document.nodes, selected],
+  );
+  const canDownloadSelected = useMemo(
+    () => hasDownloadableNodes(selectedNodes, runs),
+    [selectedNodes, runs],
+  );
   const active = doc.value.document.nodes.find((n) => n.id === selected[0]),
     single = selected.length === 1 && active ? active : null;
   const current = single ? resolveNode(single, runs) : null;
@@ -1073,34 +1085,39 @@ export function CanvasWorkspace({
     }
   };
   const copy = () => {
-    const ids = new Set(selected);
-    clipboard.current = {
-      nodes: structuredClone(
-        doc.ref.current.document.nodes.filter((n) => ids.has(n.id)),
-      ),
-      edges: structuredClone(
-        doc.ref.current.document.edges.filter(
-          (e) => ids.has(e.source) && ids.has(e.target),
-        ),
-      ),
-    };
-    notify(`已复制 ${ids.size} 个节点`);
+    const snapshot = createClipboardSnapshot(
+      doc.ref.current.document,
+      selected,
+    );
+    if (!snapshot) return;
+    clipboard.current = snapshot;
+    notify(`已复制 ${snapshot.nodes.length} 个节点`);
   };
-  const paste = (duplicate = false) => {
+  const paste = (duplicate = false, point?: { x: number; y: number }) => {
     const source = duplicate
-      ? {
-          nodes: doc.ref.current.document.nodes.filter((n) =>
-            selected.includes(n.id),
-          ),
-          edges: doc.ref.current.document.edges.filter(
-            (e) => selected.includes(e.source) && selected.includes(e.target),
-          ),
-        }
+      ? createClipboardSnapshot(doc.ref.current.document, selected)
       : clipboard.current;
-    if (!source?.nodes.length) return;
+    if (!source?.nodes.length) {
+      setContext(null);
+      return;
+    }
     if (doc.ref.current.document.nodes.length + source.nodes.length > 200) {
       notify("每张画布最多 200 个节点");
+      setContext(null);
       return;
+    }
+    const { dx, dy, nextPasteCount, nextAnchor } = resolvePasteOffset(
+      source.nodes,
+      {
+        duplicate,
+        point,
+        pasteCount: source.pasteCount,
+        anchor: source.anchor,
+      },
+    );
+    if (!duplicate && clipboard.current) {
+      clipboard.current.pasteCount = nextPasteCount;
+      clipboard.current.anchor = nextAnchor;
     }
     const mapping = new Map(
       source.nodes.map((n) => [n.id, crypto.randomUUID()]),
@@ -1108,8 +1125,8 @@ export function CanvasWorkspace({
     const copied = source.nodes.map((n) => ({
       ...structuredClone(n),
       id: mapping.get(n.id)!,
-      x: n.x + 56,
-      y: n.y + 56,
+      x: n.x + dx,
+      y: n.y + dy,
       media_id: resolveNode(n, runs).media,
       active_job: null,
       use_media: true,
@@ -1157,13 +1174,19 @@ export function CanvasWorkspace({
     }));
   };
   const downloadNodes = async () => {
+    setContext(null);
     const chosen = doc.ref.current.document.nodes.filter((n) =>
       selected.includes(n.id),
     );
-    const keys = chosen
-      .map((n) => resolveNode(n, runs).media)
-      .filter(Boolean) as string[];
-    const text = chosen.filter((n) => ["text", "sticky"].includes(n.type));
+    const {
+      media: keys,
+      text,
+      hasDownloadable,
+    } = collectDownloadTargets(chosen, runs);
+    if (!hasDownloadable) {
+      notify("所选节点暂无可下载内容");
+      return;
+    }
     try {
       if (keys.length === 1) {
         const a = document.createElement("a");
@@ -1189,7 +1212,10 @@ export function CanvasWorkspace({
         );
         const a = document.createElement("a");
         a.href = url;
-        a.download = project.title + ".txt";
+        a.download = textDownloadFilename(
+          doc.ref.current.title,
+          project.title,
+        );
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
@@ -1689,8 +1715,16 @@ export function CanvasWorkspace({
           }}
           onNodeContextMenu={(e, n) => {
             e.preventDefault();
-            setSelected([n.id]);
+            if (!selected.includes(n.id)) {
+              setSelected(nextContextSelection(selected, n.id));
+              setSelectedEdges([]);
+            }
             setContext({ x: e.clientX, y: e.clientY, node: n.id });
+          }}
+          onSelectionContextMenu={(e, selection) => {
+            e.preventDefault();
+            if (!selection.length) return;
+            setContext({ x: e.clientX, y: e.clientY, node: selection[0].id });
           }}
           onPaneContextMenu={(e) => {
             e.preventDefault();
@@ -1976,7 +2010,7 @@ export function CanvasWorkspace({
               onClick={() => setMenu(menu === "colors" ? null : "colors")}
             />
           </span>
-          {(current?.media || ["text", "sticky"].includes(single.type)) && (
+          {canDownloadSelected && (
             <IconButton icon={Download} label="下载" onClick={downloadNodes} />
           )}
           <IconButton icon={Trash2} label="删除节点" onClick={removeSelected} />
@@ -2080,6 +2114,7 @@ export function CanvasWorkspace({
           <IconButton
             icon={Download}
             label="批量下载"
+            disabled={!canDownloadSelected}
             onClick={downloadNodes}
           />
           <IconButton
@@ -2559,7 +2594,7 @@ export function CanvasWorkspace({
               <button onClick={() => paste(true)}>
                 复制副本<span>⌘D</span>
               </button>
-              <button onClick={downloadNodes}>
+              <button disabled={!canDownloadSelected} onClick={downloadNodes}>
                 <Download size={16} />
                 下载
               </button>
@@ -2587,7 +2622,15 @@ export function CanvasWorkspace({
                 </button>
               ))}
               <div className="menu-divider" />
-              <button disabled={!clipboard.current} onClick={() => paste()}>
+              <button
+                disabled={!clipboard.current?.nodes.length}
+                onClick={() =>
+                  paste(
+                    false,
+                    flow.screenToFlowPosition({ x: context.x, y: context.y }),
+                  )
+                }
+              >
                 粘贴<span>⌘V</span>
               </button>
             </>
