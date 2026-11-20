@@ -7,17 +7,30 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { Boxes, Check, ChevronDown, Circle, Plus, X } from "lucide-react";
+import {
+  ArrowUpRight,
+  Boxes,
+  Check,
+  ChevronDown,
+  Circle,
+  Plus,
+  X,
+} from "lucide-react";
 import type { SettingsTab } from "./settings-tabs";
 import { api } from "./api";
+import {
+  describeSavedService,
+  findDuplicateModelIds,
+  formatFieldDefault,
+  modelKindLabels,
+  isStringArrayField,
+  parseFieldValue,
+  pluginFieldHint as fieldHint,
+  pluginFieldLabel as label,
+  type PluginConfigField as Field,
+} from "./settings-plugins-helpers";
 import "./settings-plugins.css";
 
-type Field = {
-  title?: string;
-  type?: string;
-  enum?: unknown[];
-  writeOnly?: boolean;
-};
 type Service = {
   values: Record<string, unknown>;
   configuredFields: string[];
@@ -28,6 +41,11 @@ type Service = {
   revision: number;
   enabled: boolean;
   concurrency: number;
+};
+type ServiceReport = {
+  ready: boolean;
+  models?: string[];
+  available?: string[];
 };
 type Plugin = {
   id: string;
@@ -41,6 +59,7 @@ type Plugin = {
   configSchema: { properties?: Record<string, Field>; required?: string[] };
   choices: {
     id: string;
+    kind?: keyof typeof modelKindLabels;
     label: string;
     enabled: boolean;
     service: string | null;
@@ -68,152 +87,243 @@ type Preview = {
   fields: string[];
   nodes: boolean;
 };
-const labels: Record<string, string> = {
-  publicUrl: "服务公开地址",
-  baseUrl: "服务地址",
-  provider: "提供方",
-  apiKey: "API 密钥",
-  artifactOrigins: "允许下载媒体的其他地址",
-};
-const label = (key: string, field: Field = {}) =>
-  field.title || labels[key] || key;
 
 function ServiceForm({
   plugin,
   service,
   save,
+  onCancel,
 }: {
   plugin: Plugin;
   service?: Service;
   save: (body: object) => Promise<void>;
+  onCancel?: () => void;
 }) {
   const [error, setError] = useState("");
+  const prefix = useId();
+  const entries = Object.entries(plugin.configSchema.properties || {});
+  const requiredSet = new Set(plugin.configSchema.required || []);
+  const requiredEntries = entries.filter(([key]) => requiredSet.has(key));
+  const optionalEntries = entries.filter(([key]) => !requiredSet.has(key));
+  const hasSavedOptional = Boolean(
+    service &&
+      optionalEntries.some(([key]) => service.configuredFields.includes(key)),
+  );
+
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError("");
     const form = new FormData(e.currentTarget);
+    const config: Record<string, unknown> = {};
     try {
-      const config: Record<string, unknown> = {};
-      for (const [key, field] of Object.entries(
-        plugin.configSchema.properties || {},
-      )) {
+      for (const [key, field] of entries) {
         const raw = String(form.get(key) ?? "").trim();
-        if (raw)
-          config[key] =
-            !field.type || field.type === "string" ? raw : JSON.parse(raw);
+        if (!raw) continue;
+        const parsed = parseFieldValue(key, field, raw);
+        if (Array.isArray(parsed) && parsed.length === 0 && !raw.startsWith("["))
+          continue;
+        config[key] = parsed;
       }
-      await save(
-        service
-          ? {
-              revision: service.revision,
-              enabled: service.enabled,
-              preserveCredentials: true,
-              concurrency: service.concurrency,
-              config,
-            }
-          : {
-              name: form.get("name"),
-              pluginId: plugin.id,
-              version: plugin.adapterVersion,
-              config,
-            },
+    } catch (err) {
+      setError(
+        err instanceof Error && err.message.includes("请检查")
+          ? err.message
+          : "请检查服务设置的格式",
       );
-    } catch {
-      setError("请检查服务设置的格式");
+      return;
     }
+    await save(
+      service
+        ? {
+            revision: service.revision,
+            enabled: service.enabled,
+            preserveCredentials: true,
+            concurrency: service.concurrency,
+            config,
+          }
+        : {
+            name: String(form.get("name") ?? "").trim(),
+            pluginId: plugin.id,
+            version: plugin.adapterVersion,
+            config,
+          },
+    );
   }
+
+  function renderField(key: string, f: Field) {
+    const schemaRequired = requiredSet.has(key);
+    const configured = Boolean(service?.configuredFields.includes(key));
+    const required = schemaRequired && !configured;
+    const inputId = `${prefix}-${key}`;
+    const hint = fieldHint(key, f, Boolean(service), configured);
+    const hintId = hint ? `${inputId}-hint` : undefined;
+    const tagText =
+      service && f.writeOnly && configured
+        ? "已保存"
+        : schemaRequired
+          ? "必填"
+          : "可选";
+    const placeholder =
+      configured && service?.values[key] === undefined
+        ? "已保存，留空沿用"
+        : key === "baseUrl"
+          ? "https://api.example.com"
+          : key === "publicUrl"
+            ? "https://media.example.com"
+            : key === "artifactOrigins"
+              ? "https://cdn.example.com"
+              : undefined;
+
+    return (
+      <div className="plugin-field" key={key}>
+        <div className="plugin-field-head">
+          <label htmlFor={inputId}>{label(key, f)}</label>
+          <span
+            className="plugin-field-tag"
+            data-tone={
+              service && f.writeOnly && configured
+                ? "ok"
+                : schemaRequired
+                  ? "required"
+                  : "optional"
+            }
+          >
+            {tagText}
+          </span>
+        </div>
+        {f.type === "string" && f.enum && !f.writeOnly ? (
+          <select
+            id={inputId}
+            aria-describedby={hintId}
+            name={key}
+            required={required}
+            defaultValue={String(service?.values[key] ?? "")}
+          >
+            <option value="">
+              {configured ? "沿用当前选项" : "请选择"}
+            </option>
+            {f.enum.map((value) => (
+              <option key={String(value)} value={String(value)}>
+                {String(value)}
+              </option>
+            ))}
+          </select>
+        ) : isStringArrayField(f) && !f.writeOnly ? (
+          <textarea
+            id={inputId}
+            aria-describedby={hintId}
+            name={key}
+            rows={2}
+            autoComplete="off"
+            defaultValue={f.writeOnly ? "" : formatFieldDefault(f, service?.values[key])}
+            placeholder={placeholder}
+            required={required}
+          />
+        ) : (
+          <input
+            id={inputId}
+            aria-describedby={hintId}
+            name={key}
+            type={
+              f.writeOnly
+                ? "password"
+                : key === "baseUrl" || key === "publicUrl"
+                  ? "url"
+                  : "text"
+            }
+            autoComplete="off"
+            defaultValue={f.writeOnly ? "" : formatFieldDefault(f, service?.values[key])}
+            placeholder={placeholder}
+            required={required}
+          />
+        )}
+        {hint && (
+          <p id={hintId} className="plugin-field-hint">
+            {hint}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <form className="plugin-form" onSubmit={submit}>
       {!service && (
-        <label>
-          服务名称
+        <div className="plugin-field">
+          <div className="plugin-field-head">
+            <label htmlFor={`${prefix}-name`}>服务名称</label>
+            <span className="plugin-field-tag" data-tone="required">
+              必填
+            </span>
+          </div>
           <input
+            id={`${prefix}-name`}
             name="name"
             required
             maxLength={80}
             defaultValue={plugin.label}
+            aria-describedby={`${prefix}-name-hint`}
           />
-        </label>
+          <p id={`${prefix}-name-hint`} className="plugin-field-hint">
+            用于区分同一插件下的不同服务实例，例如「主服务」或「备用节点」。
+          </p>
+        </div>
       )}
-      {Object.entries(plugin.configSchema.properties || {}).map(([key, f]) => {
-        const required =
-          plugin.configSchema.required?.includes(key) &&
-          !service?.configuredFields.includes(key);
-        const field = (
-          <label>
-            {label(key, f)}
-            {f.type === "string" && f.enum && !f.writeOnly ? (
-              <select
-                aria-label={label(key, f)}
-                name={key}
-                required={required}
-                defaultValue={String(service?.values[key] ?? "")}
-              >
-                <option value="">
-                  {service?.configuredFields.includes(key)
-                    ? "沿用当前选项"
-                    : "请选择"}
-                </option>
-                {f.enum.map((value) => (
-                  <option key={String(value)} value={String(value)}>
-                    {String(value)}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                name={key}
-                type={
-                  f.writeOnly ? "password" : key === "baseUrl" ? "url" : "text"
-                }
-                autoComplete="off"
-                defaultValue={
-                  service?.values[key] === undefined
-                    ? ""
-                    : typeof service.values[key] === "string"
-                      ? String(service.values[key])
-                      : JSON.stringify(service.values[key])
-                }
-                placeholder={
-                  service?.configuredFields.includes(key) &&
-                  service.values[key] === undefined
-                    ? "已保存，留空沿用"
-                    : undefined
-                }
-                required={required}
-              />
-            )}
-          </label>
-        );
-        return !plugin.configSchema.required?.includes(key) ? (
-          <details key={key}>
-            <summary>更多设置</summary>
-            {field}
-          </details>
-        ) : (
-          <div key={key}>{field}</div>
-        );
-      })}
-      {error && <p role="alert">{error}</p>}
-      <button>保存服务设置</button>
+      {requiredEntries.map(([key, f]) => renderField(key, f))}
+      {optionalEntries.length > 0 && (
+        <details
+          className="plugin-optional-fields"
+          open={hasSavedOptional || undefined}
+        >
+          <summary>
+            <span>可选设置</span>
+            <small>
+              {optionalEntries.map(([key, f]) => label(key, f)).join("、")}
+            </small>
+            <ChevronDown size={14} />
+          </summary>
+          <div className="plugin-optional-body">
+            {optionalEntries.map(([key, f]) => renderField(key, f))}
+          </div>
+        </details>
+      )}
+      {error && (
+        <p className="plugin-feedback is-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="plugin-form-actions">
+        <button type="submit" className="console-primary">
+          保存服务设置
+        </button>
+        {onCancel && (
+          <button type="button" onClick={onCancel}>
+            取消
+          </button>
+        )}
+      </div>
     </form>
   );
 }
+
 function PluginDrawer({
-  title,
+  plugin,
   close,
   children,
 }: {
-  title: string;
+  plugin: Plugin;
   close: () => void;
   children: ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useId();
   useLayoutEffect(() => {
-    const element = dialog.current!;
-    element.showModal();
-    return () => element.close();
+    const element = dialog.current;
+    if (!element) return;
+    if (!element.open) element.showModal();
+    return () => {
+      if (element.open) element.close();
+    };
   }, []);
   return (
     <dialog
@@ -227,12 +337,35 @@ function PluginDrawer({
       onClick={(event) => {
         if (event.target !== event.currentTarget) return;
         const box = event.currentTarget.getBoundingClientRect();
-        if (event.clientX < box.left || event.clientX > box.right) close();
+        if (
+          event.clientX < box.left ||
+          event.clientX > box.right ||
+          event.clientY < box.top ||
+          event.clientY > box.bottom
+        )
+          close();
       }}
     >
-      <header>
-        <h3 id={heading}>{title} · 设置</h3>
-        <button type="button" aria-label="关闭插件设置" onClick={close}>
+      <header className="plugin-drawer-head">
+        <div className="plugin-drawer-title">
+          <span className="plugin-mark plugin-drawer-mark" aria-hidden="true">
+            {plugin.id.slice(0, 2).toUpperCase()}
+          </span>
+          <div>
+            <h3 id={heading}>{plugin.label} · 设置</h3>
+            <p className="plugin-drawer-meta">
+              <code>v{plugin.version}</code>
+              <span>{plugin.mode === "pull" ? "节点服务" : "接口服务"}</span>
+              <code>{plugin.id}</code>
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="plugin-drawer-close"
+          aria-label="关闭插件设置"
+          onClick={close}
+        >
           <X size={16} />
         </button>
       </header>
@@ -262,11 +395,15 @@ export function PluginSettings({
   const [servicesError, setServicesError] = useState("");
   const [loadingPlugins, setLoadingPlugins] = useState(true);
   const [loadingServices, setLoadingServices] = useState(true);
-  const [reports, setReports] = useState<
-    Record<string, { ready: boolean; models?: string[]; available?: string[] }>
-  >({});
+  const [reports, setReports] = useState<Record<string, ServiceReport>>({});
+  const [reportErrors, setReportErrors] = useState<Record<string, string>>({});
+  const [testingService, setTestingService] = useState("");
   const [opened, setOpened] = useState(""),
-    [editing, setEditing] = useState("");
+    [editing, setEditing] = useState(""),
+    [renamingModel, setRenamingModel] = useState(""),
+    [confirmAction, setConfirmAction] = useState<"" | "rollback" | "remove">(
+      "",
+    );
   const [pending, setPending] = useState<{
     file?: unknown;
     sha256?: string;
@@ -280,11 +417,36 @@ export function PluginSettings({
     locked = useRef(false),
     pluginsReq = useRef(0),
     servicesReq = useRef(0),
-    picker = useRef<HTMLInputElement>(null);
+    picker = useRef<HTMLInputElement>(null),
+    drawerAlert = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (error && opened)
+      drawerAlert.current?.scrollIntoView({ block: "nearest" });
+  }, [error, opened]);
   const call = <T,>(path: string, body?: object, method?: string) =>
     api<T>(String(workspace), "/api/admin/" + path, body, method);
+  function openDrawer(id: string) {
+    setOpened(id);
+    setEditing("");
+    setRenamingModel("");
+    setConfirmAction("");
+    setError("");
+    setMessage("");
+  }
+  function closeDrawer() {
+    setOpened("");
+    setEditing("");
+    setRenamingModel("");
+    setConfirmAction("");
+  }
   function clearReport(id: string) {
     setReports((old) => {
+      if (!(id in old)) return old;
+      const next = { ...old };
+      delete next[id];
+      return next;
+    });
+    setReportErrors((old) => {
       if (!(id in old)) return old;
       const next = { ...old };
       delete next[id];
@@ -387,10 +549,8 @@ export function PluginSettings({
       done: enabled > 0,
       act: () => {
         const plugin = plugins?.find((p) => !p.enabled) ?? plugins?.[0];
-        if (plugin) {
-          setOpened(plugin.id);
-          setEditing("");
-        } else picker.current?.click();
+        if (plugin) openDrawer(plugin.id);
+        else picker.current?.click();
       },
     },
     ...(gpuTab
@@ -535,6 +695,9 @@ export function PluginSettings({
                       supplements,
                     });
                   setOpened(pending.preview.id);
+                  setEditing("");
+                  setRenamingModel("");
+                  setConfirmAction("");
                   setPending(undefined);
                 },
                 existing ? "插件已更新" : "插件已导入",
@@ -650,9 +813,15 @@ export function PluginSettings({
                   checked={p.enabled}
                   disabled={p.removing}
                   onChange={(e) =>
-                    void action("state", {
-                      action: e.target.checked ? "enable" : "disable",
-                    })
+                    void action(
+                      "state",
+                      {
+                        action: e.target.checked ? "enable" : "disable",
+                      },
+                      e.target.checked
+                        ? `${p.label} 已开启（全平台生效）`
+                        : `${p.label} 已停用（全平台生效）`,
+                    )
                   }
                 />
                 {p.removing
@@ -703,10 +872,9 @@ export function PluginSettings({
                   </small>
                   <button
                     aria-expanded={opened === p.id}
-                    onClick={() => {
-                      setOpened(opened === p.id ? "" : p.id);
-                      setEditing("");
-                    }}
+                    onClick={() =>
+                      opened === p.id ? closeDrawer() : openDrawer(p.id)
+                    }
                   >
                     设置
                   </button>
@@ -730,293 +898,884 @@ export function PluginSettings({
                     </button>
                   )}
                 </div>
-                {opened === p.id && (
-                  <PluginDrawer
-                    title={p.label}
-                    close={() => {
-                      setOpened("");
-                      setEditing("");
-                    }}
-                  >
-                    <div className="plugin-drawer-state">
-                      <span>插件状态</span>
-                      {toggle}
-                    </div>
-                    {error && <p role="alert">{error}</p>}
-                    {message && <p role="status">{message}</p>}
-                    {p.mode !== "pull" && (
-                      <>
-                        <h3>服务设置</h3>
-                        {servicesError && (
-                          <div className="plugin-alert" role="alert">
-                            <span>服务清单读取失败：{servicesError}</span>
-                            <button
-                              type="button"
-                              disabled={loadingServices}
-                              onClick={() => void loadServices()}
-                            >
-                              {loadingServices ? "重试中…" : "重试"}
-                            </button>
+                {opened === p.id && (() => {
+                  const enabledModelCount = p.choices.filter(
+                    (c) => c.enabled,
+                  ).length;
+                  const duplicateIds = findDuplicateModelIds(p.id, plugins);
+                  const needsService =
+                    p.mode !== "pull" &&
+                    services !== undefined &&
+                    pluginServices.length === 0;
+                  return (
+                    <PluginDrawer plugin={p} close={closeDrawer}>
+                      {error && (
+                        <p
+                          ref={drawerAlert}
+                          className="plugin-feedback is-error"
+                          role="alert"
+                        >
+                          {error}
+                        </p>
+                      )}
+                      {message && (
+                        <p className="plugin-feedback is-ok" role="status">
+                          {message}
+                        </p>
+                      )}
+
+                      <section
+                        className="plugin-drawer-card plugin-master-card"
+                        aria-label="插件总开关"
+                      >
+                        <div className="plugin-drawer-state">
+                          <div className="plugin-master-title">
+                            <h4>插件总开关</h4>
+                            <span className="plugin-scope-pill">全平台生效</span>
                           </div>
-                        )}
-                        {loadingServices &&
-                        services === undefined &&
-                        !servicesError ? (
-                          <p role="status">正在读取服务…</p>
-                        ) : services !== undefined ? (
-                          <>
-                            {pluginServices.map((s) => (
-                              <div key={s.id}>
-                                <div className="plugin-actions">
-                                  <span>{s.name}</span>
-                                  <button
-                                    onClick={() =>
-                                      setEditing(editing === s.id ? "" : s.id)
-                                    }
-                                  >
-                                    修改设置
-                                  </button>
-                                  <button
-                                    onClick={() =>
-                                      void run(
-                                        async () => {
-                                          clearReport(s.id);
-                                          const health = await call<{
-                                            ready: boolean;
-                                            models?: string[];
-                                            available?: string[];
-                                          }>(
-                                            "connections/" + s.id + "/health",
-                                            {},
-                                          );
-                                          if (!health.ready)
-                                            throw Error(
-                                              "连接检查未通过，请核对地址和密钥",
-                                            );
-                                          if (active.current)
-                                            setReports((old) => ({
-                                              ...old,
-                                              [s.id]: health,
-                                            }));
-                                        },
-                                        "",
-                                        false,
-                                      )
-                                    }
-                                  >
-                                    测试连接
-                                  </button>
-                                </div>
-                                {reports[s.id]?.ready && (
-                                  <p role="status">
-                                    {reports[s.id].models
-                                      ? "连接成功，服务报告 " +
-                                        reports[s.id].models!.length +
-                                        " 个模型"
-                                      : "服务可达，密钥权限请以服务端为准"}
-                                  </p>
-                                )}
-                                {editing === s.id && (
-                                  <ServiceForm
-                                    plugin={p}
-                                    service={s}
-                                    save={(body) =>
-                                      run(async () => {
-                                        await call(
-                                          "connections/" + s.id,
-                                          body,
-                                          "PUT",
-                                        );
-                                        clearReport(s.id);
-                                        setEditing("");
-                                      }, "服务设置已保存")
-                                    }
-                                  />
-                                )}
-                              </div>
-                            ))}
-                            {pluginServices.length === 0 ||
-                            editing === "add" ? (
-                              <ServiceForm
-                                plugin={p}
-                                save={(body) =>
-                                  run(async () => {
-                                    await call("connections", body);
-                                    setEditing("");
-                                  }, "服务设置已保存")
-                                }
-                              />
-                            ) : (
-                              <button onClick={() => setEditing("add")}>
+                          {toggle}
+                        </div>
+                        <p className="plugin-section-desc">
+                          {p.removing
+                            ? "已提交移除请求；待已受理任务结束后自动卸载，期间不再受理新任务。"
+                            : p.enabled
+                              ? "关闭后，所有工作区将停止接收新任务。已受理的任务继续运行。"
+                              : needsService
+                                ? "当前未开启。请先在下方添加并保存至少一个服务配置，再开启此插件。"
+                                : "当前已停用，所有工作区均不可发起此插件任务。开启后，下方已勾选模型将按全站及团队策略对外开放。"}
+                        </p>
+                      </section>
+
+                      <section className="plugin-drawer-section">
+                        <div className="plugin-drawer-section-head">
+                          <div className="plugin-section-title">
+                            <h4>
+                              {p.mode === "pull" ? "运行方式" : "服务连接"}
+                            </h4>
+                            {p.mode !== "pull" && services !== undefined && (
+                              <span className="plugin-count-pill">
+                                {pluginServices.length} 个服务
+                              </span>
+                            )}
+                          </div>
+                          {p.mode !== "pull" &&
+                            services !== undefined &&
+                            pluginServices.length > 0 &&
+                            editing !== "add" && (
+                              <button
+                                type="button"
+                                className="plugin-btn-sm"
+                                onClick={() => setEditing("add")}
+                              >
+                                <Plus size={14} />
                                 添加服务
                               </button>
                             )}
+                        </div>
+                        {p.mode === "pull" ? (
+                          <div className="plugin-drawer-card plugin-node-note">
+                            <p className="plugin-section-desc">
+                              此插件采用节点拉取模式，由已配对的 GPU
+                              节点主动领单并回传结果，无需配置外部接口地址或密钥。
+                            </p>
+                            {gpuTab && (
+                              <button
+                                type="button"
+                                className="plugin-btn-sm"
+                                onClick={() => {
+                                  closeDrawer();
+                                  navigate(gpuTab);
+                                }}
+                              >
+                                前往 GPU 节点
+                                <ArrowUpRight size={14} />
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <>
+                            <p className="plugin-section-desc">
+                              点击「测试连接」检查当前配置能否访问服务。
+                            </p>
+                            {servicesError && (
+                              <div
+                                className="plugin-alert plugin-feedback is-error"
+                                role="alert"
+                              >
+                                <span>服务清单读取失败：{servicesError}</span>
+                                <button
+                                  type="button"
+                                  disabled={loadingServices}
+                                  onClick={() => void loadServices()}
+                                >
+                                  {loadingServices ? "重试中…" : "重试"}
+                                </button>
+                              </div>
+                            )}
+                            {loadingServices &&
+                            services === undefined &&
+                            !servicesError ? (
+                              <p
+                                className="plugin-section-desc"
+                                role="status"
+                              >
+                                正在读取服务…
+                              </p>
+                            ) : services !== undefined ? (
+                              <div className="plugin-service-list">
+                                {pluginServices.map((s) => {
+                                  const savedRows = describeSavedService(p, s);
+                                  const report = reports[s.id];
+                                  const probeError = reportErrors[s.id];
+                                  const isTesting = testingService === s.id;
+                                  const statusLabel = isTesting
+                                    ? "测试中…"
+                                    : report?.ready
+                                      ? report.models
+                                        ? "连接正常"
+                                        : "服务可达"
+                                      : probeError
+                                        ? "连接失败"
+                                        : "未测试";
+                                  const statusTone = isTesting
+                                    ? "neutral"
+                                    : report?.ready
+                                      ? "ok"
+                                      : probeError
+                                        ? "error"
+                                        : "neutral";
+                                  return (
+                                    <div
+                                      className="plugin-drawer-card plugin-service-card"
+                                      key={s.id}
+                                    >
+                                      <div className="plugin-service-head">
+                                        <div className="plugin-service-name">
+                                          <strong>{s.name}</strong>
+                                          {!s.enabled && (
+                                            <span
+                                              className="plugin-pill"
+                                              data-tone="warn"
+                                            >
+                                              已停用
+                                            </span>
+                                          )}
+                                        </div>
+                                        <span
+                                          className="plugin-pill"
+                                          data-tone={statusTone}
+                                        >
+                                          {statusLabel}
+                                        </span>
+                                      </div>
+
+                                      {savedRows.length > 0 && (
+                                        <dl className="plugin-service-meta">
+                                          {savedRows.map((row) => (
+                                            <div key={row.key}>
+                                              <dt>{row.label}</dt>
+                                              <dd data-tone={row.tone}>
+                                                {row.mono ? (
+                                                  <code>{row.value}</code>
+                                                ) : (
+                                                  row.value
+                                                )}
+                                              </dd>
+                                            </div>
+                                          ))}
+                                        </dl>
+                                      )}
+
+                                      <div className="plugin-service-actions">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            void run(
+                                              async () => {
+                                                clearReport(s.id);
+                                                setTestingService(s.id);
+                                                try {
+                                                  const health =
+                                                    await call<ServiceReport>(
+                                                      "connections/" +
+                                                        s.id +
+                                                        "/health",
+                                                      {},
+                                                    );
+                                                  if (!health.ready) {
+                                                    if (active.current)
+                                                      setReportErrors((old) => ({
+                                                        ...old,
+                                                        [s.id]:
+                                                          "连接检查未通过，请核对服务地址、网络连通性与密钥配置",
+                                                      }));
+                                                    return;
+                                                  }
+                                                  if (active.current)
+                                                    setReports((old) => ({
+                                                      ...old,
+                                                      [s.id]: health,
+                                                    }));
+                                                } catch (err) {
+                                                  if (active.current)
+                                                    setReportErrors((old) => ({
+                                                      ...old,
+                                                      [s.id]:
+                                                        (err as Error).message ||
+                                                        "连接测试失败，请稍后重试",
+                                                    }));
+                                                } finally {
+                                                  if (active.current)
+                                                    setTestingService("");
+                                                }
+                                              },
+                                              "",
+                                              false,
+                                            )
+                                          }
+                                        >
+                                          {isTesting ? "测试中…" : "测试连接"}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-expanded={editing === s.id}
+                                          onClick={() =>
+                                            setEditing(
+                                              editing === s.id ? "" : s.id,
+                                            )
+                                          }
+                                        >
+                                          修改设置
+                                        </button>
+                                      </div>
+
+                                      {report?.ready && (
+                                        <p
+                                          className="plugin-feedback is-ok"
+                                          role="status"
+                                        >
+                                          {report.models
+                                            ? `连接成功，服务报告 ${report.models.length} 个模型${
+                                                report.available
+                                                  ? `（已匹配本插件 ${report.available.length} / ${p.choices.length} 个）`
+                                                  : ""
+                                              }`
+                                            : "服务可达，密钥权限请以服务端为准"}
+                                        </p>
+                                      )}
+                                      {probeError && (
+                                        <p
+                                          className="plugin-feedback is-error"
+                                          role="alert"
+                                        >
+                                          {probeError}
+                                        </p>
+                                      )}
+
+                                      {editing === s.id && (
+                                        <div className="plugin-service-editor">
+                                          <p className="plugin-editor-title">
+                                            修改服务配置
+                                          </p>
+                                          <ServiceForm
+                                            plugin={p}
+                                            service={s}
+                                            onCancel={() => setEditing("")}
+                                            save={(body) =>
+                                              run(async () => {
+                                                await call(
+                                                  "connections/" + s.id,
+                                                  body,
+                                                  "PUT",
+                                                );
+                                                clearReport(s.id);
+                                                setEditing("");
+                                              }, "服务设置已保存；请重新测试连接以验证最新配置")
+                                            }
+                                          />
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+
+                                {pluginServices.length === 0 && (
+                                  <div className="plugin-drawer-card plugin-service-create">
+                                    <p className="plugin-editor-title">
+                                      配置首个服务
+                                    </p>
+                                    <p className="plugin-section-desc">
+                                      先填写并保存服务连接，保存后即可测试连通性并开启插件。
+                                    </p>
+                                    <ServiceForm
+                                      plugin={p}
+                                      save={(body) =>
+                                        run(async () => {
+                                          await call("connections", body);
+                                          setEditing("");
+                                        }, "服务设置已保存；可点击「测试连接」验证连通性")
+                                      }
+                                    />
+                                  </div>
+                                )}
+
+                                {pluginServices.length > 0 &&
+                                  editing === "add" && (
+                                    <div className="plugin-drawer-card plugin-service-create">
+                                      <p className="plugin-editor-title">
+                                        添加新服务
+                                      </p>
+                                      <p className="plugin-section-desc">
+                                        支持为同一插件配置多个服务实例；保存后可在下方模型列表中按模型指定调用服务。
+                                      </p>
+                                      <ServiceForm
+                                        plugin={p}
+                                        onCancel={() => setEditing("")}
+                                        save={(body) =>
+                                          run(async () => {
+                                            await call("connections", body);
+                                            setEditing("");
+                                          }, "新服务已保存")
+                                        }
+                                      />
+                                    </div>
+                                  )}
+                              </div>
+                            ) : null}
                           </>
-                        ) : null}
-                      </>
-                    )}
-                    <details>
-                      <summary>模型（{p.choices.length}）</summary>
-                      {p.choices.map((m) => (
-                        <div className="plugin-actions" key={m.id}>
-                          <label className="plugin-inline">
-                            <input
-                              type="checkbox"
-                              checked={m.enabled}
-                              onChange={(e) =>
-                                void action("model", {
-                                  model: m.id,
-                                  enabled: e.target.checked,
-                                })
-                              }
-                            />
-                            {m.label}
-                          </label>
-                          {pluginServices
-                            .filter((s) => reports[s.id]?.available)
-                            .map((s) => (
-                              <small key={s.id}>
-                                {s.name} ·{" "}
-                                {reports[s.id].available!.includes(m.id)
-                                  ? "服务已列出"
-                                  : "服务未列出"}
-                              </small>
-                            ))}
-                          {p.choices.some(
-                            (other) =>
-                              other.id !== m.id && other.label === m.label,
-                          ) ||
-                          plugins.some(
-                            (other) =>
-                              other.id !== p.id &&
-                              other.choices.some(
-                                (c) => c.id !== m.id && c.label === m.label,
-                              ),
-                          ) ? (
-                            <button
-                              onClick={() => {
-                                const name = window
-                                  .prompt("模型显示名称", m.label)
-                                  ?.trim();
-                                if (name)
-                                  void action("model", {
-                                    model: m.id,
-                                    enabled: m.enabled,
-                                    label: name,
-                                  });
-                              }}
+                        )}
+                      </section>
+
+                      <section className="plugin-drawer-section">
+                        <div className="plugin-drawer-section-head">
+                          <div className="plugin-section-title">
+                            <h4>可用模型</h4>
+                            <span className="plugin-count-pill">
+                              {enabledModelCount} / {p.choices.length} 已开放
+                            </span>
+                          </div>
+                        </div>
+                        <p className="plugin-section-desc">
+                          勾选全站可用的模型。团队权限可在「模型管理」中调整。
+                        </p>
+                        {!p.enabled && p.choices.length > 0 && (
+                          <p className="plugin-inline-note">
+                            当前插件总开关已关闭，以下勾选将在开启插件后对用户生效。
+                          </p>
+                        )}
+                        {duplicateIds.size > 0 && (
+                          <p className="plugin-inline-note is-warn">
+                            同名模型可按类型和 ID 区分，也可以为它们修改显示名。
+                          </p>
+                        )}
+                        {p.choices.length === 0 ? (
+                          <div className="plugin-drawer-card">
+                            <p className="plugin-section-desc">
+                              此插件未声明可见的生成模型。
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="plugin-model-list">
+                            {p.choices.map((m) => {
+                              const kindLabel = m.kind && modelKindLabels[m.kind];
+                              const isDuplicate = duplicateIds.has(m.id);
+                              const isRenaming = renamingModel === m.id;
+                              const probeMatches = pluginServices.filter(
+                                (s) => reports[s.id]?.available,
+                              );
+                              return (
+                                <div
+                                  className="plugin-model-item"
+                                  data-enabled={m.enabled}
+                                  key={m.id}
+                                >
+                                  <div className="plugin-model-main">
+                                    <label className="plugin-model-check">
+                                      <input
+                                        type="checkbox"
+                                        checked={m.enabled}
+                                        onChange={(e) =>
+                                          void action(
+                                            "model",
+                                            {
+                                              model: m.id,
+                                              enabled: e.target.checked,
+                                            },
+                                            e.target.checked
+                                              ? `已开放模型 ${m.label}（${m.id}）`
+                                              : `已关闭模型 ${m.label}（${m.id}）`,
+                                          )
+                                        }
+                                      />
+                                      <span className="plugin-model-info">
+                                        <span className="plugin-model-title">
+                                          <strong>{m.label}</strong>
+                                          {kindLabel && (
+                                            <span className="plugin-pill is-kind">
+                                              {kindLabel}
+                                            </span>
+                                          )}
+                                          {isDuplicate && (
+                                            <span
+                                              className="plugin-pill"
+                                              data-tone="warn"
+                                            >
+                                              同名
+                                            </span>
+                                          )}
+                                        </span>
+                                        <code className="plugin-model-id">
+                                          {m.id}
+                                        </code>
+                                      </span>
+                                    </label>
+                                    <button
+                                      type="button"
+                                      className="plugin-btn-sm plugin-btn-quiet"
+                                      aria-expanded={isRenaming}
+                                      onClick={() =>
+                                        setRenamingModel(
+                                          isRenaming ? "" : m.id,
+                                        )
+                                      }
+                                    >
+                                      修改显示名
+                                    </button>
+                                  </div>
+
+                                  {probeMatches.length > 0 && (
+                                    <div className="plugin-model-probes">
+                                      {probeMatches.map((s) => {
+                                        const listed =
+                                          reports[s.id].available!.includes(
+                                            m.id,
+                                          );
+                                        return (
+                                          <span
+                                            className="plugin-pill"
+                                            data-tone={listed ? "ok" : "warn"}
+                                            key={s.id}
+                                          >
+                                            {s.name} ·{" "}
+                                            {listed
+                                              ? "服务已列出"
+                                              : "服务未列出"}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+
+                                  {isRenaming && (
+                                    <form
+                                      className="plugin-rename-form"
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Escape") {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          setRenamingModel("");
+                                        }
+                                      }}
+                                      onSubmit={(e) => {
+                                        e.preventDefault();
+                                        const form = new FormData(
+                                          e.currentTarget,
+                                        );
+                                        const name = String(
+                                          form.get("label") ?? "",
+                                        ).trim();
+                                        if (!name) return;
+                                        void run(async () => {
+                                          await call(base + "model", {
+                                            revision: p.revision,
+                                            model: m.id,
+                                            enabled: m.enabled,
+                                            label: name,
+                                          });
+                                          if (active.current) setRenamingModel("");
+                                        }, "模型显示名已更新");
+                                      }}
+                                    >
+                                      <label
+                                        htmlFor={`rename-${p.id}-${m.id}`}
+                                      >
+                                        工作台显示名称
+                                      </label>
+                                      <div className="plugin-rename-row">
+                                        <input
+                                          id={`rename-${p.id}-${m.id}`}
+                                          name="label"
+                                          type="text"
+                                          autoFocus
+                                          required
+                                          maxLength={80}
+                                          defaultValue={m.label}
+                                          placeholder="输入易于区分的名称"
+                                        />
+                                        <button
+                                          type="submit"
+                                          className="console-primary plugin-btn-sm"
+                                        >
+                                          保存
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="plugin-btn-sm"
+                                          onClick={() => setRenamingModel("")}
+                                        >
+                                          取消
+                                        </button>
+                                      </div>
+                                      <p className="plugin-field-hint">
+                                        仅影响工作台与设置页展示，底层模型 ID（
+                                        <code>{m.id}</code>）保持不变。
+                                      </p>
+                                    </form>
+                                  )}
+
+                                  {m.services.length > 1 && (
+                                    <div className="plugin-model-route">
+                                      <label
+                                        htmlFor={`route-${p.id}-${m.id}`}
+                                      >
+                                        调用服务
+                                      </label>
+                                      <select
+                                        id={`route-${p.id}-${m.id}`}
+                                        aria-label={m.label + "使用的服务"}
+                                        value={m.service ?? ""}
+                                        onChange={(e) =>
+                                          void action(
+                                            "model",
+                                            {
+                                              model: m.id,
+                                              enabled: m.enabled,
+                                              service: e.target.value,
+                                            },
+                                            "模型调用服务已更新",
+                                          )
+                                        }
+                                      >
+                                        <option disabled value="">
+                                          选择服务
+                                        </option>
+                                        {m.services.map((s) => (
+                                          <option key={s.id} value={s.id}>
+                                            {s.name}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        <div className="plugin-section-links">
+                          <button
+                            type="button"
+                            className="plugin-btn-sm"
+                            onClick={() => navigate("prices")}
+                          >
+                            设置生成定价
+                            <ArrowUpRight size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className="plugin-btn-sm"
+                            onClick={() => navigate("models")}
+                          >
+                            团队模型权限
+                            <ArrowUpRight size={14} />
+                          </button>
+                        </div>
+                      </section>
+
+                      <details
+                        className="plugin-drawer-details"
+                        open={
+                          Boolean(
+                            p.updateInfo?.version || p.updateInfo?.error,
+                          ) || undefined
+                        }
+                      >
+                        <summary>
+                          <span className="plugin-details-title">
+                            版本与更新
+                          </span>
+                          <span className="plugin-details-meta">
+                            {p.updateInfo?.version ? (
+                              <span className="plugin-pill" data-tone="ok">
+                                可更新至 {p.updateInfo.version}
+                              </span>
+                            ) : p.updateInfo?.error ? (
+                              <span className="plugin-pill" data-tone="error">
+                                检查失败
+                              </span>
+                            ) : (
+                              <code>v{p.version}</code>
+                            )}
+                            <ChevronDown size={15} />
+                          </span>
+                        </summary>
+                        <div className="plugin-details-body">
+                          <dl className="plugin-version-meta">
+                            <div>
+                              <dt>当前版本</dt>
+                              <dd>
+                                <code>{p.version}</code>
+                              </dd>
+                            </div>
+                            <div>
+                              <dt>适配器版本</dt>
+                              <dd>
+                                <code>{p.adapterVersion}</code>
+                              </dd>
+                            </div>
+                            {p.checkedAt && (
+                              <div className="plugin-version-checked">
+                                <dt>最近检查</dt>
+                                <dd>
+                                  {new Date(p.checkedAt).toLocaleString()}
+                                </dd>
+                              </div>
+                            )}
+                          </dl>
+
+                          {p.updateInfo?.error && (
+                            <p
+                              className="plugin-feedback is-error"
+                              role="alert"
                             >
-                              修改显示名
-                            </button>
-                          ) : null}
-                          {m.services.length > 1 && (
-                            <select
-                              aria-label={m.label + "使用的服务"}
-                              value={m.service ?? ""}
-                              onChange={(e) =>
-                                void action("model", {
-                                  model: m.id,
-                                  enabled: m.enabled,
-                                  service: e.target.value,
-                                })
-                              }
-                            >
-                              <option disabled value="">
-                                选择服务
-                              </option>
-                              {m.services.map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {s.name}
-                                </option>
-                              ))}
-                            </select>
+                              更新检查失败：{p.updateInfo.error}
+                            </p>
+                          )}
+
+                          {p.updateInfo?.version && (
+                            <div className="plugin-update-banner">
+                              <div>
+                                <strong>
+                                  发现新版本 {p.updateInfo.version}
+                                </strong>
+                                {p.updateInfo.notes && (
+                                  <p>{p.updateInfo.notes}</p>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                className="console-primary plugin-btn-sm"
+                                onClick={() => {
+                                  void run(
+                                    async () => {
+                                      const preview = await call<Preview>(
+                                        base + "review",
+                                        {},
+                                      );
+                                      setPending({
+                                        sha256: p.updateInfo!.sha256,
+                                        notes: p.updateInfo!.notes,
+                                        preview,
+                                      });
+                                      closeDrawer();
+                                    },
+                                    "",
+                                    false,
+                                  );
+                                }}
+                              >
+                                更新到 {p.updateInfo.version}
+                              </button>
+                            </div>
+                          )}
+
+                          <form
+                            className="plugin-form"
+                            key={p.revision}
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              const f = new FormData(e.currentTarget),
+                                token = String(f.get("token") || "");
+                              void action(
+                                "source",
+                                {
+                                  url: f.get("url") || null,
+                                  ...(token ? { token } : {}),
+                                },
+                                "更新源已保存",
+                              );
+                            }}
+                          >
+                            <div className="plugin-field">
+                              <div className="plugin-field-head">
+                                <label htmlFor={`update-url-${p.id}`}>
+                                  更新地址
+                                </label>
+                                <span
+                                  className="plugin-field-tag"
+                                  data-tone="optional"
+                                >
+                                  可选
+                                </span>
+                              </div>
+                              <input
+                                id={`update-url-${p.id}`}
+                                type="url"
+                                name="url"
+                                placeholder="https://example.com/update.json"
+                                defaultValue={p.updateUrl || ""}
+                              />
+                              <p className="plugin-field-hint">
+                                填写远程更新清单地址后可在线检查更新；留空则仅支持手动导入插件包。
+                              </p>
+                            </div>
+                            <div className="plugin-field">
+                              <div className="plugin-field-head">
+                                <label htmlFor={`update-token-${p.id}`}>
+                                  只读令牌
+                                </label>
+                                <span
+                                  className="plugin-field-tag"
+                                  data-tone={
+                                    p.hasUpdateToken ? "ok" : "optional"
+                                  }
+                                >
+                                  {p.hasUpdateToken ? "已保存" : "可选"}
+                                </span>
+                              </div>
+                              <input
+                                id={`update-token-${p.id}`}
+                                type="password"
+                                name="token"
+                                autoComplete="off"
+                                placeholder={
+                                  p.hasUpdateToken
+                                    ? "已保存，留空沿用"
+                                    : "私有仓库可选填写"
+                                }
+                              />
+                              <p className="plugin-field-hint">
+                                仅用于访问私有更新源，加密保存且不回显。
+                              </p>
+                            </div>
+                            <div className="plugin-form-actions">
+                              <button type="submit">保存更新设置</button>
+                              {p.updateUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void run(
+                                      () => call(base + "check", {}),
+                                      "已完成更新检查",
+                                    )
+                                  }
+                                >
+                                  立即检查更新
+                                </button>
+                              )}
+                            </div>
+                          </form>
+
+                          {p.previousVersion && (
+                            <div className="plugin-rollback-box">
+                              <p className="plugin-section-desc">
+                                可回退到上一已安装版本{" "}
+                                <code>{p.previousVersion}</code>
+                                ；回退将恢复上一版插件包与对应配置快照，不影响已受理任务。
+                              </p>
+                              {confirmAction === "rollback" ? (
+                                <div className="plugin-confirm-inline">
+                                  <span>
+                                    确认回退到 {p.previousVersion}？
+                                  </span>
+                                  <div className="plugin-form-actions">
+                                    <button
+                                      type="button"
+                                      className="console-primary plugin-btn-sm"
+                                      onClick={() => {
+                                        setConfirmAction("");
+                                        void action(
+                                          "rollback",
+                                          {},
+                                          "已回到上一版",
+                                        );
+                                      }}
+                                    >
+                                      确认回退
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="plugin-btn-sm"
+                                      onClick={() => setConfirmAction("")}
+                                    >
+                                      取消
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="plugin-btn-sm"
+                                  onClick={() => setConfirmAction("rollback")}
+                                >
+                                  回到 {p.previousVersion}
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
-                      ))}
-                      <button onClick={() => navigate("prices")}>
-                        设置生成定价
-                      </button>
-                    </details>
-                    <details>
-                      <summary>更新设置</summary>
-                      <form
-                        className="plugin-form"
-                        key={p.revision}
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          const f = new FormData(e.currentTarget),
-                            token = String(f.get("token") || "");
-                          void action(
-                            "source",
-                            {
-                              url: f.get("url") || null,
-                              ...(token ? { token } : {}),
-                            },
-                            "更新源已保存",
-                          );
-                        }}
-                      >
-                        <label>
-                          更新地址
-                          <input
-                            type="url"
-                            name="url"
-                            defaultValue={p.updateUrl || ""}
-                          />
-                        </label>
-                        <label>
-                          只读令牌
-                          <input
-                            type="password"
-                            name="token"
-                            autoComplete="off"
-                            placeholder={
-                              p.hasUpdateToken ? "已保存" : undefined
-                            }
-                          />
-                        </label>
-                        <button>保存更新设置</button>
-                      </form>
-                      {p.checkedAt && (
-                        <p>
-                          {p.updateInfo?.error || "最近检查"} ·{" "}
-                          {new Date(p.checkedAt).toLocaleString()}
+                      </details>
+
+                      <section className="plugin-danger-zone">
+                        <h4>移除插件</h4>
+                        <p className="plugin-section-desc">
+                          {p.removing
+                            ? "已提交移除请求，当前仍有未完成任务；任务结束后将自动清除服务地址与密钥并完成卸载。"
+                            : `移除「${p.label}」将清除已保存的服务地址与密钥，并立即停止受理新任务；历史作品与账单记录会保留。`}
                         </p>
-                      )}
-                      {p.previousVersion && (
-                        <button
-                          onClick={() => {
-                            if (
-                              window.confirm("回到 " + p.previousVersion + "？")
-                            )
-                              void action("rollback", {}, "已回到上一版");
-                          }}
-                        >
-                          回到 {p.previousVersion}
-                        </button>
-                      )}
-                    </details>
-                    <button
-                      disabled={p.removing}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            "移除 " +
-                              p.label +
-                              " 并清除服务地址及密钥？历史作品和账单将保留。",
-                          )
-                        )
-                          void action(
-                            "state",
-                            { action: "remove" },
-                            "已提交移除请求",
-                          );
-                      }}
-                    >
-                      移除插件
-                    </button>
-                  </PluginDrawer>
-                )}
+                        {confirmAction === "remove" && !p.removing ? (
+                          <div className="plugin-confirm-inline is-danger">
+                            <span>
+                              确认移除「{p.label}」并清除其服务地址及密钥？
+                            </span>
+                            <div className="plugin-form-actions">
+                              <button
+                                type="button"
+                                className="plugin-btn-danger-solid plugin-btn-sm"
+                                onClick={() => {
+                                  setConfirmAction("");
+                                  void action(
+                                    "state",
+                                    { action: "remove" },
+                                    "已提交移除请求",
+                                  );
+                                }}
+                              >
+                                确认移除
+                              </button>
+                              <button
+                                type="button"
+                                className="plugin-btn-sm"
+                                onClick={() => setConfirmAction("")}
+                              >
+                                取消
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="plugin-btn-danger"
+                            disabled={p.removing}
+                            onClick={() => setConfirmAction("remove")}
+                          >
+                            {p.removing ? "等待任务结束后移除…" : "移除插件"}
+                          </button>
+                        )}
+                      </section>
+                    </PluginDrawer>
+                  );
+                })()}
               </article>
             );
           })}
