@@ -10,6 +10,7 @@ import { ReferenceMedia } from "./AssetMedia";
 import { Icon } from "./Icon";
 import {
   activeReferences,
+  changeCreation,
   changeFlow,
   changeH3Mode,
   chooseModel,
@@ -26,6 +27,7 @@ import {
   packReferences,
   referenceAsset,
   referenceLabel,
+  seedError,
   selectedModel,
   standardSteps,
   type Draft,
@@ -235,11 +237,9 @@ function Advanced({
         data-act="save-seed"
         onClick={() => {
           const value = seed.current!.value.trim();
-          if (
-            value &&
-            (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
-          ) {
-            notify("请输入有效的非负整数");
+          const error = seedError(modelForm(state, draft), value);
+          if (error) {
+            notify(error);
             return;
           }
           save({ seed: value, fast_mode: fast, sampling_steps: steps }, false);
@@ -315,25 +315,8 @@ export function ComposerMenuContents({
               selected={draft.kind === value}
               pick={() => {
                 if (uploading) return;
-                const saved = value === "image" && session.suspendedImageDraft;
-                if (saved) {
-                  update({
-                    ...saved,
-                    suspendedImageDraft: null,
-                    refs: saved.refs.filter((id) => referenceAsset(state, id)),
-                    parent: state.jobs.some((job) => job.id === saved.parent)
-                      ? saved.parent
-                      : null,
-                  });
-                } else {
-                  const changed = ensureCreation(state, draft, value);
-                  update({
-                    ...session,
-                    draft: changed,
-                    parent: null,
-                    retainedSeed: null,
-                  });
-                }
+                const next = changeCreation(state, session, value);
+                if (next !== session) update(next);
                 close(true);
               }}
             />
@@ -809,17 +792,4 @@ export function ComposerMenuContents({
       );
     }
   }
-}
-
-function ensureCreation(state: StudioState, draft: Draft, kind: Draft["kind"]) {
-  const next = { ...draft, kind };
-  const available = Object.keys(modelsForKind(state, kind)).filter((id) =>
-    modelAvailable(state, id),
-  );
-  return normalizeParams(
-    state,
-    available.includes(selectedModel(next))
-      ? next
-      : chooseModel(next, available[0] || ""),
-  );
 }

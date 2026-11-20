@@ -49,6 +49,39 @@ export function openDialogFor(element: HTMLElement) {
   return dialog?.open ? dialog : null;
 }
 
+function stopDialogMedia(container: ParentNode | null) {
+  if (!container) return;
+  for (const media of container.querySelectorAll<HTMLMediaElement>(
+    "video, audio",
+  )) {
+    media.pause();
+    try {
+      media.currentTime = 0;
+    } catch {
+      // Ignore when media is not seekable yet.
+    }
+  }
+}
+
+function PreviewMedia({
+  id,
+  mediaKind,
+}: {
+  id: string;
+  mediaKind: Asset["kind"];
+}) {
+  const host = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = host.current;
+    return () => stopDialogMedia(element);
+  }, []);
+  return (
+    <div className="h3-media-preview" ref={host}>
+      <ReferenceMedia id={id} kind={mediaKind} controls />
+    </div>
+  );
+}
+
 export function AssetDialog({
   dialog,
   admin,
@@ -78,17 +111,29 @@ export function AssetDialog({
   }, [admin]);
 
   useLayoutEffect(() => {
+    const element = ref.current;
     shownDialog.current = dialog;
     confirmationPending.current = false;
     if (dialog) {
       setPrevious(dialog);
       setConfirming(false);
       if (dialog.content.kind !== "preview")
-        ref.current!.setAttribute("aria-labelledby", "modal-heading");
-      if (!ref.current!.open) ref.current!.showModal();
-    } else if (ref.current!.open) ref.current!.close();
-    return () => cancelAnimationFrame(closeFrame.current);
+        element!.setAttribute("aria-labelledby", "modal-heading");
+      if (!element!.open) element!.showModal();
+    } else {
+      stopDialogMedia(element);
+      if (element!.open) element!.close();
+    }
+    return () => {
+      cancelAnimationFrame(closeFrame.current);
+      if (dialog?.content.kind === "preview") stopDialogMedia(element);
+    };
   }, [dialog]);
+
+  function closeDialog() {
+    stopDialogMedia(ref.current);
+    ref.current?.close();
+  }
 
   async function confirm() {
     if (!dialog || content?.kind !== "confirm" || confirmationPending.current)
@@ -97,7 +142,7 @@ export function AssetDialog({
     setConfirming(true);
     try {
       await content.run();
-      if (shownDialog.current === dialog) ref.current?.close();
+      if (shownDialog.current === dialog) closeDialog();
     } catch (error) {
       notify((error as Error).message);
       if (shownDialog.current === dialog) {
@@ -116,7 +161,9 @@ export function AssetDialog({
           : undefined
       }
       ref={ref}
+      onCancel={() => stopDialogMedia(ref.current)}
       onClose={() => {
+        stopDialogMedia(ref.current);
         closeFrame.current = requestAnimationFrame(() => {
           const opener = dialog?.opener;
           const target =
@@ -136,7 +183,7 @@ export function AssetDialog({
           event.clientY < bounds.top ||
           event.clientY > bounds.bottom
         )
-          event.currentTarget.close();
+          closeDialog();
       }}
     >
       <div id="dialog-body">
@@ -162,19 +209,17 @@ export function AssetDialog({
             </div>
           </>
         )}
-        {content?.kind === "preview" && (
+        {dialog?.content.kind === "preview" && (
           <>
-            <div className="h3-media-preview">
-              <ReferenceMedia
-                id={content.id}
-                kind={content.mediaKind}
-                controls
-              />
-            </div>
+            <PreviewMedia
+              key={dialog.content.id}
+              id={dialog.content.id}
+              mediaKind={dialog.content.mediaKind}
+            />
             <button
               className="quiet-button"
               data-act="close"
-              onClick={() => ref.current!.close()}
+              onClick={closeDialog}
             >
               关闭
             </button>
@@ -196,7 +241,7 @@ export function AssetDialog({
               <button
                 id="back"
                 className="ghost"
-                onClick={() => ref.current!.close()}
+                onClick={closeDialog}
               >
                 取消
               </button>
@@ -208,7 +253,7 @@ export function AssetDialog({
         id="close-modal"
         type="button"
         aria-label="关闭对话框"
-        onClick={() => ref.current!.close()}
+        onClick={closeDialog}
       >
         <Icon name="close" />
       </button>

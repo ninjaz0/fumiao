@@ -172,7 +172,11 @@ export function Composer({
   const files = useRef<HTMLInputElement>(null);
   const savedRange = useRef<Range | null>(null);
   const frameSlot = useRef<FrameSlot | undefined>(undefined);
-  const paintedForFrames = useRef<boolean | null>(null);
+  const painted = useRef<{
+    plain: boolean;
+    prompt: string;
+    serialized: string;
+  } | null>(null);
 
   const [dragging, setDragging] = useState(false);
   const model = selectedModel(draft);
@@ -184,6 +188,7 @@ export function Composer({
   const flow = flowSpec(state, model);
   const fixed = !!flow && !flow.family;
   const frameMode = frames(draft);
+  const plainPrompt = frameMode || audio;
   const frameOptions = h3Options(draft.h3);
   const references = packReferences(session);
   const issue = referenceIssue(state, session) || flowIssue(state, session);
@@ -249,15 +254,24 @@ export function Composer({
     : "";
 
   useLayoutEffect(() => {
+    const current = readPrompt(prompt.current!, state, refs, plainPrompt);
+    const samePainted =
+      painted.current?.plain === plainPrompt &&
+      painted.current?.prompt === draft.prompt &&
+      painted.current?.serialized === current;
     if (
-      paintedForFrames.current !== frameMode ||
-      readPrompt(prompt.current!, state, refs) !== draft.prompt
+      painted.current?.plain !== plainPrompt ||
+      (current !== draft.prompt && !samePainted)
     ) {
-      paintPrompt(prompt.current!, state, refs, draft.prompt, frameMode);
+      paintPrompt(prompt.current!, state, refs, draft.prompt, plainPrompt);
       savedRange.current = null;
-      paintedForFrames.current = frameMode;
+      painted.current = {
+        plain: plainPrompt,
+        prompt: draft.prompt,
+        serialized: readPrompt(prompt.current!, state, refs, plainPrompt),
+      };
     }
-  }, [state, refs, draft.prompt, frameMode]);
+  }, [state, refs, draft.prompt, plainPrompt]);
 
   useLayoutEffect(() => {
     const composer = box.current!;
@@ -284,7 +298,7 @@ export function Composer({
     savedRange.current = rememberSelection(prompt.current!, savedRange.current);
   }
   function savePrompt() {
-    change(readPrompt(prompt.current!, state, refs));
+    change(readPrompt(prompt.current!, state, refs, plainPrompt));
     remember();
   }
   useImperativeHandle(editor, () => ({
@@ -295,14 +309,14 @@ export function Composer({
         "[data-refid]",
       )) {
         const id = chip.dataset.refid!;
-        if (next.includes(id))
+        if (!plainPrompt && next.includes(id))
           chip.lastElementChild!.textContent = referenceLabel(state, id, next);
         else chip.remove();
       }
-      return readPrompt(element, state, next);
+      return readPrompt(element, state, next, plainPrompt);
     },
     insert(id) {
-      if (!refs.includes(id)) return;
+      if (plainPrompt || !refs.includes(id)) return;
       const range = savedRange.current;
       if (
         range?.collapsed &&

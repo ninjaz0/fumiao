@@ -167,7 +167,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     ((before: StudioState, after: StudioState) => void) | null
   >(null);
   const assetScroll = useRef(0);
-  const closeDetailOnDismiss = useRef(false);
   const scrollAfterRender = useRef<(() => void) | null>(null);
   const animateAfterRender = useRef<(() => void) | null>(null);
 
@@ -1046,10 +1045,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         if (popover.current?.contains(event.target as Node))
           event.preventDefault();
         closeMenu(true);
-      } else if (detail) {
-        if (modalOpen) closeDetailOnDismiss.current = true;
-        else closeDetail();
-      } else if (referencePicking && !modalOpen) finishPicking();
+      } else if (detail && !modalOpen) closeDetail();
+      else if (referencePicking && !modalOpen) finishPicking();
       else if (library.selecting && !modalOpen) library.reset();
     }
     document.addEventListener("keydown", escape);
@@ -1466,13 +1463,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         key={state?.me.id}
         dialog={dialog}
         admin={state?.me.role === "admin"}
-        onClose={() => {
-          setDialog(null);
-          if (closeDetailOnDismiss.current) {
-            closeDetailOnDismiss.current = false;
-            closeDetail();
-          }
-        }}
+        onClose={() => setDialog(null)}
         notify={notify}
         state={state}
         session={session}
