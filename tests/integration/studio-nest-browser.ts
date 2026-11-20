@@ -68,6 +68,59 @@ async function dragPastImage(page: Page) {
   assert.ok(await original.evaluate((img) => img.isConnected));
 }
 
+async function checkPackRefreshRace(page: Page, studio: string, state: StudioState) {
+  const [direct, packed] = state.assets;
+  assert.ok(direct && packed);
+  const pack = { id: "test-pack", revision: 1, media: [packed.id], name: "测试包" };
+  const key = `fm-draft-${state.me.id}-workspace-${state.workspace_id}`;
+  await page.addInitScript(({ key, pack, direct }) => {
+    sessionStorage.setItem(key, JSON.stringify({
+      draft: { kind: "image", packs: [pack] }, refs: [direct],
+    }));
+  }, { key, pack, direct: direct.id });
+
+  let stateReads = 0, packReads = 0;
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/state", (route) => {
+    const read = ++stateReads;
+    return route.fulfill({ json: {
+      ...state,
+      me: { ...state.me, nickname: read >= 3 ? "刷新已完成" : "刷新前" },
+      assets: read === 2 ? state.assets.filter((a) => a.id !== direct.id) : state.assets,
+    } });
+  });
+  await page.route("**/api/asset-packs", async (route) => {
+    if (++packReads === 2) {
+      await delayed;
+      await route.fulfill({ status: 503, json: { detail: "素材包暂不可用" } });
+    } else {
+      await route.fulfill({ json: { packs: [pack] } });
+    }
+  });
+  try {
+    await page.goto(studio);
+    const refs = page.locator(".reference-deck-count");
+    await expect(refs).toHaveText("2");
+    await expect(page.locator(".account")).toHaveAttribute("title", "刷新已完成", {
+      timeout: apiTimeout,
+    });
+    const failed = page.waitForResponse((r) =>
+      new URL(r.url()).pathname === "/api/asset-packs" && r.status() === 503,
+    );
+    release();
+    await (await failed).finished();
+    // Type again so the mounted composer persists the draft after the late response.
+    await page.locator("#prompt").fill("保留新引用");
+    await expect(refs).toHaveText("2");
+    assert.deepEqual(await page.evaluate((key) =>
+      JSON.parse(sessionStorage.getItem(key)!).refs, key), [direct.id]);
+  } finally {
+    release();
+    await page.close();
+  }
+}
+
 export async function studioBrowser(
   platform: Platform,
   web: string,
@@ -374,6 +427,7 @@ export async function studioBrowser(
     }
     const savedCanvas = await document();
     const before = await state();
+    await checkPackRefreshRace(await context.newPage(), studio, before);
     const jobEntries = before.credit_history.filter(
       (entry) => entry.job === jobId,
     );

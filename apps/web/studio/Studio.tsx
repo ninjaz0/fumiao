@@ -265,7 +265,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
               String(next.workspace_id),
               "/api/asset-packs",
             );
-            if (version !== stateRead.current || leaving.current) return;
             if (Array.isArray(result?.packs)) {
               livePacks = new Map(
                 result.packs.map((pack) => [pack.id, pack]),
@@ -274,6 +273,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           } catch {
             // Keep existing pack references when /api/asset-packs fails.
           }
+          if (version !== stateRead.current || leaving.current) return;
         }
         const priorDraft = currentDraft.current || initialDraft;
         const prevSpace = previous ?? next;
