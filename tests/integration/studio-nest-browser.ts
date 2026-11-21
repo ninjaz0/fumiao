@@ -388,6 +388,34 @@ export async function studioBrowser(
       imagePrompt,
     );
     await nav("home");
+
+    const audioScript = "这段语音草稿还没有发送。";
+    const voiceDescription = "温柔自然，语速舒缓";
+    const creation = page.locator('.composer [data-menu="creation"]');
+    const voiceSettings = page.locator('.composer [data-menu="duration"]');
+    const voice = page.getByRole("textbox", { name: "音色描述" });
+    const prompt = page.locator("#prompt");
+    const switchToAudio = async () => {
+      await creation.click();
+      await page.getByRole("option", { name: "语音生成" }).click();
+    };
+    await switchToAudio();
+    await prompt.fill(audioScript);
+    await voiceSettings.click();
+    await voice.fill(voiceDescription);
+    await page.getByRole("button", { name: "确定", exact: true }).click();
+    await page.locator(`#job-${jobId} .asset-preview`).click();
+    await page.getByRole("button", { name: "生成视频", exact: true }).click();
+    await expect(creation).toHaveText("视频生成");
+    await expect(prompt).toBeEmpty();
+    await switchToAudio();
+    await voiceSettings.click();
+    await expect(voice).toHaveValue(voiceDescription);
+    await expect(prompt).toHaveText(audioScript);
+    await page.keyboard.press("Escape");
+    await creation.click();
+    await page.getByRole("option", { name: "图片生成" }).click();
+
     await page.locator("#prompt").fill(draft);
 
     const canvas = await context.request.post("/api/canvases", {

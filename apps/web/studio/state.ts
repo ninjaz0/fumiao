@@ -273,6 +273,11 @@ function draftSnapshot(session: DraftSession): DraftSnapshot {
     submitId: session.submitId,
   };
 }
+export function suspendAudioDraft(session: DraftSession): DraftSnapshot | null {
+  return session.draft.kind === "audio"
+    ? draftSnapshot(session)
+    : session.suspendedAudioDraft;
+}
 function readSnapshot(state: StudioState, value: unknown): DraftSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Partial<DraftSnapshot>;
@@ -1335,11 +1340,7 @@ export function loadJob(
     retainedSeed: !state.model_forms?.[job.model]?.fields.seed
       ? null
       : (job.seed ?? null),
-    suspendedAudioDraft: audio
-      ? null
-      : wasAudio
-        ? draftSnapshot(session)
-        : session.suspendedAudioDraft,
+    suspendedAudioDraft: audio ? null : suspendAudioDraft(session),
     suspendedMediaDraft: audio
       ? wasAudio
         ? session.suspendedMediaDraft
