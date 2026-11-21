@@ -74,6 +74,7 @@ import {
   removeDraftPack,
   resultTab,
   selectedModel,
+  suspendAudioDraft,
   syncDraftReferences,
   quote,
   readDraft,
@@ -829,6 +830,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       refs: [job.result],
       parent: null,
       retainedSeed: null,
+      suspendedAudioDraft: suspendAudioDraft(previous),
+      suspendedMediaDraft: null,
     });
     openHomeComposer();
   }
