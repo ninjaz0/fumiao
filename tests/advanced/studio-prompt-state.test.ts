@@ -11,6 +11,7 @@ import {
   addImages,
   changeCreation,
   checkImages,
+  generationRequest,
   H3,
   hasDraftPacks,
   loadJob,
@@ -537,7 +538,10 @@ test("deleted assets are removed from restored H3 frames and saved references", 
   const refreshedState = { ...state, assets: [] };
   const refreshed = pruneDraftAssets(refreshedState, snapshot);
   assert.deepEqual(activeReferences(refreshed), []);
-  assert.equal(referenceIssue(refreshedState, refreshed), "请添加首帧或尾帧图片");
+  assert.equal(referenceIssue(refreshedState, refreshed), "");
+  const request = generationRequest(refreshedState, refreshed);
+  for (const id of ["img1", "img2", "vid1", "aud1"])
+    assert.equal(JSON.stringify(request.body).includes(JSON.stringify(id)), false);
   assert.equal(referenceIssue(state, snapshot), "");
   const restored = readDraft({
     ...state,

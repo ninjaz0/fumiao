@@ -147,7 +147,11 @@ async function checkDeletedH3Frame(page: Page, studio: string, state: StudioStat
     deleted = true;
     await expect(frame).toHaveAttribute("data-act", "h3-upload", { timeout: apiTimeout });
     await expect(frame).toHaveAttribute("data-key", "");
-    await expect(page.getByRole("button", { name: "生成", exact: true })).toBeDisabled();
+    await expect(frame.locator("img")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(({ key, id }) => {
+      const draft = sessionStorage.getItem(key);
+      return draft !== null && !draft.includes(JSON.stringify(id));
+    }, { key, id: image.id })).toBe(true);
   } finally {
     await page.close();
   }

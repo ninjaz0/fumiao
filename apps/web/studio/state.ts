@@ -1271,8 +1271,6 @@ export function referenceIssue(
       : "";
   }
   const h3 = job ? jobH3(job) : h3Options(draft.h3);
-  if (h3.mode === "frames" && !h3.first_frame && !h3.last_frame)
-    return "请添加首帧或尾帧图片";
   if (h3.mode === "frames")
     return frameRatiosDiffer(
       referenceAsset(state, h3.first_frame),
