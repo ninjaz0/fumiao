@@ -230,7 +230,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }, []);
 
   const closeMenu = useCallback((focus = false) => {
-    if (focus) anchor.current?.focus();
+    if (focus || popover.current?.contains(document.activeElement))
+      anchor.current?.focus({ preventScroll: true });
     anchor.current = null;
     setMenuShown(false);
     clearTimeout(menuTimer.current);
@@ -478,14 +479,18 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (!menu || menuHidden || !anchor.current) return;
     positionMenu();
     const element = popover.current;
-    if (["workspaces", "duration", "image-model"].includes(menu)) {
-      const option =
-        element?.querySelector<HTMLElement>(
-          '[aria-selected="true"]:not(:disabled)',
-        ) ??
-        element?.querySelector<HTMLElement>(
-          '[role="option"]:not(:disabled):not([hidden])',
+    if (isComposerMenu(menu) || menu === "workspaces") {
+      const visible = (selector: string) =>
+        Array.from(element?.querySelectorAll<HTMLElement>(selector) ?? []).find(
+          (control) => control.getClientRects().length > 0,
         );
+      const option =
+        visible(
+          '[aria-selected="true"]:not(:disabled), [role="radio"][aria-checked="true"]:not(:disabled)',
+        ) ??
+        visible(
+          'button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex="0"], a[href]',
+        ) ?? element;
       option?.focus({ preventScroll: true });
     }
     const frame = requestAnimationFrame(() => setMenuShown(true));
@@ -1624,6 +1629,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       <div
         id="popover"
         ref={popover}
+        tabIndex={-1}
         hidden={menuHidden}
         className={
           menu

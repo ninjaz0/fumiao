@@ -329,10 +329,43 @@ export async function studioBrowser(
     assert.ok(Number.isSafeInteger(priceRevision));
     await expect(page.locator("#toast")).toHaveText("价格已保存");
     await nav("home");
+    const composerCreation = page.locator('.composer [data-menu="creation"]');
+    await composerCreation.focus();
+    await page.keyboard.press("Enter");
+    const composerPopover = page.locator("#popover");
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(composerPopover.getByRole("option", { name: "图片生成" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(composerPopover.getByRole("option", { name: "语音生成" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(composerPopover).toBeHidden();
+    await expect(composerCreation).toBeFocused();
+    for (const selector of [
+      '[data-menu="h3-mode"]',
+      '[data-menu="format"]',
+      '[data-menu="advanced"]',
+      '[data-act="reference"]',
+      '[data-menu="mention"]',
+      '[data-menu="image-model"]',
+      '[data-menu="duration"]',
+    ]) {
+      const trigger = page.locator(`.composer ${selector}`);
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => composerPopover.evaluate(
+        (element) => element.contains(window.document.activeElement),
+      )).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect(composerPopover).toBeHidden();
+      await expect(trigger).toBeFocused();
+    }
+    console.log("Verified composer popover focus, arrow/Tab navigation and Escape restoration");
     await page.locator('.composer [data-menu="creation"]').click();
     await page
       .locator('#popover [data-act="creation"][data-value="image"]')
       .click();
+    await expect(composerCreation).toBeFocused();
     await page.locator("#prompt").fill(imagePrompt);
     await expect(page.locator(".composer-credit")).toHaveAttribute(
       "aria-label",
