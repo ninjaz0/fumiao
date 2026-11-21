@@ -1031,6 +1031,21 @@ function frameRatiosDiffer(first?: Asset, last?: Asset) {
     Math.abs(Math.log(first.w / first.h / (last.w / last.h))) > 0.035
   );
 }
+export function submittedDraft(session: DraftSession): DraftSession {
+  const { h3ReferenceDraft, ...values } = session.draft;
+  return {
+    ...session,
+    refs: [],
+    parent: null,
+    retainedSeed: null,
+    draft: {
+      ...values,
+      prompt: "",
+      packs: [],
+      h3: values.h3 && { ...emptyH3, mode: values.h3.mode },
+    },
+  };
+}
 export function changeH3Mode(
   state: StudioState,
   session: DraftSession,
