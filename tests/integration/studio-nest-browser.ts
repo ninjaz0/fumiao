@@ -395,10 +395,13 @@ export async function studioBrowser(
     await page.keyboard.press("Escape");
     console.log("Verified typed mention keeps prompt focus, continued typing and Escape restoration");
     await page.locator('.composer [data-menu="creation"]').click();
+    await page.evaluate(() => window.document.dispatchEvent(new Event("scroll")));
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
     await page
       .locator('#popover [data-act="creation"][data-value="image"]')
       .click();
     await expect(composerCreation).toBeFocused();
+    console.log("Verified creation menu survives queued scroll and restores live trigger focus after selection");
     await page.locator("#prompt").fill(imagePrompt);
     await expect(page.locator(".composer-credit")).toHaveAttribute(
       "aria-label",
@@ -443,6 +446,9 @@ export async function studioBrowser(
     assert.deepEqual(await media.body(), bytes);
     assert.deepEqual(providerErrors, []);
     assert.deepEqual(providerPrompts, [imagePrompt]);
+    await expect(page.locator(`#job-${jobId} .asset-preview img`)).toHaveAttribute(
+      "src", "/media/" + result, { timeout: apiTimeout },
+    );
     await page
       .locator(`#job-${jobId} .asset-preview`)
       .click({ timeout: apiTimeout });

@@ -504,18 +504,18 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       if (event.type === "pointerdown") editor.current?.remember();
       if (
         !element?.contains(target) &&
-        (event.type === "scroll" || !anchor.current?.contains(target))
+        !anchor.current?.contains(target)
       )
         closeMenu();
     };
     window.addEventListener("resize", positionMenu);
     document.addEventListener("pointerdown", outside);
-    document.addEventListener("scroll", outside, true);
+    document.addEventListener("scroll", positionMenu, true);
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", positionMenu);
       document.removeEventListener("pointerdown", outside);
-      document.removeEventListener("scroll", outside, true);
+      document.removeEventListener("scroll", positionMenu, true);
     };
   }, [menu, menuHidden, closeMenu, positionMenu]);
 
