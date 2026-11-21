@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
 import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
 import { OriginalStateRecords } from "../../packages/original-api/src/state-records.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
-import { seedStudioAssets } from "../../scripts/seed-studio-assets.js";
 import { selectAllAssets } from "../../apps/web/studio/library-selection.js";
 
 test("205 seeded Studio assets download with capped selection", async () => {
@@ -18,7 +18,25 @@ test("205 seeded Studio assets download with capped selection", async () => {
     await app.listen(0, "127.0.0.1");
     const origin = await app.getUrl();
     const cookie = "fm_session=" + token;
-    const visible = await seedStudioAssets(origin, cookie, "1");
+    const bytes = await sharp({
+      create: { width: 17, height: 13, channels: 3, background: "#7a3f9d" },
+    })
+      .png()
+      .toBuffer();
+    const visible: string[] = [];
+    for (let i = 0; i < 205; i++) {
+      const response = await fetch(origin + "/api/assets", {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          "X-Workspace-Id": "1",
+          "Content-Type": "application/octet-stream",
+        },
+        body: new Uint8Array(bytes),
+      });
+      assert.equal(response.status, 200);
+      visible.push("asset:" + (await response.json()).id);
+    }
     const workspace = (
       await f.db.query("SELECT id FROM workspaces WHERE kind='team'")
     ).rows[0];
