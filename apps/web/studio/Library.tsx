@@ -17,8 +17,6 @@ import {
 import { JobCard, kindLabel } from "./History";
 import { Icon } from "./Icon";
 import { mediaURL, type Asset, type Job, type StudioState } from "./state";
-import { MAX_ASSET_SELECTION } from "../../../packages/original-api/src/asset-limits";
-import { allAssetsSelected, selectAllAssets } from "./library-selection";
 
 export type LibraryTab = "videos" | "images" | "audio";
 export type LibraryScope = "history" | "favorites";
@@ -107,7 +105,7 @@ export function useLibrary(
   const favorites = state?.favorites ?? [];
   const keys = selected.filter((key) => records.has(key));
   const count = visible.filter((key) => keys.includes(key)).length;
-  const all = allAssetsSelected(keys, visible);
+  const all = count > 0 && count === visible.length;
 
   useEffect(() => {
     setSelected((current) => {
@@ -130,17 +128,22 @@ export function useLibrary(
   function toggle(key: string) {
     if (!records.has(key) || activity) return;
     const checked = keys.includes(key);
-    if (!checked && keys.length >= MAX_ASSET_SELECTION) {
-      notify(`一次最多选择 ${MAX_ASSET_SELECTION} 项`);
+    if (!checked && keys.length >= 200) {
+      notify("一次最多选择 200 项");
       return;
     }
     setSelecting(true);
     setSelected(checked ? keys.filter((id) => id !== key) : [...keys, key]);
   }
   function selectAll() {
-    if (!all && new Set([...keys, ...visible]).size > MAX_ASSET_SELECTION)
-      notify(`一次最多选择 ${MAX_ASSET_SELECTION} 项，已选中 ${MAX_ASSET_SELECTION} 项`);
-    setSelected(selectAllAssets(keys, visible));
+    if (!all && visible.length > 200)
+      notify("一次最多选择 200 项，已选中前 200 项");
+    const first = visible.slice(0, 200);
+    setSelected(
+      all
+        ? keys.filter((key) => !first.includes(key))
+        : [...new Set([...keys, ...first])],
+    );
   }
 
   return {
