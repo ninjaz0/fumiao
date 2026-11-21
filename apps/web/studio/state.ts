@@ -389,17 +389,22 @@ export function pruneDraftAssets(
     const first = h3?.first_frame;
     const last = h3?.last_frame;
     const videoAudio = h3?.video_audio?.filter(exists);
-    const refs = saved?.refs.filter(exists);
-    const savedAudio = saved?.video_audio.filter(exists);
+    let nextSaved = saved;
+    if (saved) {
+      const refs = saved.refs.filter(exists);
+      const savedAudio = saved.video_audio.filter(exists);
+      if (
+        refs.length !== saved.refs.length ||
+        savedAudio.length !== saved.video_audio.length
+      )
+        nextSaved = { ...saved, refs, video_audio: savedAudio };
+    }
     const changedH3 =
       h3 &&
       ((first && !exists(first)) ||
         (last && !exists(last)) ||
         videoAudio?.length !== h3.video_audio?.length);
-    const changedSaved =
-      saved &&
-      (refs!.length !== saved.refs.length ||
-        savedAudio!.length !== saved.video_audio.length);
+    const changedSaved = nextSaved !== saved;
     if (!changedH3 && !changedSaved) return snapshot;
     return {
       ...snapshot,
@@ -415,15 +420,7 @@ export function pruneDraftAssets(
               },
             }
           : {}),
-        ...(changedSaved
-          ? {
-              h3ReferenceDraft: {
-                ...saved,
-                refs: refs!,
-                video_audio: savedAudio!,
-              },
-            }
-          : {}),
+        ...(changedSaved ? { h3ReferenceDraft: nextSaved } : {}),
       },
     };
   }
