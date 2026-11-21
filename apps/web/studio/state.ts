@@ -242,6 +242,7 @@ const initialDraft = {
 export type Draft = typeof initialDraft & {
   params?: FormValues;
   h3?: H3Options;
+  suspendedH3Frames?: H3Options;
   packs?: Pack[];
   flowSourceJob?: number | null;
   h3ReferenceDraft?: {
@@ -468,10 +469,17 @@ export function seedError(form: ModelForm | undefined, raw: string): string {
 export function normalizeParams(state: StudioState, draft: Draft): Draft {
   const form = modelForm(state, draft);
   const flow = flowSpec(state, selectedModel(draft));
+  const supportsH3 = draft.kind === "video" && form?.referenceModes && !flow;
+  const suspendedH3Frames = supportsH3
+    ? undefined
+    : frames(draft)
+      ? draft.h3
+      : draft.suspendedH3Frames;
   if (flow) {
     return {
       ...draft,
       h3: undefined,
+      suspendedH3Frames,
       params: undefined,
       ratio: flow.ratio || draft.ratio,
       seconds: String(flow.seconds ?? draft.seconds),
@@ -489,7 +497,8 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
   const seed = typeof draft.seed === "string" ? draft.seed.trim() : "";
   return {
     ...draft,
-    h3: form?.referenceModes ? h3Options(draft.h3) : undefined,
+    h3: supportsH3 ? h3Options(draft.suspendedH3Frames ?? draft.h3) : undefined,
+    suspendedH3Frames,
     flowSourceJob: null,
     params: form?.parameterObject ? values : undefined,
     ratio: String(values.ratio ?? draft.ratio),
@@ -1433,7 +1442,7 @@ export function generationRequest(
           : draft.imageQuality,
       },
     };
-  const { h3, ...values } = draft;
+  const { h3, suspendedH3Frames, ...values } = draft;
   return {
     kind,
     path: "/api/jobs",
