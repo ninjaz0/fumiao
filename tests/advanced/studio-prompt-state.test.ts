@@ -13,6 +13,7 @@ import {
   checkImages,
   H3,
   hasDraftPacks,
+  imageToVideoDraft,
   loadJob,
   mergeAssetPackAssets,
   modelForm,
@@ -189,6 +190,70 @@ function installFakeEnv() {
     },
   };
 }
+
+test("image to video assigns the first frame in frame mode", (t) => {
+  t.after(installFakeEnv().restore);
+  const state = makeState();
+  const previous = readDraft(state);
+  previous.draft.kind = "video";
+  previous.draft.videoModel = H3;
+  previous.draft.h3 = { mode: "frames" };
+  const next = imageToVideoDraft(state, previous, "img1");
+  assert.equal(next.draft.h3?.first_frame, "img1");
+  assert.deepEqual(next.refs, []);
+  assert.equal(previous.draft.h3.first_frame, undefined);
+  previous.draft.h3 = {
+    mode: "frames",
+    first_frame: "img2",
+    last_frame: "img2",
+  };
+  const replacement = imageToVideoDraft(state, previous, "img1");
+  assert.equal(replacement.draft.h3?.first_frame, "img1");
+  assert.equal(replacement.draft.h3?.last_frame, "img2");
+});
+
+test("image to video retains references outside frame mode", (t) => {
+  t.after(installFakeEnv().restore);
+  const state = makeState();
+  const previous = readDraft(state);
+  previous.draft.h3 = { mode: "reference" };
+  const next = imageToVideoDraft(state, previous, "img1");
+  assert.deepEqual(next.refs, ["img1"]);
+  assert.equal(next.draft.kind, "video");
+  assert.equal(next.draft.prompt, "");
+  assert.equal(next.parent, null);
+  assert.equal(next.retainedSeed, null);
+});
+
+test("image to video preserves the unsent audio script and clears stale media", (t) => {
+  t.after(installFakeEnv().restore);
+  const state = makeState();
+  const previous = changeCreation(state, readDraft(state), "audio");
+  previous.draft.prompt = "这段语音草稿还没有发送。";
+  previous.draft.voiceDescription = "温柔自然，语速舒缓";
+  const next = imageToVideoDraft(state, previous, "img1");
+  assert.equal(next.suspendedAudioDraft?.draft.prompt, previous.draft.prompt);
+  assert.equal(next.suspendedMediaDraft, null);
+  assert.equal(next.draft.prompt, "");
+  const restored = changeCreation(state, next, "audio");
+  assert.equal(restored.draft.prompt, previous.draft.prompt);
+  assert.equal(restored.draft.voiceDescription, previous.draft.voiceDescription);
+  const again = imageToVideoDraft(state, next, "img2");
+  assert.deepEqual(again.suspendedAudioDraft, next.suspendedAudioDraft);
+});
+
+test("image to video validates frame images", (t) => {
+  t.after(installFakeEnv().restore);
+  const state = makeState();
+  const previous = readDraft(state);
+  previous.draft.kind = "video";
+  previous.draft.videoModel = H3;
+  previous.draft.h3 = { mode: "frames" };
+  assert.throws(() => imageToVideoDraft(state, previous, "vid1"), /只接收图片/);
+  previous.draft.h3.last_frame = "img2";
+  state.assets.find((asset) => asset.id === "img2")!.w = 200;
+  assert.throws(() => imageToVideoDraft(state, previous, "img1"), /比例相同/);
+});
 
 function makeState(overrides: Partial<StudioState> = {}): StudioState {
   return {

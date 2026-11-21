@@ -62,6 +62,7 @@ import {
   h3Options,
   hasDraftPacks,
   isH3,
+  imageToVideoDraft,
   loadJob,
   modelAvailable,
   normalizeParams,
@@ -74,7 +75,6 @@ import {
   removeDraftPack,
   resultTab,
   selectedModel,
-  suspendAudioDraft,
   syncDraftReferences,
   quote,
   readDraft,
@@ -816,24 +816,12 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     const job = space?.jobs.find((item) => item.id === id);
     if (!space || !previous || !job?.result || busy.current.has("upload"))
       return;
-    const draft = {
-      ...previous.draft,
-      kind: "video" as const,
-      prompt: "",
-      quality: "480",
-      seconds: "5",
-      seed: "",
-    };
-    updateDraft({
-      ...previous,
-      draft: normalizeParams(space, ensureModel(space, draft)),
-      refs: [job.result],
-      parent: null,
-      retainedSeed: null,
-      suspendedAudioDraft: suspendAudioDraft(previous),
-      suspendedMediaDraft: null,
-    });
-    openHomeComposer();
+    try {
+      updateDraft(imageToVideoDraft(space, previous, job.result));
+      openHomeComposer();
+    } catch (error) {
+      notify((error as Error).message);
+    }
   }
 
   function showDialog(
