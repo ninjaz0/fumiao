@@ -544,6 +544,12 @@ test("switching away from H3 keeps both frame slots for the return to H3", (t) =
   assert.deepEqual(restored.draft.h3, expected);
   assert.deepEqual(activeReferences(restored), ["img1", "img2"]);
   assert.equal(restored.draft.prompt, "科幻街景");
+
+  // Removing the last frame while Muse is active must not restore its stale ID.
+  state.assets = state.assets.filter(({ id }) => id !== "img2");
+  const afterDeletion = select(readDraft(state), H3);
+  assert.deepEqual(afterDeletion.draft.h3, { ...expected, last_frame: null });
+  assert.deepEqual(activeReferences(afterDeletion), ["img1"]);
 });
 
 test("#88 changeCreation isolates audio draft from video/image drafts and restores seamlessly", (t) => {

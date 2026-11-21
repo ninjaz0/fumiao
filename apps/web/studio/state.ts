@@ -495,9 +495,16 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
     ? normalizeForm(form, { ...draftValues(draft), ...draft.params })
     : {};
   const seed = typeof draft.seed === "string" ? draft.seed.trim() : "";
+  const h3 = supportsH3
+    ? h3Options(draft.suspendedH3Frames ?? draft.h3)
+    : undefined;
+  if (h3 && draft.suspendedH3Frames) {
+    if (!referenceAsset(state, h3.first_frame)) h3.first_frame = null;
+    if (!referenceAsset(state, h3.last_frame)) h3.last_frame = null;
+  }
   return {
     ...draft,
-    h3: supportsH3 ? h3Options(draft.suspendedH3Frames ?? draft.h3) : undefined,
+    h3,
     suspendedH3Frames,
     flowSourceJob: null,
     params: form?.parameterObject ? values : undefined,
