@@ -19,8 +19,10 @@ import {
   normalizeParams,
   packReferences,
   pruneDraftPacks,
+  pruneDraftAssets,
   readDraft,
   removeDraftPack,
+  referenceIssue,
   seedError,
   syncDraftReferences,
   writeDraft,
@@ -503,6 +505,55 @@ test("#88 plain mode prevents rendering/reading media chips in audio mode", (t) 
     readPrompt(stale as unknown as HTMLElement, state, refs, true),
     " 朗读文本",
   );
+});
+
+test("deleted assets are removed from restored H3 frames and saved references", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState();
+  const base = readDraft(state);
+  const snapshot = {
+    ...base,
+    draft: {
+      ...base.draft,
+      kind: "video" as const,
+      videoModel: H3,
+      h3: {
+        mode: "frames" as const,
+        first_frame: "img1",
+        last_frame: "img2",
+        video_audio: ["vid1", "aud1"],
+      },
+      h3ReferenceDraft: {
+        refs: ["img1", "img2", "vid1"],
+        prompt: "<Picture 1> <Picture 2> <Video 1>",
+        packs: [],
+        video_audio: ["vid1", "aud1"],
+      },
+    },
+  };
+  writeDraft(state, { ...snapshot, suspendedMediaDraft: snapshot });
+  assert.equal(pruneDraftAssets(state, snapshot), snapshot);
+  const refreshedState = { ...state, assets: [] };
+  const refreshed = pruneDraftAssets(refreshedState, snapshot);
+  assert.deepEqual(activeReferences(refreshed), []);
+  assert.equal(referenceIssue(refreshedState, refreshed), "请添加首帧或尾帧图片");
+  assert.equal(referenceIssue(state, snapshot), "");
+  const restored = readDraft({
+    ...state,
+    assets: state.assets.filter((a) => ["img2", "aud1"].includes(a.id)),
+  });
+  for (const draft of [restored.draft, restored.suspendedMediaDraft!.draft]) {
+    assert.equal(draft.h3?.first_frame, null);
+    assert.equal(draft.h3?.last_frame, "img2");
+    assert.deepEqual(draft.h3?.video_audio, ["aud1"]);
+    assert.deepEqual(draft.h3ReferenceDraft?.refs, ["img2"]);
+    assert.deepEqual(draft.h3ReferenceDraft?.video_audio, ["aud1"]);
+  }
+  const empty = readDraft({ ...state, assets: [] });
+  assert.deepEqual(activeReferences(empty), []);
+  assert.equal(empty.draft.h3?.last_frame, null);
+  assert.deepEqual(empty.draft.h3?.video_audio, []);
 });
 
 test("#88 changeCreation isolates audio draft from video/image drafts and restores seamlessly", (t) => {

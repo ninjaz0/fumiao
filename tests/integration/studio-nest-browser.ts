@@ -121,6 +121,38 @@ async function checkPackRefreshRace(page: Page, studio: string, state: StudioSta
   }
 }
 
+async function checkDeletedH3Frame(page: Page, studio: string, state: StudioState) {
+  const model = Object.keys(state.model_forms).find((id) =>
+    state.model_forms[id].referenceModes?.includes("frames"),
+  );
+  assert.ok(model, "Studio fixture must include H3 frame mode");
+  const image = state.assets.find((asset) => asset.kind === "ref");
+  assert.ok(image);
+  const key = `fm-draft-${state.me.id}-workspace-${state.workspace_id}`;
+  await page.addInitScript(({ key, model, image }) => {
+    sessionStorage.setItem(key, JSON.stringify({
+      draft: { kind: "video", videoModel: model, prompt: "删除首帧回归", h3: { mode: "frames", first_frame: image } },
+      refs: [],
+    }));
+  }, { key, model, image: image.id });
+  let deleted = false;
+  await page.route("**/api/state", (route) => route.fulfill({ json: {
+    ...state,
+    assets: deleted ? state.assets.filter((asset) => asset.id !== image.id) : state.assets,
+  } }));
+  try {
+    await page.goto(studio);
+    const frame = page.locator('.h3-frame-preview[data-slot="first_frame"]');
+    await expect(frame).toHaveAttribute("data-key", image.id);
+    deleted = true;
+    await expect(frame).toHaveAttribute("data-act", "h3-upload", { timeout: apiTimeout });
+    await expect(frame).toHaveAttribute("data-key", "");
+    await expect(page.getByRole("button", { name: "生成", exact: true })).toBeDisabled();
+  } finally {
+    await page.close();
+  }
+}
+
 export async function studioBrowser(
   platform: Platform,
   web: string,
@@ -498,6 +530,7 @@ export async function studioBrowser(
     const savedCanvas = await document();
     const before = await state();
     await checkPackRefreshRace(await context.newPage(), studio, before);
+    await checkDeletedH3Frame(await context.newPage(), studio, before);
     const jobEntries = before.credit_history.filter(
       (entry) => entry.job === jobId,
     );

@@ -357,7 +357,7 @@ export function readDraft(state: StudioState): DraftSession {
     !modelAvailable(state, selectedModel(draft))
       ? draft
       : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft));
-  return {
+  return pruneDraftAssets(state, {
     parent: typeof saved?.parent === "number" ? saved.parent : null,
     retainedSeed:
       typeof saved?.retainedSeed === "number" ? saved.retainedSeed : null,
@@ -371,10 +371,81 @@ export function readDraft(state: StudioState): DraftSession {
         ),
     draft: isAudio ? { ...normalizedDraft, packs: [] } : normalizedDraft,
     submitId: saved?.submitId || crypto.randomUUID(),
-  };
+  });
 }
 export function writeDraft(state: StudioState, session: DraftSession) {
   sessionStorage.setItem(keyFor(state), JSON.stringify(session));
+}
+
+export function pruneDraftAssets(
+  state: StudioState,
+  session: DraftSession,
+): DraftSession {
+  const exists = (id: string) => !!referenceAsset(state, id);
+  function prune(snapshot: DraftSnapshot): DraftSnapshot {
+    const { draft } = snapshot;
+    const h3 = draft.h3;
+    const saved = draft.h3ReferenceDraft;
+    const first = h3?.first_frame;
+    const last = h3?.last_frame;
+    const videoAudio = h3?.video_audio?.filter(exists);
+    const refs = saved?.refs.filter(exists);
+    const savedAudio = saved?.video_audio.filter(exists);
+    const changedH3 =
+      h3 &&
+      ((first && !exists(first)) ||
+        (last && !exists(last)) ||
+        videoAudio?.length !== h3.video_audio?.length);
+    const changedSaved =
+      saved &&
+      (refs!.length !== saved.refs.length ||
+        savedAudio!.length !== saved.video_audio.length);
+    if (!changedH3 && !changedSaved) return snapshot;
+    return {
+      ...snapshot,
+      draft: {
+        ...draft,
+        ...(changedH3
+          ? {
+              h3: {
+                ...h3,
+                first_frame: first && exists(first) ? first : null,
+                last_frame: last && exists(last) ? last : null,
+                video_audio: videoAudio,
+              },
+            }
+          : {}),
+        ...(changedSaved
+          ? {
+              h3ReferenceDraft: {
+                ...saved,
+                refs: refs!,
+                video_audio: savedAudio!,
+              },
+            }
+          : {}),
+      },
+    };
+  }
+  const active = prune(session);
+  const image =
+    session.suspendedImageDraft && prune(session.suspendedImageDraft);
+  const audio =
+    session.suspendedAudioDraft && prune(session.suspendedAudioDraft);
+  const media =
+    session.suspendedMediaDraft && prune(session.suspendedMediaDraft);
+  return active === session &&
+    image === session.suspendedImageDraft &&
+    audio === session.suspendedAudioDraft &&
+    media === session.suspendedMediaDraft
+    ? session
+    : {
+        ...session,
+        ...active,
+        suspendedImageDraft: image,
+        suspendedAudioDraft: audio,
+        suspendedMediaDraft: media,
+      };
 }
 
 export const selectedModel = (draft: Draft) =>
@@ -1203,6 +1274,8 @@ export function referenceIssue(
       : "";
   }
   const h3 = job ? jobH3(job) : h3Options(draft.h3);
+  if (h3.mode === "frames" && !h3.first_frame && !h3.last_frame)
+    return "请添加首帧或尾帧图片";
   if (h3.mode === "frames")
     return frameRatiosDiffer(
       referenceAsset(state, h3.first_frame),
