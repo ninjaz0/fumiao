@@ -152,6 +152,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const view = useRef<HTMLElement>(null);
   const popover = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLButtonElement | null>(null);
+  const menuFocusTarget = useRef<HTMLElement | null>(null);
   const menuTimer = useRef(0);
   const toastTimer = useRef(0);
   const busy = useRef(new Set<string>());
@@ -231,8 +232,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   const closeMenu = useCallback((focus = false) => {
     if (focus || popover.current?.contains(document.activeElement))
-      anchor.current?.focus({ preventScroll: true });
+      menuFocusTarget.current?.focus({ preventScroll: true });
     anchor.current = null;
+    menuFocusTarget.current = null;
     setMenuShown(false);
     clearTimeout(menuTimer.current);
     menuTimer.current = window.setTimeout(() => setMenuHidden(true), 100);
@@ -479,7 +481,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (!menu || menuHidden || !anchor.current) return;
     positionMenu();
     const element = popover.current;
-    if (isComposerMenu(menu) || menu === "workspaces") {
+    if (
+      (isComposerMenu(menu) || menu === "workspaces") &&
+      menuFocusTarget.current === anchor.current
+    ) {
       const visible = (selector: string) =>
         Array.from(element?.querySelectorAll<HTMLElement>(selector) ?? []).find(
           (control) => control.getClientRects().length > 0,
@@ -514,13 +519,16 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     };
   }, [menu, menuHidden, closeMenu, positionMenu]);
 
-  function openMenu(kind: StudioMenu, button: HTMLButtonElement) {
+  function openMenu(kind: StudioMenu, button: HTMLButtonElement, focus = true) {
     if (anchor.current === button) {
       closeMenu();
       return;
     }
     clearTimeout(menuTimer.current);
     anchor.current = button;
+    menuFocusTarget.current = focus
+      ? button
+      : document.activeElement as HTMLElement;
     if (isComposerMenu(kind) && active.current && currentDraft.current) {
       seenComposerMenus.current.add(kind);
       composerMenuAria.current = composerMenuLabel(

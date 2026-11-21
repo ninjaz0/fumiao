@@ -361,6 +361,39 @@ export async function studioBrowser(
       await expect(trigger).toBeFocused();
     }
     console.log("Verified composer popover focus, arrow/Tab navigation and Escape restoration");
+    await page.locator('#files').setInputFiles({
+      name: "mention-focus.png", mimeType: "image/png", buffer: bytes,
+    });
+    await expect(page.locator('.composer [data-act="reference"]')).toHaveAttribute(
+      "aria-label", "管理参考内容，已添加 1 个素材",
+    );
+    const mentionPrompt = page.locator("#prompt");
+    await mentionPrompt.fill("");
+    await mentionPrompt.press("@");
+    await expect(composerPopover).toBeVisible();
+    await expect(mentionPrompt).toBeFocused();
+    await page.keyboard.type("continued");
+    await expect(mentionPrompt).toHaveText("@continued");
+    await page.keyboard.press("Escape");
+    await expect(composerPopover).toBeHidden();
+    await expect(mentionPrompt).toBeFocused();
+    await mentionPrompt.fill("");
+    await mentionPrompt.press("@");
+    await expect(mentionPrompt).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(composerPopover.locator(".ref-entry").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(composerPopover).toBeHidden();
+    await expect(mentionPrompt).toBeFocused();
+    const mentionTrigger = page.locator('.composer [data-menu="mention"]');
+    await mentionTrigger.click();
+    await expect(composerPopover.locator(".ref-entry").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(mentionTrigger).toBeFocused();
+    await page.locator('.composer [data-act="reference"]').click();
+    await composerPopover.locator('[data-act="unref"]').click();
+    await page.keyboard.press("Escape");
+    console.log("Verified typed mention keeps prompt focus, continued typing and Escape restoration");
     await page.locator('.composer [data-menu="creation"]').click();
     await page
       .locator('#popover [data-act="creation"][data-value="image"]')
