@@ -1,3 +1,4 @@
+import { OriginalNodes } from "@fumiao/platform/node-management.js";
 import { randomInt, randomUUID } from "node:crypto";
 import { Platform, type Actor } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
@@ -784,8 +785,7 @@ export class OriginalIdentity {
         requireValue(false, 403, "管理员账户请在个人资料中修改");
       }
       if(await one(sql,"SELECT id FROM gpu_nodes WHERE owner_id=$1 AND enabled AND NOT archived",[member.id])){
-        const {NodeManagement}=await this.p.registry.nodeExtension(sql);
-        await new NodeManagement(this.p).removeOwned(sql, member.id);
+        await new OriginalNodes(this.p).removeOwned(sql, member.id);
       }
       await sql.query("UPDATE gpu_pairings SET expires_at=to_timestamp(0) WHERE owner_id=$1",[member.id]);
       await sql.query("DELETE FROM sessions WHERE user_id=$1", [member.id]);

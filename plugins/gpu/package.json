@@ -8,8 +8,6 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@fumiao/original-api": "workspace:*",
-    "@fumiao/platform": "workspace:*",
     "@fumiao/plugin-sdk": "workspace:*"
   }
 }

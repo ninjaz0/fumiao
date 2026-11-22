@@ -10,7 +10,6 @@
   "dependencies": {
     "@fumiao/image-import": "workspace:*",
     "@fumiao/platform": "workspace:*",
-    "@fumiao/plugin-gpu": "workspace:*",
     "@fumiao/plugin-payments": "workspace:*",
     "@fumiao/plugin-sdk": "workspace:*",
     "@fumiao/plugin-storyboard": "workspace:*",

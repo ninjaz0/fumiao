@@ -6,10 +6,7 @@ import {
   reservedAdapterId,
   type OfficialAdapter,
 } from "./distribution/official-adapter.js";
-import {
-  packageContributions,
-  type LegacySettingsPage,
-} from "@fumiao/plugin-sdk/contributions.js";
+import { packageContributions } from "@fumiao/plugin-sdk/contributions.js";
 import type { PairedAgentProtocol } from "@fumiao/plugin-sdk/paired-agent.js";
 import { validator } from "./schema.js";
 export { validator } from "./schema.js";
@@ -30,46 +27,24 @@ import {
   hasStudioPackages,
 } from "./studio-plugin-profile.js";
 
+import { OriginalNodes as NodeManagement } from "./node-management.js";
+import { OriginalPairedAgent as Agent } from "./node-agent.js";
+
 export class PluginRegistry {
   private builtins = new Map<string, ProviderPlugin>();
   private protocols = new Map<string, PairedAgentProtocol>();
   private extensions = new Map<string, OfficialAdapter>();
   async nodeExtension(sql: Sql, pluginId?: string) {
     if (await hasStudioPackages(sql)) {
-      const candidates = await sql.query<{
-        id: string;
-        version: string;
-        settingsPage: LegacySettingsPage | null;
-        contributes: unknown;
-      }>(
-        `SELECT p.id,r.package->>'adapterVersion' AS version,r.package->'settingsPage' AS "settingsPage",
-           r.package->'contributes' AS contributes FROM studio_packages p JOIN studio_package_releases r USING(id,version)
-         WHERE p.installed AND ($1::text IS NULL OR p.id=$1)
-           AND (r.package ? 'settingsPage' OR r.package->'contributes'->'hostCapabilities' ? 'nodes')
-         ORDER BY p.id`,
-        [pluginId ?? null],
+      const row = await one(
+        sql,
+        `SELECT r.package->'settingsPage' AS "settingsPage", r.package->'contributes' AS contributes
+         FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+         WHERE p.installed AND p.id=$1`,
+        [pluginId ?? "gpu"],
       );
-      const row = candidates.rows.find((candidate) =>
-        packageContributions(candidate).hostCapabilities.includes("nodes"),
-      );
-      if (row) {
-        if (!this.extensions.has(row.id + "@" + row.version)) {
-          const module = await one(
-            sql,
-            "SELECT code FROM studio_adapter_modules WHERE id=$1 AND version=$2",
-            [row.id, row.version],
-          );
-          requireValue(module, 503, "节点插件版本不可用");
-          await this.registerModule(row.id, row.version, module.code);
-        }
-        const binding = this.extensions.get(row.id + "@" + row.version);
-        requireValue(
-          binding?.NodeManagement && binding.Agent,
-          503,
-          "节点服务不可用",
-        );
-        return { NodeManagement: binding.NodeManagement, Agent: binding.Agent };
-      }
+      if (row && packageContributions(row).hostCapabilities.includes("nodes"))
+        return { NodeManagement, Agent };
       requireValue(
         (await studioPluginProfile(sql)) !== "explicit",
         404,
@@ -77,11 +52,6 @@ export class PluginRegistry {
       );
     }
     requireValue(pluginId === undefined, 404, "尚未安装节点插件");
-    const [{ OriginalNodes: NodeManagement }, { OriginalPairedAgent: Agent }] =
-      await Promise.all([
-        import("@fumiao/original-api/nodes.js"),
-        import("@fumiao/original-api/paired-agent.js"),
-      ]);
     return { NodeManagement, Agent };
   }
   private custom: boolean;
@@ -433,7 +403,8 @@ export class PluginRegistry {
     if ((manifest.originalSubmission?.version ?? 0) >= 2) {
       requireValue(
         (portable || (endpoint && validRemoteEndpoint(endpoint))) &&
-          manifest.mode === "request" &&
+          (manifest.mode === "request" ||
+            (portable && manifest.originalSubmission?.version === 3)) &&
           !reservedAdapterId(manifest.id) &&
           ![...this.builtins.values()].some(
             (p) => p.manifest.id === manifest.id,

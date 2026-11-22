@@ -1,0 +1,103 @@
+{
+  "format": 1,
+  "id": "example-node-pool",
+  "label": "ComfyUI 节点池",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "contributes": {
+    "version": 1,
+    "nodePools": {
+      "version": 1
+    },
+    "hostCapabilities": [
+      "nodes"
+    ],
+    "settingsPages": [
+      {
+        "id": "nodes",
+        "title": "ComfyUI 节点",
+        "icon": "gpu",
+        "scopes": [
+          "nodes"
+        ],
+        "actions": [
+          {
+            "id": "pair",
+            "kind": "host",
+            "operation": "nodes.pair"
+          },
+          {
+            "id": "drain",
+            "kind": "host",
+            "operation": "nodes.drain"
+          },
+          {
+            "id": "resume",
+            "kind": "host",
+            "operation": "nodes.resume"
+          },
+          {
+            "id": "remove",
+            "kind": "host",
+            "operation": "nodes.remove"
+          }
+        ],
+        "program": "{\n  view(input) {\n    return { schema: 1, title: \"ComfyUI 节点\", blocks: [\n      { type: \"form\", id: \"pair\", title: \"接入工作机\", fields: [\n        {name:\"name\", type:\"text\",label:\"实例名称\"},\n        {name:\"models\",type:\"multiselect\",label:\"模型\",required:true,\n         options:[{value:\"comfy-image\",label:\"ComfyUI 图像\"}],value:[\"comfy-image\"]}\n      ],submit:{action:\"pair\",label:\"生成接入命令\"} },\n      {type:\"list\",empty:\"暂无工作机\",rows:input.nodes.nodes.map(n => ({\n        id:n.id,title:n.name,status:n.stage,detail:n.detail,\n        actions:[{action:n.control===\"active\"?\"drain\":\"resume\",label:n.control===\"active\"?\"排空\":\"恢复\",target:n.id},\n          {action:\"remove\",label:\"移除\",target:n.id}]\n      }))}\n    ] };\n  },\n}"
+      }
+    ]
+  },
+  "manifest": {
+    "id": "example-node-pool",
+    "label": "ComfyUI 节点池",
+    "version": "1.0.0",
+    "contractVersion": 1,
+    "mode": "pull",
+    "originalSubmission": {
+      "version": 3
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "models": [
+      {
+        "id": "comfy-image",
+        "label": "ComfyUI 图像",
+        "kind": "image",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {},
+          "x-references": {
+            "max": 0
+          }
+        },
+        "studio": {
+          "order": 1000,
+          "priceOrder": 1000,
+          "descriptor": {
+            "kind": "image",
+            "label": "ComfyUI 图像"
+          },
+          "prices": [
+            {
+              "tier": "standard",
+              "label": "标准",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "program": "{\n  capabilities(report) {\n    return { ready_models: report.ready === true ? [\"comfy-image\"] : [] };\n  },\n  eligible(node, job) {\n    return node.ready_models.includes(job.model) && job.kind === \"image\";\n  },\n  dispatch(job) {\n    return { prompt: job.input.prompt };\n  },\n  receipt(job, report) {\n    return job.kind === \"image\" && typeof report.prompt_id === \"string\" && report.prompt_id.length > 0;\n  },\n  artifactRules() {\n    return { mime: \"image/png\", maxBytes: 32 * 1024 * 1024 };\n  },\n}",
+  "nodeClient": {
+    "agent.tgz": "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",
+    "install.sh": "IyEvdXNyL2Jpbi9lbnYgYmFzaApzZXQgLWV1byBwaXBlZmFpbAp1bWFzayAwNzcKOiAiJHtGVU1JQU9fU0lURTo/57y65bCR5bel5L2c5Y+w5Zyw5Z2AfSIgIiR7Q09NRllfV09SS0ZMT1c6P+ivt+iuvue9riBDb21meVVJIEFQSSDmoLzlvI/nmoTlt6XkvZzmtYHmlofku7bot6/lvoR9Igo6ICIke0NPTUZZX1BST01QVF9OT0RFOj/or7forr7nva7lt6XkvZzmtYHmlofmnKzovpPlhaXoioLngrkgSUR9Igpyb290PSR7RlVNSUFPX05PREVfSE9NRTotIiRIT01FLy5sb2NhbC9zaGFyZS9mdW1pYW8tY29tZnkifQpta2RpciAtcCAiJHJvb3QiCmlmIGNvbW1hbmQgLXYgZmxvY2sgPi9kZXYvbnVsbDsgdGhlbgogIGV4ZWMgOT4iJHJvb3Qvd29ya2VyLmxvY2siCiAgZmxvY2sgLW4gOSB8fCB7IGVjaG8gIuatpOW3peS9nOebruW9leW3suaciei/kOihjOS4reeahOiKgueCuSIgPiYyOyBleGl0IDE7IH0KZmkKc3RhZ2U9JChta3RlbXAgLWQgIiRyb290Ly5pbnN0YWxsLlhYWFhYWCIpCnRyYXAgJ3JtIC1yZiAtLSAiJHN0YWdlIicgRVhJVApiYXNlPSIkRlVNSUFPX1NJVEUvYWdlbnQvZXhhbXBsZS1ub2RlLXBvb2wvY2xpZW50IgpjdXJsIC1mc1NMICIkYmFzZS9hZ2VudC50Z3oiIC1vICIkc3RhZ2UvYWdlbnQudGd6IgpjdXJsIC1mc1NMICIkYmFzZS9hZ2VudC50Z3ouc2hhMjU2IiAtbyAiJHN0YWdlL2RpZ2VzdCIKKGNkICIkc3RhZ2UiICYmIHNoYTI1NnN1bSAtYyBkaWdlc3QgJiYgdGFyIHh6ZiBhZ2VudC50Z3ogd29ya2VyLnB5KQpjcCAiJENPTUZZX1dPUktGTE9XIiAiJHJvb3Qvd29ya2Zsb3cuanNvbiIKaW5zdGFsbCAtbSA2MDAgIiRzdGFnZS93b3JrZXIucHkiICIkcm9vdC93b3JrZXIucHkiCmNkICIkcm9vdCIKcHl0aG9uMyB3b3JrZXIucHkgIiR7Mjo/57y65bCR6YWN5a+556CBfSIK",
+    "agent.tgz.sha256": "ZDNkMTIyYTRhMDFjYmVhMjQwMTM0NGY5MDZjOThiNGQ4YWFlMjIwMzdiYTVlZTFhZWJhNjVkN2UxZjNkYmZiMyAgYWdlbnQudGd6Cg=="
+  }
+}

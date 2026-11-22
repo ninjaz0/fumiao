@@ -161,7 +161,7 @@ test("preview and import reject conflicting formats and invalid contribution per
         manifest: { ...file.remote.manifest, mode: "pull" },
       },
     },
-    /NodeManagement/,
+    /节点池声明/,
   );
   assert.equal((await packages.list(actor))[0].version, file.version);
   await assert.rejects(p.registry.nodeExtension(db), { status: 404 });

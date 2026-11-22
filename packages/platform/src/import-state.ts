@@ -361,7 +361,7 @@ export async function importStateNodes(
     );
   }
   await sql.query(
-    "SELECT setval(pg_get_serial_sequence('gpu_nodes','public_id'),GREATEST(COALESCE((SELECT max(public_id) FROM gpu_nodes),0),1),EXISTS(SELECT 1 FROM gpu_nodes))",
+    "SELECT setval(pg_get_serial_sequence(COALESCE(to_regclass('nodes'), 'gpu_nodes'::regclass)::text,'public_id'),GREATEST(COALESCE((SELECT max(public_id) FROM gpu_nodes),0),1),EXISTS(SELECT 1 FROM gpu_nodes))",
   );
 }
 

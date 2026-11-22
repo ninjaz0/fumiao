@@ -118,14 +118,22 @@ export class Executor {
             AND j.state IN ('dispatching','running','finalizing')
             AND NOT c.fmworker_resource_driver AND NOT (v.manifest ? 'fmworkerResources')
             AND ${executableJob}
-            AND ($1=false OR v.manifest->'originalState'->'recovery' IS NOT NULL)
+            AND ($1=false OR v.manifest->'originalState'->'recovery' IS NOT NULL OR (v.manifest->>'mode'='pull' AND v.manifest->'originalSubmission'->>'version'='3'))
             ORDER BY j.workspace_id,j.id FOR UPDATE OF j SKIP LOCKED`,
         [originalOnly],
       )
     ).rows;
     for (const job of stale) {
       const { manifest } = job;
-      const recovery = manifest.originalState?.recovery;
+      const recovery =
+        manifest.originalState?.recovery ??
+        (manifest.mode === "pull" && manifest.originalSubmission?.version === 3
+          ? {
+              maxAttempts: 2,
+              retryNote: "节点租约过期，等待重新领取",
+              failureNote: "节点任务多次中断",
+            }
+          : undefined);
       if (manifest.requestLifecycle) {
         if (
           (job.receipt || job.remote_id) &&
@@ -191,7 +199,7 @@ export class Executor {
     await sql.query(`WITH drained AS (
         SELECT n.id FROM gpu_nodes n JOIN connections c ON c.id=n.connection_id
         JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
-        WHERE NOT c.fmworker_resource_driver AND v.manifest->'originalState'->'recovery' IS NOT NULL
+        WHERE NOT c.fmworker_resource_driver AND (v.manifest->'originalState'->'recovery' IS NOT NULL OR (v.manifest->>'mode'='pull' AND v.manifest->'originalSubmission'->>'version'='3'))
         AND NOT EXISTS (SELECT 1 FROM fmworker_resources r WHERE r.node_id=n.id)
         AND n.control='draining'
         AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.remote_id=n.id::text AND j.state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob})

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { build } from "esbuild";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve, relative, join } from "node:path";
@@ -29,9 +30,10 @@ const releases = [
   },
   {
     id: "gpu",
-    entry:
-      'export { gpuText as adapter } from "./src/text.js";' +
-      'export {gpuPairedAgent as protocol} from "./src/paired-agent.js";export {OriginalNodes as NodeManagement} from "./src/node-management.js";export {OriginalPairedAgent as Agent} from "./src/agent-dispatch.js";',
+    // The published adapter is immutable. Its node controllers are now owned
+    // by the host; retain these exact bytes for existing provider snapshots.
+    pinnedAdapter:
+      "b418dad85380eed9df512cac18d952dc550e616ebd32ff38aa17b09f840b2df6",
     program: true,
   },
   {
@@ -39,6 +41,7 @@ const releases = [
     entry: 'export { chatStreaming as adapter } from "../chat/src/stream.js";',
   },
   { id: "example-extension" },
+  { id: "example-node-pool", program: true, clientBuild: "client/pack.py" },
 ];
 async function buildAdapter(root, entry) {
   const result = await build({
@@ -100,9 +103,18 @@ async function packContributions(root, contributes) {
     delete contributes.settings.migrateFile;
   }
 }
-for (const { id, entry, program } of releases) {
+for (const { id, entry, program, pinnedAdapter, clientBuild } of releases) {
   const root = "plugins/" + id,
     file = JSON.parse(await readFile(root + "/package/release.json", "utf8"));
+  if (pinnedAdapter) {
+    const bytes = await readFile(
+      root + "/package/provider-" + file.adapterVersion + ".js.gz",
+    );
+    if (hash(bytes) !== pinnedAdapter)
+      throw Error("Published adapter digest mismatch: " + id);
+    file.adapterModule = bytes.toString("base64");
+    trusted[id + "@" + file.adapterVersion] = pinnedAdapter;
+  }
   if (entry) {
     const packed = await buildAdapter(root, entry);
     trusted[id + "@" + file.adapterVersion] = hash(packed);
@@ -116,10 +128,13 @@ for (const { id, entry, program } of releases) {
       title: "GPU 节点",
       render: await expression(root + "/package/panel.js"),
     };
+  }
+  if (id === "gpu" || file.contributes?.nodePools) {
+    if (clientBuild) execFileSync("python3", [join(root, clientBuild)]);
     file.nodeClient = {};
     for (const name of ["agent.tgz", "install.sh", "agent.tgz.sha256"])
       file.nodeClient[name] = (
-        await readFile("plugins/gpu/distribution/" + name)
+        await readFile(root + "/distribution/" + name)
       ).toString("base64");
   }
   const path = id + ".fmplugin.json",

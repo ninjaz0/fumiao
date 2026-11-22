@@ -39,15 +39,13 @@ const debt = {
     "plugins/images/src/{settings,lifecycle}.ts",
     "plugins/remote/src/original.ts",
     "plugins/muse/src/artifacts.ts",
-    "plugins/gpu/src/{node-management,agent-dispatch}.ts",
   ],
   imageImport: ["packages/image-import/src/index.ts"],
   platform: [
     "packages/platform/src/{plugins,payments,historical-adapters,studio-packages,portable-plugin}.ts",
     "packages/platform/src/{import-canvases,plugin-pages}.ts",
-    "packages/platform/src/distribution/official-adapter.ts",
   ],
-  originalApi: ["packages/original-api/src/{paired-agent,nodes,storyboard-exports,recharge}.ts"],
+  originalApi: ["packages/original-api/src/{storyboard-exports,recharge}.ts"],
 };
 
 export default tseslint.config(

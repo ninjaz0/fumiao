@@ -1,1 +1,1 @@
-export * from "@fumiao/plugin-gpu/node-management.js";
+export * from "@fumiao/platform/node-management.js";

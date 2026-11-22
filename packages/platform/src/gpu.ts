@@ -432,6 +432,10 @@ export class GpuGateway {
     load: () => Promise<Buffer>,
     receipt: ArtifactReceipt,
     options: {
+      verify?: (
+        job: Record<string, any>,
+        bytes: Buffer,
+      ) => Promise<Record<string, any> & { mime: string }>;
       params?: (job: Record<string, any>) => Record<string, any>;
       preflight?: (
         id: string,
@@ -485,7 +489,8 @@ export class GpuGateway {
     const data = await load();
     let metadata: Record<string, any> & { mime: string },
       completionTiming: TimingReport["timing"];
-    if (initial.validateArtifact) {
+    if (options.verify) metadata = await options.verify(initial, data);
+    else if (initial.validateArtifact) {
       const plugin = await this.p.registry.resolve(
         this.p.db,
         initial.plugin_id,

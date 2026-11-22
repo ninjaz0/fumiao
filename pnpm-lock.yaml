@@ -338,9 +338,6 @@ importers:
       '@fumiao/platform':
         specifier: workspace:*
         version: link:../platform
-      '@fumiao/plugin-gpu':
-        specifier: workspace:*
-        version: link:../../plugins/gpu
       '@fumiao/plugin-payments':
         specifier: workspace:*
         version: link:../../plugins/payments
@@ -454,12 +451,6 @@ importers:
 
   plugins/gpu:
     dependencies:
-      '@fumiao/original-api':
-        specifier: workspace:*
-        version: link:../../packages/original-api
-      '@fumiao/platform':
-        specifier: workspace:*
-        version: link:../../packages/platform
       '@fumiao/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk

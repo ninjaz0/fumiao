@@ -24,7 +24,7 @@ import {
   type ViewButton,
 } from "@fumiao/plugin-sdk/contributions.js";
 import { one, type Sql } from "./db.js";
-import { officialAdapter } from "./distribution/official-adapter.js";
+import { OriginalNodes } from "./node-management.js";
 import { Platform } from "./platform.js";
 import { PluginHost, type HttpTransport } from "./plugin-host.js";
 import { loadProgram, runProgram } from "./plugin-program.js";
@@ -272,7 +272,7 @@ export class PluginPages {
         stamp: Date.now() / 1000,
         catalog: {},
         imageEnabled: true,
-      }).gpu_models ?? {};
+      }).gpu_models ?? Object.fromEntries(plugin.manifest.models.map(m => [m.id, { label: m.label }]));
     const { rows } = await sql.query(
       `SELECT n.public_id::float8 AS id,n.name,n.control,n.detail,n.models,
       CASE WHEN n.last_seen < now()-interval '75 seconds' THEN 'offline' ELSE coalesce(n.queue_state->>'stage','preparing') END AS stage,
@@ -411,21 +411,8 @@ export class PluginPages {
       403,
       "插件未声明节点能力",
     );
-    const { id, adapterVersion } = ctx.release;
-    const module = await one(
-      sql,
-      "SELECT code FROM studio_adapter_modules WHERE id=$1 AND version=$2",
-      [id, adapterVersion],
-    );
-    requireValue(module, 503, "节点插件版本不可用");
-    const { NodeManagement } = await officialAdapter(
-      id,
-      adapterVersion,
-      module.code,
-    );
-    requireValue(NodeManagement, 503, "节点服务不可用");
-    // The native adapter opens transactions itself. Bind those calls to this action's
-    // transaction so authorization, node changes and the audit row commit together.
+    const { id } = ctx.release;
+    // Keep the node change and its page action audit in the same transaction.
     const scoped = new Platform(
       {
         query: sql.query.bind(sql),
@@ -436,7 +423,7 @@ export class PluginPages {
       this.p.registry,
       this.p.storage,
     );
-    const nodes = new NodeManagement(scoped);
+    const nodes = new OriginalNodes(scoped, id);
     if (operation === "nodes.suggestName" || operation === "nodes.pair")
       requireValue(request.target === undefined, 400, "此操作不接受节点标识");
     if (operation === "nodes.suggestName")

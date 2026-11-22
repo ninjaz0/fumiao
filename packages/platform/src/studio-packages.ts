@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { nodePoolHooks } from "@fumiao/plugin-sdk/node-pools.js";
 import { purgePluginData } from "./plugin-host.js";
 import { portablePlugin } from "./portable-plugin.js";
 import { officialAdapter } from "./distribution/official-adapter.js";
@@ -198,11 +200,45 @@ async function inspectPackage(file: PackageFile) {
       );
     }
   }
-  if (contributions.hostCapabilities.includes("nodes"))
+  if (contributions.nodePools) {
     requireValue(
-      binding?.NodeManagement,
+      file.manifest &&
+        file.nodeClient &&
+        file.program &&
+        manifest.originalSubmission?.version === 3,
       400,
-      "节点能力需要适配器导出 NodeManagement",
+      "节点池需要独立清单、节点程序和客户端",
+    );
+    const describe = await loadProgram(`({ hooks() {
+      const program = (${file.program}\n);
+      return Object.keys(program).map(name => typeof program[name] === "function" ? name : null);
+    } })`);
+    const hooks = describe("hooks") as unknown[];
+    requireValue(
+      nodePoolHooks.every((hook) => hooks.includes(hook)) &&
+        hooks.length === nodePoolHooks.length,
+      400,
+      "节点池必须实现五项策略",
+    );
+    const bytes = Buffer.from(file.nodeClient["agent.tgz"], "base64");
+    const checksum = Buffer.from(file.nodeClient["agent.tgz.sha256"], "base64")
+      .toString("utf8")
+      .trim();
+    requireValue(
+      bytes.length &&
+        /^([0-9a-f]{64})(?:[ \t]+\*?agent\.tgz)?$/.exec(checksum)?.[1] ===
+          createHash("sha256").update(bytes).digest("hex") &&
+        Buffer.from(file.nodeClient["install.sh"], "base64").length,
+      400,
+      "节点安装文件或摘要无效",
+    );
+  } else if (file.manifest && manifest.mode === "pull") {
+    throw new DomainError(400, "pull 插件须声明节点池");
+  } else if (contributions.hostCapabilities.includes("nodes"))
+    requireValue(
+      binding?.protocol,
+      400,
+      "节点管理需要节点池声明或已安装的节点协议",
     );
   if (file.nodeClient)
     requireValue(
@@ -249,6 +285,8 @@ function permissionSummary(
   const added = (label: string, isNew: boolean) =>
     label + (prior && isNew ? "（新增）" : "");
   const lines: string[] = [];
+  if (next.nodePools)
+    lines.push(added("节点池 · 接入、派发和成片验收", !prior?.nodePools));
   for (const page of next.settingsPages) {
     const old = prior?.settingsPages.find((p) => p.id === page.id);
     const broaderAudience =
@@ -408,7 +446,7 @@ export class StudioPackages {
       f.nodeClient &&
       canonical(f.nodeClient) !== canonical(prior?.package.nodeClient)
     )
-      changes.push("包含新的 GPU 节点安装文件，已有机器保持原版本");
+      changes.push("包含新的节点安装文件，已有机器保持原版本");
     const required = (m.configSchema.required ?? []) as string[];
     const services = prior
       ? (
@@ -556,7 +594,7 @@ export class StudioPackages {
         m.id === file.id &&
           m.version === file.adapterVersion &&
           m.originalSubmission?.version === 3 &&
-          m.mode === "request",
+          (m.mode === "request" || !!file.contributes?.nodePools),
         400,
         "独立服务插件清单无效",
       );
@@ -661,7 +699,7 @@ export class StudioPackages {
           409,
           "插件版本不符合更新条件",
         );
-      if (file.program) {
+      if (file.program && !contributions.nodePools) {
         const invoke = await loadProgram(file.program);
         const hooks = invoke("describe") as string[];
         requireValue(
@@ -673,7 +711,7 @@ export class StudioPackages {
           "插件程序声明了未知操作",
         );
       }
-      if (file.manifest) {
+      if (file.manifest && !contributions.nodePools) {
         const hooks = (await loadProgram(file.program!))(
           "describe",
         ) as string[];

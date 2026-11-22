@@ -1,3 +1,4 @@
+import { nodePoolSchema } from "./node-pools.js";
 import { z } from "zod";
 
 /*
@@ -222,6 +223,7 @@ export type SettingsDeclaration = z.infer<typeof settingsDeclarationSchema>;
 export const contributesSchema = z
   .object({
     version: z.literal(CONTRIBUTIONS_VERSION),
+    nodePools: nodePoolSchema.optional(),
     settingsPages: z.array(settingsPageSchema).max(8).default([]),
     settings: settingsDeclarationSchema.optional(),
     hostCapabilities: z
@@ -263,6 +265,7 @@ export function contributionProblems(
     problems.push("宿主能力重复");
   if (caps.has("nodes") && !(context.mode === "pull" && context.hasProgram))
     problems.push("节点能力需要 pull 模式的节点程序");
+  if (c.nodePools && !caps.has("nodes")) problems.push("节点池需要 nodes 能力");
   if (caps.has("http") !== !!c.http)
     problems.push("http 能力与 http.origins 必须同时声明");
   for (const origin of c.http?.origins ?? []) {

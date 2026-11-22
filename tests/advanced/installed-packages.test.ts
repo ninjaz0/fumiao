@@ -16,7 +16,7 @@ import {
 import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
 import { PluginRegistry } from "@fumiao/platform/plugins.js";
 import { Executor } from "@fumiao/platform/executor.js";
-import { one } from "@fumiao/platform/db.js";
+import { migrate, one } from "@fumiao/platform/db.js";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
@@ -35,8 +35,8 @@ const load = async (id: string): Promise<PackageFile> =>
   JSON.parse(
     await readFile("plugins/" + id + "/" + id + ".fmplugin.json", "utf8"),
   );
-async function setup() {
-  const f = await databaseFixture();
+async function setup(through?: string) {
+  const f = await databaseFixture(through);
   await f.p.registry.initializeStudio(f.db, false);
   const identity = new OriginalIdentity(f.p),
     user = { name: "admin", password: randomUUID() };
@@ -316,7 +316,7 @@ test("chat package drains accepted replies and can be reinstalled with fresh cre
 });
 
 test("GPU package installs its administrator panel while disabled and removes the pairing capability", async () => {
-  const f = await setup(),
+  const f = await setup("036_plugin_data.sql"),
     file = await load("gpu");
   const app = await createOriginalApp(f.p);
   try {
@@ -396,6 +396,20 @@ test("GPU package installs its administrator panel while disabled and removes th
     await f.packages.change(f.actor, "gpu", 2, "disable");
     const claimed = (await call("/agent/claim", { method: "POST" })).job;
     assert.equal(claimed.id, job.id);
+    const snapshot = async () =>
+      Promise.all(
+        ["jobs", "ledger", "wallets", "gpu_pairings", "gpu_nodes"].map(
+          async (table) =>
+            (await f.db.query("SELECT * FROM " + table + " ORDER BY 1")).rows,
+        ),
+      );
+    const prior = await snapshot();
+    await migrate(f.db);
+    assert.deepEqual(await snapshot(), prior);
+    assert.equal(
+      (await call("/agent/claim", { method: "POST" })).job.ticket,
+      claimed.ticket,
+    );
     const wav = wavFixture();
     for (let i = 44; i < wav.length; i += 2) wav.writeInt16LE(1100, i);
     const delivered = await call("/agent/jobs/" + job.id + "/result", {
@@ -1100,4 +1114,144 @@ test("blank canvases save sticky edits and list runs across zero-plugin, v3 pack
   } finally {
     await f.cleanup();
   }
+});
+
+test("a portable node pool pairs, claims and settles its pinned release alongside GPU", async (t) => {
+  const f = await setup();
+  t.after(() => f.cleanup());
+  const file = await load("example-node-pool");
+  const gpu = await load("gpu");
+  await f.packages.install(f.actor, gpu);
+  await assert.rejects(
+    f.packages.preview(f.actor, {
+      ...file,
+      program:
+        "({capabilities:1,eligible(){},dispatch(){},receipt(){},artifactRules(){}})",
+    }),
+    { status: 400 },
+  );
+  await assert.rejects(
+    f.packages.install(f.actor, {
+      ...file,
+      nodeClient: {
+        ...file.nodeClient,
+        "agent.tgz": Buffer.from("broken").toString("base64"),
+      },
+    }),
+    { status: 400 },
+  );
+  await f.packages.install(f.actor, file);
+  await f.packages.change(f.actor, file.id, 1, "enable");
+  const app = await createOriginalApp(f.p);
+  await app.listen(0, "127.0.0.1");
+  t.after(() => app.close());
+  const url = await app.getUrl();
+  const root = "/agent/" + file.id;
+  const token = secret();
+  const request = async (path: string, body?: object, expected = 200) => {
+    const response = await fetch(url + path, {
+      method: body ? "POST" : "GET",
+      headers: {
+        "content-type": "application/json",
+        cookie: "fm_session=" + f.session,
+        authorization: "Bearer " + token,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await response.json();
+    assert.equal(response.status, expected, JSON.stringify(data));
+    return data;
+  };
+  const client = await fetch(url + root + "/client/agent.tgz");
+  assert.deepEqual(
+    Buffer.from(await client.arrayBuffer()),
+    Buffer.from(file.nodeClient!["agent.tgz"], "base64"),
+  );
+  const pair = await request(
+    "/api/plugins/" + file.id + "/pages/nodes/actions/pair",
+    { payload: { name: "test", models: ["comfy-image"] } },
+  );
+  const code = pair.result.value.split(" ").at(-1);
+  await request("/agent/enroll", { code, secret: token }, 403);
+  await request(root + "/enroll", { code, secret: token });
+  await request(root + "/enroll", { code, secret: secret() }, 403);
+  await request("/agent/registration", undefined, 403);
+  await request(root + "/heartbeat", {
+    stage: "ready",
+    capabilities: { ready: true },
+  });
+  const gen = new OriginalGeneration(f.p);
+  const catalog = new StudioCatalog(f.db);
+  const prices = await catalog.prices();
+  await f.db.transaction((sql) =>
+    catalog.savePrices(
+      sql,
+      Object.fromEntries(prices.items.map((p) => [p.key, 0])),
+      prices.revision,
+    ),
+  );
+  const job = await gen.submit(
+    f.actor,
+    await gen.parse("image", {
+      uid: randomUUID(),
+      model: "comfy-image",
+      prompt: "test",
+      params: {},
+    }),
+  );
+  const newer = {
+    ...file,
+    version: "1.0.1",
+    program: file.program!.replace(
+      "return { prompt: job.input.prompt };",
+      "return { updated: true };",
+    ),
+  };
+  await f.packages.install(f.actor, newer, 2);
+  const claim = (await request(root + "/claim", {})).job;
+  assert.equal(claim.id, job.id);
+  assert.deepEqual(claim.instruction, { prompt: "test" });
+  assert.equal((await request(root + "/claim", {})).job.ticket, claim.ticket);
+  const bytes = await sharp({
+    create: { width: 12, height: 12, channels: 3, background: "white" },
+  })
+    .png()
+    .toBuffer();
+  const endpoint = root + "/jobs/" + job.id + "/result";
+  const result = async (data: Buffer, report: unknown) =>
+    fetch(url + endpoint, {
+      method: "PUT",
+      body: new Uint8Array(data),
+      headers: {
+        authorization: "Bearer " + token,
+        "X-Job-Ticket": claim.ticket,
+        "X-SHA256": createHash("sha256").update(data).digest("hex"),
+        "X-Job-Timing": JSON.stringify(report),
+      },
+    });
+  assert.equal((await result(bytes, {})).status, 422);
+  assert.equal(
+    (await result(Buffer.from("invalid"), { prompt_id: "test" })).status,
+    422,
+  );
+  const [a, b] = await Promise.all([
+    result(bytes, { prompt_id: "test" }),
+    result(bytes, { prompt_id: "test" }),
+  ]);
+  assert.equal(a.status, 200, await a.clone().text());
+  assert.deepEqual(await a.json(), await b.json());
+  const settled = await one(
+    f.db,
+    `SELECT j.state, j.package_version,
+     (SELECT count(*)::int FROM job_assets WHERE job_id=j.id AND role='output') AS outputs,
+     (SELECT count(*)::int FROM ledger WHERE job_id=j.id AND action='spend') AS charges
+     FROM jobs j WHERE j.public_id=$1`,
+    [job.id],
+  );
+  assert.deepEqual(settled, {
+    state: "completed",
+    package_version: file.version,
+    outputs: 1,
+    charges: 1,
+  });
 });

@@ -269,3 +269,33 @@ POST /api/admin/connections/:id/upgrade
 取消排队任务会立即释放积分。运行中的外部任务只有在提供方确认取消后才能释放；不支持取消的提供方会继续等待最终结果。GPU 执行端在心跳中接收取消请求。
 
 支付适配器是独立的 `PaymentAdapter` 接口，见 `plugins/payments/src/index.ts`。当前内置 ZPay 和 EPusdt，尚不支持在管理页动态安装第三方支付插件。
+
+### 节点池 v1
+
+管理员可以从 Studio 的插件设置导入 `plugins/example-node-pool/example-node-pool.fmplugin.json`，启用后在「ComfyUI 节点」生成接入命令。准备一台运行 ComfyUI 的 Linux 机器，导出 API 格式的工作流，设置 `COMFY_WORKFLOW` 为文件路径，`COMFY_PROMPT_NODE` 为文本节点 ID。工作流需要一个保存 PNG 的输出节点。节点端默认连接本机 8188 端口，通过 `COMFY_URL` 可以指定自己的 ComfyUI 服务。在该机器运行接入命令，保持进程在线，然后在 Studio 选择「ComfyUI 图像」提交任务。
+
+清单使用 `mode: "pull"`、Studio 提交契约 v3、`contributes.nodePools: { "version": 1 }` 和 `hostCapabilities: ["nodes"]`。模型参数、表单和价格沿用 Studio 模型清单。节点安装器、压缩包和 SHA-256 摘要放在 `nodeClient` 中。管理员页面使用设置页的 `nodes` 读取范围和 `nodes.pair` 等宿主操作。示例的全部策略在 `plugins/example-node-pool/package/program.js`。
+
+节点池的五个策略是同步 QuickJS 扩展点。宿主根据节点当前安装版本处理能力上报，用接单时冻结的包版本执行四项任务策略。
+
+| 函数 | 输入与返回值 |
+| --- | --- |
+| `capabilities(report)` | 归一化节点心跳的 `capabilities` 对象，返回 `{ ready_models, features? }`。模型必须在配对授权内，输出上限 16 KiB。 |
+| `eligible(node, job)` | 从队列模型、输入和节点能力判断是否接单，返回布尔值。宿主另行检查节点控制状态、心跳和领取权限。 |
+| `dispatch(job, node)` | 返回 JSON 指令对象。任务含 `model`、`kind`、`input.prompt`、`input.params`、`input.references`。素材路径由宿主按工作区生成。 |
+| `receipt(job, report)` | 读取与派发相同的任务输入，验证回传的 JSON 报告。返回 `true` 才进入媒体验收。 |
+| `artifactRules(job)` | 声明 MIME、字节上限和可选的尺寸、时长、音视频编码、帧数、帧率、声道及采样率。字段定义见 `packages/plugin-sdk/src/node-pools.ts`。 |
+
+节点访问 `/agent/<插件 ID>/client/{install.sh,agent.tgz,agent.tgz.sha256}`。安装器收到 `FUMIAO_SITE`、`--models=<模型列表>` 和配对码。协议沿用以下 HTTP 方法，所有路径都位于 `/agent/<插件 ID>` 下。
+
+| 请求 | 约定 |
+| --- | --- |
+| `POST /enroll` | 提交 `{code,secret}`，由节点生成并私下保存随机凭据。同一码仅能绑定同一凭据。 |
+| `GET /registration` | 返回已授权模型和控制状态。此请求及下列请求使用节点的 Bearer 凭据。 |
+| `POST /heartbeat` | 提交 `{stage,capabilities,ticket?}`。工作中定期续约，响应的 `held` 表示是否仍持有该任务。 |
+| `POST /claim` | 返回 `{job:null}` 或含 `id`、`ticket`、`instruction` 的任务。 |
+| `GET /jobs/:id/ref/:key` | 读取当前任务的参考素材。任务操作还需 `X-Job-Ticket`。 |
+| `PUT /jobs/:id/result` | 原始成品字节，`X-Sha256` 为 hex 摘要，`X-Job-Timing` 为 JSON 回执。宿主校验后保存私有素材并结算。 |
+| `POST /jobs/:id/error`、`GET /jobs/:id/receipt` | 上报 `{stage:"error",detail}` 或查询是否已收到成片。重复成功回传返回同一素材。 |
+
+`037_node_pools.sql` 原地重命名节点和配对表，保留旧表名的可更新视图。`node_pools` 从已有 pull 连接读取插件归属。原有节点、任务票据、序列、账本和已冻结的包版本继续沿用。当前 GPU 发行包仍走原协议与原生模型策略；此版本可用于独立验收新增节点池。在后续 GPU 协议切换窗口，先停止接单、排空任务，核对冻结余额并备份数据库和私有媒体，再升级宿主并重新安装节点。回退到缺少节点池能力的宿主前，应先排空并停用新增的池。整库恢复须使用同一时间点的媒体备份，具体步骤见运维手册。

@@ -1,7 +1,10 @@
 import type { Request } from "express";
 import type { OriginalActor } from "@fumiao/original-api/identity.js";
 
-export type OriginalAuthRequest = Request & { actor: OriginalActor };
+export type OriginalAuthRequest = Request & {
+  actor: OriginalActor;
+  nodePool?: string;
+};
 
 export function originalSessionToken(req: Request) {
   return (
