@@ -83,7 +83,7 @@ export function ChatWorkspace(props:Props){
   setPendingDraft(null);
   let active=data;
   const context=props.getContext?await props.getContext():undefined;
-  if(!active){active=await req<Snapshot>('/api/chats',{model,context});current.current=active.conversation.id;setCid(active.conversation.id);sessionStorage.setItem(scope+'-active',active.conversation.id);setData(active)}
+  if(!active){active=await req<Snapshot>('/api/chats',{model,context});const key=scope+'-draft-';const saved=sessionStorage.getItem(key);if(saved!==null){sessionStorage.setItem(key+active.conversation.id,saved);sessionStorage.removeItem(key)}current.current=active.conversation.id;setCid(active.conversation.id);sessionStorage.setItem(scope+'-active',active.conversation.id);setData(active)}
   const signature=JSON.stringify([active.conversation.id,model,draft,retry]);
   if(pending.current?.signature!==signature)pending.current={signature,uid:crypto.randomUUID()};
   try{
