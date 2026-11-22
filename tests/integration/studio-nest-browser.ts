@@ -11,6 +11,7 @@ import type { Actor, Platform } from "../../packages/platform/src/platform.js";
 import { originalUI } from "../../packages/web-compat/src/ui.js";
 import { imagesText } from "../../plugins/images/src/text.js";
 import type { studioPayment } from "./studio-nest-payment.js";
+import { verifyChatSettingsRetry } from "./studio-chat-settings.js";
 import {
   assertStudio,
   open,
@@ -426,6 +427,7 @@ export async function studioBrowser(
     await expect(currentSettings).toHaveCount(0);
     await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
     await settings(page);
+    await verifyChatSettingsRetry(page);
     await expect(currentSettings).toHaveAttribute("aria-current", "page");
     await expect(sidebar.locator(".workspace-switch")).toBeVisible();
     await expect.poll(() => sidebar.evaluate((rail) => {
@@ -778,6 +780,21 @@ export async function studioBrowser(
         (await document()).document.nodes.map((item) => item.text),
       )
       .toEqual([chatReply]);
+    const conversationId = await page
+      .locator(".fm-chat-conversation-row.selected")
+      .getAttribute("data-conversation");
+    await assistant.getByRole("button", { name: "放入画布" }).click();
+    await expect(picker).toBeVisible();
+    await page.locator("button.fm-chat-new").click();
+    await expect(picker).toBeHidden();
+    await page
+      .locator(
+        `[data-conversation="${conversationId}"] .fm-chat-conversation-open`,
+      )
+      .click();
+    await expect(assistant.locator(".fm-chat-prose")).toHaveText(chatReply);
+    await expect(edit).toHaveValue(chatDraft);
+    await expect(picker).toBeHidden();
     const headers = { Origin: web, "X-Workspace-Id": String(workspace) };
     const project = await document();
     for (const [i, title] of ["固定参考图", "拖动参考图"].entries()) {
