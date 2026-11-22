@@ -10,7 +10,7 @@ import {
   viewSchema,
 } from "@fumiao/plugin-sdk/contributions.js";
 import { manifestSchema } from "@fumiao/plugin-sdk/index.js";
-import { loadProgram } from "@fumiao/platform/plugin-program.js";
+import { loadProgram, runProgram } from "@fumiao/platform/plugin-program.js";
 import { validator } from "@fumiao/platform/schema.js";
 import { validOriginalRemoteModels } from "@fumiao/plugin-remote/original.js";
 
@@ -52,10 +52,57 @@ test("the release digest, remote model and packaged contributions match their co
     [],
   );
   assert.deepEqual(contributions, parsed);
-  assert.deepEqual(contributions.hostCapabilities, []);
+  assert.deepEqual(contributions.hostCapabilities, ["data"]);
   assert.deepEqual(
     contributions.settingsPages.map((page) => page.id),
-    ["display", "overview"],
+    ["display", "overview", "notes"],
+  );
+});
+
+test("the notes page keeps its own data through the host", async () => {
+  const notes = page("notes");
+  const store = new Map<string, unknown>();
+  const host = async (name: string, args: unknown[]) => {
+    const key = String(args[0] ?? "");
+    if (name === "data.list")
+      return {
+        keys: [...store.keys()].filter((k) => k.startsWith(key)).sort(),
+        more: false,
+      };
+    if (name === "data.get") return store.get(key) ?? null;
+    if (name === "data.put") return (store.set(key, args[1]), true);
+    return store.delete(key);
+  };
+  const all = ["data.get", "data.list", "data.put", "data.delete"];
+  const view = async () =>
+    viewSchema.parse(
+      await runProgram(notes.program, "view", [{}], all.slice(0, 2), host),
+    );
+  const act = (id: string, payload: object) =>
+    runProgram(notes.program, "action", [id, payload, {}], all, host);
+  const rows = async () => {
+    const list = (await view()).blocks.find((b) => b.type === "list");
+    return list?.type === "list" ? list.rows.map((r) => [r.id, r.title]) : [];
+  };
+  assert.deepEqual(await rows(), []);
+  assert.deepEqual(await act("add-note", { text: " 第一条 " }), {
+    notice: "备注已保存",
+  });
+  await act("add-note", { text: "第二条" });
+  assert.deepEqual(await rows(), [
+    ["notes/000001", "第一条"],
+    ["notes/000002", "第二条"],
+  ]);
+  await act("remove-note", { key: "notes/000001" });
+  await act("add-note", { text: "第三条" });
+  assert.deepEqual(await rows(), [
+    ["notes/000002", "第二条"],
+    ["notes/000003", "第三条"],
+  ]);
+  await assert.rejects(act("add-note", { text: "  " }));
+  assert.deepEqual(
+    notes.actions.map((a) => a.kind),
+    ["program", "program"],
   );
 });
 

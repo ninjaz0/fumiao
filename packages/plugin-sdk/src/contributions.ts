@@ -72,9 +72,45 @@ export const memberScopes: readonly PageScope[] = [
   "settings",
 ];
 
-/** Host capabilities a package may request; each unlocks host operations. */
-export const hostCapabilities = ["nodes"] as const;
+/**
+ * Host capabilities a package may request. The administrator confirms them
+ * at installation and the host checks them on every call.
+ *
+ * - nodes: node pairing and control, through `host` page actions.
+ * - http:  HTTPS requests to the origins listed in `contributes.http`.
+ * - data:  a key-value store owned by this plugin.
+ */
+export const hostCapabilities = ["nodes", "http", "data"] as const;
 export type HostCapability = (typeof hostCapabilities)[number];
+
+/**
+ * Functions a page program reaches as `host.<name>(...)`. Hooks receive
+ * `host` as their last argument and may be async:
+ * `view(input, host)` gets the `read` functions, `action(id, payload, input, host)`
+ * gets all functions of the declared capabilities.
+ *
+ * | Function    | Arguments                                   | Result                                         |
+ * |-------------|---------------------------------------------|------------------------------------------------|
+ * | http.fetch  | url, { method?, headers?, json? \| body? }   | { status, ok, contentType, text, json }        |
+ * | data.get    | key, { scope? }                             | stored value or null                           |
+ * | data.list   | prefix?, { scope? }                         | { keys, more }                                 |
+ * | data.put    | key, value, { scope? }                      | true                                           |
+ * | data.delete | key, { scope? }                             | whether a value was removed                    |
+ *
+ * `scope` is `workspace` (default) or `global`. Redirects are returned, not
+ * followed. A failed call rejects with an Error carrying a short message.
+ */
+export const hostFunctions = {
+  "http.fetch": { capability: "http", access: "write" },
+  "data.get": { capability: "data", access: "read" },
+  "data.list": { capability: "data", access: "read" },
+  "data.put": { capability: "data", access: "write" },
+  "data.delete": { capability: "data", access: "write" },
+} as const satisfies Record<
+  string,
+  { capability: HostCapability; access: "read" | "write" }
+>;
+export type HostFunction = keyof typeof hostFunctions;
 
 /**
  * Host operations reachable from a page action. The host owns the
@@ -153,7 +189,8 @@ export const settingsPageSchema = z
     actions: z.array(pageActionSchema).max(16).default([]),
     /**
      * QuickJS object expression:
-     * `{ view(input) { return View }, action?(id, payload, input) { return ProgramActionOutput } }`
+     * `{ view(input, host) { return View }, action?(id, payload, input, host) { return ProgramActionOutput } }`
+     * Both hooks may be async. `host` holds the granted host functions.
      */
     program: z
       .string()
@@ -191,6 +228,11 @@ export const contributesSchema = z
       .array(z.enum(hostCapabilities))
       .max(hostCapabilities.length)
       .default([]),
+    /** Where `http.fetch` may send requests, e.g. `https://api.example.com`. */
+    http: z
+      .object({ origins: z.array(z.string().max(200)).min(1).max(16) })
+      .strict()
+      .optional(),
   })
   .strict();
 export type Contributes = z.infer<typeof contributesSchema>;
@@ -221,6 +263,22 @@ export function contributionProblems(
     problems.push("宿主能力重复");
   if (caps.has("nodes") && !(context.mode === "pull" && context.hasProgram))
     problems.push("节点能力需要 pull 模式的节点程序");
+  if (caps.has("http") !== !!c.http)
+    problems.push("http 能力与 http.origins 必须同时声明");
+  for (const origin of c.http?.origins ?? []) {
+    let url: URL | undefined;
+    try {
+      url = new URL(origin);
+    } catch {
+      url = undefined;
+    }
+    if (url?.protocol !== "https:" || url.origin !== origin)
+      problems.push(
+        "http.origins 只接受 https 源，例如 https://api.example.com：" + origin,
+      );
+  }
+  if (new Set(c.http?.origins).size !== (c.http?.origins.length ?? 0))
+    problems.push("http.origins 重复");
   const pageIds = new Set<string>();
   for (const page of c.settingsPages) {
     if (pageIds.has(page.id)) problems.push("设置页标识重复：" + page.id);

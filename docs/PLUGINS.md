@@ -81,6 +81,38 @@
 4. **回滚**。恢复目标版本升级前保存的值；没有对应快照时，按目标版本的迁移和校验规则处理。
 5. **停用和移除**。停用保留设置。移除会等待已接单任务结算，完成后清除本插件各范围的设置，重新安装从默认值开始。
 
+### 在页面程序里调用宿主
+
+页面程序的 `view` 和 `action` 可以是 `async`，最后一个参数是 `host`。包在 `contributes.hostCapabilities` 里声明要用的能力，管理员在安装确认页逐条看到，宿主在每次调用时检查。没有声明的能力在 `host` 上不存在。
+
+| 能力 | 声明 | 函数 |
+|---|---|---|
+| `data` | `"hostCapabilities": ["data"]` | `host.data.get(key, {scope?})`、`list(prefix?, {scope?})`、`put(key, value, {scope?})`、`delete(key, {scope?})` |
+| `http` | `"hostCapabilities": ["http"]` 加 `"http": {"origins": ["https://api.example.com"]}` | `host.http.fetch(url, {method?, headers?, json? 或 body?})`，返回 `{status, ok, contentType, text, json}` |
+
+- **读和写分开**。`view` 只拿到读函数（`data.get`、`data.list`）。`http.fetch` 和写入只在 `action` 里可用，并和这次操作的审计记录一起提交；操作失败时已写入的数据一并撤销。
+- **`data`** 是属于这个插件的键值存储，`scope` 为 `workspace`（默认）或 `global`。键最长 200 个字符，单个值上限 256 KB，每个插件合计 16 MB、2000 个键。插件不建表，移除插件时数据一并清除。
+- **`http`** 只能访问声明过的 HTTPS 源。宿主拒绝指向回环、内网、链路本地和云元数据地址的请求，不跟随重定向（3xx 原样返回），请求正文上限 256 KB，响应上限 1 MB，单次 10 秒超时。不能设置 `Cookie`、`Host` 等由宿主负责的请求头。
+- **限额**。一次调用最多 32 次宿主调用，插件自身的执行时间上限 250 毫秒（等待宿主的时间不计），总时长上限 15 秒。
+- **失败**。宿主调用失败时 `await` 抛出 `Error`，`message` 是简短说明，可以用 `try / catch` 处理。
+
+```js
+export default {
+  async view(input, host) {
+    const last = await host.data.get("last");
+    return { schema: 1, title: "同步状态", blocks: [{ type: "text", text: last ? "上次同步：" + last.at : "尚未同步" }] };
+  },
+  async action(id, payload, input, host) {
+    const res = await host.http.fetch("https://api.example.com/v1/sync", { method: "POST", json: { since: payload.since } });
+    if (!res.ok) throw Error("同步失败");
+    await host.data.put("last", { at: payload.at, count: res.json.count });
+    return { notice: "已同步 " + res.json.count + " 项" };
+  },
+};
+```
+
+示例包的「工作区备注」页（[`notes.js`](../plugins/example-extension/package/notes.js)）用 `data` 能力保存每个工作区自己的备注。不使用 `host` 的同步写法仍然有效，已发布的包不需要修改。
+
 ### 本地调试示例
 
 在 `plugins/example-extension/package/` 修改声明和程序。仓库打包脚本从 `release.json` 读取贡献声明。`programFile` 和 `migrateFile` 是相对该文件的源码路径，各文件以 `export default` 导出独立表达式。打包后这两个字段分别替换为 `program` 和 `migrate` 字符串。也可以直接在声明中写表达式字符串。
