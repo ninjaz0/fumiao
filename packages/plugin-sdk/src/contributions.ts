@@ -343,8 +343,15 @@ export const contributesSchema = z
       .default([]),
     /** Where `http.fetch` may send requests, e.g. `https://api.example.com`. */
     http: z
-      .object({ origins: z.array(z.string().max(200)).min(1).max(16) })
+      .object({
+        origins: z.array(z.string().max(200)).max(16),
+        connection: z.literal(true).optional(),
+      })
       .strict()
+      .refine(
+        (h) => h.origins.length > 0 || h.connection === true,
+        "请声明服务连接或 HTTP 目标",
+      )
       .optional(),
   })
   .strict();

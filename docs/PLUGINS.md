@@ -16,6 +16,8 @@
 
 文件顶层包含 `format: 1`、`id`、`label`、`version` 和 `adapterVersion`。版本采用三个非负整数，以点分隔。直接接入服务的通用包包含 `manifest` 和 `program`。清单按下文 v3 契约声明模型、参数和价格。程序是一个 JavaScript 对象表达式，提供 `request({model,kind,input,remoteId})` 和 `result({raw,model,kind,remoteId})`。前者返回同源的 `{path,body}`，省略 body 为 GET；后者把服务响应映射成下文的任务回执。程序在受时间和内存限制的 QuickJS 中处理 JSON，平台负责携带密钥发请求。已有独立协议服务可在同一个包中用 `remote: {endpoint,manifest}` 作为接入方式。
 
+Muse 2.0.0 使用请求工作台契约 `originalSubmission.version = 5`。安装确认页列出服务连接、密钥注入和媒体验收权限。工作台程序的 SHA-256 摘要随适配器版本冻结。宿主向管理员配置的公网 HTTPS 服务注入密钥，读取本次任务的参考图，校验输出图片或视频后扣费。升级时旧 HTTP 或内网连接保留设置，已接单的任务按原配置和价格完成。管理员在「设置 → 插件」更换服务地址并保存后，该连接恢复接收新任务。
+
 Flow 和 Muse 的 1.0.0 发行包、GPU 和兼容对话的旧版发行包保存在各自的 `package/legacy-*.fmplugin.json`。恢复旧库或安装这些版本时，宿主核对归档中的适配器字节，并使用随宿主发布的历史实现。已接单的 Flow 和 Muse 任务若在升级后仍需派发，Worker 使用接单时的服务配置检查旧提供方的容量，按原价结算。GPU 节点池和兼容对话的 2.0.0 发行包使用沙箱程序。运行 `pnpm plugins:pack` 可重建沙箱发行包并核对历史归档。
 
 `updateUrl` 可以指向自建 HTTP(S) 服务器上的清单，也可以指向以 `.git` 结尾的 HTTP(S) Git 仓库。Git 读取默认分支根目录的 `update.json`，包和清单来自同一次提交。HTTP 包从同源地址读取。以下示例中的摘要须替换为发布文件原始字节的 SHA-256。

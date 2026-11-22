@@ -5,11 +5,8 @@ import {
 } from "@fumiao/plugin-sdk/model-form.js";
 import { muse } from "./index.js";
 import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
-export const studioRatios = {
-  image: ["1:1", "16:9", "9:16", "4:3", "3:4"],
-  video: ["16:9", "9:16"],
-};
-export const studioSeconds = [5, 6, 8, 10];
+import { studioRatios, studioSeconds } from "./studio-policies.js";
+export { studioRatios, studioSeconds };
 export const museStudio: ProviderPlugin = {
   ...muse,
   modelForm(model) {

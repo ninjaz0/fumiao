@@ -2,7 +2,7 @@
   "format": 1,
   "id": "muse",
   "label": "Muse2API",
-  "version": "1.0.0",
-  "adapterVersion": "1.13.0",
+  "version": "2.0.0",
+  "adapterVersion": "2.0.0",
   "updateUrl": "https://raw.githubusercontent.com/ninjaz0/fumiao/main/plugins/muse/update.json"
 }

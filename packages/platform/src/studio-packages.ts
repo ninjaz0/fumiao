@@ -159,7 +159,7 @@ export const packageFile = z
             f.contributes?.exporters?.length ||
             f.contributes?.events?.length ||
             f.contributes?.actions?.length))) &&
-      (!f.manifest || !!f.program || !!f.manifest.chat),
+      (!f.manifest || !!f.program || !!f.manifest.chat || !!f.studioProgram),
     "插件必须声明一种执行方式",
   )
   .refine(
@@ -284,8 +284,25 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
     );
   }
   const studio = manifest.originalSubmission?.version === 4;
+  const request = manifest.originalSubmission?.version === 5;
+  if (request || contributions.http?.connection)
+    requireValue(
+      request &&
+        file.manifest &&
+        !file.program &&
+        !file.nodeClient &&
+        !manifest.chat &&
+        manifest.mode === "request" &&
+        manifest.artifactDownload &&
+        manifest.artifactValidation?.version === 3 &&
+        manifest.requestLifecycle &&
+        contributions.http?.connection &&
+        contributions.hostCapabilities.includes("secrets"),
+      400,
+      "请求工作台需要服务地址、密钥注入和媒体验收能力",
+    );
   requireValue(
-    studio === !!file.studioProgram &&
+    (studio || request) === !!file.studioProgram &&
       (!studio ||
         (contributions.nodePools &&
           (!manifest.referenceImports ||
@@ -346,9 +363,11 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
         ? remotePlugin(manifest, file.remote.endpoint)
         : manifest.chat?.sandbox
           ? await registry.chatAdapter(manifest)
-          : file.studioProgram
-            ? await nodeStudioPlugin(manifest, file.studioProgram)
-            : portablePlugin(manifest)));
+          : request && file.studioProgram
+            ? await registry.requestAdapter(manifest, file.studioProgram)
+            : file.studioProgram
+              ? await nodeStudioPlugin(manifest, file.studioProgram)
+              : portablePlugin(manifest)));
   return { adapter, manifest, contributions };
 }
 
@@ -470,7 +489,11 @@ function permissionSummary(
           !prior?.hostCapabilities.includes("secrets"),
         ),
     );
-  if (next.http)
+  if (next.http?.connection)
+    lines.push(
+      added("访问管理员配置的公网 HTTPS 服务", !prior?.http?.connection),
+    );
+  if (next.http?.origins.length)
     lines.push(
       "宿主能力：访问外部服务 " +
         next.http.origins
@@ -773,6 +796,7 @@ export class StudioPackages {
           m.version === file.adapterVersion &&
           (m.originalSubmission?.version === 3 ||
             m.originalSubmission?.version === 4 ||
+            m.originalSubmission?.version === 5 ||
             !!m.chat?.sandbox) &&
           (m.mode === "request" || !!file.contributes?.nodePools),
         400,
@@ -946,6 +970,7 @@ export class StudioPackages {
       if (
         file.manifest &&
         !inspected.chat?.sandbox &&
+        inspected.originalSubmission?.version !== 5 &&
         !contributions.nodePools
       ) {
         const hooks = (await loadProgram(file.program!))(

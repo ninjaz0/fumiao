@@ -8,7 +8,7 @@ export const originalPolicySchema = z.discriminatedUnion("version", [
   z.object({ version: z.literal(3) }).strict(),
   z
     .object({
-      version: z.literal(4),
+      version: z.union([z.literal(4), z.literal(5)]),
       studioDigest: z.string().regex(/^[a-f0-9]{64}$/),
     })
     .strict(),

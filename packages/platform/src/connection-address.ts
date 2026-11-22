@@ -6,7 +6,7 @@ import { validator } from "./schema.js";
 
 export type AddressPause = "non-public" | "unresolved";
 export const usesPublicConnection = (manifest: Manifest) =>
-  !!manifest.chat?.sandbox;
+  !!manifest.chat?.sandbox || manifest.originalSubmission?.version === 5;
 export function connectionBase(
   manifest: Manifest,
   config: Record<string, unknown>,

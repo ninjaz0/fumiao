@@ -1,3 +1,4 @@
+import { sandboxRequest } from "./sandbox-request.js";
 import type { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
 import { sandboxChat } from "./sandbox-chat.js";
 import { nodeStudioPlugin } from "./node-studio-policy.js";
@@ -59,14 +60,17 @@ export class PluginRegistry {
   constructor(
     plugins?: ProviderPlugin[],
     protocols: readonly PairedAgentProtocol[] = [],
-    private readonly chatTransport?: typeof chatHttp,
+    private readonly providerTransport?: typeof chatHttp,
   ) {
     this.custom = !!plugins;
     for (const plugin of plugins ?? []) this.remember(plugin);
     for (const p of protocols) this.protocols.set(p.provider, p);
   }
   chatAdapter(manifest: Manifest) {
-    return sandboxChat(manifest, this.chatTransport);
+    return sandboxChat(manifest, this.providerTransport);
+  }
+  requestAdapter(manifest: Manifest, source: string) {
+    return sandboxRequest(manifest, source, this.providerTransport);
   }
   private remember(p: ProviderPlugin) {
     this.builtins.set(p.manifest.id + "@" + p.manifest.version, p);
@@ -267,16 +271,15 @@ export class PluginRegistry {
     const sandbox =
       manifest.chat?.sandbox && portable && !endpoint
         ? await this.chatAdapter(manifest)
-        : studioProgram &&
-            portable &&
-            manifest.mode === "pull" &&
-            manifest.originalSubmission?.version === 4
-          ? await nodeStudioPlugin(manifest, studioProgram)
-          : undefined;
+        : studioProgram && portable && !endpoint && manifest.originalSubmission?.version === 5
+          ? await this.requestAdapter(manifest, studioProgram)
+          : studioProgram && portable && manifest.mode === "pull" && manifest.originalSubmission?.version === 4
+            ? await nodeStudioPlugin(manifest, studioProgram)
+            : undefined;
     requireValue(
-      manifest.originalSubmission?.version !== 4 || sandbox,
+      ![4, 5].includes(manifest.originalSubmission?.version ?? 0) || sandbox,
       400,
-      "节点池缺少工作台策略",
+      "插件缺少工作台策略",
     );
     requireValue(
       !sandbox ||
@@ -620,14 +623,16 @@ export class PluginRegistry {
         );
         if (native) return this.registerArchive(id, version, native.code);
       }
-      if (row.manifest.originalSubmission?.version === 4) {
+      if ([4, 5].includes(row.manifest.originalSubmission?.version)) {
         const release = await one(
           db,
           "SELECT package->>'studioProgram' AS source FROM studio_package_releases WHERE id=$1 AND package->>'adapterVersion'=$2 AND package ? 'studioProgram' LIMIT 1",
           [id, version],
         );
         requireValue(release, 503, "缺少冻结的工作台程序");
-        return nodeStudioPlugin(row.manifest, release.source);
+        return row.manifest.originalSubmission.version === 5
+          ? this.requestAdapter(row.manifest, release.source)
+          : nodeStudioPlugin(row.manifest, release.source);
       }
       if ((row.manifest.originalSubmission?.version ?? 0) >= 2)
         return portablePlugin(row.manifest);

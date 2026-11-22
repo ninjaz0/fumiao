@@ -9,6 +9,7 @@ import {
 import type { IncomingMessage } from "node:http";
 import { Transform, type Readable, type TransformCallback } from "node:stream";
 export class ChatTransportError extends Error {}
+export class ProviderBodyTooLarge extends ChatTransportError {}
 /** httpx retries raw deflate only when the first compressed chunk fails. */
 class Deflate extends Transform {
   private decoder = createInflate({ finishFlush: constants.Z_SYNC_FLUSH });
@@ -85,6 +86,7 @@ export async function chatHttp(
     connectMs: number;
     readMs: number;
     lookup?: import("node:net").LookupFunction;
+    idempotencyKey?: string;
     maxRequestBytes?: number;
     maxResponseBytes?: number;
   },
@@ -100,6 +102,9 @@ export async function chatHttp(
   const headers: Record<string, string | number> = {
     Authorization: "Bearer " + options.key,
     Accept: "*/*",
+    ...(options.idempotencyKey
+      ? { "Idempotency-Key": options.idempotencyKey }
+      : {}),
     "Accept-Encoding": "gzip, deflate",
     ...(body
       ? { "Content-Type": "application/json", "Content-Length": body.length }
@@ -170,10 +175,13 @@ export async function chatHttp(
       for await (const chunk of decoded) {
         received += chunk.length;
         if (received > (options.maxResponseBytes ?? Infinity))
-          throw new ChatTransportError("Provider response exceeds byte limit");
+          throw new ProviderBodyTooLarge(
+            "Provider response exceeds byte limit",
+          );
         yield chunk as Buffer;
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof ProviderBodyTooLarge) throw error;
       throw new ChatTransportError("Provider response interrupted");
     }
   }
