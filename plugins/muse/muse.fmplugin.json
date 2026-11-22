@@ -2,9 +2,330 @@
   "format": 1,
   "id": "muse",
   "label": "Muse2API",
-  "version": "1.0.0",
-  "adapterVersion": "1.13.0",
+  "version": "2.0.0",
+  "adapterVersion": "2.0.0",
   "updateUrl": "https://raw.githubusercontent.com/ninjaz0/fumiao/main/plugins/muse/update.json",
-  "adapterModule": "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",
-  "program": "{\n  request({ kind, model, input, remoteId }) {\n    const path = kind === \"video\" ? \"/v1/videos\" : \"/v1/images/tasks\";\n    if (remoteId) return { path: path + \"/\" + remoteId };\n    return {\n      path,\n      body: {\n        model,\n        prompt: input.prompt.replace(/<Picture (\\p{Nd}+)>/gu, \"[图$1]\"),\n        aspect_ratio: input.params.ratio,\n        images: input.references.map((r) => r.url),\n        timeout: 600,\n        ...(kind === \"video\"\n          ? { duration: input.params.seconds }\n          : { response_format: \"url\" }),\n      },\n    };\n  },\n}"
+  "manifest": {
+    "id": "muse",
+    "version": "2.0.0",
+    "contractVersion": 1,
+    "label": "Muse",
+    "mode": "request",
+    "configSchema": {
+      "type": "object",
+      "required": [
+        "baseUrl",
+        "apiKey"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "apiKey": {
+          "type": "string",
+          "minLength": 1,
+          "writeOnly": true
+        },
+        "artifactOrigins": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "pattern": "^https://"
+          }
+        },
+        "publicUrl": {
+          "type": "string",
+          "pattern": "^https?://"
+        }
+      }
+    },
+    "models": [
+      {
+        "id": "muse-image",
+        "label": "Muse 图片",
+        "kind": "image",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ratio": {
+              "type": "string",
+              "enum": [
+                "16:9",
+                "9:16",
+                "1:1",
+                "4:3",
+                "3:4",
+                "21:9"
+              ],
+              "default": "16:9"
+            }
+          }
+        },
+        "studio": {
+          "order": 3,
+          "priceOrder": 30,
+          "descriptor": {
+            "kind": "image",
+            "label": "Muse"
+          },
+          "prices": [
+            {
+              "tier": "native",
+              "label": "原生",
+              "amount": null,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "muse-video",
+        "label": "Muse 视频",
+        "kind": "video",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ratio": {
+              "type": "string",
+              "enum": [
+                "16:9",
+                "9:16",
+                "1:1",
+                "4:3",
+                "3:4",
+                "21:9"
+              ],
+              "default": "16:9"
+            },
+            "seconds": {
+              "type": "integer",
+              "enum": [
+                5,
+                6,
+                8,
+                10
+              ],
+              "default": 5
+            }
+          }
+        },
+        "studio": {
+          "order": 1,
+          "priceOrder": 10,
+          "descriptor": {
+            "kind": "video",
+            "label": "Muse"
+          },
+          "prices": [
+            {
+              "tier": "5",
+              "label": "原生 · 5s",
+              "amount": null,
+              "match": {
+                "type": "object",
+                "required": [
+                  "seconds"
+                ],
+                "properties": {
+                  "seconds": {
+                    "const": 5
+                  }
+                }
+              }
+            },
+            {
+              "tier": "6",
+              "label": "原生 · 6s",
+              "amount": null,
+              "match": {
+                "type": "object",
+                "required": [
+                  "seconds"
+                ],
+                "properties": {
+                  "seconds": {
+                    "const": 6
+                  }
+                }
+              }
+            },
+            {
+              "tier": "8",
+              "label": "原生 · 8s",
+              "amount": null,
+              "match": {
+                "type": "object",
+                "required": [
+                  "seconds"
+                ],
+                "properties": {
+                  "seconds": {
+                    "const": 8
+                  }
+                }
+              }
+            },
+            {
+              "tier": "10",
+              "label": "原生 · 10s",
+              "amount": null,
+              "match": {
+                "type": "object",
+                "required": [
+                  "seconds"
+                ],
+                "properties": {
+                  "seconds": {
+                    "const": 10
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "timing": {
+      "version": 1,
+      "geometry": "native",
+      "hardware": false,
+      "scaleSteps": false,
+      "providerClock": true
+    },
+    "queue": {
+      "version": 1,
+      "strategy": "capacity",
+      "timingVersions": [
+        "1.2.0",
+        "1.3.0",
+        "1.4.0",
+        "1.5.0",
+        "1.6.0",
+        "1.7.0",
+        "1.8.0",
+        "1.9.0",
+        "1.10.0",
+        "1.11.0",
+        "1.12.0",
+        "1.13.0",
+        "2.0.0"
+      ]
+    },
+    "originalSubmission": {
+      "version": 5,
+      "studioDigest": "5b8eaf860cf4b336c4d70422be12c649824875c464da7c57106b0373c45af32e"
+    },
+    "originalEstimate": {
+      "version": 1
+    },
+    "originalState": {
+      "version": 1,
+      "fields": [
+        "muse"
+      ],
+      "queueLane": "plugin",
+      "outputKinds": {
+        "image": "ref"
+      }
+    },
+    "artifactDownload": {
+      "version": 1
+    },
+    "artifactValidation": {
+      "version": 3,
+      "errors": {
+        "imageFormat": "Muse 返回的图片格式或尺寸无效",
+        "imageDecode": "Muse 成品保存失败，请检查后重新生成",
+        "video": "Muse 返回的视频无法验证或方向异常",
+        "failed": "Muse 成品保存失败，请检查后重新生成"
+      }
+    },
+    "requestLifecycle": {
+      "version": 1,
+      "honorImageEnabled": true,
+      "cancelDisabled": true,
+      "notes": {
+        "submitting": "正在提交 Muse",
+        "unavailable": "等待 Muse 就绪",
+        "inputFailed": "参考图读取失败，请检查素材后重新生成",
+        "saveFailed": "Muse 成品保存失败，请检查后重新生成",
+        "unknownSubmission": "Muse 提交结果待确认，请联系管理员核对后再重试",
+        "disabled": "账户已停用"
+      }
+    },
+    "canvas": {
+      "version": 1,
+      "models": [
+        {
+          "model": "muse-image",
+          "kind": "image",
+          "ratios": {
+            "values": [
+              "1:1",
+              "16:9",
+              "9:16",
+              "4:3",
+              "3:4"
+            ],
+            "error": "Muse 画幅选项无效"
+          }
+        },
+        {
+          "model": "muse-video",
+          "kind": "video",
+          "templatePriority": 1,
+          "ratios": {
+            "values": [
+              "16:9",
+              "9:16"
+            ],
+            "error": "Muse 画幅选项无效"
+          },
+          "durations": {
+            "values": [
+              5,
+              6,
+              8,
+              10
+            ],
+            "error": "Muse 时长选项无效"
+          }
+        }
+      ]
+    },
+    "canvasSubmission": {
+      "version": 1,
+      "models": [
+        {
+          "model": "muse-image",
+          "kind": "image"
+        },
+        {
+          "model": "muse-video",
+          "kind": "video",
+          "fixedSamplingSteps": 20
+        }
+      ]
+    }
+  },
+  "studioProgram": "(()=>{\"use strict\";var policy=(()=>{var M=Object.defineProperty;var $=Object.getOwnPropertyDescriptor;var K=Object.getOwnPropertyNames;var W=Object.prototype.hasOwnProperty;var D=(e,t)=>{for(var r in t)M(e,r,{get:t[r],enumerable:!0})},L=(e,t,r,n)=>{if(t&&typeof t==\"object\"||typeof t==\"function\")for(let i of K(t))!W.call(e,i)&&i!==r&&M(e,i,{get:()=>t[i],enumerable:!(n=$(t,i))||n.enumerable});return e};var H=e=>L(M({},\"__esModule\",{value:!0}),e);var ne={};D(ne,{default:()=>re});var l={\"muse-image\":{fields:{ratio:{type:\"string\",enum:[\"1:1\",\"16:9\",\"9:16\",\"4:3\",\"3:4\"],default:\"16:9\"}},nativeResolution:!0,references:{min:0,max:9},tiers:[{tier:\"native\",when:{}}]},\"muse-video\":{fields:{ratio:{type:\"string\",enum:[\"16:9\",\"9:16\"],default:\"16:9\"},seconds:{type:\"integer\",enum:[5,6,8,10],default:6}},nativeResolution:!0,references:{min:0,max:9},tiers:[{tier:\"5\",when:{seconds:[5]}},{tier:\"6\",when:{seconds:[6]}},{tier:\"8\",when:{seconds:[8]}},{tier:\"10\",when:{seconds:[10]}}]}};var Z=()=>({source:\"none\",samples:0,confidence:\"none\",version:4});function q(e,t,r,n,i,u){return{modelForm:s=>u[s.id],namespace:e.namespace,validate:e.validate,plan:e.plan,prepare(s,c,o){return e.prepare(s,{...c,admit:o.task.admit,capacity:o.task.capacity})},estimate(s,c){return t.prepare(s,{authorize:async()=>{},references:c.task.references})},configuration:r.configuration,project:r.project,timingFeatures:i,requestCapacity:n.requestCapacity,queuePlan(s,c,o){return n.queuePlan(s,{remaining:a=>o[a.id],predict:a=>c[a.id]??Z()})}}}var N=\"\\\\t-\\\\r\\\\x1c-\\\\x20\\\\x85\\\\xa0\\\\u1680\\\\u2000-\\\\u200a\\\\u2028\\\\u2029\\\\u202f\\\\u205f\\\\u3000\",G=new RegExp(\"^[\"+N+\"]+|[\"+N+\"]+$\",\"g\"),O=e=>e.replace(G,\"\");function A(e,t){try{return JSON.parse(e,t)}catch{}let r=[],n=[];for(let o=0;o<e.length;)if(e.charCodeAt(o)===34){let a=o++;for(;;){if(o>=e.length)throw new Error(\"Invalid JSON string\");let d=e.charCodeAt(o++);if(d===92)o++;else if(d===34)break}r.push(JSON.parse(e.slice(a,o)))}else{let a=e.startsWith(\"-Infinity\",o)?\"-Infinity\":e.startsWith(\"Infinity\",o)?\"Infinity\":e.startsWith(\"NaN\",o)?\"NaN\":null;a?(n.push({start:o,end:o+a.length,value:a===\"NaN\"?NaN:a===\"Infinity\"?1/0:-1/0}),o+=a.length):o++}let i=\"__muse_json_constant__\";for(;r.some(o=>o.startsWith(i));)i+=\"_\";let u={},s=[],c=0;for(let[o,a]of n.entries()){let d=i+o;u[d]=a.value,s.push(e.slice(c,a.start),\"[\"+JSON.stringify(d)+\"]\"),c=a.end}return s.push(e.slice(c)),JSON.parse(s.join(\"\"),function(o,a,d={}){return Array.isArray(a)&&a.length===1&&typeof a[0]==\"string\"&&Object.hasOwn(u,a[0])&&(a=u[a[0]],d={}),t?t.call(this,o,a,d):a})}function R(e){let t=e.replace(/^[\\u0000-\\u0020]+/,\"\").replace(/[\\t\\r\\n]/g,\"\"),r=/^(?:([a-z][a-z0-9+.-]*):)?(?:\\/\\/([^/?#]*))?([^?#]*)(?:\\?([^#]*))?(?:#(.*))?$/i.exec(t);if(!r)throw new Error(\"Invalid artifact URL\");return{scheme:(r[1]||\"\").toLowerCase(),netloc:r[2]||\"\",path:r[3],query:r[4]||\"\",fragment:r[5]||\"\"}}function m(e){return Array.isArray(e)?e.length>0:e&&typeof e==\"object\"?Object.keys(e).length>0:!!e}function P(e){if(typeof e==\"boolean\")return Number(e);if(typeof e==\"string\"&&/^[+-]?\\d(?:_?\\d)*$/.test(e.trim()))return Number(e.trim().replaceAll(\"_\",\"\"));if(typeof e==\"number\"&&Number.isFinite(e))return Math.trunc(e);throw Error(\"Invalid provider capacity\")}var b=class extends Error{constructor(r,n=400){super(r);this.status=n}status};function E(e,t,r){if(e.parent&&(!t||r!==\"any\"&&t.kind!==r))throw new b(\"\\u5185\\u5BB9\\u4E0D\\u5B58\\u5728\\u6216\\u65E0\\u6743\\u8BBF\\u95EE\",404)}function I(e,t){if(!Number.isFinite(e)||e===0)return e;if(!Number.isInteger(t)||t<0||t>12)throw Error(\"Unsupported decimal precision\");let r=new DataView(new ArrayBuffer(8));r.setFloat64(0,e);let n=r.getBigUint64(0),i=n>>63n!==0n,u=Number(n>>52n&2047n),s=n&(1n<<52n)-1n,c=(u?s+(1n<<52n):s)*10n**BigInt(t),o=(u||1)-1023-52;if(o>=0)return e;let a=1n<<BigInt(-o),d=c/a,w=c%a,p=d+(w*2n>a||w*2n===a&&d%2n===1n?1n:0n);return+((i?\"-\":\"\")+p+\"e-\"+t)}var C=(e,t)=>Object.fromEntries(t.filter(r=>Object.hasOwn(e,r)).map(r=>[r,e[r]]));var J={image:[\"1:1\",\"16:9\",\"9:16\",\"4:3\",\"3:4\"],video:[\"16:9\",\"9:16\"]},X=[5,6,8,10],h=e=>{throw new b(e)};function T(e){return{namespace:t=>\"-muse-\"+t.kind,validate(t,r){if(r===\"before-packs\"&&t.h3?.mode===\"frames\"&&t.asset_packs.length&&h(\"\\u9996\\u5C3E\\u5E27\\u6A21\\u5F0F\\u8BF7\\u5728\\u69FD\\u4F4D\\u4E2D\\u76F4\\u63A5\\u9009\\u62E9\\u56FE\\u7247\"),r!==\"before-retry\")return;t.h3&&h(\"\\u5F53\\u524D\\u6A21\\u578B\\u4E0D\\u652F\\u6301 H3 \\u8F93\\u5165\\u6A21\\u5F0F\"),t.kind===\"video\"&&t.sampling_steps!==20&&h(\"Muse \\u4E0D\\u652F\\u6301\\u91C7\\u6837\\u6B65\\u6570\\u8BBE\\u7F6E\"),t.kind===\"image\"&&![\"1K\",\"2K\"].includes(t.resolution)&&h(\"\\u8BE5\\u6A21\\u578B\\u4E0D\\u652F\\u6301\\u8FD9\\u4E2A\\u5206\\u8FA8\\u7387\"),e(t.prompt)||h(\"\\u8BF7\\u68C0\\u67E5 Muse \\u6A21\\u578B\\u548C\\u63D0\\u793A\\u8BCD\"),(t.kind===\"image\"?J.image:J.video).includes(t.ratio)||h(\"Muse \\u4E0D\\u652F\\u6301\\u8FD9\\u4E2A\\u753B\\u5E45\\u9009\\u9879\"),t.kind===\"video\"&&!X.includes(t.seconds)&&h(\"Muse \\u65F6\\u957F\\u53EF\\u9009 5\\u30016\\u30018\\u300110 \\u79D2\")},plan:t=>({namespace:\"-muse-\"+t.kind,refs:t.refs,roles:[\"ref\"],missing:{status:404,message:\"\\u5185\\u5BB9\\u4E0D\\u5B58\\u5728\\u6216\\u65E0\\u6743\\u8BBF\\u95EE\"},parentKind:t.kind,referenceBytes:{max:100*1024*1024,message:\"Muse \\u53C2\\u8003\\u56FE\\u603B\\u5927\\u5C0F\\u4E0D\\u80FD\\u8D85\\u8FC7 100 MB\"},admission:{models:[\"muse-image\",\"muse-video\"],owner:20,message:\"Muse \\u6392\\u961F\\u4EFB\\u52A1\\u8F83\\u591A\\uFF0C\\u8BF7\\u7B49\\u5F85\\u6216\\u53D6\\u6D88\\u90E8\\u5206\\u4EFB\\u52A1\"}}),async prepare(t,r){return E(t,r.parent,t.kind),await r.admit(),await r.capacity(),{params:{ratio:t.ratio,...t.kind===\"video\"?{seconds:t.seconds}:{}},references:r.references.map(n=>n.id),view:{ratio:t.ratio,quality:0,seconds:t.kind===\"video\"?t.seconds:0,sampling_steps:20,seed:0,width:0,height:0,image_quality:\"native\",audio_settings:{},h3_inputs:{}}}}}}var v={async prepare(e,t){e.model!==\"muse-\"+e.kind&&h(\"\\u6A21\\u578B\\u4E0E\\u751F\\u6210\\u7C7B\\u578B\\u4E0D\\u5339\\u914D\"),(![\"video\",\"image\"].includes(e.kind)||![\"16:9\",\"9:16\",\"1:1\",\"4:3\",\"3:4\",\"21:9\"].includes(e.ratio))&&h(\"\\u672A\\u77E5\\u751F\\u6210\\u53C2\\u6570\"),e.sampling_steps!==20&&h(\"Muse \\u4E0D\\u652F\\u6301\\u91C7\\u6837\\u6B65\\u6570\\u8BBE\\u7F6E\"),(!(e.kind===\"image\"?[\"1:1\",\"16:9\",\"9:16\",\"4:3\",\"3:4\"]:[\"16:9\",\"9:16\"]).includes(e.ratio)||e.kind===\"video\"&&![5,6,8,10].includes(e.seconds))&&h(\"\\u672A\\u77E5 Muse \\u53C2\\u6570\");let r=await t.references(e.refs);return{model:e.model,kind:e.kind,references:r.map(n=>n.id),params:{ratio:e.ratio,seconds:e.kind===\"video\"?e.seconds:0}}}},Q={configured:e=>!!(e.baseUrl&&e.apiKey),configuration:e=>({muse:{configured:e.connection?.configured??!1,ready:!!(e.connection?.health.ready&&e.stamp-(e.connection.health.checked||0)<90),image_ratios:[\"1:1\",\"16:9\",\"9:16\",\"4:3\",\"3:4\"],video_ratios:[\"16:9\",\"9:16\"],durations:[5,6,8,10]}}),project:e=>e.state===\"completed\"?{width:e.metadata.width,height:e.metadata.height,actual:{...C(e.metadata,[\"width\",\"height\"]),...e.kind===\"video\"?{duration:I(e.metadata.duration,3),fps:e.metadata.fps??null}:{}}}:[\"queued\",\"failed\",\"cancelled\"].includes(e.state)?{}:{note:e.state===\"finalizing\"?\"\\u6B63\\u5728\\u4FDD\\u5B58 Muse \\u6210\\u54C1\":e.remoteId?e.phase===\"queued\"?\"\\u7B49\\u5F85 Muse \\u7A7A\\u95F2\\u8D26\\u53F7\":e.phase===\"preparing\"?\"\\u6B63\\u5728\\u51C6\\u5907 Muse\":\"Muse \\u751F\\u6210\\u4E2D\":\"\\u6B63\\u5728\\u63D0\\u4EA4 Muse\"}};function j({model:e,kind:t,input:r}){return{kind:t,model:e,executor:\"muse-api\",workflow:\"muse2api-native-v1\",width:0,height:0,native_ratio:String(r.params.ratio||\"16:9\"),seconds:t===\"video\"?r.params.seconds??5:0,steps:0,video_mode:t===\"video\"?r.references.length?\"i2v\":\"t2v\":\"image\",quality:\"native\",refs:r.references.length,ref_pixels:r.references.reduce((n,i)=>n+i.width*i.height,0),hardware:\"muse-api\",profile:{},runtime_id:\"\",cold:null}}var Y=(e,t)=>typeof e.id==\"number\"&&typeof t.id==\"number\"?e.id-t.id:String(e.id)<String(t.id)?-1:String(e.id)>String(t.id)?1:0;function B(e){let t=e.health,r=new Set(e.jobs.filter(i=>i.status===\"running\"&&i.remoteId).map(i=>i.remoteId)),n=(t.tasks||[]).filter(i=>!r.has(i.id)).length;return Math.max(0,Math.min(16,t.capacity??1)-n-(t.maintenance??0))}var U={requestCapacity(e){return e.health.ready&&e.stamp-(e.health.checked??0)<90?B(e):0},queuePlan(e,t){let{health:r,jobs:n,runs:i,stamp:u}=e,s=r.ready&&u-(r.checked??0)<90,c=B(e),o=Array.from({length:Math.max(1,c)},()=>({low:0,median:0,high:0})),a=n.filter(p=>p.status===\"running\"&&i[p.id]?.phase!==\"queued\");for(let[p,g]of a.entries()){let y=t.remaining(g),x=o[Math.min(p,o.length-1)];for(let f of[\"low\",\"median\",\"high\"])x[f]=y[f]!=null&&!y.overdue?Math.max(x[f]||0,y[f]):null}let d={},w=0;for(let p of n.filter(g=>g.status===\"queued\"||g.status===\"running\"&&i[g.id]?.phase===\"queued\").sort(Y)){if(p.kind===\"image\"&&!e.imageEnabled){d[p.id]={source:\"none\",reason:\"service_paused\",ahead:w};continue}let g=t.predict(p),y=o.reduce((f,_)=>(_.median??1/0)<(f.median??1/0)?_:f),x=!s||!c?{source:\"none\",reason:s?\"muse_busy\":\"waiting_muse\",ahead:w,duration:g}:{...y,source:y.high!==null?\"queue\":\"none\",reason:y.high!==null?null:\"observing\",ahead:w,duration:g};d[p.id]=p.status===\"running\"?{...x,phase:\"queued\"}:x;for(let f of[\"low\",\"median\",\"high\"])y[f]=y[f]!==null&&g[f]!=null?y[f]+g[f]:null;w++}return d}};function S(e){let t={state:e.status===\"processing\"?\"running\":typeof e.status==\"string\"&&[\"queued\",\"completed\",\"failed\"].includes(e.status)?e.status:\"unknown\"};typeof e.phase==\"string\"?t.phase=e.phase.slice(0,80):m(e.phase)&&(t.phase=\"unknown\");for(let r of[\"created_at\",\"accepted_at\",\"started_at\",\"generating_at\",\"finished_at\",\"updated_at\",\"elapsed\"])typeof e[r]==\"number\"&&Number.isFinite(e[r])&&(t[r]=e[r]);for(let r of[\"started_at\",\"generating_at\"])t[r]===void 0&&m(e[r])&&(t[`${r}_reported`]=!0);return t}var z=e=>({state:\"pending\",remoteId:e}),k=(e,t={})=>({...t,disposition:{action:\"fail\",note:e}});function F(e){if(e.status<200||e.status>=300||e.text===null)return null;try{return A(e.text)}catch{return null}}function ee(e,t){if([401,403,429].includes(t))return{disposition:{action:\"retry\",note:\"\\u7B49\\u5F85 Muse \\u5C31\\u7EEA\",delaySeconds:60}};if([400,413,422].includes(t))return k(\"Muse \\u62D2\\u7EDD\\u4E86\\u751F\\u6210\\u53C2\\u6570\\u6216\\u53C2\\u8003\\u56FE\");let r=m(e?.task_id)?e.task_id:e?.id;return typeof r!=\"string\"||/^task_[a-f0-9]{20,64}$/.exec(r)?.[0]!==r?{disposition:{action:\"fail\",note:\"Muse \\u63D0\\u4EA4\\u7ED3\\u679C\\u5F85\\u786E\\u8BA4\\uFF0C\\u8BF7\\u8054\\u7CFB\\u7BA1\\u7406\\u5458\\u6838\\u5BF9\\u540E\\u518D\\u91CD\\u8BD5\",interrupted:!0,uncertain:!0}}:{receipt:z(r),clock:S(e),note:\"\\u7B49\\u5F85 Muse \\u7A7A\\u95F2\\u8D26\\u53F7\"}}function te(e,t,r){if(t===404)return k(\"Muse \\u4E2D\\u7684\\u4EFB\\u52A1\\u8BB0\\u5F55\\u5DF2\\u4E0D\\u5B58\\u5728\\uFF0C\\u7ED3\\u679C\\u672A\\u786E\\u8BA4\\uFF1B\\u8BF7\\u68C0\\u67E5\\u540E\\u518D\\u91CD\\u65B0\\u751F\\u6210\");if(!e||typeof e!=\"object\"||Array.isArray(e))return{disposition:{action:\"poll\"}};let n={clock:S(e)};if([\"completed\",\"done\",\"succeeded\",\"success\"].includes(e.status)){n.note=\"\\u6B63\\u5728\\u4FDD\\u5B58 Muse \\u6210\\u54C1\";let i=m(e.result)?e.result:{};if(!m(e.url)&&(typeof i!=\"object\"||Array.isArray(i)))return k(\"Muse \\u6210\\u54C1\\u4FDD\\u5B58\\u5931\\u8D25\\uFF0C\\u8BF7\\u68C0\\u67E5\\u540E\\u91CD\\u65B0\\u751F\\u6210\",n);let u=m(e.url)?e.url:i.url;if(!m(u)&&m(e.data)){let s=Array.isArray(e.data)?e.data[0]:null;if(!s||typeof s!=\"object\"||Array.isArray(s))return k(\"Muse \\u6210\\u54C1\\u4FDD\\u5B58\\u5931\\u8D25\\uFF0C\\u8BF7\\u68C0\\u67E5\\u540E\\u91CD\\u65B0\\u751F\\u6210\",n);u=s.url}return typeof u==\"string\"?{...n,receipt:{state:\"completed\",artifacts:[{url:u}]}}:k(\"Muse \\u672A\\u8FD4\\u56DE\\u53EF\\u4E0B\\u8F7D\\u7684\\u6210\\u54C1\",n)}return e.status===\"failed\"?k(\"Muse \\u751F\\u6210\\u672A\\u6210\\u529F\\uFF0C\\u8BF7\\u68C0\\u67E5\\u670D\\u52A1\\u7AEF\\u4EFB\\u52A1\\u8BB0\\u5F55\\u540E\\u91CD\\u65B0\\u751F\\u6210\",n):(e.status===\"processing\"?(Object.hasOwn(e,\"phase\")||(n.timing={job_phase:\"generating\"}),n.note=e.phase===\"preparing\"?\"\\u6B63\\u5728\\u51C6\\u5907 Muse\":\"Muse \\u751F\\u6210\\u4E2D\"):e.status===\"queued\"&&(n.note=\"\\u7B49\\u5F85 Muse \\u7A7A\\u95F2\\u8D26\\u53F7\"),{...n,receipt:z(r)})}var re={...q(T(O),v,Q,U,j,l),request({kind:e,model:t,remoteId:r,prompt:n,params:i,references:u}){let s=e===\"video\"?\"/v1/videos\":\"/v1/images/tasks\";return r?{path:s+\"/\"+r,timeoutMs:5e3}:{path:s,timeoutMs:12e4,idempotency:\"compact\",body:{model:t,prompt:n.replace(/<Picture (\\p{Nd}+)>/gu,\"[\\u56FE$1]\"),aspect_ratio:i.ratio,images:u.map(c=>c.value),timeout:600,...e===\"video\"?{duration:i.seconds}:{response_format:\"url\"}}}},result(e,t){return t?te(F(e),e.status,t):ee(F(e),e.status)},async serviceProbe(e){let t=await e.service.read(\"/v1/models\");if(t.status<200||t.status>=300)return{ready:!1};try{let r=JSON.parse(t.text).data;if(Array.isArray(r)&&r.every(n=>typeof n?.id==\"string\"))return{ready:!0,models:r.map(n=>n.id)}}catch{}return{ready:!0}},async queueHealth(e){async function t(r){let n=await e.service.read(r);if(n.status<200||n.status>=300||n.text===null)throw Error();return JSON.parse(n.text)}try{let r=await t(\"/readyz\");if(r.status!==\"ready\"||!m(r.accounts))return{ready:!1};let n=await t(\"/v1/models\");if(!Array.isArray(n.data)||!n.data.length)return{ready:!1};try{let i=await t(\"/v1/queue\"),u=(i.tasks===void 0?[]:i.tasks).slice(0,1e4).map(s=>typeof s.id==\"string\"?{id:s.id}:{});if(u.some(s=>s.id?.length>500))throw Error();return{ready:!0,capacity:Math.max(0,Math.min(16,P(i.capacity===void 0?1:i.capacity))),maintenance:Math.max(0,Math.min(1e3,P(i.maintenance===void 0?0:i.maintenance))),tasks:u}}catch{return{ready:!0,capacity:1,maintenance:0,tasks:[]}}}catch{return{ready:!1}}},artifact(e,t,r){let n=R(e);if(!n.query&&!n.fragment)for(let i of[t,r??{netloc:\"backend.nvmes.com\",path:\"/muse\"},{netloc:\"muse.nvmes.com\",path:\"\"}]){let u=i.path+\"/v1/media/\";if(n.netloc&&n.netloc!==i.netloc||!n.path.startsWith(u))continue;let s=n.path.slice(u.length);if(/^[A-Za-z0-9_.-]{1,200}$/.test(s)&&!s.includes(\"..\"))return{path:\"/v1/media/\"+s}}return{error:\"Muse \\u8FD4\\u56DE\\u4E86\\u65E0\\u6548\\u7684\\u6210\\u54C1\\u5730\\u5740\"}},downloadError(e){return e===\"oversized\"?{note:\"Muse \\u6210\\u54C1\\u8D85\\u8FC7 64 MB\\uFF0C\\u672A\\u4FDD\\u5B58\",disposition:\"failed\"}:{note:\"\",disposition:\"retry\"}}};return H(ne);})();\n;return policy.default})()",
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "http",
+      "secrets",
+      "media"
+    ],
+    "http": {
+      "origins": [],
+      "connection": true
+    }
+  }
 }

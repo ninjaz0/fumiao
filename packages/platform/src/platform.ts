@@ -1,3 +1,10 @@
+import {
+  addressPause,
+  connectionBase,
+  usesPublicConnection,
+  validSavedConfig,
+  type AddressPause,
+} from "./connection-address.js";
 import { hasStudioPackages } from "./studio-plugin-profile.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -433,11 +440,12 @@ export class Platform {
         concurrency: number;
         config: string;
         fields: Record<string, { writeOnly?: boolean; enum?: unknown[] }>;
-      }>(`SELECT c.id,c.name,c.plugin_id,c.plugin_version,c.revision,c.enabled,c.concurrency,c.config,
+        pause: AddressPause | null;
+      }>(`SELECT c.id,c.name,c.plugin_id,c.plugin_version,c.revision,c.enabled,c.concurrency,c.config,to_jsonb(c)->>'sandbox_address_pause' AS pause,
       v.manifest->'configSchema'->'properties' AS fields FROM connections c JOIN plugin_versions v ON (v.id,v.version)=(c.plugin_id,c.plugin_version)
       WHERE NOT c.removed AND NOT c.fmworker_resource_driver ORDER BY c.name`)
     ).rows;
-    return rows.map(({ config, fields, ...row }) => {
+    return rows.map(({ config, fields, pause, ...row }) => {
       const saved = this.vault.open(config);
       // Only expressly public service fields may be returned to a browser.
       const values = Object.fromEntries(
@@ -451,7 +459,12 @@ export class Platform {
           )
           .map((k) => [k, saved[k]]),
       );
-      return { ...row, values, configuredFields: Object.keys(saved) };
+      return {
+        ...row,
+        values,
+        configuredFields: Object.keys(saved),
+        ...(pause ? { addressPause: pause } : {}),
+      };
     });
   }
   async createConnection(user: Actor, value: unknown, studio = false) {
@@ -502,18 +515,30 @@ export class Platform {
       400,
       "连接配置不符合插件要求",
     );
-    const managed =
-      studio &&
+    if (usesPublicConnection(plugin.manifest))
+      requireValue(
+        !(await addressPause(plugin.manifest, input.config)),
+        400,
+        "服务地址须为可解析的公网 HTTPS 地址",
+      );
+    const installation =
       (await hasStudioPackages(sql)) &&
       (await one(
         sql,
-        "SELECT installed,removing FROM studio_packages WHERE id=$1",
+        `SELECT p.installed,p.removing,r.package->>'adapterVersion' AS adapter_version
+         FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE p.id=$1 FOR SHARE OF p`,
         [input.pluginId],
       ));
+    const managed = studio && installation;
     requireValue(
       !managed || (managed.installed && !managed.removing),
       409,
       "请先导入插件",
+    );
+    requireValue(
+      !installation || installation.adapter_version === input.version,
+      409,
+      "连接版本与已安装的插件不符，请刷新后重试",
     );
     if (
       studio &&
@@ -648,12 +673,26 @@ export class Platform {
         );
       input.config = { ...saved, ...input.config };
     }
-    if (input.config)
+    let pause: AddressPause | null = row.sandbox_address_pause ?? null;
+    if (input.config) {
+      if (usesPublicConnection(plugin.manifest)) {
+        const saved = this.vault.open(row.config);
+        const sameAddress =
+          connectionBase(plugin.manifest, saved)?.href ===
+          connectionBase(plugin.manifest, input.config)?.href;
+        pause = await addressPause(plugin.manifest, input.config);
+        requireValue(
+          !pause || (sameAddress && row.sandbox_address_pause),
+          400,
+          "服务地址须为可解析的公网 HTTPS 地址",
+        );
+      }
       requireValue(
-        validator.validate(plugin.manifest.configSchema, input.config),
+        validSavedConfig(plugin.manifest, input.config, pause),
         400,
         "连接配置无效",
       );
+    }
     if (input.config && plugin.manifest.chat)
       requireValue(
         plugin.chatProvider!(input.config) ===
@@ -661,15 +700,19 @@ export class Platform {
         400,
         "请为不同的对话服务新建连接",
       );
+    const writePause = Object.hasOwn(row, "sandbox_address_pause");
     const result = await one(
       this.db,
-      "UPDATE connections SET enabled=$2,config=$3,concurrency=$4,revision=revision+1 WHERE id=$1 AND revision=$5 RETURNING revision",
+      "UPDATE connections SET enabled=$2,config=$3,concurrency=$4,revision=revision+1" +
+        (writePause ? ",sandbox_address_pause=$6" : "") +
+        " WHERE id=$1 AND revision=$5 RETURNING revision",
       [
         id,
         input.enabled,
         input.config ? this.vault.seal(input.config) : row.config,
         input.concurrency,
         input.revision,
+        ...(writePause ? [pause] : []),
       ],
     );
     requireValue(result, 409, "连接配置已更新，请刷新");

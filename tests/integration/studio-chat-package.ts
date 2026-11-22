@@ -1,22 +1,31 @@
+import { seedLegacyPackage, legacyPackage } from "../helpers/legacy-studio.js";
+import type { Platform } from "@fumiao/platform/platform.js";
 import assert from "node:assert/strict";
 import { expect, type Page } from "@playwright/test";
 import { chatProviderFixture } from "../helpers/chat-provider.js";
 import { request, settings, setTab } from "./studio-settings-browser.js";
 
 /** The caller has logged into a fresh, funded Studio and opened Settings → Plugins. */
-export async function verifyChatPackage(page: Page) {
+export async function verifyChatPackage(page: Page, p: Platform) {
   const provider = await chatProviderFixture();
   try {
     await page
       .getByLabel("选择插件文件")
-      .setInputFiles("plugins/compatible-chat/compatible-chat.fmplugin.json");
-    const imported = await request(
-      page,
-      "/api/admin/plugins/import",
-      "POST",
-      () => page.getByRole("button", { name: "确认导入" }).click(),
-    );
-    assert.equal(imported.status(), 201, await imported.text());
+      .setInputFiles(
+        "plugins/compatible-chat/package/legacy-1.2.1.fmplugin.json",
+      );
+    await expect(
+      page.getByText(/旧版原生插件已停止导入/).first(),
+    ).toBeVisible();
+    await seedLegacyPackage(p, await legacyPackage("compatible-chat"));
+    await page.reload();
+    await settings(page);
+    await setTab(page, "plugins");
+    await page
+      .locator("article.plugin-connection")
+      .filter({ has: page.getByText("兼容对话", { exact: true }) })
+      .getByRole("button", { name: "设置", exact: true })
+      .click();
     const toggle = page.getByRole("switch", { name: "兼容对话开关" });
     await expect(toggle).not.toBeChecked();
     const connection = provider.config();
@@ -74,6 +83,25 @@ export async function verifyChatPackage(page: Page) {
       ["deepseek-flash"],
     );
     await settings(page);
+    await setTab(page, "plugins");
+    // The new release only connects to public HTTPS services. An old loopback
+    // connection still drains and the administrator can inspect its upgrade.
+    await page
+      .getByLabel("选择插件文件")
+      .setInputFiles("plugins/compatible-chat/compatible-chat.fmplugin.json");
+    await expect(
+      page.getByText(/对管理员配置的服务地址注入连接密钥/),
+    ).toBeVisible();
+    const upgrade = await request(
+      page,
+      "/api/admin/plugins/import",
+      "POST",
+      () => page.getByRole("button", { name: "确认更新", exact: true }).click(),
+    );
+    assert.ok(upgrade.ok(), await upgrade.text());
+    await expect(page.getByText(/此连接已暂停接收新任务/)).toBeVisible();
+    const config = await (await page.request.get("/api/chat/config")).json();
+    assert.deepEqual(Object.keys(config.models), []);
     await setTab(page, "plugins");
   } finally {
     await provider.cleanup();

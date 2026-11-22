@@ -1,8 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { build } from "esbuild";
 import { readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve, relative, join } from "node:path";
-import { gzipSync } from "node:zlib";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 
 const hash = (b) => createHash("sha256").update(b).digest("hex");
@@ -16,25 +14,32 @@ async function expression(path) {
     .trim()
     .replace(/;$/, "");
 }
-const trusted = {};
+// These packages were already distributed. Keep their inputs byte-for-byte
+// stable when rebuilding the sandbox releases or restoring an old database.
 const releases = [
   {
     id: "flow",
-    entry: 'export { flowText as adapter } from "./src/text.js";',
-    program: true,
+    sandboxBuild: "package/build.mjs",
+    archive: "legacy-1.0.0.fmplugin.json",
+    archiveDigest: "5aef66b00034c8dd5ad8c7ff8be8f51966f5dfb2bf770b8e63832175686faeb5",
   },
   {
     id: "muse",
-    entry: 'export { museText as adapter } from "./src/text.js";',
-    program: true,
+    sandboxBuild: "package/build.mjs",
+    archive: "legacy-1.0.0.fmplugin.json",
+    archiveDigest: "ad67a5ecf101bfbdbb6dde80b94443348ac7c1304ec702b0a6114d8583933ac5",
   },
   {
     id: "gpu",
+    archive: "legacy-1.0.0.fmplugin.json",
+    archiveDigest: "89613b0db235ea2cd77aa8fe6b21e5d06f56a9c07b3b87c144aa157c6c5d0121",
     sandboxBuild: "package/build.mjs",
   },
   {
     id: "compatible-chat",
-    entry: 'export { chatStreaming as adapter } from "../chat/src/stream.js";',
+    archive: "legacy-1.2.1.fmplugin.json",
+    archiveDigest: "f4c8134cc3d0928e16991d6159e0a31355dcda10a16555a33fdc0dfc4cba7970",
+    sandboxBuild: "package/build.mjs",
   },
   { id: "storyboard" },
   { id: "payments" },
@@ -43,52 +48,6 @@ const releases = [
   { id: "example-review-notes" },
   { id: "example-node-pool", program: true, clientBuild: "client/pack.py" },
 ];
-async function buildAdapter(root, entry) {
-  const result = await build({
-    stdin: {
-      contents: entry,
-      resolveDir: resolve(root),
-    },
-    format: "esm",
-    platform: "node",
-    target: "node24",
-    bundle: true,
-    write: false,
-    plugins: [
-      {
-        name: "studio-sdk",
-        setup(b) {
-          // Host modules stay external. Installed packages name them by
-          // repository path, so that identifier is part of the format.
-          b.onResolve(
-            {
-              filter:
-                /^@fumiao\/(plugin-sdk|platform|original-api|image-import)\//,
-            },
-            (args) => {
-              const [, name, ...rest] = args.path.split("/");
-              return {
-                path: `fumiao:packages/${name}/src/${rest.join("/")}`,
-                external: true,
-              };
-            },
-          );
-          b.onLoad({ filter: /plugins\/.*\.ts$/ }, async ({ path }) => {
-            let contents = await readFile(path, "utf8");
-            for (const m of contents.matchAll(
-              /readFileSync\(new URL\("([^"]+)", import\.meta\.url\), "utf8"\)/g,
-            )) {
-              const data = await readFile(join(dirname(path), m[1]), "utf8");
-              contents = contents.replace(m[0], () => JSON.stringify(data));
-            }
-            return { contents, loader: "ts", resolveDir: dirname(path) };
-          });
-        },
-      },
-    ],
-  });
-  return gzipSync(result.outputFiles[0].contents);
-}
 async function packContributions(root, contributes) {
   for (const page of [...(contributes.settingsPages ?? []), ...(contributes.events ?? []), ...(contributes.actions ?? []), ...(contributes.exporters ?? []), ...(contributes.paymentMethods ?? [])]) {
     if (page.programFile) {
@@ -103,24 +62,28 @@ async function packContributions(root, contributes) {
     delete contributes.settings.migrateFile;
   }
 }
-for (const { id, entry, program, sandboxBuild, clientBuild } of releases) {
+for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of releases) {
   const root = "plugins/" + id,
     file = JSON.parse(await readFile(root + "/package/release.json", "utf8"));
+  if (archive) {
+    const data = await readFile(join(root, "package", archive));
+    if (hash(data) !== archiveDigest)
+      throw Error("Published package digest mismatch: " + id);
+    const legacy = JSON.parse(data);
+    const bytes = Buffer.from(legacy.adapterModule, "base64");
+    if (legacy.id !== id || !bytes.length)
+      throw Error("Invalid historical package: " + id);
+    if (!sandboxBuild)
+      throw Error("Published native packages need a sandbox build: " + id);
+    if (id === "gpu") {
+      const archived = await readFile(
+        join(root, "package/provider-" + legacy.adapterVersion + ".js.gz"),
+      );
+      if (!archived.equals(bytes))
+        throw Error("Published GPU adapter digest mismatch");
+    }
+  }
   if (sandboxBuild) {
-    const legacy = JSON.parse(
-      await readFile(join(root, "package/legacy-1.0.0.fmplugin.json"), "utf8"),
-    );
-    const pinned =
-      "b418dad85380eed9df512cac18d952dc550e616ebd32ff38aa17b09f840b2df6";
-    const legacyBytes = await readFile(
-      join(root, "package/provider-" + legacy.adapterVersion + ".js.gz"),
-    );
-    if (
-      hash(legacyBytes) !== pinned ||
-      !legacyBytes.equals(Buffer.from(legacy.adapterModule, "base64"))
-    )
-      throw Error("Published GPU adapter digest mismatch");
-    trusted[id + "@" + legacy.adapterVersion] = pinned;
     Object.assign(
       file,
       JSON.parse(
@@ -132,15 +95,10 @@ for (const { id, entry, program, sandboxBuild, clientBuild } of releases) {
       ),
     );
   }
-  if (entry) {
-    const packed = await buildAdapter(root, entry);
-    trusted[id + "@" + file.adapterVersion] = hash(packed);
-    file.adapterModule = packed.toString("base64");
-  }
   if (file.contributes)
     await packContributions(root + "/package", file.contributes);
   if (program) file.program = await expression(root + "/package/program.js");
-  if (sandboxBuild)
+  if (id === "gpu")
     file.nodeClient = JSON.parse(
       execFileSync("python3", [join(root, "package/build-client.py")], {
         encoding: "utf8",
@@ -162,15 +120,16 @@ for (const { id, entry, program, sandboxBuild, clientBuild } of releases) {
     json({
       id,
       version: file.version,
-      notes: sandboxBuild
-        ? "节点池协议升级，排空任务后重新接入实例"
-        : "首次发布",
+      notes:
+        id === "compatible-chat"
+          ? "对话请求和流式回复由沙箱处理"
+          : id === "gpu"
+            ? "节点池协议升级，排空任务后重新接入实例"
+            : id === "muse" || id === "flow"
+              ? "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS"
+              : "首次发布",
       package: path,
       sha256: hash(data),
     }),
   );
 }
-await writeFile(
-  "packages/platform/src/distribution/official-adapters.json",
-  json(trusted),
-);

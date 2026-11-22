@@ -1,7 +1,7 @@
+import { seedLegacyPackage, legacyPackage } from "../helpers/legacy-studio.js";
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { one } from "@fumiao/platform/db.js";
 import {
@@ -97,6 +97,18 @@ test("only public addresses and declared https origins are reachable", () => {
     "192.168.1.1",
     "169.254.169.254",
     "100.64.0.1",
+    "192.0.2.1",
+    "198.51.100.42",
+    "203.0.113.7",
+    "192.88.99.2",
+    "64:ff9b:1::1",
+    "100::1",
+    "fec0::1",
+    "2001:2::1",
+    "2001:db8::1",
+    "2002::1",
+    "3fff::1",
+    "2606:4700:4700::1111%lo0",
     "0.0.0.0",
     "::1",
     "::ffff:127.0.0.1",
@@ -112,6 +124,8 @@ test("only public addresses and declared https origins are reachable", () => {
     "8.8.8.8",
     "1.1.1.1",
     "::ffff:8.8.8.8",
+    "2001:3::1",
+    "2001:4860:4860::8888",
     "2606:4700:4700::1111",
   ])
     assert.equal(publicAddress(address), true, address);
@@ -213,12 +227,7 @@ async function setup(t: TestContext, contributes: object, fake = true) {
     await identity.login({ name: "admin", password }, "fixture"),
   );
   const packages = new StudioPackages(f.p);
-  await packages.install(
-    admin,
-    JSON.parse(
-      await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
-    ),
-  );
+  await seedLegacyPackage(f.p, await legacyPackage("gpu"));
   await f.db.query(
     `UPDATE studio_package_releases SET package=(package-'settingsPage') || jsonb_build_object('contributes',$1::jsonb) WHERE id='gpu'`,
     [

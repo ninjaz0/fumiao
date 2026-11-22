@@ -79,10 +79,17 @@ export const memberScopes: readonly PageScope[] = [
  *
  * - nodes: node pairing and control, through `host` page actions.
  * - http:  HTTPS requests to the origins listed in `contributes.http`.
+ * - secrets: inject the saved connection credential into an authorized HTTP request.
  * - data:  a key-value store owned by this plugin.
  * - media: inspect and transform private assets in the active workspace.
  */
-export const hostCapabilities = ["nodes", "http", "data", "media"] as const;
+export const hostCapabilities = [
+  "nodes",
+  "http",
+  "data",
+  "media",
+  "secrets",
+] as const;
 export type HostCapability = (typeof hostCapabilities)[number];
 
 /**
@@ -97,6 +104,8 @@ export type HostCapability = (typeof hostCapabilities)[number];
  * | media.transcode / media.concat | asset ID or ordered IDs, { format: "mp4" or "wav" } | new asset ID and metadata |
  * | media.extractFrame | asset ID, { seconds } | new PNG asset ID and metadata |
  * | http.fetch  | url, { method?, headers?, json? \| body? }   | { status, ok, contentType, text, json }        |
+ * | http.openStream | url, same options as fetch | { status, ok, contentType }; one response per invocation |
+ * | http.readStream | none | { done, text }; incremental UTF-8, including split code points |
  * | data.get    | key, { scope? }                             | stored value or null                           |
  * | data.list   | prefix?, { scope? }                         | { keys, more }                                 |
  * | data.put    | key, value, { scope? }                      | true                                           |
@@ -110,6 +119,8 @@ export const hostFunctions = {
   "media.transcode": { capability: "media", access: "write" },
   "media.concat": { capability: "media", access: "write" },
   "media.extractFrame": { capability: "media", access: "write" },
+  "http.openStream": { capability: "http", access: "write" },
+  "http.readStream": { capability: "http", access: "write" },
   "http.fetch": { capability: "http", access: "write" },
   "data.get": { capability: "data", access: "read" },
   "data.list": { capability: "data", access: "read" },
@@ -332,8 +343,15 @@ export const contributesSchema = z
       .default([]),
     /** Where `http.fetch` may send requests, e.g. `https://api.example.com`. */
     http: z
-      .object({ origins: z.array(z.string().max(200)).min(1).max(16) })
+      .object({
+        origins: z.array(z.string().max(200)).max(16),
+        connection: z.literal(true).optional(),
+      })
       .strict()
+      .refine(
+        (h) => h.origins.length > 0 || h.connection === true,
+        "请声明服务连接或 HTTP 目标",
+      )
       .optional(),
   })
   .strict();
@@ -366,6 +384,8 @@ export function contributionProblems(
   if (caps.has("nodes") && !(context.mode === "pull" && context.hasProgram))
     problems.push("节点能力需要 pull 模式的节点程序");
   if (c.nodePools && !caps.has("nodes")) problems.push("节点池需要 nodes 能力");
+  if (caps.has("secrets") && !caps.has("http"))
+    problems.push("密钥注入需要 http 能力");
   if (caps.has("http") !== !!c.http)
     problems.push("http 能力与 http.origins 必须同时声明");
   for (const origin of c.http?.origins ?? []) {

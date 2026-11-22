@@ -5,7 +5,7 @@ import {
 } from "./studio-plugin-profile.js";
 import { one, type Sql } from "./db.js";
 import { requireValue } from "./security.js";
-import { validator } from "./plugins.js";
+import { validSavedConfig } from "./connection-address.js";
 import { hasStudioPackages } from "./studio-plugin-profile.js";
 import type { ProviderPlugin, ChatPolicy } from "@fumiao/plugin-sdk/index.js";
 export type ChatConnection = {
@@ -16,6 +16,44 @@ export type ChatConnection = {
   config: Record<string, unknown>;
   configured: boolean;
 };
+// Older Studio accounts share the image connection's credential with this exact
+// provider and these two endpoints. Sandbox manifests cannot create such grants.
+function inheritedKey(
+  plugin: ProviderPlugin,
+  provider: ChatConnection["provider"],
+  config: Record<string, unknown>,
+  managed: boolean,
+) {
+  const defaultUrl = provider.defaultConfig.baseUrl;
+  const target = URL.parse(String(config.baseUrl || defaultUrl));
+  if (plugin.manifest.chat?.sandbox) {
+    if (target) target.pathname = target.pathname.replace(/\/+$/, "") + "/";
+    if (
+      plugin.manifest.id !== "compatible-chat" ||
+      provider.id !== "openai" ||
+      defaultUrl !== "https://api.openai.com/v1/" ||
+      target?.href !== defaultUrl ||
+      provider.models.length !== 1 ||
+      provider.models[0] !== "gpt-4.1"
+    )
+      return;
+    return {
+      model: "gpt-image-2.6-sunburst",
+      field: "apiKey",
+      endpoints: {
+        probe: new URL("models", target).href,
+        reply: new URL("chat/completions", target).href,
+      },
+    };
+  }
+  if (
+    provider.credentialFallback &&
+    (!managed ||
+      (typeof defaultUrl === "string" &&
+        target?.origin === new URL(defaultUrl).origin))
+  )
+    return { ...provider.credentialFallback, endpoints: undefined };
+}
 /** Resolve only the explicitly active catalog version. Credentials stay server-side;
  * inherited image credentials are applied in memory, never copied to another row. */
 export class ChatProviders {
@@ -56,7 +94,11 @@ export class ChatProviders {
       }));
       requireValue(
         configs.every((c) =>
-          validator.validate(plugin.manifest.configSchema, c.config),
+          validSavedConfig(
+            plugin.manifest,
+            c.config,
+            c.row.sandbox_address_pause ?? null,
+          ),
         ),
         503,
         "原对话连接配置无效",
@@ -84,16 +126,8 @@ export class ChatProviders {
         let config = { ...storedConfig };
         // An imported service may use a custom host. Only inherit a credential
         // for the provider's declared destination on managed installations.
-        const defaultUrl = provider.defaultConfig.baseUrl;
-        if (
-          !plugin.chatConfigured!(config) &&
-          provider.credentialFallback &&
-          (!managed ||
-            (typeof defaultUrl === "string" &&
-              URL.parse(String(config.baseUrl || defaultUrl))?.origin ===
-                new URL(defaultUrl).origin))
-        ) {
-          const fallback = provider.credentialFallback;
+        const fallback = inheritedKey(plugin, provider, config, !!managed);
+        if (!plugin.chatConfigured!(config) && fallback) {
           const model = await one(
             sql,
             "SELECT plugin_id,plugin_version FROM studio_catalog WHERE id=$1",
@@ -124,11 +158,14 @@ export class ChatProviders {
               if (
                 imagePlugin.originalState?.configured(value) &&
                 typeof value[fallback.field] === "string"
-              )
+              ) {
                 config = plugin.chatConfigure!(
                   config,
                   value[fallback.field] as string,
                 );
+                if (fallback.endpoints)
+                  config.inheritedChatEndpoints = fallback.endpoints;
+              }
             }
           }
         }
@@ -138,7 +175,9 @@ export class ChatProviders {
           row: matches[0]?.row,
           storedConfig,
           config,
-          configured: plugin.chatConfigured!(config),
+          configured:
+            !matches[0]?.row.sandbox_address_pause &&
+            plugin.chatConfigured!(config),
         });
       }
     }

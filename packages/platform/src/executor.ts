@@ -16,14 +16,17 @@ import {
   type Receipt,
 } from "@fumiao/plugin-sdk/index.js";
 import { requireValue } from "./security.js";
+import { inspectProviderOutput } from "./provider-output.js";
 import { inspectMedia } from "./media.js";
 import { artifactCapacity } from "./capacity.js";
 import { JobTiming } from "./timing.js";
-import type { QueueJob } from "@fumiao/plugin-sdk/queue.js";
+import { FrozenQueueHealth } from "./queue-health.js";
+import type { QueueHealth, QueueJob } from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
 class ReferenceUnavailable extends Error {}
 
 export class Executor {
+  private readonly frozenHealth = new FrozenQueueHealth();
   constructor(private platform: Platform) {}
   async queueReady() {
     return (
@@ -101,7 +104,7 @@ export class Executor {
         SELECT j.id,v.manifest->'requestLifecycle'->'notes'->>'unavailable' AS note
         FROM jobs j JOIN connections c ON c.id=j.connection_id
         JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
-        WHERE j.state='queued' AND ${executableJob} AND v.manifest->'requestLifecycle' IS NOT NULL
+        WHERE j.state='queued' AND c.plugin_version=j.plugin_version AND ${executableJob} AND v.manifest->'requestLifecycle' IS NOT NULL
         AND v.manifest->'requestLifecycle'->'notes'->>'unavailable' IS NOT NULL
         AND j.request_note IS DISTINCT FROM v.manifest->'requestLifecycle'->'notes'->>'unavailable'
         AND (c.queue_health_revision IS DISTINCT FROM c.revision OR NOT COALESCE((c.queue_health->>'ready')::boolean,false)
@@ -207,6 +210,15 @@ export class Executor {
       ) UPDATE gpu_nodes n SET control='paused' FROM drained WHERE n.id=drained.id`);
   }
   async claim(id: string): Promise<Record<string, any> | undefined> {
+    const attempt = await this.claimWithHealth(id);
+    if (typeof attempt !== "function") return attempt;
+    // Network I/O runs after the transaction released the job and connection.
+    // Reacquire both locks and recheck all limits before starting the task.
+    const health = await attempt();
+    const retry = await this.claimWithHealth(id, health);
+    return typeof retry === "function" ? undefined : retry;
+  }
+  private async claimWithHealth(id: string, frozenHealth?: QueueHealth) {
     const p = this.platform;
     return p.db.transaction(async (sql) => {
       const job = await one(
@@ -298,6 +310,17 @@ export class Executor {
         );
         if (Number(count.total) >= connection.concurrency) return;
         if (plugin.requestCapacity) {
+          const superseded =
+            plugin.queueHealth &&
+            connection.plugin_version !== job.plugin_version;
+          if (superseded && !frozenHealth)
+            return () =>
+              this.frozenHealth.read(
+                p,
+                plugin,
+                connection.id,
+                job.config_snapshot,
+              );
           const active = (
             await sql.query(
               `SELECT id,provider_model,kind,remote_id,input FROM jobs j WHERE connection_id=$1 AND state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
@@ -306,8 +329,9 @@ export class Executor {
           ).rows;
           const capacity = plugin.requestCapacity({
             stamp: Date.now() / 1000,
-            health:
-              connection.queue_health_revision === connection.revision
+            health: superseded
+              ? frozenHealth!
+              : connection.queue_health_revision === connection.revision
                 ? connection.queue_health
                 : {},
             jobs: active.map(
@@ -328,7 +352,20 @@ export class Executor {
             500,
             "插件容量无效",
           );
-          if (capacity !== null && Number(count.total) >= capacity) return;
+          if (capacity !== null && Number(count.total) >= capacity) {
+            const waiting = policy?.notes.unavailable;
+            if (
+              superseded &&
+              !frozenHealth?.ready &&
+              waiting &&
+              job.request_note !== waiting
+            )
+              await sql.query("UPDATE jobs SET request_note=$2 WHERE id=$1", [
+                id,
+                waiting,
+              ]);
+            return;
+          }
         }
       }
       if (
@@ -811,7 +848,16 @@ export class Executor {
         bytes = Buffer.concat(chunks);
       }
       let metadata: Record<string, any> & { mime: string };
-      if (version?.manifest.artifactValidation?.version === 2) {
+      const validation = version?.manifest.artifactValidation;
+      if (validation?.version === 3) {
+        metadata = await inspectProviderOutput(
+          validation,
+          bytes,
+          job.kind,
+          Boolean(job.receipt),
+          signal,
+        );
+      } else if (validation?.version === 2) {
         const plugin = await p.registry.resolve(
           p.db,
           job.plugin_id,

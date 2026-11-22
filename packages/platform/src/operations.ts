@@ -1,3 +1,9 @@
+import {
+  addressPause,
+  connectionBase,
+  usesPublicConnection,
+  validSavedConfig,
+} from "./connection-address.js";
 import { StudioCatalog } from "./catalog.js";
 import { z } from "zod";
 import { Platform, uuid, type Actor } from "./platform.js";
@@ -100,9 +106,18 @@ export class Operations {
         400,
         "请为不同的对话服务新建连接",
       );
-    const { validator, connectionModels } = await import("./plugins.js");
+    const { connectionModels } = await import("./plugins.js");
+    const publicConnection = usesPublicConnection(plugin.manifest);
+    const pause = await addressPause(plugin.manifest, input.config);
+    if (pause)
+      requireValue(
+        connectionBase(previous.manifest, this.p.vault.open(row.config))
+          ?.href === connectionBase(plugin.manifest, input.config)?.href,
+        400,
+        "服务地址须为可解析的公网 HTTPS 地址",
+      );
     requireValue(
-      validator.validate(plugin.manifest.configSchema, input.config),
+      validSavedConfig(plugin.manifest, input.config, pause),
       400,
       "插件配置无效",
     );
@@ -131,10 +146,21 @@ export class Operations {
           "连接版本与模型目录不一致，请显式激活插件目录",
         );
       }
+      const writePause = Object.hasOwn(row, "sandbox_address_pause");
+      requireValue(!pause || writePause, 503, "请先执行连接准入迁移");
       const updated = await one(
         sql,
-        "UPDATE connections SET plugin_version=$2,config=$3,revision=revision+1,enabled=false WHERE id=$1 AND revision=$4 RETURNING id",
-        [id, input.version, this.p.vault.seal(input.config), input.revision],
+        "UPDATE connections SET plugin_version=$2,config=$3,revision=revision+1" +
+          (publicConnection ? "" : ",enabled=false") +
+          (writePause ? ",sandbox_address_pause=$5" : "") +
+          " WHERE id=$1 AND revision=$4 RETURNING id",
+        [
+          id,
+          input.version,
+          this.p.vault.seal(input.config),
+          input.revision,
+          ...(writePause ? [pause] : []),
+        ],
       );
       requireValue(updated, 409, "连接版本已变化");
       await sql.query(

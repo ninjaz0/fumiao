@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
-// HTML5 name data from Python 3.12 html.entities; provenance/license in ../html5.
-const names: Record<string, string> = JSON.parse(
-  readFileSync(new URL("../html5/html5-entities.json", import.meta.url), "utf8"),
-);
+// HTML5 names from Python 3.12 html.entities. See ../html5 for provenance and license.
+import entities from "../html5/html5-entities.json" with { type: "json" };
+const names: Record<string, string> = entities;
 const windows = [
   8364, 129, 8218, 402, 8222, 8230, 8224, 8225, 710, 8240, 352, 8249, 338, 141,
   381, 143, 144, 8216, 8217, 8220, 8221, 8226, 8211, 8212, 732, 8482, 353, 8250,

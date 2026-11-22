@@ -1,3 +1,4 @@
+import { seedLegacyPackage, legacyPackage } from "../helpers/legacy-studio.js";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -266,45 +267,21 @@ test("update-source review compares each page, action, audience, visibility and 
   });
 });
 
-test("node binding follows normalized capabilities across legacy and page-less GPU releases", async (t) => {
+test("legacy GPU permissions survive database recovery and switch to the sandbox through an explicit upgrade", async (t) => {
   const { p, db, actor, packages } = await setup(t);
-  const legacy: PackageFile = JSON.parse(
-    await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
-  );
-  const preview = await packages.preview(actor, legacy);
-  assert.equal(preview.nodes, true);
-  assert.match(
-    preview.changes.join("\n"),
-    /GPU 节点.*管理员.*节点状态.*配对节点.*移除节点/,
-  );
-  await packages.install(actor, legacy);
-  const binding = await p.registry.nodeExtension(db);
-  assert.ok(binding.NodeManagement);
-  const { settingsPage, ...rest } = legacy;
-  assert.ok(settingsPage);
-  const next = {
-    ...rest,
-    version: "2.0.0",
-    contributes: { version: 1, hostCapabilities: ["nodes"] },
-  };
-  assert.doesNotMatch(
-    (await packages.preview(actor, next)).changes.join("\n"),
-    /节点管理（新增）/,
+  const legacy = await legacyPackage("gpu");
+  await assert.rejects(packages.preview(actor, legacy), /已停止导入/);
+  await seedLegacyPackage(p, legacy);
+  assert.ok((await p.registry.nodeExtension(db)).NodeManagement);
+  const next = JSON.parse(
+    await readFile("plugins/gpu/gpu.fmplugin.json", "utf8"),
   );
   await packages.install(actor, next, 1);
-  assert.deepEqual(await p.registry.nodeExtension(db, legacy.id), binding);
+  assert.ok((await p.registry.nodeExtension(db, legacy.id)).NodeManagement);
   await assert.rejects(p.registry.nodeExtension(db, "unrelated"), {
     status: 404,
   });
-  await packages.install(
-    actor,
-    {
-      ...rest,
-      version: "3.0.0",
-      contributes: { version: 1, settingsPages: [page] },
-    },
-    2,
-  );
+  await packages.change(actor, legacy.id, 2, "remove");
   await assert.rejects(p.registry.nodeExtension(db), { status: 404 });
   const stored = await one(
     db,

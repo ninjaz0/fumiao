@@ -111,7 +111,4 @@ export const stateProviderFieldsSchema = z
       .strict(),
   })
   .strict();
-export const publicKeys = (value: Record<string, any>, keys: string[]) =>
-  Object.fromEntries(
-    keys.filter((k) => Object.hasOwn(value, k)).map((k) => [k, value[k]]),
-  );
+export { publicKeys } from "./public-keys.js";

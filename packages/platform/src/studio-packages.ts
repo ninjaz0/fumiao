@@ -1,9 +1,15 @@
+import {
+  addressPause,
+  connectionBase,
+  usesPublicConnection,
+  validSavedConfig,
+  type AddressPause,
+} from "./connection-address.js";
 import { nodeStudioPlugin } from "./node-studio-policy.js";
 import { createHash } from "node:crypto";
 import { nodePoolHooks } from "@fumiao/plugin-sdk/node-pools.js";
 import { purgePluginData } from "./plugin-host.js";
 import { portablePlugin } from "./portable-plugin.js";
-import { officialAdapter } from "./distribution/official-adapter.js";
 import {
   manifestSchema,
   type ProviderPlugin,
@@ -25,7 +31,12 @@ import { z } from "zod";
 import { Ajv } from "ajv";
 import { StudioCatalog } from "./catalog.js";
 import { one, type Sql } from "./db.js";
-import { canonical, connectionModels, validator } from "./plugins.js";
+import {
+  canonical,
+  connectionModels,
+  validator,
+  type PluginRegistry,
+} from "./plugins.js";
 import type { Platform, Actor } from "./platform.js";
 import { DomainError, requireValue } from "./security.js";
 import {
@@ -90,10 +101,6 @@ export const packageFile = z
     adapterVersion: releaseVersion,
     manifest: z.record(z.string(), z.unknown()).optional(),
     equivalentModels: z.array(z.string().min(1).max(180)).max(500).optional(),
-    adapterModule: z
-      .string()
-      .max(1024 * 1024)
-      .optional(),
     updateUrl: sourceURL.optional(),
     nodeClient: z
       .object({
@@ -136,15 +143,17 @@ export const packageFile = z
   .strict()
   .refine(
     (f) =>
-      [f.manifest, f.adapterModule, f.remote, f.extensionOnly].filter(Boolean)
-        .length === 1 &&
+      [f.manifest, f.remote, f.extensionOnly].filter(Boolean).length === 1 &&
       (!f.extensionOnly ||
         (!f.program &&
           !f.nodeClient &&
           !f.studioProgram &&
           !f.equivalentModels &&
-          (f.contributes?.paymentMethods?.length || f.contributes?.exporters?.length || f.contributes?.events?.length || f.contributes?.actions?.length))) &&
-      (!f.manifest || !!f.program),
+          (f.contributes?.paymentMethods?.length ||
+            f.contributes?.exporters?.length ||
+            f.contributes?.events?.length ||
+            f.contributes?.actions?.length))) &&
+      (!f.manifest || !!f.program || !!f.manifest.chat || !!f.studioProgram),
     "插件必须声明一种执行方式",
   )
   .refine(
@@ -160,6 +169,13 @@ export const upgradeFields = z
   .default({});
 export type PackageFile = z.infer<typeof packageFile>;
 export function parsePackageFile(value: unknown): PackageFile {
+  if (
+    value &&
+    typeof value === "object" &&
+    (Object.hasOwn(value, "adapterModule") ||
+      Object.hasOwn(value, "legacyArchive"))
+  )
+    throw new DomainError(400, "旧版原生插件已停止导入，请选择新版沙箱插件包");
   const result = packageFile.safeParse(value);
   if (!result.success) {
     const problem = result.error.issues.find(
@@ -170,10 +186,7 @@ export function parsePackageFile(value: unknown): PackageFile {
   return result.data;
 }
 
-async function inspectPackage(file: PackageFile) {
-  const binding = file.adapterModule
-    ? await officialAdapter(file.id, file.adapterVersion, file.adapterModule)
-    : undefined;
+async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
   const manifest: Manifest = file.extensionOnly
     ? {
         id: file.id,
@@ -184,8 +197,7 @@ async function inspectPackage(file: PackageFile) {
         models: [],
         configSchema: {},
       }
-    : (binding?.adapter.manifest ??
-      manifestSchema.parse(file.manifest ?? file.remote?.manifest));
+    : manifestSchema.parse(file.manifest ?? file.remote?.manifest);
   requireValue(
     manifest.id === file.id && manifest.version === file.adapterVersion,
     400,
@@ -243,9 +255,58 @@ async function inspectPackage(file: PackageFile) {
       );
     }
   }
+  if (manifest.artifactValidation?.version === 3)
+    requireValue(
+      file.manifest && contributions.hostCapabilities.includes("media"),
+      400,
+      "宿主成品验收需要 media 能力",
+    );
+  if (manifest.chat?.sandbox || (file.manifest?.chat && !file.program)) {
+    const sandbox = manifest.chat?.sandbox;
+    requireValue(
+      file.manifest &&
+        sandbox &&
+        !file.program &&
+        !file.studioProgram &&
+        !manifest.originalSubmission &&
+        manifest.mode === "request" &&
+        manifest.models.length &&
+        manifest.models.every((m) => m.kind === "chat") &&
+        contributions.hostCapabilities.includes("secrets") &&
+        contributions.http &&
+        canonical([...sandbox.origins].sort()) ===
+          canonical([...contributions.http.origins].sort()),
+      400,
+      "沙箱对话需要声明 HTTP 目标和连接密钥注入",
+    );
+  }
   const studio = manifest.originalSubmission?.version === 4;
+  const request = manifest.originalSubmission?.version === 5;
+  if (manifest.originalSubmission?.version === 5)
+    requireValue(
+      (manifest.originalSubmission.artifactOrigins ?? []).every(origin =>
+        contributions.http?.origins.includes(origin) &&
+        /^https:\/\/(?:\*\.)?(?:[a-z0-9-]+\.)+[a-z0-9-]+$/.test(origin)),
+      400, "成品域名必须声明为获准的 HTTPS 源",
+    );
+  if (request || contributions.http?.connection)
+    requireValue(
+      request &&
+        file.manifest &&
+        !file.program &&
+        !file.nodeClient &&
+        !manifest.chat &&
+        manifest.mode === "request" &&
+        manifest.artifactDownload &&
+        manifest.artifactValidation?.version === 3 &&
+        manifest.requestLifecycle &&
+        contributions.http?.connection &&
+        contributions.hostCapabilities.includes("secrets"),
+      400,
+      "请求工作台需要服务地址、密钥注入和媒体验收能力",
+    );
   requireValue(
-    studio === !!file.studioProgram &&
+    (studio || request) === !!file.studioProgram &&
       (!studio ||
         (contributions.nodePools &&
           (!manifest.referenceImports ||
@@ -288,11 +349,7 @@ async function inspectPackage(file: PackageFile) {
   } else if (file.manifest && manifest.mode === "pull") {
     throw new DomainError(400, "pull 插件须声明节点池");
   } else if (contributions.hostCapabilities.includes("nodes"))
-    requireValue(
-      binding?.protocol,
-      400,
-      "节点管理需要节点池声明或已安装的节点协议",
-    );
+    throw new DomainError(400, "节点管理需要节点池声明");
   if (file.nodeClient)
     requireValue(
       manifest.mode === "pull" && file.program,
@@ -301,12 +358,15 @@ async function inspectPackage(file: PackageFile) {
     );
   const adapter = file.extensionOnly
     ? undefined
-    : (binding?.adapter ??
-      (file.remote
-        ? remotePlugin(manifest, file.remote.endpoint)
-        : file.studioProgram
-          ? await nodeStudioPlugin(manifest, file.studioProgram)
-          : portablePlugin(manifest)));
+    : file.remote
+      ? remotePlugin(manifest, file.remote.endpoint)
+      : manifest.chat?.sandbox
+        ? await registry.chatAdapter(manifest)
+        : request && file.studioProgram
+          ? await registry.requestAdapter(manifest, file.studioProgram)
+          : file.studioProgram
+            ? await nodeStudioPlugin(manifest, file.studioProgram)
+            : portablePlugin(manifest);
   return { adapter, manifest, contributions };
 }
 
@@ -420,7 +480,19 @@ function permissionSummary(
           !prior?.hostCapabilities.includes("media"),
         ),
     );
-  if (next.http)
+  if (next.hostCapabilities.includes("secrets"))
+    lines.push(
+      "宿主能力：" +
+        added(
+          "对管理员配置的服务地址注入连接密钥",
+          !prior?.hostCapabilities.includes("secrets"),
+        ),
+    );
+  if (next.http?.connection)
+    lines.push(
+      added("访问管理员配置的公网 HTTPS 服务", !prior?.http?.connection),
+    );
+  if (next.http?.origins.length)
     lines.push(
       "宿主能力：访问外部服务 " +
         next.http.origins
@@ -505,7 +577,10 @@ export class StudioPackages {
   async preview(actor: Actor, value: unknown) {
     this.p.admin(actor);
     const f = parsePackageFile(value);
-    const { manifest: m, contributions } = await inspectPackage(f);
+    const { manifest: m, contributions } = await inspectPackage(
+      f,
+      this.p.registry,
+    );
     const prior = await one(
       this.p.db,
       `SELECT r.package,coalesce(v.manifest,'{"models":[]}'::jsonb) AS manifest FROM studio_packages p JOIN studio_package_releases r USING(id,version)
@@ -623,7 +698,10 @@ export class StudioPackages {
   ) {
     const current = await one(
       this.p.db,
-      "SELECT p.*,r.package->'remote'->>'endpoint' AS endpoint FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE installed AND p.id=$1",
+      `SELECT p.*,r.package->'remote'->>'endpoint' AS endpoint,v.manifest AS old_manifest
+        FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+        LEFT JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
+        WHERE installed AND p.id=$1`,
       [file.id],
     );
     if (!current || current.version === file.version) return [];
@@ -655,6 +733,11 @@ export class StudioPackages {
       requireValue(!services.length, 409, "独立扩展不能使用模型连接");
       return [];
     }
+    const inspected: {
+      id: string;
+      revision: number;
+      pause: AddressPause | null;
+    }[] = [];
     for (const s of services) {
       const previous = this.p.vault.open(s.config),
         extra = supplements[s.id] ?? {};
@@ -676,19 +759,33 @@ export class StudioPackages {
         adapter.manifest.configSchema,
         extra,
       );
+      const pause = await addressPause(adapter.manifest, config);
       requireValue(
-        validator.validate(adapter.manifest.configSchema, config),
+        validSavedConfig(adapter.manifest, config, pause),
         409,
         "现有配置缺少新版要求的字段",
       );
-      if (adapter.manifest.mode === "request")
+      if (usesPublicConnection(adapter.manifest) && previous.apiKey) {
+        const savedOrigin =
+          current.old_manifest &&
+          connectionBase(current.old_manifest, previous)?.origin;
+        requireValue(
+          (savedOrigin &&
+            savedOrigin === connectionBase(adapter.manifest, config)?.origin) ||
+            (pause && previous.baseUrl && previous.baseUrl === config.baseUrl),
+          409,
+          "不能向新的服务地址转发已有密钥",
+        );
+      }
+      if (adapter.manifest.mode === "request" && !pause)
         requireValue(
           await adapter.health(config, AbortSignal.timeout(10000)),
           409,
           "新版本使用现有配置未通过连接检查",
         );
+      inspected.push({ id: s.id, revision: s.revision, pause });
     }
-    return services.map((s) => [s.id, s.revision]);
+    return inspected;
   }
   private async manifest(sql: Sql, file: PackageFile) {
     if (file.manifest) {
@@ -697,7 +794,9 @@ export class StudioPackages {
         m.id === file.id &&
           m.version === file.adapterVersion &&
           (m.originalSubmission?.version === 3 ||
-            m.originalSubmission?.version === 4) &&
+            m.originalSubmission?.version === 4 ||
+            m.originalSubmission?.version === 5 ||
+            !!m.chat?.sandbox) &&
           (m.mode === "request" || !!file.contributes?.nodePools),
         400,
         "独立服务插件清单无效",
@@ -727,29 +826,7 @@ export class StudioPackages {
       );
       return this.p.registry.installOn(sql, manifest, endpoint, true);
     }
-    // Only reviewed local runtime contracts can implement privileged operations.
-    requireValue(file.adapterModule, 400, "插件文件缺少适配器");
-    const adapter = await this.p.registry.registerModule(
-      file.id,
-      file.adapterVersion,
-      file.adapterModule,
-    );
-    await sql.query(
-      "INSERT INTO studio_adapter_modules(id,version,code) VALUES($1,$2,$3) ON CONFLICT(id,version) DO NOTHING",
-      [file.id, file.adapterVersion, file.adapterModule],
-    );
-    requireValue(
-      adapter.manifest.models.some((m) => m.studio),
-      400,
-      "插件未提供工作台模型",
-    );
-    const existing = await one(
-      sql,
-      "SELECT endpoint FROM plugin_versions WHERE id=$1 AND version=$2",
-      [file.id, file.adapterVersion],
-    );
-    requireValue(!existing?.endpoint, 400, "远程插件须提供完整清单");
-    return this.p.registry.installOn(sql, adapter.manifest, undefined, true);
+    throw new DomainError(400, "插件文件缺少执行清单");
   }
   async install(
     actor: Actor,
@@ -764,7 +841,7 @@ export class StudioPackages {
       adapter,
       manifest: inspected,
       contributions,
-    } = await inspectPackage(file);
+    } = await inspectPackage(file, this.p.registry);
     const probed = await this.probe(
       file,
       adapter,
@@ -772,6 +849,7 @@ export class StudioPackages {
       revision,
       rollback,
     );
+    const serviceChecks = new Map(probed.map((s) => [s.id, s]));
     return this.p.db.transaction(async (sql) => {
       await sql.query(
         "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",
@@ -866,7 +944,12 @@ export class StudioPackages {
           "插件程序声明了未知操作",
         );
       }
-      if (file.manifest && !contributions.nodePools) {
+      if (
+        file.manifest &&
+        !inspected.chat?.sandbox &&
+        inspected.originalSubmission?.version !== 5 &&
+        !contributions.nodePools
+      ) {
         const hooks = (await loadProgram(file.program!))(
           "describe",
         ) as string[];
@@ -933,6 +1016,7 @@ export class StudioPackages {
           config: string;
           revision: number;
           plugin_version: string;
+          sandbox_address_pause?: AddressPause | null;
         }>(
           "SELECT * FROM connections WHERE plugin_id=$1 AND NOT removed AND NOT fmworker_resource_driver FOR UPDATE",
           [file.id],
@@ -940,17 +1024,28 @@ export class StudioPackages {
       ).rows;
       if (current?.installed)
         requireValue(
-          services.length === probed.length &&
-            services.every((s) =>
-              probed.some(
-                ([id, revision]) => s.id === id && s.revision === revision,
-              ),
+          services.length === serviceChecks.size &&
+            services.every(
+              (s) => serviceChecks.get(s.id)?.revision === s.revision,
             ),
           409,
           "服务配置已更新，请重新检查",
         );
       for (const service of services) {
-        if (service.plugin_version === file.adapterVersion) continue;
+        const pause = serviceChecks.get(service.id)?.pause ?? null;
+        requireValue(
+          !pause || Object.hasOwn(service, "sandbox_address_pause"),
+          503,
+          "请先执行连接准入迁移",
+        );
+        if (service.plugin_version === file.adapterVersion) {
+          if ((service.sandbox_address_pause ?? null) !== pause)
+            await sql.query(
+              "UPDATE connections SET sandbox_address_pause=$2,revision=revision+1 WHERE id=$1",
+              [service.id, pause],
+            );
+          continue;
+        }
         const config = await this.upgradeConfig(
           sql,
           service,
@@ -963,7 +1058,7 @@ export class StudioPackages {
           [service.id, service.plugin_version, service.config],
         );
         requireValue(
-          validator.validate(manifest.configSchema, config),
+          validSavedConfig(manifest, config, pause),
           409,
           "现有服务设置与新版不兼容",
         );
@@ -972,9 +1067,17 @@ export class StudioPackages {
           file.id,
           file.adapterVersion,
         );
+        const writePause = Object.hasOwn(service, "sandbox_address_pause");
         await sql.query(
-          "UPDATE connections SET plugin_version=$2,config=$3,revision=revision+1 WHERE id=$1",
-          [service.id, file.adapterVersion, this.p.vault.seal(config)],
+          "UPDATE connections SET plugin_version=$2,config=$3,revision=revision+1" +
+            (writePause ? ",sandbox_address_pause=$4" : "") +
+            " WHERE id=$1",
+          [
+            service.id,
+            file.adapterVersion,
+            this.p.vault.seal(config),
+            ...(writePause ? [pause] : []),
+          ],
         );
         await sql.query(
           "UPDATE models SET catalog_id=NULL,enabled=false WHERE connection_id=$1",
@@ -1046,7 +1149,8 @@ export class StudioPackages {
     this.p.admin(actor);
     const rows = (
       await this.p.db
-        .query(`SELECT p.id,p.version,p.previous_version AS "previousVersion",p.enabled,p.removing,p.revision,
+        .query(`SELECT p.id,p.version,(SELECT prior.version FROM studio_package_releases prior
+            WHERE prior.id=p.id AND prior.version=p.previous_version AND prior.package ?| array['manifest','remote','extensionOnly']) AS "previousVersion",p.enabled,p.removing,p.revision,
       p.update_url AS "updateUrl",p.update_auth IS NOT NULL AS "hasUpdateToken",p.checked_at AS "checkedAt",p.update_info AS "updateInfo",
       r.package->>'label' AS label, r.package->>'adapterVersion' AS "adapterVersion",coalesce(v.manifest->'configSchema','{}'::jsonb) AS "configSchema",
       ARRAY(SELECT jsonb_build_object('id',m->>'id','title',m->>'title') FROM jsonb_array_elements(r.package->'contributes'->'paymentMethods') m) AS "paymentMethods",

@@ -1,3 +1,4 @@
+import { legacyPackage, seedLegacyPackage } from "../helpers/legacy-studio.js";
 import { deliverPluginEvent } from "@fumiao/platform/plugin-extensions.js";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -16,6 +17,7 @@ import {
 } from "@fumiao/platform/studio-packages.js";
 import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
 import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { QueueHealthPoller } from "@fumiao/platform/queue-health.js";
 import { Executor } from "@fumiao/platform/executor.js";
 import { migrate, one } from "@fumiao/platform/db.js";
 import { execFileSync } from "node:child_process";
@@ -31,14 +33,11 @@ import { OriginalChatSettings } from "@fumiao/original-api/chat-settings.js";
 import { OriginalChats } from "@fumiao/original-api/chats.js";
 import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
 import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
+import { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
 import { chatProviderFixture } from "../helpers/chat-provider.js";
 const load = async (id: string): Promise<PackageFile> =>
   JSON.parse(
     await readFile("plugins/" + id + "/" + id + ".fmplugin.json", "utf8"),
-  );
-const legacyGpu = async (): Promise<PackageFile> =>
-  JSON.parse(
-    await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
   );
 async function setup(through?: string) {
   const f = await databaseFixture(through);
@@ -52,12 +51,12 @@ async function setup(through?: string) {
 }
 for (const id of ["flow", "muse"]) {
   test(
-    "import " +
+    "restore " +
       id +
-      " file into an empty Studio, then drain a frozen job across update, restart and disable",
+      " from an old installation and drain a frozen job across upgrade, restart and disable",
     async () => {
       const f = await setup(),
-        file = await load(id),
+        file = await legacyPackage(id),
         seen: string[] = [],
         png = await sharp({
           create: { width: 16, height: 16, channels: 3, background: "#345678" },
@@ -88,6 +87,10 @@ for (const id of ["flow", "muse"]) {
         const path = req.url!;
         if (path === "/v1/models")
           return void res.end(JSON.stringify({ data: [{ id: "fixture" }] }));
+        if (path === "/readyz")
+          return void res.end('{"status":"ready","accounts":[1]}');
+        if (path === "/v1/queue")
+          return void res.end('{"capacity":1,"tasks":[]}');
         if (path === "/health")
           return void res.end(
             JSON.stringify({
@@ -130,10 +133,15 @@ for (const id of ["flow", "muse"]) {
       base = "http://127.0.0.1:" + (server.address() as { port: number }).port;
       try {
         assert.deepEqual(await f.packages.list(f.actor), []);
-        await Promise.all([
+        await assert.rejects(
+          f.packages.preview(f.actor, file),
+          /原生插件已停止导入/,
+        );
+        await assert.rejects(
           f.packages.install(f.actor, file),
-          f.packages.install(f.actor, file),
-        ]);
+          /原生插件已停止导入/,
+        );
+        await seedLegacyPackage(f.p, file);
         const pkg = async () => (await f.packages.list(f.actor))[0];
         assert.equal((await pkg()).enabled, false);
         const service = await f.p.createConnection(
@@ -187,11 +195,14 @@ for (const id of ["flow", "muse"]) {
             result.id,
           ]);
         assert.equal(job.package_version, file.version);
-        const next = { ...file, version: "1.1.0" };
+        const next = await load(id);
         await f.packages.install(f.actor, next, (await pkg()).revision);
         await f.packages.change(f.actor, id, (await pkg()).revision, "disable");
         await assert.rejects(submit);
-        await f.packages.install(f.actor, file, (await pkg()).revision, true);
+        await assert.rejects(
+          f.packages.install(f.actor, file, (await pkg()).revision, true),
+          /已停止导入/,
+        );
         await f.packages.change(f.actor, id, (await pkg()).revision, "remove");
         assert.equal((await pkg()).removing, true);
         f.p.registry = new PluginRegistry();
@@ -227,102 +238,338 @@ for (const id of ["flow", "muse"]) {
     },
   );
 }
-test("chat package drains accepted replies and can be reinstalled with fresh credentials", async () => {
+for (const release of ["native", "sandbox"])
+  test(
+    release +
+      " chat package drains accepted replies and enforces its reinstall policy",
+    async () => {
+      const f = await setup(),
+        wire = await chatProviderFixture();
+      const native =
+        release === "native"
+          ? await legacyPackage("compatible-chat")
+          : undefined;
+      const file = native ?? (await load("compatible-chat"));
+      // The transport fixture represents one authorized upstream HTTPS origin.
+      const send: typeof chatHttp = (url, init) => {
+        assert.equal(url.origin, "https://1.1.1.1");
+        return chatHttp(new URL(url.pathname, wire.origin), {
+          ...init,
+          lookup: undefined,
+        });
+      };
+      const registry = () =>
+        new PluginRegistry(
+          undefined,
+          [],
+          release === "sandbox" ? send : undefined,
+        );
+      f.p.registry = registry();
+      const settings = new OriginalChatSettings(f.p),
+        chats = new OriginalChats(f.p);
+      const models = async () =>
+        Object.keys((await settings.config(f.actor)).models).sort();
+      const pkg = async () => (await f.packages.list(f.actor))[0];
+      const change = async (action: "enable" | "disable" | "remove") =>
+        f.packages.change(f.actor, file.id, (await pkg()).revision, action);
+      const connect = (model: string) =>
+        f.p.createConnection(
+          f.actor,
+          {
+            name: model,
+            pluginId: file.id,
+            version: file.adapterVersion,
+            config:
+              release === "native"
+                ? wire.config(model)
+                : {
+                    ...wire.config(model),
+                    baseUrl:
+                      "https://1.1.1.1" +
+                      new URL(wire.config(model).baseUrl).pathname,
+                  },
+          },
+          true,
+        );
+      try {
+        assert.deepEqual(await models(), []);
+        if (native) await seedLegacyPackage(f.p, native);
+        else await f.packages.install(f.actor, file);
+        await connect("gpt-4.1");
+        await connect("deepseek-flash");
+        await assert.rejects(connect("deepseek-flash"), { status: 409 });
+        assert.deepEqual(await models(), []);
+        await change("enable");
+        assert.deepEqual(await models(), ["deepseek-flash", "gpt-4.1"]);
+        await f.db.query("UPDATE wallets SET balance=10");
+        const { conversation } = await chats.create(f.actor, {});
+        const draft = {
+          uid: randomUUID(),
+          model: "gpt-4.1",
+          text: "插件回复验证",
+          expected_revision: conversation.revision,
+          price_revision: (await settings.config(f.actor)).pricing.revision,
+        };
+        const send = () => chats.send(f.actor, conversation.id, draft);
+        await change("disable");
+        await assert.rejects(send, { status: 403 });
+        await change("enable");
+        await send();
+        const turn = await one(f.db, "SELECT id FROM chat_turns WHERE uid=$1", [
+          draft.uid,
+        ]);
+        await change("remove");
+        assert.equal((await pkg()).removing, true);
+        assert.deepEqual(await models(), []);
+        await send(); // Retrying the accepted UID during removal returns the same turn.
+        f.p.registry = registry();
+        wire.setWire("stream", {
+          raw: 'data: {"choices":[{"delta":{"content":"已完成"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        });
+        const runtime = new ChatRuntime(new ChatExecution(chats));
+        await runtime.execute(turn.id);
+        await runtime.execute(turn.id);
+        assert.equal(
+          (await chats.get(f.actor, conversation.id)).messages.at(-1)?.content,
+          "已完成",
+        );
+        assert.deepEqual(
+          wire.requests.filter((r) => r.body?.stream).map((r) => r.path),
+          ["/v1/chat/completions"],
+        );
+        assert.deepEqual(
+          await one(
+            f.db,
+            "SELECT balance::int,held::int FROM wallets JOIN chat_charges USING(workspace_id) WHERE turn_id=$1",
+            [turn.id],
+          ),
+          { balance: 9, held: 0 },
+        );
+        await f.packages.finishRemovals();
+        assert.deepEqual(await f.packages.list(f.actor), []);
+        assert.deepEqual((await settings.read(f.actor)).providers, {});
+        if (release === "native") {
+          await assert.rejects(f.packages.install(f.actor, file), /已停止导入/);
+          return;
+        }
+        await f.packages.install(f.actor, file);
+        assert.ok(
+          Object.values((await settings.read(f.actor)).providers).every(
+            (p) => !p.configured,
+          ),
+        );
+        await connect("deepseek-flash");
+        await change("enable");
+        assert.deepEqual(await models(), ["deepseek-flash"]);
+      } finally {
+        await wire.cleanup();
+        await f.cleanup();
+      }
+    },
+  );
+
+test("upgrading a private connection pauses only new admissions and keeps the accepted turn and wallet snapshot", async () => {
   const f = await setup(),
-    wire = await chatProviderFixture();
-  const file = await load("compatible-chat");
+    wire = await chatProviderFixture(),
+    legacy = await legacyPackage("compatible-chat"),
+    next = await load("compatible-chat");
+  let publicProbes = 0;
+  const send: typeof chatHttp = async (url, init) => {
+    assert.equal(url.origin, "https://1.1.1.1");
+    assert.equal(init.method, "GET");
+    publicProbes++;
+    return {
+      status: 200,
+      headers: {},
+      body: (async function* () {
+        yield Buffer.from('{"data":[{"id":"gpt-4.1"}]}');
+      })(),
+      close() {},
+    };
+  };
+  f.p.registry = new PluginRegistry(undefined, [], send);
   const settings = new OriginalChatSettings(f.p),
     chats = new OriginalChats(f.p);
-  const models = async () =>
-    Object.keys((await settings.config(f.actor)).models).sort();
-  const pkg = async () => (await f.packages.list(f.actor))[0];
-  const change = async (action: "enable" | "disable" | "remove") =>
-    f.packages.change(f.actor, file.id, (await pkg()).revision, action);
-  const connect = (model: string) =>
-    f.p.createConnection(
+  try {
+    await seedLegacyPackage(f.p, legacy);
+    const previous = wire.config("deepseek-flash");
+    const { id: privateId } = await f.p.createConnection(
       f.actor,
       {
-        name: model,
-        pluginId: file.id,
-        version: file.adapterVersion,
-        config: wire.config(model),
+        pluginId: legacy.id,
+        version: legacy.adapterVersion,
+        name: "内网服务",
+        config: previous,
       },
       true,
     );
-  try {
-    assert.deepEqual(await models(), []);
-    await f.packages.install(f.actor, file);
-    await connect("gpt-4.1");
-    await connect("deepseek-flash");
-    await assert.rejects(connect("deepseek-flash"), { status: 409 });
-    assert.deepEqual(await models(), []);
-    await change("enable");
-    assert.deepEqual(await models(), ["deepseek-flash", "gpt-4.1"]);
+    const { id: publicId } = await f.p.createConnection(
+      f.actor,
+      {
+        pluginId: legacy.id,
+        version: legacy.adapterVersion,
+        name: "公网服务",
+        config: {
+          provider: "openai",
+          baseUrl: "https://1.1.1.1/v1/",
+          apiKey: "test-public-key",
+        },
+      },
+      true,
+    );
+    await f.packages.change(f.actor, legacy.id, 1, "enable");
     await f.db.query("UPDATE wallets SET balance=10");
     const { conversation } = await chats.create(f.actor, {});
     const draft = {
       uid: randomUUID(),
-      model: "gpt-4.1",
-      text: "插件回复验证",
+      model: "deepseek-flash",
+      text: "冻结的请求",
       expected_revision: conversation.revision,
       price_revision: (await settings.config(f.actor)).pricing.revision,
     };
-    const send = () => chats.send(f.actor, conversation.id, draft);
-    await change("disable");
-    await assert.rejects(send, { status: 403 });
-    await change("enable");
-    await send();
-    const turn = await one(f.db, "SELECT id FROM chat_turns WHERE uid=$1", [
+    await chats.send(f.actor, conversation.id, draft);
+    const frozen = await one(f.db, "SELECT * FROM chat_turns WHERE uid=$1", [
       draft.uid,
     ]);
-    await change("remove");
-    assert.equal((await pkg()).removing, true);
-    assert.deepEqual(await models(), []);
-    await send(); // Retrying the accepted UID during removal returns the same turn.
-    f.p.registry = new PluginRegistry();
+    const [pkg] = await f.packages.list(f.actor);
+    await f.packages.install(f.actor, next, pkg.revision);
+    assert.equal(publicProbes, 1);
+    const rows = await f.p.studioConnections(f.actor);
+    assert.equal(
+      rows.find((r) => r.id === privateId)?.addressPause,
+      "non-public",
+    );
+    assert.equal(rows.find((r) => r.id === publicId)?.addressPause, undefined);
+    const saved = await one(f.db, "SELECT * FROM connections WHERE id=$1", [
+      privateId,
+    ]);
+    assert.equal(saved.enabled, true);
+    assert.deepEqual(f.p.vault.open(saved.config), previous);
+    assert.equal(saved.plugin_version, next.adapterVersion);
+    assert.deepEqual(Object.keys((await settings.config(f.actor)).models), [
+      "gpt-4.1",
+    ]);
+    f.p.registry = new PluginRegistry(undefined, [], send);
     wire.setWire("stream", {
-      raw: 'data: {"choices":[{"delta":{"content":"已完成"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      raw: 'data: {"choices":[{"delta":{"content":"完成"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n',
     });
-    const runtime = new ChatRuntime(new ChatExecution(chats));
-    await runtime.execute(turn.id);
-    await runtime.execute(turn.id);
+    await chats.send(f.actor, conversation.id, draft);
+    await new ChatRuntime(new ChatExecution(chats)).execute(frozen.id);
+    const completed = await one(f.db, "SELECT * FROM chat_turns WHERE id=$1", [
+      frozen.id,
+    ]);
+    assert.equal(completed.plugin_version, legacy.adapterVersion);
+    assert.equal(completed.config_snapshot, frozen.config_snapshot);
     assert.equal(
       (await chats.get(f.actor, conversation.id)).messages.at(-1)?.content,
-      "已完成",
+      "完成",
     );
-    assert.deepEqual(
-      wire.requests.filter((r) => r.body?.stream).map((r) => r.path),
-      ["/v1/chat/completions"],
+    const fresh = (await chats.create(f.actor, {})).conversation;
+    await assert.rejects(
+      chats.send(f.actor, fresh.id, {
+        ...draft,
+        uid: randomUUID(),
+        expected_revision: fresh.revision,
+        price_revision: (await settings.config(f.actor)).pricing.revision,
+      }),
+      { status: 409 },
     );
     assert.deepEqual(
       await one(
         f.db,
-        "SELECT balance::int,held::int FROM wallets JOIN chat_charges USING(workspace_id) WHERE turn_id=$1",
-        [turn.id],
+        "SELECT balance::int, held::int FROM wallets JOIN chat_charges USING(workspace_id) WHERE turn_id=$1",
+        [frozen.id],
       ),
       { balance: 9, held: 0 },
     );
-    await f.packages.finishRemovals();
-    assert.deepEqual(await f.packages.list(f.actor), []);
-    assert.deepEqual((await settings.read(f.actor)).providers, {});
-    await f.packages.install(f.actor, file);
-    assert.ok(
-      Object.values((await settings.read(f.actor)).providers).every(
-        (p) => !p.configured,
-      ),
+    const change = {
+      revision: saved.revision,
+      enabled: true,
+      concurrency: 1,
+      preserveCredentials: true,
+    };
+    await assert.rejects(
+      f.p.updateConnection(f.actor, privateId, {
+        ...change,
+        config: { baseUrl: "https://1.1.1.1/" },
+      }),
+      /重新填写密钥/,
     );
-    await connect("deepseek-flash");
-    await change("enable");
-    assert.deepEqual(await models(), ["deepseek-flash"]);
+    await f.p.updateConnection(f.actor, privateId, {
+      ...change,
+      config: { baseUrl: "https://1.1.1.1/", apiKey: "new-key" },
+    });
+    assert.deepEqual(
+      Object.keys((await settings.config(f.actor)).models).sort(),
+      ["deepseek-flash", "gpt-4.1"],
+    );
+    assert.equal(
+      (await f.p.studioConnections(f.actor)).find((r) => r.id === privateId)
+        ?.addressPause,
+      undefined,
+    );
+    assert.equal(
+      (
+        await one(
+          f.db,
+          "SELECT count(*)::int AS n FROM chat_turns WHERE uid=$1",
+          [draft.uid],
+        )
+      ).n,
+      1,
+    );
   } finally {
     await wire.cleanup();
     await f.cleanup();
   }
 });
 
+test("sandbox chat import freezes the program, requires HTTP and secrets, and reloads without a native module", async () => {
+  const f = await setup(),
+    file = await load("compatible-chat");
+  try {
+    const preview = await f.packages.preview(f.actor, file);
+    assert.match(JSON.stringify(preview), /注入连接密钥/);
+    assert.equal(Object.hasOwn(file, "adapterModule"), false);
+    const denied = structuredClone(file);
+    denied.contributes!.hostCapabilities = ["http"];
+    await assert.rejects(f.packages.install(f.actor, denied), /密钥注入/);
+    await f.packages.install(f.actor, file);
+    const restarted = new PluginRegistry();
+    const plugin = await restarted.resolve(f.db, file.id, file.adapterVersion);
+    assert.equal(plugin.chatProvider!({ provider: "deepseek" }), "deepseek");
+    assert.equal(
+      await plugin.health(
+        { provider: "deepseek", baseUrl: "https://127.0.0.1" },
+        new AbortController().signal,
+      ),
+      false,
+    );
+    assert.equal(
+      await one(
+        f.db,
+        "SELECT 1 FROM studio_adapter_modules WHERE id=$1 AND version=$2",
+        [file.id, file.adapterVersion],
+      ),
+      undefined,
+    );
+    const changed = structuredClone(file);
+    changed.version = "2.0.1";
+    const chat = changed.manifest!.chat as { sandbox: { program: string } };
+    chat.sandbox.program += " ";
+    const [installed] = await f.packages.list(f.actor);
+    await assert.rejects(
+      f.packages.install(f.actor, changed, installed.revision),
+      /同一插件版本内容不可修改/,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("GPU package installs its administrator panel while disabled and removes the pairing capability", async () => {
   const f = await setup("036_plugin_data.sql"),
-    file = await legacyGpu();
+    file = await legacyPackage("gpu");
   const app = await createOriginalApp(f.p);
   try {
     await assert.rejects(
@@ -330,9 +577,9 @@ test("GPU package installs its administrator panel while disabled and removes th
         ...file,
         adapterModule: Buffer.from("modified").toString("base64"),
       }),
-      /验证/,
+      /已停止导入/,
     );
-    await f.packages.install(f.actor, file);
+    await seedLegacyPackage(f.p, file);
     const state = new OriginalState(f.p);
     assert.equal(
       (await state.read(f.actor)).gpu_node_settings.title,
@@ -437,10 +684,7 @@ test("GPU package installs its administrator panel while disabled and removes th
     await f.packages.change(f.actor, file.id, 3, "remove");
     assert.equal((await state.read(f.actor)).gpu_node_settings, null);
     assert.equal((await fetch(url + "/connect/agent.tgz")).status, 404);
-    await f.packages.install(f.actor, file);
-    assert.ok(
-      (await nodes.pair(f.actor, { name: "test2", models: [voice] })).command,
-    );
+    await assert.rejects(f.packages.install(f.actor, file), /已停止导入/);
   } finally {
     await app.close();
     await f.cleanup();
@@ -450,7 +694,7 @@ test("update source pins package identity and checksum before activation and pre
   const f = await setup(),
     file = await load("muse"),
     updates = new StudioUpdates(f.p),
-    next = { ...file, version: "1.1.0" },
+    next = { ...file, version: "2.1.0" },
     raw = JSON.stringify(next);
   let digest = createHash("sha256").update(raw).digest("hex");
   const server = createServer((req, res) => {
@@ -502,6 +746,158 @@ test("update source pins package identity and checksum before activation and pre
   } finally {
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
+    await f.cleanup();
+  }
+});
+
+test("portable image outputs use the host decoder before storage and settlement", async () => {
+  const f = await setup();
+  const id = "portable-image",
+    model = id + "-model";
+  let bytes = await sharp({
+    create: { width: 24, height: 16, channels: 3, background: "#345678" },
+  })
+    .withMetadata({ orientation: 6 })
+    .jpeg()
+    .toBuffer();
+  const seen = { count: 0 };
+  const server = createServer((_req, res) => {
+    seen.count++;
+    res.end(
+      JSON.stringify({
+        url: "data:image/jpeg;base64," + bytes.toString("base64"),
+      }),
+    );
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const baseUrl =
+    "http://127.0.0.1:" + (server.address() as { port: number }).port;
+  const file = {
+    format: 1,
+    id,
+    label: id,
+    version: "1.0.0",
+    adapterVersion: "1.0.0",
+    contributes: { version: 1, hostCapabilities: ["media"] },
+    manifest: {
+      id,
+      label: id,
+      version: "1.0.0",
+      contractVersion: 1,
+      mode: "request",
+      originalSubmission: { version: 3 },
+      artifactValidation: {
+        version: 3,
+        errors: {
+          imageFormat: "图片格式不受支持",
+          imageDecode: "无法解码图片",
+          video: "视频无效",
+          failed: "未保存成品",
+        },
+      },
+      configSchema: {
+        type: "object",
+        properties: {
+          baseUrl: { type: "string" },
+          apiKey: { type: "string", writeOnly: true },
+        },
+        required: ["baseUrl", "apiKey"],
+      },
+      models: [
+        {
+          id: model,
+          label: model,
+          kind: "image",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+          studio: {
+            order: 1,
+            priceOrder: 1,
+            descriptor: { kind: "image", label: model },
+            prices: [
+              {
+                tier: "standard",
+                amount: 1,
+                label: "图片",
+                match: { type: "object" },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    program:
+      "({request(){return {path:'/images',body:{}}},result({raw}){return {state:'completed',artifacts:[{url:raw.url}]}}})",
+  };
+  try {
+    await assert.rejects(
+      f.packages.install(f.actor, { ...file, contributes: { version: 1 } }),
+      /media/,
+    );
+    await f.packages.install(f.actor, file);
+    await f.p.createConnection(
+      f.actor,
+      {
+        pluginId: id,
+        version: file.adapterVersion,
+        name: id,
+        config: { baseUrl, apiKey: "fixture" },
+      },
+      true,
+    );
+    await f.packages.change(f.actor, id, 1, "enable");
+    await f.db.query("UPDATE wallets SET balance=10");
+    const gen = new OriginalGeneration(f.p);
+    const execute = async () => {
+      const { id: publicId } = await gen.submit(
+        f.actor,
+        await gen.parse("image", {
+          model,
+          prompt: "fixture",
+          uid: randomUUID(),
+          params: {},
+        }),
+      );
+      const job = await one(f.db, "SELECT id FROM jobs WHERE public_id=$1", [
+        publicId,
+      ]);
+      const executor = new Executor(f.p);
+      await executor.execute(job.id);
+      await executor.execute(job.id);
+      return one(f.db, "SELECT * FROM jobs WHERE id=$1", [job.id]);
+    };
+    const ok = await execute();
+    assert.equal(ok.state, "completed", ok.error);
+    const asset = await one(
+      f.db,
+      "SELECT a.* FROM assets a JOIN job_assets j ON a.id=j.asset_id WHERE j.job_id=$1 AND j.role='output'",
+      [ok.id],
+    );
+    assert.equal(asset.metadata.width, 16);
+    assert.equal(asset.metadata.height, 24);
+    assert.deepEqual(await f.p.storage.read(asset.object_key), bytes);
+    bytes = Buffer.from("invalid");
+    const bad = await execute();
+    assert.equal(bad.state, "failed");
+    assert.equal(bad.error, "无法解码图片");
+    assert.equal(seen.count, 2);
+    assert.equal(
+      (
+        await one(
+          f.db,
+          "SELECT count(*)::int AS refunds FROM ledger WHERE job_id=$1 AND action='refund'",
+          [bad.id],
+        )
+      ).refunds,
+      1,
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
     await f.cleanup();
   }
 });
@@ -730,7 +1126,7 @@ test("portable packages share a declared model across services without changing 
 test("an authenticated Git update uses the repository default branch and its committed package", async () => {
   const f = await setup(),
     file = await load("muse"),
-    next = { ...file, version: "1.2.0" };
+    next = { ...file, version: "2.2.0" };
   const repo = join(f.directory, "updates.git"),
     work = join(f.directory, "source");
   const git = (args: string[], cwd: string) =>
@@ -823,7 +1219,7 @@ test("an authenticated Git update uses the repository default branch and its com
 
 test("a previously restored chat connection adopts the packaged adapter on restart", async () => {
   const f = await databaseFixture("033_studio_plugin_profile.sql"),
-    file = await load("compatible-chat");
+    file = await legacyPackage("compatible-chat");
   try {
     await f.p.registry.initializeStudio(f.db, false);
     await f.db.transaction((sql) =>
@@ -874,7 +1270,7 @@ test("a previously restored chat connection adopts the packaged adapter on resta
         "SELECT version,code FROM studio_adapter_modules WHERE id=$1",
         [file.id],
       ),
-      { version: file.adapterVersion, code: file.adapterModule },
+      undefined,
     );
     assert.deepEqual(
       Object.keys((await new OriginalChatSettings(f.p).config(actor)).models),
@@ -888,7 +1284,7 @@ test("a previously restored chat connection adopts the packaged adapter on resta
 
 test("current installation upgrades its configured GPU service without requiring fresh pairing", async () => {
   const f = await databaseFixture("033_studio_plugin_profile.sql");
-  const file = await legacyGpu();
+  const file = await legacyPackage("gpu");
   try {
     await f.p.registry.initializeStudio(f.db, false);
     await f.db.transaction((sql) =>
@@ -989,7 +1385,7 @@ test("installed settings pages isolate values by package, reject stale saves and
     await assert.rejects(save(1, "SRT"), { status: 409 });
     const upgraded = {
       ...first,
-      version: "1.1.0",
+      version: "2.1.0",
       settingsPages: [
         { ...pages[0], title: "字幕选项" },
         { ...pages[0], id: "other" },
@@ -1125,8 +1521,8 @@ test("a portable node pool pairs, claims and settles its pinned release alongsid
   const f = await setup();
   t.after(() => f.cleanup());
   const file = await load("example-node-pool");
-  const gpu = await legacyGpu();
-  await f.packages.install(f.actor, gpu);
+  const gpu = await legacyPackage("gpu");
+  await seedLegacyPackage(f.p, gpu);
   await assert.rejects(
     f.packages.preview(f.actor, {
       ...file,
@@ -1265,9 +1661,9 @@ test("GPU 2.0 dispatches H3 and Breeze through its sandbox, validates media and 
   const f = await setup();
   t.after(() => f.cleanup());
   const file = await load("gpu");
-  assert.equal(file.adapterModule, undefined);
-  const old = await legacyGpu();
-  await f.packages.install(f.actor, old);
+  assert.equal(Object.hasOwn(file, "adapterModule"), false);
+  const old = await legacyPackage("gpu");
+  await seedLegacyPackage(f.p, old);
   await f.packages.change(f.actor, "gpu", 1, "enable");
   const nodes = new OriginalNodes(f.p, "gpu");
   const oldPair = await nodes.pair(f.actor, {
@@ -1392,8 +1788,8 @@ test("GPU 2.0 dispatches H3 and Breeze through its sandbox, validates media and 
   });
   const audio = await submit("audio", "breeze-tts-2");
   await assert.rejects(f.packages.install(f.actor, old, 3, true), {
-    status: 409,
-    message: "请先排空在途任务，再切换节点协议",
+    status: 400,
+    message: "旧版原生插件已停止导入，请选择新版沙箱插件包",
   });
   const settled: string[] = [];
   for (const id of [h3.id, audio.id]) {
@@ -1820,3 +2216,288 @@ test("subscribers receive committed job transitions and actual team membership c
     await f.cleanup();
   }
 });
+
+for (const id of ["muse", "flow"])
+  test(
+    id +
+      " sandbox upgrade pauses an old private service, drains its snapshot and delivers new media through the repaired connection",
+    async () => {
+      const muse = id === "muse",
+        model = muse ? "muse-image" : "flow:veo-3.1-quality-4s-landscape";
+      const upstream = model.replace(/^flow:/, "");
+      const f = await setup();
+      const old = await legacyPackage(id),
+        next = await load(id);
+      const png = await sharp({
+        create: { width: 16, height: 20, channels: 3, background: "#125678" },
+      })
+        .png()
+        .toBuffer();
+      let media = png;
+      if (!muse) {
+        const path = join(f.directory, "result.mp4");
+        execFileSync("ffmpeg", [
+          "-loglevel",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "color=s=32x24:r=8",
+          "-t",
+          "1",
+          "-pix_fmt",
+          "yuv420p",
+          path,
+        ]);
+        media = await readFile(path);
+      }
+      const seen: {
+        key: string;
+        token: string;
+        body: Record<string, unknown>;
+      }[] = [];
+      const fixture = createServer(async (req, res) => {
+        const token = String(req.headers.authorization);
+        if (!["Bearer previous", "Bearer repaired"].includes(token))
+          return void res.writeHead(401).end();
+        if (req.url === "/readyz")
+          return void res.end('{"status":"ready","accounts":[1]}');
+        if (req.url === "/v1/models")
+          return void res.end(JSON.stringify({ data: [{ id: upstream }] }));
+        if (req.url === "/health")
+          return void res.end(
+            '{"backend_running":true,"has_active_tokens":true}',
+          );
+        if (req.url === "/v1/queue")
+          return void res.end('{"capacity":2,"tasks":[]}');
+        if (req.url === "/v1/media/result.png" || req.url === "/tmp/result.mp4")
+          return void res.end(media);
+        if (
+          req.method === "POST" &&
+          req.url === (muse ? "/v1/images/tasks" : "/v1/chat/completions")
+        ) {
+          const parts = [];
+          for await (const chunk of req) parts.push(chunk);
+          seen.push({
+            key: String(req.headers["idempotency-key"]),
+            token,
+            body: JSON.parse(Buffer.concat(parts).toString()),
+          });
+          if (!muse)
+            return void res.end(
+              `data: {"choices":[{"delta":{"content":"<video src='https://backend.nvmes.com/flow/tmp/result.mp4'>"}}]}\ndata: [DONE]\n`,
+            );
+          return void res.end(
+            JSON.stringify({
+              task_id: "task_" + "a".repeat(32),
+              status: "queued",
+            }),
+          );
+        }
+        if (req.url === "/v1/images/tasks/task_" + "a".repeat(32))
+          return void res.end(
+            '{"status":"completed","url":"/v1/media/result.png"}',
+          );
+        res.writeHead(404).end();
+      });
+      fixture.listen(0, "127.0.0.1");
+      await once(fixture, "listening");
+      const base =
+        "http://127.0.0.1:" + (fixture.address() as { port: number }).port;
+      const sandboxSend: typeof chatHttp = (url, options) => {
+        assert.equal(url.origin, "https://1.1.1.1");
+        assert.ok(options.lookup);
+        return chatHttp(new URL(url.pathname, base), {
+          ...options,
+          lookup: undefined,
+        });
+      };
+      const restart = () => {
+        f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+        return new Executor(f.p);
+      };
+      try {
+        restart();
+        assert.equal(Object.hasOwn(next, "adapterModule"), false);
+        await seedLegacyPackage(f.p, old);
+        const c = await f.p.createConnection(
+          f.actor,
+          {
+            pluginId: old.id,
+            version: old.adapterVersion,
+            name: id,
+            config: { baseUrl: base, apiKey: "previous" },
+          },
+          true,
+        );
+        const catalog = new StudioCatalog(f.db),
+          prices = await catalog.prices();
+        await f.db.transaction((sql) =>
+          catalog.savePrices(
+            sql,
+            Object.fromEntries(prices.items.map((i) => [i.key, 3])),
+            prices.revision,
+          ),
+        );
+        await f.packages.change(f.actor, id, 1, "enable");
+        const team = await one(
+          f.db,
+          "SELECT * FROM workspaces WHERE kind='team'",
+        );
+        await f.db.transaction((sql) =>
+          f.p.credit(sql, team.id, 100, randomUUID(), "adjust"),
+        );
+        const submit = async (uid: string) => {
+          const g = new OriginalGeneration(f.p);
+          return g.submit(
+            f.actor,
+            await g.parse(muse ? "image" : "video", {
+              uid,
+              model,
+              prompt: "<Picture １> 示例",
+            }),
+            String(team.public_id),
+          );
+        };
+        const uid = randomUUID(),
+          accepted = await submit(uid);
+        const job = (id: number) =>
+          one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [id]);
+        const before = await job(accepted.id);
+        await assert.rejects(
+          f.packages.install(
+            f.actor,
+            { ...next, studioProgram: next.studioProgram + " " },
+            2,
+          ),
+          /摘要/,
+        );
+        await assert.rejects(
+          f.packages.install(
+            f.actor,
+            {
+              ...next,
+              contributes: {
+                version: 1,
+                hostCapabilities: ["http", "media"],
+                http: next.contributes!.http,
+              },
+            },
+            2,
+          ),
+          /密钥注入/,
+        );
+        if (!muse)
+          await assert.rejects(
+            f.packages.install(
+              f.actor,
+              {
+                ...next,
+                contributes: {
+                  ...next.contributes!,
+                  http: { connection: true, origins: [] },
+                },
+              },
+              2,
+            ),
+            /成品域名/,
+          );
+        await f.packages.install(f.actor, next, 2);
+        const paused = (await f.p.studioConnections(f.actor))[0];
+        assert.equal(paused.addressPause, "non-public");
+        assert.equal(paused.enabled, true);
+        assert.equal(paused.values.baseUrl, base);
+        assert.equal((await submit(uid)).id, accepted.id);
+        await assert.rejects(submit(randomUUID()), /执行连接/);
+        assert.equal(seen.length, 0);
+        assert.equal(
+          (await f.packages.list(f.actor)).find((pkg) => pkg.id === id)
+            ?.previousVersion,
+          null,
+        );
+        await assert.rejects(
+          f.p.createConnection(
+            f.actor,
+            {
+              name: "过期版本",
+              pluginId: id,
+              version: old.adapterVersion,
+              config: { baseUrl: base, apiKey: "previous" },
+            },
+            true,
+          ),
+          /版本与已安装的插件不符/,
+        );
+        // Resolution of accepted work does not consult archived executable bytes.
+        await f.db.query("DELETE FROM studio_adapter_modules WHERE id=$1", [
+          id,
+        ]);
+        const oldWorker = restart();
+        await oldWorker.execute(before.id);
+        await oldWorker.execute(before.id);
+        const completed = await job(accepted.id);
+        assert.equal(completed.state, "completed", completed.error);
+        assert.equal(completed.config_snapshot, before.config_snapshot);
+        assert.equal(completed.plugin_version, old.adapterVersion);
+        await f.p.updateConnection(f.actor, c.id, {
+          revision: paused.revision,
+          enabled: true,
+          concurrency: 2,
+          config: { baseUrl: "https://1.1.1.1", apiKey: "repaired" },
+        });
+        assert.equal(
+          (await f.p.studioConnections(f.actor))[0].addressPause,
+          undefined,
+        );
+        assert.deepEqual(await f.p.connectionHealth(f.actor, c.id), {
+          ready: true,
+          models: [upstream],
+          available: [model],
+        });
+        await new QueueHealthPoller(f.p).refresh(c.id);
+        const newer = await job((await submit(randomUUID())).id);
+        assert.equal(newer.package_version, next.version);
+        assert.equal(newer.plugin_version, next.adapterVersion);
+        const worker = restart();
+        await Promise.all([worker.execute(newer.id), worker.execute(newer.id)]);
+        await restart().execute(newer.id);
+        const done = await job(newer.public_id);
+        assert.equal(done.state, "completed", done.error);
+        assert.equal(done.attempts, 1);
+        assert.deepEqual(
+          seen.map((v) => [
+            v.key,
+            v.token,
+            muse ? v.body.prompt : (v.body.messages as any)[0].content[0].text,
+          ]),
+          [
+            [
+              muse ? before.id.replaceAll("-", "") : "undefined",
+              "Bearer previous",
+              muse ? "[图１] 示例" : "<Picture １> 示例",
+            ],
+            [
+              muse ? newer.id.replaceAll("-", "") : "undefined",
+              "Bearer repaired",
+              muse ? "[图１] 示例" : "<Picture １> 示例",
+            ],
+          ],
+        );
+        assert.equal(Number((await f.p.wallet(f.actor, team.id)).balance), 94);
+        assert.equal(Number((await f.p.wallet(f.actor, team.id)).held), 0);
+        const asset = await one(
+          f.db,
+          "SELECT metadata FROM assets WHERE id=$1",
+          [done.result.assets[0]],
+        );
+        assert.deepEqual(
+          [asset.metadata.mime, asset.metadata.width, asset.metadata.height],
+          muse ? ["image/png", 16, 20] : ["video/mp4", 32, 24],
+        );
+      } finally {
+        fixture.closeAllConnections();
+        await new Promise<void>((done) => fixture.close(() => done()));
+        await f.cleanup();
+      }
+    },
+  );

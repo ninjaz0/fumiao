@@ -1,11 +1,10 @@
+import { seedLegacyPackage, legacyPackage } from "../helpers/legacy-studio.js";
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { one } from "@fumiao/platform/db.js";
-import { StudioPackages } from "@fumiao/platform/studio-packages.js";
 import { databaseFixture } from "../helpers/database.js";
 import type { PluginPageEntry } from "@fumiao/plugin-sdk/contributions.js";
 
@@ -38,10 +37,8 @@ async function setup(t: TestContext) {
     { name: "member", password },
     "fixture",
   );
-  const file = JSON.parse(
-    await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
-  );
-  await new StudioPackages(f.p).install(admin, file);
+  const file = await legacyPackage("gpu");
+  await seedLegacyPackage(f.p, file);
   const app = await createOriginalApp(f.p);
   await app.listen(0, "127.0.0.1");
   t.after(() => app.close());
