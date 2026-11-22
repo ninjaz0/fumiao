@@ -21,6 +21,8 @@ export default (() => {
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   };
   return {
+    // Hooks may be async. `host` holds the functions this package declared:
+    // a view can read, an action can also write.
     async view(input, host) {
       const saved = (await host.data.get("notes-v2")) || { next: 1, notes: [] };
       const { keys, more } = await host.data.list("notes/");

@@ -3,5 +3,5 @@
   "version": "1.2.1",
   "notes": "修复工作区备注数量较多时无法打开的问题，自动整理旧备注",
   "package": "example-extension.fmplugin.json",
-  "sha256": "c6ca56e9e0d8eca773fcce64cdc43667ce8957afd5670226235bb88836ca2e2a"
+  "sha256": "2869c12082cd8641760165144681977ae52e5d8abb6e5d90a39bff50acaaa0e9"
 }
