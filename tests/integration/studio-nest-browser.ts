@@ -121,6 +121,56 @@ async function checkPackRefreshRace(page: Page, studio: string, state: StudioSta
   }
 }
 
+async function checkH3ImageUploadLimit(
+  page: Page,
+  studio: string,
+  bytes: Buffer,
+) {
+  try {
+    await page.goto(studio);
+    await expect(
+      page.getByRole("button", { name: "选择模型，当前MiniMax H3" }),
+    ).toBeVisible();
+    const mode = page.getByRole("button", { name: "选择参考模式" });
+    await expect(mode).toHaveText("全能参考");
+
+    let uploads = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/api/assets"
+      ) {
+        uploads++;
+      }
+    });
+    await page.getByRole("button", { name: "添加参考内容" }).click();
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "上传素材" }).click();
+    await (await chooser).setFiles(
+      Array.from({ length: 10 }, (_, i) => ({
+        name: `h3-reference-${i + 1}.png`,
+        mimeType: "image/png",
+        buffer: bytes,
+      })),
+    );
+
+    await expect(page.locator(".reference-deck-count")).toHaveText(/^(9|10)$/, {
+      timeout: apiTimeout,
+    });
+    await expect(mode).toBeEnabled({ timeout: apiTimeout });
+    assert.equal(uploads, 9, "The tenth image must not reach /api/assets");
+    await expect(page.locator(".reference-deck-count")).toHaveText("9");
+    await expect(page.locator("#toast")).toHaveText(
+      "最多选择 9 张参考图片，请先移除部分图片",
+    );
+    console.log(
+      "Verified H3 upload: nine images accepted, tenth rejected before /api/assets",
+    );
+  } finally {
+    await page.close();
+  }
+}
+
 export async function studioBrowser(
   platform: Platform,
   web: string,
@@ -498,6 +548,7 @@ export async function studioBrowser(
     const savedCanvas = await document();
     const before = await state();
     await checkPackRefreshRace(await context.newPage(), studio, before);
+    await checkH3ImageUploadLimit(await context.newPage(), studio, bytes);
     const jobEntries = before.credit_history.filter(
       (entry) => entry.job === jobId,
     );

@@ -1284,11 +1284,17 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       try {
         for (const file of selected) {
           const current = currentDraft.current;
-          if (!current || leaving.current || !sameSpace(space, active.current))
+          const currentSpace = active.current;
+          if (
+            !current ||
+            !currentSpace ||
+            leaving.current ||
+            !sameSpace(space, currentSpace)
+          )
             return;
           const h3 = isH3(current.draft);
           const frameMode = frames(current.draft);
-          const form = space.model_forms[selectedModel(current.draft)];
+          const form = currentSpace.model_forms[selectedModel(current.draft)];
           const limit = form?.references.max ?? 0;
           const pictures = form?.references.counts?.image ?? limit;
           const kind = file.type.startsWith("video/")
@@ -1296,20 +1302,30 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             : file.type.startsWith("audio/")
               ? "audio"
               : "image";
-          if (
-            !frameMode &&
-            (limit <= 0 || (kind === "image" && pictures <= 0))
-          ) {
-            notify("当前模型不支持参考图片，请先切换支持参考图的模型");
-            break;
-          }
-          if (!frameMode && packReferences(current).length >= limit) {
-            notify(
-              h3
-                ? `最多选择 ${limit} 个参考素材`
-                : `最多上传 ${limit} 张参考图片`,
-            );
-            break;
+          if (!frameMode) {
+            if (limit <= 0 || (kind === "image" && pictures <= 0)) {
+              notify("当前模型不支持参考图片，请先切换支持参考图的模型");
+              break;
+            }
+            const references = packReferences(current);
+            if (
+              kind === "image" &&
+              pictures < limit &&
+              references.filter(
+                (id) => referenceType(currentSpace, id) === "Picture",
+              ).length >= pictures
+            ) {
+              notify(`最多选择 ${pictures} 张参考图片，请先移除部分图片`);
+              break;
+            }
+            if (references.length >= limit) {
+              notify(
+                h3
+                  ? `最多选择 ${limit} 个参考素材`
+                  : `最多上传 ${limit} 张参考图片`,
+              );
+              break;
+            }
           }
           if (kind !== "image" && (!h3 || frameMode))
             throw new Error("这个模式只接收图片");
