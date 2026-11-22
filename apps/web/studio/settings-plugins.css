@@ -73,7 +73,7 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
-.studio-plugins .plugin-alert {
+.settings-section .plugin-alert {
   display: flex;
   align-items: center;
   justify-content: space-between;

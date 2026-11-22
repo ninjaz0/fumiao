@@ -29,7 +29,14 @@ export async function verifyChatSettingsRetry(page: Page) {
   const section = page.locator(".fm-chat-service");
   try {
     await setTab(page, "chatService");
-    await expect(section.getByRole("alert")).toContainText("对话服务暂不可用");
+    const alert = section.getByRole("alert");
+    const retry = alert.getByRole("button", { name: "重试", exact: true });
+    await expect(alert.locator("span")).toHaveText("对话服务暂不可用");
+    await expect(alert).toHaveCSS("display", "flex");
+    await expect(alert).toHaveCSS("justify-content", "space-between");
+    await expect(alert).toHaveCSS("gap", "10px");
+    await expect(retry).toHaveCSS("border-top-width", "1px");
+    await expect(retry).toHaveCSS("min-height", "34px");
     await expect(section.getByText("正在读取对话服务…")).toBeHidden();
     await section.getByRole("button", { name: "重试", exact: true }).click();
     await expect(section.getByRole("alert")).toBeVisible();

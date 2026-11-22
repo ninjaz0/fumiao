@@ -107,8 +107,12 @@ export function ChatSettings({
       <h2>对话服务</h2>
       {error && (
         <div className="ledger-card plugin-alert" role="alert">
-          <span>对话服务读取失败：{error}</span>
-          <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+          <span>{error}</span>
+          <button
+            className="ledger-button"
+            type="button"
+            onClick={() => setAttempt((value) => value + 1)}
+          >
             重试
           </button>
         </div>
