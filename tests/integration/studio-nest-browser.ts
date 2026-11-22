@@ -11,6 +11,7 @@ import type { Actor, Platform } from "../../packages/platform/src/platform.js";
 import { originalUI } from "../../packages/web-compat/src/ui.js";
 import { imagesText } from "../../plugins/images/src/text.js";
 import type { studioPayment } from "./studio-nest-payment.js";
+import { verifyChatSettingsRetry } from "./studio-chat-settings.js";
 import {
   assertStudio,
   open,
@@ -426,6 +427,7 @@ export async function studioBrowser(
     await expect(currentSettings).toHaveCount(0);
     await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
     await settings(page);
+    await verifyChatSettingsRetry(page);
     await expect(currentSettings).toHaveAttribute("aria-current", "page");
     await expect(sidebar.locator(".workspace-switch")).toBeVisible();
     await expect.poll(() => sidebar.evaluate((rail) => {
