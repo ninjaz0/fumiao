@@ -73,6 +73,8 @@ async function checkNext(
     // These pages need a definite session, which only the API can provide.
     assert.equal(response.status, 503);
     assert.equal(response.headers.get("retry-after"), "5");
+    if (method === "GET")
+      assert.match(Buffer.from(body).toString(), /http-equiv="refresh"/);
   } else if (path === "/studio/") {
     assert.equal(response.status, 308);
     assert.equal(response.headers.get("location"), "/studio?q=a%20b&q=%2F");

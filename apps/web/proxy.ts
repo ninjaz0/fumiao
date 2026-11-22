@@ -2,15 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { originalHeaders } from "../../packages/web-compat/src/ui";
 import { backend } from "./proxy-backend";
 
-const unavailable = () =>
-  new NextResponse("服务暂时不可用，请稍后重试", {
-    status: 503,
-    headers: {
-      "content-type": "text/plain; charset=utf-8",
-      "cache-control": "private, no-store",
-      "retry-after": "5",
+// The pages below need the API; reload until it answers again.
+const unavailable = (request: NextRequest) =>
+  new NextResponse(
+    request.method === "HEAD"
+      ? null
+      : '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>弗淼 AIGC</title><p>服务暂时不可用，页面会自动重试。</p></html>',
+    {
+      status: 503,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "private, no-store",
+        "retry-after": "5",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      },
     },
-  });
+  );
 const redirect = (request: NextRequest, location: string) => {
   const response = NextResponse.redirect(new URL(location, request.url), 307);
   response.headers.set("cache-control", "private, no-store");
@@ -50,10 +58,10 @@ export async function proxy(request: NextRequest) {
       });
       await state.body?.cancel();
       studio = auth && state.ok;
-      if (!state.ok && state.status !== 401) return unavailable();
+      if (!state.ok && state.status !== 401) return unavailable(request);
       if (canvas && !state.ok) return redirect(request, "/studio");
     } catch {
-      return unavailable();
+      return unavailable(request);
     }
   }
   if (!compat && (searchParams.has("workspace") || searchParams.has("recharge")))
