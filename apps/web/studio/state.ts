@@ -1119,6 +1119,32 @@ export function changeH3Mode(
     },
   };
 }
+export function imageToVideoDraft(
+  state: StudioState,
+  previous: DraftSession,
+  result: string,
+): DraftSession {
+  const draft = {
+    ...previous.draft,
+    kind: "video" as const,
+    prompt: "",
+    quality: "480",
+    seconds: "5",
+    seed: "",
+  };
+  const session: DraftSession = {
+    ...previous,
+    draft: normalizeParams(state, ensureModel(state, draft)),
+    refs: [],
+    parent: null,
+    retainedSeed: null,
+    suspendedAudioDraft: suspendAudioDraft(previous),
+    suspendedMediaDraft: null,
+  };
+  return frames(session.draft)
+    ? assignFrame(state, session, result, "first_frame")
+    : { ...session, refs: [result] };
+}
 export function assignFrame(
   state: StudioState,
   session: DraftSession,

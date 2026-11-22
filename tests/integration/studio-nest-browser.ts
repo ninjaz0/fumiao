@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { chromium, expect, type Page } from "@playwright/test";
 import sharp from "sharp";
 import { newNode, type Project } from "../../apps/web/canvas-editor/types.js";
-import type { StudioState } from "../../apps/web/studio/state.js";
+import { H3, type StudioState } from "../../apps/web/studio/state.js";
 import { one } from "../../packages/platform/src/db.js";
 import type { Actor, Platform } from "../../packages/platform/src/platform.js";
 import { originalUI } from "../../packages/web-compat/src/ui.js";
@@ -25,6 +25,30 @@ const chatDraft = "重启后恢复未发对话";
 const chatReply = "隔离验收回复";
 const canvasTitle = "隔离工作台画布";
 const apiTimeout = 20_000;
+
+async function checkImageToVideoFrames(page: Page, studio: string, state: StudioState) {
+  const image = state.jobs.find((job) => job.kind === "image" && job.result);
+  assert.ok(image?.result);
+  const key = `fm-draft-${state.me.id}-workspace-${state.workspace_id}`;
+  await page.addInitScript(({ key, model }) => {
+    sessionStorage.setItem(key, JSON.stringify({
+      draft: { kind: "video", videoModel: model, h3: { mode: "frames" } },
+      refs: [],
+    }));
+  }, { key, model: H3 });
+  await page.route("**/api/state", (route) => route.fulfill({ json: {
+    ...state,
+    model_access: { ...state.model_access, [H3]: true },
+  } }));
+  await page.goto(studio);
+  await page.locator(`[data-act="detail"][data-id="${image.id}"]`).click();
+  await page.locator('[data-act="image-to-video"]').click();
+  await expect(page.locator('.h3-frame-preview[data-slot="first_frame"]'))
+    .toHaveAttribute("data-key", image.result);
+  await expect(page.locator('.h3-frame-preview[data-slot="last_frame"]'))
+    .toHaveAttribute("data-key", "");
+  await page.close();
+}
 
 async function dragPastImage(page: Page) {
   const fixed = page.getByAltText("固定参考图", { exact: true });
@@ -547,6 +571,7 @@ export async function studioBrowser(
     }
     const savedCanvas = await document();
     const before = await state();
+    await checkImageToVideoFrames(await context.newPage(), studio, before);
     await checkPackRefreshRace(await context.newPage(), studio, before);
     await checkH3ImageUploadLimit(await context.newPage(), studio, bytes);
     const jobEntries = before.credit_history.filter(
