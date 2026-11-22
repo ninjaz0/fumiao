@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  />
+  <title>弗淼插件开发宿主</title>
+  <style>
+    :root {
+      font:
+        16px/1.55 Inter,
+        system-ui,
+        sans-serif;
+      color: #222a29;
+      background: #f5f6f2;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    main {
+      max-width: 860px;
+      margin: 3rem auto;
+      padding: 0 1.5rem;
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin: 0;
+    }
+    label,
+    h2 {
+      display: block;
+      font-size: 1rem;
+      font-weight: 600;
+      margin: 1.4rem 0 0.4rem;
+    }
+    select,
+    textarea,
+    pre {
+      width: 100%;
+      border: 1px solid #aebbb6;
+      border-radius: 0.4rem;
+      padding: 0.75rem;
+      background: white;
+      color: inherit;
+    }
+    textarea,
+    pre {
+      font:
+        14px/1.55 ui-monospace,
+        monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    textarea {
+      min-height: 11rem;
+    }
+    button {
+      background: #225246;
+      color: white;
+      padding: 0.6rem 1.4rem;
+      border: 0;
+      border-radius: 0.35rem;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.5;
+    }
+    #error {
+      color: #8b2926;
+    }
+    #version {
+      color: #49615a;
+    }
+    pre {
+      min-height: 4rem;
+    }
+    button:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible {
+      outline: 3px solid #498a75;
+    }
+  </style>
+  <main>
+    <h1 id="title">插件开发宿主</h1>
+    <span id="version"></span>
+    <form>
+      <label for="hook">扩展入口</label
+      ><select id="hook"></select>
+      <label for="args">调用参数（JSON 数组）</label
+      ><textarea id="args" spellcheck="false"></textarea>
+      <button id="run">运行入口</button>
+    </form>
+    <p role="alert" id="error"></p>
+    <h2>返回值</h2>
+    <pre id="result" aria-live="polite"></pre>
+    <h2>宿主调用</h2>
+    <pre id="calls"></pre>
+  </main>
+  <script type="module">
+    const el = (id) => document.getElementById(id),
+      hook = el("hook"),
+      args = el("args"),
+      error = el("error");
+    let cases = [],
+      generation = 0;
+    function select() {
+      const c = cases.find((x) => x.id === hook.value);
+      args.value = JSON.stringify(c?.args ?? [], null, 2);
+      el("result").textContent = "";
+      el("calls").textContent = "";
+    }
+    async function load() {
+      const seq = ++generation;
+      el("run").disabled = true;
+      try {
+        const data = await (await fetch("/project")).json();
+        if (seq !== generation) return;
+        if (data.error) throw Error(data.error);
+        const prior = hook.value;
+        const priorInput = args.value;
+        const edited =
+          priorInput !==
+          JSON.stringify(
+            cases.find((c) => c.id === prior)?.args ?? [],
+            null,
+            2,
+          );
+        cases = data.cases;
+        el("title").textContent = data.plugin;
+        el("version").textContent = data.version;
+        hook.replaceChildren(...cases.map(({ id }) => new Option(id, id)));
+        if (cases.some((x) => x.id === prior)) hook.value = prior;
+        select();
+        if (hook.value === prior && edited) args.value = priorInput;
+        error.textContent = "";
+        el("run").disabled = !cases.length;
+      } catch (e) {
+        if (seq === generation) error.textContent = e.message;
+      }
+    }
+    hook.onchange = select;
+    document.querySelector("form").onsubmit = async (e) => {
+      e.preventDefault();
+      const seq = generation;
+      el("run").disabled = true;
+      error.textContent = "";
+      try {
+        const request = { id: hook.value, args: JSON.parse(args.value) };
+        const response = await fetch("/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        });
+        const data = await response.json();
+        if (seq !== generation) return;
+        if (!response.ok) throw Error(data.error);
+        el("result").textContent = JSON.stringify(data.result, null, 2);
+        el("calls").textContent = data.calls.join("\n") || "本次未调用宿主";
+      } catch (e) {
+        if (seq === generation) {
+          error.textContent = e.message;
+          el("result").textContent = "";
+          el("calls").textContent = "";
+        }
+      } finally {
+        if (seq === generation) el("run").disabled = false;
+      }
+    };
+    new EventSource("/changes").onmessage = load;
+    await load();
+  </script>
+</html>

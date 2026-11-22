@@ -63,5 +63,6 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
       - name: Verify /studio with the production build
         run: pnpm test:studio
+      - run: pnpm test:plugin-authors
       - run: pnpm test:studio:remote-provider
       - run: docker build -t fumiao:ci .
