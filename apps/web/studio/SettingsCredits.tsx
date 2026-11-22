@@ -75,10 +75,12 @@ export function Credits({
   const { credits, workspace_id: workspace } = state;
   const latest = state.credit_history;
   const [previous, setPrevious] = useState(latest);
-  const [rows, setRows] = useState(latest);
-  const [before, setBefore] = useState(
-    latest.length === 50 ? latest.at(-1)?.id : undefined,
-  );
+  const [ledger, setHistory] = useState({
+    rows: latest,
+    before: latest.length === 50 ? latest.at(-1)?.id : undefined,
+    epoch: 0,
+  });
+  const { rows, before, epoch } = ledger;
   const [busy, setBusy] = useState(false);
 
   if (previous !== latest) {
@@ -87,15 +89,15 @@ export function Credits({
       latest.length === 50 &&
       (!rows.length || latest.at(-1)!.id > rows[0].id)
     ) {
-      setRows(latest);
-      setBefore(latest.at(-1)?.id);
+      setHistory({ rows: latest, before: latest.at(-1)?.id, epoch: epoch + 1 });
     } else {
-      setRows(mergeCreditRows(rows, latest));
+      setHistory({ ...ledger, rows: mergeCreditRows(rows, latest) });
     }
   }
 
   async function more(button: HTMLButtonElement) {
     if (busy || before === undefined) return;
+    const startEpoch = epoch;
     setBusy(true);
     try {
       const result = await api<{ history: CreditEntry[] }>(
@@ -103,9 +105,17 @@ export function Credits({
         "/api/credits?before=" + before,
       );
       if (!button.isConnected) return;
-      setRows((rows) => mergeCreditRows(rows, result.history));
-      setBefore(
-        result.history.length === 50 ? result.history.at(-1)?.id : undefined,
+      setHistory((history) =>
+        history.epoch !== startEpoch
+          ? history
+          : {
+              ...history,
+              rows: mergeCreditRows(history.rows, result.history),
+              before:
+                result.history.length === 50
+                  ? result.history.at(-1)?.id
+                  : undefined,
+            },
       );
     } catch (error) {
       notify((error as Error).message);

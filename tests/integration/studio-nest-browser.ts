@@ -37,6 +37,8 @@ async function checkCreditHistoryRefresh(page: Page, state: StudioState) {
   let live = false;
   let polled = entries.slice(0, 50);
   let failMore = true;
+  let releaseMore!: () => void;
+  const heldMore = new Promise<void>((resolve) => { releaseMore = resolve; });
   await page.route("**/api/state", (route) =>
     route.fulfill({
       json: {
@@ -49,7 +51,7 @@ async function checkCreditHistoryRefresh(page: Page, state: StudioState) {
       },
     }),
   );
-  await page.route("**/api/credits?before=*", (route) => {
+  await page.route("**/api/credits?before=*", async (route) => {
     if (failMore) {
       failMore = false;
       return route.fulfill({ status: 500, headers: { "x-fumiao-web": "next" }, json: { detail: "分页暂不可用" } });
@@ -57,6 +59,12 @@ async function checkCreditHistoryRefresh(page: Page, state: StudioState) {
     const before = Number(
       new URL(route.request().url()).searchParams.get("before"),
     );
+    if (before === 300) await heldMore;
+    if (before >= 300) {
+      return route.fulfill({ json: { history: Array.from({ length: 50 }, (_, index) => ({
+        ...entries[0], id: before - index - 1, note: `polled-credit-${before - index - 1}`,
+      })) } });
+    }
     return route.fulfill({
       json: {
         history: entries.filter((entry) => entry.id < before).slice(0, 50),
@@ -113,6 +121,27 @@ async function checkCreditHistoryRefresh(page: Page, state: StudioState) {
   await expect(retained).toHaveCount(0);
   await expect(page.locator('[data-act="credit-more"]')).toHaveAttribute("data-before", "300");
   console.log("Credit history restarts pagination when a poll has a gap: passed");
+  const more = page.locator('[data-act="credit-more"]');
+  const pending = page.waitForRequest("**/api/credits?before=300");
+  await more.click();
+  await pending;
+  try {
+    await pollBatch(400, 50);
+    await expect(more).toHaveAttribute("data-before", "400");
+  } finally {
+    releaseMore();
+  }
+  await expect(more).toBeEnabled();
+  await expect(more).toHaveAttribute("data-before", "400");
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(50);
+  const nextPage = page.waitForRequest("**/api/credits?before=400");
+  await more.click();
+  await nextPage;
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(100);
+  await expect(more).toHaveAttribute("data-before", "350");
+  const contiguous = await page.locator(".credit-ledger-row small").allTextContents();
+  assert.deepEqual(contiguous, Array.from({ length: 100 }, (_, index) => ` · polled-credit-${449 - index}`));
+  console.log("Credit history ignores in-flight pages from before a gap reset: passed");
   console.log("Credit history live refresh preserves loaded pages: passed");
   await page.close();
 }
