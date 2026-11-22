@@ -143,7 +143,7 @@ export const packageFile = z
           !f.nodeClient &&
           !f.studioProgram &&
           !f.equivalentModels &&
-          (f.contributes?.events?.length || f.contributes?.actions?.length))) &&
+          (f.contributes?.paymentMethods?.length || f.contributes?.exporters?.length || f.contributes?.events?.length || f.contributes?.actions?.length))) &&
       (!f.manifest || !!f.program),
     "插件必须声明一种执行方式",
   )
@@ -198,6 +198,10 @@ async function inspectPackage(file: PackageFile) {
   });
   requireValue(!problems.length, 400, problems.join("；"));
   for (const [hook, declarations] of [
+    ["create", contributions.paymentMethods],
+    ["verify", contributions.paymentMethods],
+    ["callback", contributions.paymentMethods],
+    ["plan", contributions.exporters],
     ["handle", contributions.events],
     ["run", contributions.actions],
   ] as const) {
@@ -337,6 +341,14 @@ function permissionSummary(
   const added = (label: string, isNew: boolean) =>
     label + (prior && isNew ? "（新增）" : "");
   const lines: string[] = [];
+  for (const m of next.paymentMethods ?? []) {
+    const paths = [m.checkoutPath, m.createPath, m.queryPath].filter(Boolean).join("、");
+    const priorMethod = prior?.paymentMethods?.find(old => old.id === m.id);
+    lines.push(added("充值渠道 · " + m.title + " · 收款网关 " + paths + " · " + m.signature,
+      !priorMethod || canonical(priorMethod) !== canonical(m)));
+  }
+  for (const e of next.exporters ?? [])
+    lines.push(added("画布导出器 · " + e.title, !prior?.exporters?.some(old => old.id === e.id)));
   for (const event of next.events ?? [])
     lines.push(
       added(
@@ -1032,17 +1044,32 @@ export class StudioPackages {
   }
   async list(actor: Actor) {
     this.p.admin(actor);
-    return (
+    const rows = (
       await this.p.db
         .query(`SELECT p.id,p.version,p.previous_version AS "previousVersion",p.enabled,p.removing,p.revision,
       p.update_url AS "updateUrl",p.update_auth IS NOT NULL AS "hasUpdateToken",p.checked_at AS "checkedAt",p.update_info AS "updateInfo",
       r.package->>'label' AS label, r.package->>'adapterVersion' AS "adapterVersion",coalesce(v.manifest->'configSchema','{}'::jsonb) AS "configSchema",
+      ARRAY(SELECT jsonb_build_object('id',m->>'id','title',m->>'title') FROM jsonb_array_elements(r.package->'contributes'->'paymentMethods') m) AS "paymentMethods",
       CASE WHEN r.package ? 'extensionOnly' THEN 'extension' ELSE v.manifest->>'mode' END AS mode,
       (SELECT COALESCE(jsonb_agg(jsonb_build_object('id',c.id,'label',COALESCE(c.display_label,c.descriptor->>'label'),'kind',c.descriptor->>'kind','enabled',COALESCE((g.flags->>c.id)::boolean,false), 'service',s.connection_id,'services',(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',x.id,'name',x.name) ORDER BY x.name,x.id),'[]'::jsonb) FROM connections x JOIN models m ON m.connection_id=x.id JOIN studio_packages t ON t.id=x.plugin_id AND t.installed AND NOT t.removing WHERE m.catalog_id=c.id AND x.enabled AND NOT x.removed)) ORDER BY c.position,c.id),'[]'::jsonb)
         FROM studio_catalog c CROSS JOIN studio_policy g LEFT JOIN studio_model_service s ON s.model_id=c.id WHERE (c.plugin_id=p.id OR EXISTS(SELECT 1 FROM studio_shared_models e WHERE e.model_id=c.id AND e.plugin_id=p.id)) AND NOT c.hidden) AS choices, ARRAY(SELECT m->>'label' FROM jsonb_array_elements(v.manifest->'models') m WHERE m ? 'studio' AND COALESCE((m->>'hidden')::boolean,false)=false) AS models
       FROM studio_packages p JOIN studio_package_releases r USING(id,version)
       LEFT JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion' WHERE p.installed AND (v.id IS NOT NULL OR r.package ? 'extensionOnly') ORDER BY label,p.id`)
     ).rows;
+    const providers = rows.filter(row=>row.paymentMethods.length);
+    if (providers.length) {
+      const channels = (await this.p.db.query(
+        "SELECT method,enabled,plugin_id FROM payment_channels WHERE plugin_id=ANY($1::text[])",
+        [providers.map(row=>row.id)],
+      )).rows;
+      for (const row of providers) {
+        row.paymentMethods=row.paymentMethods.map((method:{id:string;title:string})=>{
+          const channel=channels.find(c=>c.plugin_id===row.id && c.method===method.id);
+          return {...method,configured:!!channel,enabled:channel?.enabled??false};
+        });
+      }
+    }
+    return rows;
   }
   async change(
     actor: Actor,

@@ -1,4 +1,8 @@
-import { storyboardHistory } from "@fumiao/plugin-storyboard/history.js";
+import {
+  canvasExporters,
+  planComposition,
+} from "@fumiao/platform/composition/exporters.js";
+import { storyboardHistory } from "@fumiao/platform/composition/history.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, statfs } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
@@ -14,8 +18,8 @@ import {
   originalStoryboard,
   type CompositionPlugin,
   type Shot,
-} from "@fumiao/plugin-storyboard/original.js";
-import { webVtt } from "@fumiao/plugin-storyboard/subtitles.js";
+} from "@fumiao/platform/composition/renderer.js";
+import { webVtt } from "@fumiao/platform/composition/subtitles.js";
 import { OriginalCanvases, canvasConflict } from "./canvases.js";
 import { parseBody } from "./validation.js";
 import { parseCanvasDocument, storyboardExportFields } from "./canvas-draft.js";
@@ -72,7 +76,11 @@ export class OriginalStoryboardExports {
           [project.id],
         )
       ).rows;
-      return { exports: rows.map((row) => this.public(row)) };
+      const exporters = (await canvasExporters(sql)).map(({ key, title }) => ({
+        key,
+        title,
+      }));
+      return { exports: rows.map((row) => this.public(row)), exporters };
     });
   }
   async subtitles(user: Actor, key: string, format: "srt" | "vtt" = "srt") {
@@ -103,9 +111,9 @@ export class OriginalStoryboardExports {
   }
   async create(user: Actor, key: string, value: unknown) {
     const body = parseBody(value, storyboardExportFields);
-    const plugin = this.plugins.get("original-storyboard@1.0.0");
+    const renderer = this.plugins.get("original-storyboard@1.0.0");
     requireValue(
-      plugin && (await plugin.health()),
+      renderer && (await renderer.health()),
       503,
       "成片合成服务尚未配置，请联系管理员",
     );
@@ -120,9 +128,20 @@ export class OriginalStoryboardExports {
         [user.id, body.uid],
       );
       if (old) {
-        requireValue(old.project_id === project.id, 409, "提交编号已使用");
+        requireValue(
+          old.project_id === project.id &&
+            (old.exporter_plugin
+              ? old.exporter_plugin + "/" + old.exporter_id
+              : "storyboard/mp4") === body.exporter,
+          409,
+          "提交编号已使用",
+        );
         return this.public(old);
       }
+      const exporter = (
+        await canvasExporters(sql, body.exporter.split("/")[0])
+      ).find((e) => e.key === body.exporter);
+      requireValue(exporter, 503, "成片合成服务尚未配置，请联系管理员");
       requireValue(
         project.revision === body.expected_revision,
         409,
@@ -245,7 +264,7 @@ export class OriginalStoryboardExports {
         stamp = Math.floor(this.clock());
       const row = await one(
         sql,
-        "INSERT INTO storyboard_exports(id,public_id,uid,owner_id,workspace_id,project_id,revision,snapshot,state,subtitles,error,created,updated) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$9,$10,$10) RETURNING *",
+        "INSERT INTO storyboard_exports(id,public_id,uid,owner_id,workspace_id,project_id,revision,snapshot,state,subtitles,error,created,updated,exporter_plugin,exporter_version,exporter_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$9,$10,$10,$11,$12,$13) RETURNING *",
         [
           id,
           publicId,
@@ -254,9 +273,14 @@ export class OriginalStoryboardExports {
           project.workspace_id,
           project.id,
           project.revision,
-          canvasBytes(JSON.stringify(shots)),
+          canvasBytes(
+            JSON.stringify(await planComposition(exporter.program, shots)),
+          ),
           canvasBytes(""),
           stamp,
+          exporter.plugin,
+          exporter.version,
+          exporter.id,
         ],
       );
       for (const asset of assets.values())

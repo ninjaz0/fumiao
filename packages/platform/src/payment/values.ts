@@ -1,7 +1,4 @@
-import {
-  decodePythonJson,
-  pythonJsonText,
-} from "@fumiao/plugin-sdk/json.js";
+import { decodePythonJson, pythonJsonText } from "@fumiao/plugin-sdk/json.js";
 
 export type PaymentValues = Record<string, unknown>;
 
@@ -120,4 +117,37 @@ export function paymentExpiry(value: unknown) {
           : NaN;
   if (!Number.isSafeInteger(expiry)) throw new Error("Invalid payment expiry");
   return expiry > 10 ** 12 ? Math.floor(expiry / 1000) : expiry;
+}
+
+/** Parallel JSON trees retain exact, typed gateway values across the sandbox boundary. */
+export function gatewayDocument(values: PaymentValues) {
+  type Conversion = (value: unknown) => unknown;
+  function project(value: unknown, convert: Conversion): unknown {
+    if (Array.isArray(value)) return value.map((v) => project(v, convert));
+    if (value && typeof value === "object" && !(value instanceof PaymentNumber))
+      return Object.fromEntries(
+        Object.entries(value).map(([k, v]) => [k, project(v, convert)]),
+      );
+    try {
+      return convert(value);
+    } catch {
+      return null;
+    }
+  }
+  return {
+    values: project(values, (v) =>
+      v instanceof PaymentNumber ? String(v) : v,
+    ),
+    status: project(
+      values,
+      (v) =>
+        typeof v === "string" ||
+        (v instanceof PaymentNumber && /^-?\d+$/.test(String(v))),
+    ),
+    numeric: project(values, (v) =>
+      v instanceof PaymentNumber ? paymentScalar(v) : null,
+    ),
+    fen: project(values, originalFen),
+    expiry: project(values, paymentExpiry),
+  };
 }

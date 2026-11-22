@@ -235,6 +235,26 @@ export const eventTypes = [
   "member.added",
   "member.removed",
 ] as const;
+const gatewayPath = z
+  .string()
+  .max(160)
+  .regex(/^\/(?:[A-Za-z0-9_-]+\/)*(?:[A-Za-z0-9_.-]+|\{trade\})$/)
+  .refine((path) => !path.includes(".."));
+const slugField = z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/);
+const paymentFieldPath = z
+  .string()
+  .max(120)
+  .regex(/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/);
+const confirmation = z
+  .object({
+    status: paymentFieldPath,
+    paid: z.string().min(1).max(32),
+    trade: paymentFieldPath,
+    order: paymentFieldPath.optional(),
+    amount: paymentFieldPath.optional(),
+    merchant: paymentFieldPath.optional(),
+  })
+  .strict();
 const hookProgram = z
   .string()
   .min(1)
@@ -272,6 +292,36 @@ export const contributesSchema = z
   .object({
     version: z.literal(CONTRIBUTIONS_VERSION),
     nodePools: nodePoolSchema.optional(),
+    paymentMethods: z
+      .array(
+        z
+          .object({
+            id: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/),
+            title: label,
+            notice: z.string().min(1).max(240).optional(),
+            orderField: slugField,
+            acknowledgement: z.string().min(1).max(64),
+            checkoutPath: gatewayPath.optional(),
+            createPath: gatewayPath.optional(),
+            queryPath: gatewayPath,
+            queryKey: slugField.optional(),
+            confirmation,
+            callbackAmount: slugField,
+            callbackMerchant: slugField,
+            callbackTrade: slugField,
+            signature: z.enum(["md5-suffix", "hmac-sha256"]),
+            program: hookProgram,
+          })
+          .strict(),
+      )
+      .max(8)
+      .optional(),
+    exporters: z
+      .array(
+        z.object({ id: slug, title: label, program: hookProgram }).strict(),
+      )
+      .max(12)
+      .optional(),
     events: z.array(eventSubscription).max(eventTypes.length).optional(),
     actions: z.array(resourceAction).max(16).optional(),
     settingsPages: z.array(settingsPageSchema).max(8).default([]),
@@ -332,7 +382,19 @@ export function contributionProblems(
   }
   if (new Set(c.http?.origins).size !== (c.http?.origins.length ?? 0))
     problems.push("http.origins 重复");
+  if (c.exporters?.length && !caps.has("media"))
+    problems.push("导出器需要媒体能力");
+  for (const m of c.paymentMethods ?? []) {
+    if (!m.checkoutPath && !m.createPath) problems.push("充值渠道缺少下单路径");
+    if (
+      (!m.confirmation.order || !m.confirmation.amount) &&
+      !m.queryPath.endsWith("/{trade}")
+    )
+      problems.push("查单必须绑定网关单号，或提供订单号和金额字段");
+  }
   for (const names of [
+    c.paymentMethods?.map((m) => m.id),
+    c.exporters?.map((e) => e.id),
     c.events?.map((e) => e.type),
     c.actions?.map((a) => a.id),
     ...(c.actions ?? []).map((a) => a.fields?.map((f) => f.name)),

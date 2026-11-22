@@ -174,3 +174,11 @@ QuickJS 沿用现有限制（16 MB 内存、100 ms、2 MB 输出），无网络�
 [素材自动分类示例](../plugins/example-asset-tags/example-asset-tags.fmplugin.json)在新素材就绪时按 MIME 归类。在素材或任务成品的菜单点「查看素材分类」可以读取结果。[审片备注示例](../plugins/example-review-notes/example-review-notes.fmplugin.json)在任务的「更多」菜单中保存、查看当前工作区的备注。
 
 迁移 038 只为新发生的业务变更排队，已有任务、素材与账本沿用原记录。升级前按运维手册备份数据库和媒体。回退到无法读取新版清单的宿主时，恢复升级前的同一时间点备份。
+
+## 画布导出器和充值渠道
+
+`contributes.exporters[]` 声明 `id`、`title` 和 QuickJS 程序，并申请 `media` 能力。画布通过 `GET /api/canvases/:id/exports` 读取可用导出器，提交时传 `exporter: "插件ID/导出器ID"`。省略时使用 `storyboard/mp4`。程序的 `plan({shots})` 返回 1–30 个片段，每个片段由镜头下标 `index`、旁白开关 `narration` 和字幕开关 `subtitles` 组成。宿主核对镜头和私有素材访问权，冻结计划、引用和插件版本，在 Worker 执行受限 MP4 合成。导出器可以重排镜头、去掉音轨或关闭字幕。已排队的导出在插件停用后继续执行。参见 [分镜导出器](../plugins/storyboard/package/plan.js)。
+
+`contributes.paymentMethods[]` 提供渠道标识、标题、签名算法、回调的订单号／金额／商户号／交易号字段、应答文本、允许的网关路径和查单成功条件。程序实现 `create`、`callback` 和 `verify`。安装预览列出网关路径与签名算法。管理员在「设置 → 插件」启用扩展后，在插件详情中为该渠道填写 HTTPS 网关、商户号及密钥。商户密钥由宿主加密保存，在签名或查单时注入。程序只能调用该阶段允许的声明路径。收银台必须与配置的网关同源。宿主独立核对签名、订单绑定、金额、网关付款状态和交易号，积分只在数据库事务内入账一次。[支付宝示例](../plugins/payments/package/alipay.js) 与 [USDT-Plasma 示例](../plugins/payments/package/usdt_plasma.js) 使用同一套宿主接口。
+
+迁移 039 为已有实例登记分镜和支付扩展，并保留现有渠道配置、导出快照和账本。全新实例可在「设置 → 插件」导入对应的 `.fmplugin.json` 文件。新充值订单冻结插件版本和加密配置。升级前的订单沿用原商户一致性检查。停用插件会停止接收新单，已受理订单继续用原版本查单、验签。迁移前应按运维手册备份数据库、私有媒体及配套密钥；回退到旧宿主时恢复同一时间点备份。

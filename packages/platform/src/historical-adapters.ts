@@ -3,7 +3,7 @@ import { gpuPairedAgent } from "@fumiao/plugin-gpu/paired-agent.js";
 import { museText } from "@fumiao/plugin-muse/text.js";
 import { flowText } from "@fumiao/plugin-flow/text.js";
 import { imagesText } from "@fumiao/plugin-images/text.js";
-import { storyboardHistory } from "@fumiao/plugin-storyboard/history.js";
+import { storyboardHistory } from "./composition/history.js";
 import { museCanvasRuns } from "@fumiao/plugin-muse/canvas-runs.js";
 import { museCanvas } from "@fumiao/plugin-muse/canvas.js";
 import { flowCanvasRuns } from "@fumiao/plugin-flow/canvas-runs.js";
@@ -52,7 +52,7 @@ import { imagesQueue } from "@fumiao/plugin-images/queue.js";
 import { muse } from "@fumiao/plugin-muse/index.js";
 import { flow } from "@fumiao/plugin-flow/index.js";
 import { gpu } from "@fumiao/plugin-gpu/index.js";
-import { storyboard } from "@fumiao/plugin-storyboard/index.js";
+import { storyboard } from "./composition/legacy-provider.js";
 import { images } from "@fumiao/plugin-images/index.js";
 import { chat } from "@fumiao/plugin-chat/index.js";
 // Published Studio adapter versions. Older versions stay resolvable for accepted jobs.

@@ -1,20 +1,15 @@
 import { randomBytes } from "node:crypto";
 import { one, type Sql } from "@fumiao/platform/db.js";
-import {
-  DomainError,
-  hash,
-  requireValue,
-} from "@fumiao/platform/security.js";
+import { DomainError, hash, requireValue } from "@fumiao/platform/security.js";
 import {
   paymentConfig,
   type PaymentConfig,
-} from "@fumiao/plugin-payments/index.js";
+} from "@fumiao/platform/payment/wire.js";
 import {
-  originalPaymentAdapters,
-  paymentMoney,
-  type OriginalPaymentAdapter,
-} from "@fumiao/plugin-payments/original.js";
-import type { PaymentValues } from "@fumiao/plugin-payments/original-values.js";
+  paymentMethods,
+  paymentProvider,
+} from "@fumiao/platform/payment/methods.js";
+import type { PaymentValues } from "@fumiao/platform/payment/values.js";
 import type { OriginalActor, OriginalIdentity } from "./identity.js";
 
 export const originalOrderId = /^FM[0-9a-f]{26}(?![\s\S])/;
@@ -40,6 +35,10 @@ type Order = {
   workspace: string;
   method: string;
   merchant: string;
+  plugin_id: string;
+  plugin_version: string;
+  config_snapshot: string | null;
+  method_label?: string;
   amount: number;
   credits: number;
   state: string;
@@ -60,6 +59,10 @@ function readOrder(row: Record<string, any>): Order {
   } as Order;
 }
 
+const methodLabel = `(SELECT decl->>'title' FROM studio_package_releases pkg,
+  jsonb_array_elements(pkg.package->'contributes'->'paymentMethods') decl
+  WHERE pkg.id=r.plugin_id AND pkg.version=r.plugin_version AND decl->>'id'=r.method) AS method_label`;
+
 function publicOrder(order: Order) {
   const state =
     order.state === "pending" && order.expires <= now()
@@ -69,6 +72,7 @@ function publicOrder(order: Order) {
     id: order.id,
     workspace: Number(order.workspace),
     method: order.method,
+    method_label: order.method_label,
     amount: order.amount,
     credits: order.credits,
     created: order.created,
@@ -133,21 +137,27 @@ export class OriginalRecharge {
     }
   }
 
-  private async config(method: string) {
-    if (!originalPaymentAdapters.has(method)) return;
+  private async orderConfig(order: Order) {
+    if (order.config_snapshot)
+      return paymentConfig.parse(this.p.vault.open(order.config_snapshot));
     const channel = await one(
       this.p.db,
-      "SELECT config FROM payment_channels WHERE method=$1 AND enabled",
-      [method],
+      "SELECT config FROM payment_channels WHERE method=$1 AND plugin_id=$2 AND enabled",
+      [order.method, order.plugin_id],
     );
-    return channel && this.decodeConfig(channel);
-  }
-
-  private async orderConfig(order: Order) {
-    const config = await this.config(order.method);
+    const config = channel && this.decodeConfig(channel);
     if (!config || merchant(config) !== order.merchant)
       throw new DomainError(503, "此订单的支付通道暂不可用，请联系管理员");
     return config;
+  }
+  private async orderMethod(order: Order) {
+    const methods = await paymentMethods(this.p.db, {
+      plugin: order.plugin_id,
+      version: order.plugin_version,
+    });
+    const method = methods.find((m) => m.id === order.method);
+    requireValue(method, 503, "订单的支付插件版本不可用");
+    return paymentProvider(method);
   }
 
   private async ownedOrder(actor: OriginalActor, id: string) {
@@ -155,7 +165,7 @@ export class OriginalRecharge {
       originalOrderId.test(id) &&
       (await one(
         this.p.db,
-        `SELECT r.*,w.public_id AS workspace FROM original_recharge_orders r
+        `SELECT r.*,w.public_id AS workspace, ${methodLabel} FROM original_recharge_orders r
        JOIN workspaces w ON w.id=r.workspace_id WHERE r.id=$1 AND r.owner_id=$2`,
         [id, actor.id],
       ));
@@ -180,7 +190,7 @@ export class OriginalRecharge {
       selected,
     );
     const { rows } = await this.p.db.query(
-      `SELECT r.*,$4::bigint AS workspace FROM original_recharge_orders r
+      `SELECT r.*,$4::bigint AS workspace, ${methodLabel} FROM original_recharge_orders r
        WHERE owner_id=$1 AND workspace_id=$2 AND id<$3 ORDER BY id DESC LIMIT 30`,
       [
         actor.id,
@@ -192,12 +202,21 @@ export class OriginalRecharge {
       ],
     );
     const channels = await this.p.db.query(
-      "SELECT method,config FROM payment_channels WHERE enabled ORDER BY position",
+      "SELECT method,config,plugin_id FROM payment_channels WHERE enabled ORDER BY position",
     );
+    const active = await paymentMethods(this.p.db);
     const methods = channels.rows.flatMap((channel) => {
-      const adapter = originalPaymentAdapters.get(channel.method);
+      const adapter = active.find(
+        (m) => m.plugin === channel.plugin_id && m.id === channel.method,
+      );
       return adapter && this.decodeConfig(channel)
-        ? [{ id: channel.method, label: adapter.label }]
+        ? [
+            {
+              id: channel.method,
+              label: adapter.title,
+              ...(adapter.notice ? { notice: adapter.notice } : {}),
+            },
+          ]
         : [];
     });
     return {
@@ -210,9 +229,6 @@ export class OriginalRecharge {
   }
 
   async create(actor: OriginalActor, input: CreateRecharge) {
-    const config = await this.config(input.method);
-    requireValue(config, 503, "此付款方式暂不可用");
-    const adapter = originalPaymentAdapters.get(input.method)!;
     const amount = input.yuan * 100;
     const prepared = await this.p.db.transaction(async (sql) => {
       await this.lock(sql, "uid:" + input.uid);
@@ -244,6 +260,16 @@ export class OriginalRecharge {
         );
         return { order: readOrder(old), fresh: false };
       }
+      const channel = await one(
+        sql,
+        "SELECT config,plugin_id FROM payment_channels WHERE method=$1 AND enabled FOR SHARE",
+        [input.method],
+      );
+      const config = channel && this.decodeConfig(channel);
+      const method = (await paymentMethods(sql)).find(
+        (m) => m.id === input.method && m.plugin === channel?.plugin_id,
+      );
+      requireValue(config && method, 503, "此付款方式暂不可用");
       const created = now();
       const { n } = await one(
         sql,
@@ -257,8 +283,8 @@ export class OriginalRecharge {
       );
       const row = await one(
         sql,
-        `INSERT INTO original_recharge_orders(id,uid,owner_id,workspace_id,method,merchant,amount,credits,created,expires)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *,$11::bigint AS workspace`,
+        `INSERT INTO original_recharge_orders(id,uid,owner_id,workspace_id,method,merchant,amount,credits,created,expires,plugin_id,plugin_version,config_snapshot)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$12,$13,$14) RETURNING *,$11::bigint AS workspace`,
         [
           "FM" + created + randomBytes(8).toString("hex"),
           input.uid,
@@ -271,15 +297,23 @@ export class OriginalRecharge {
           created,
           created + 1800,
           workspace.public_id,
+          method.plugin,
+          method.version,
+          channel.config,
         ],
       );
       return { order: readOrder(row), fresh: true };
     });
     const { order } = prepared;
     if (!prepared.fresh) return publicOrder(order);
-    let receipt: Awaited<ReturnType<OriginalPaymentAdapter["create"]>>;
+    const adapter = await this.orderMethod(order);
+    let receipt: Awaited<ReturnType<typeof adapter.create>>;
     try {
-      receipt = await adapter.create(order, config, this.site);
+      receipt = await adapter.create(
+        order,
+        await this.orderConfig(order),
+        this.site,
+      );
     } catch {
       const row = await one(
         this.p.db,
@@ -328,29 +362,38 @@ export class OriginalRecharge {
       409,
       "订单已支付、已过期或仍在确认中，请返回积分页面查询",
     );
-    await this.orderConfig(order);
+    const channel = await one(
+      this.p.db,
+      "SELECT config FROM payment_channels WHERE method=$1 AND plugin_id=$2 AND enabled",
+      [order.method, order.plugin_id],
+    );
+    const current = channel && this.decodeConfig(channel);
+    requireValue(
+      current && merchant(current) === order.merchant,
+      503,
+      "此订单的支付通道暂不可用，请联系管理员",
+    );
     return order.checkout;
   }
 
   async notify(method: string, values: PaymentValues) {
-    const adapter = originalPaymentAdapters.get(method);
-    if (!adapter) throw new Error("Unknown payment method");
-    const id = values[adapter.orderField];
-    if (typeof id !== "string" || !originalOrderId.test(id))
-      throw new Error("Invalid payment order");
-    const row = await one(
-      this.p.db,
-      "SELECT * FROM original_recharge_orders WHERE id=$1 AND method=$2",
-      [id, method],
+    const ids = Object.values(values).filter(
+      (v): v is string => typeof v === "string" && originalOrderId.test(v),
     );
+    const { rows } = await this.p.db.query(
+      "SELECT * FROM original_recharge_orders WHERE id=ANY($1::text[]) AND method=$2",
+      [ids, method],
+    );
+    const row = rows.length === 1 && rows[0];
     if (!row) throw new Error("Unknown payment order");
     const order = readOrder(row);
     const config = await this.orderConfig(order);
-    const expected = adapter.callback(order, config, values);
+    const adapter = await this.orderMethod(order);
+    const expected = await adapter.callback(order, config, values);
     if (order.state !== "paid" || order.trade_id !== expected) {
       const trade = await adapter.verify(order, config, expected);
       if (!trade) throw new Error("Payment not confirmed");
-      await this.settle(id, trade, adapter.label);
+      await this.settle(order.id, trade, adapter.label);
     }
     return adapter.acknowledgement;
   }
@@ -365,7 +408,7 @@ export class OriginalRecharge {
     );
     if (!row) return;
     const order = readOrder(row);
-    const adapter = originalPaymentAdapters.get(order.method)!;
+    const adapter = await this.orderMethod(order);
     const trade = await adapter.verify(order, await this.orderConfig(order));
     if (trade) await this.settle(order.id, trade, adapter.label);
   }
@@ -396,7 +439,7 @@ export class OriginalRecharge {
         {
           actorId: order.owner_id,
           uid: "recharge:" + id,
-          note: `${label} ¥${paymentMoney(order)} · ${id}`,
+          note: `${label} ¥${(order.amount / 100).toFixed(2)} · ${id}`,
         },
       );
     });

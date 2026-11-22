@@ -123,6 +123,7 @@ export const canvasExactRevisionFields: Fields = {
   },
 };
 export const storyboardExportFields: Fields = {
+  exporter: text(120, "storyboard/mp4"),
   uid: { kind: "uuid" },
   ...canvasExactRevisionFields,
 };

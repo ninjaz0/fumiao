@@ -141,7 +141,16 @@ for (const prior of [undefined, nodes, recharge]) {
           ],
           [order.id, order.uid, owner, workspace, order.state, order.trade_id],
         );
-        if (ordersBefore) assert.deepEqual(orders, ordersBefore);
+        if (ordersBefore)
+          assert.deepEqual(
+            orders,
+            ordersBefore.map((row) => ({
+              plugin_id: "payments",
+              plugin_version: "1.0.0",
+              config_snapshot: null,
+              ...row,
+            })),
+          );
         assert.deepEqual(await new OriginalNodes(f.p).suggestedName(), {
           name:
             prior === nodes
@@ -163,12 +172,13 @@ for (const prior of [undefined, nodes, recharge]) {
         assert.equal(Number(upgradedChannels[0].position), 1);
         assert.deepEqual(
           upgradedChannels,
-          prior === nodes
-            ? channels.map((channel) => ({
-                ...channel,
-                position: upgradedChannels[0].position,
-              }))
-            : channels,
+          channels.map((channel) => ({
+            ...channel,
+            plugin_id: "payments",
+            ...(prior === nodes
+              ? { position: upgradedChannels[0].position }
+              : {}),
+          })),
         );
 
         await migrate(f.db);
@@ -379,7 +389,15 @@ for (const prior of [undefined, pairedAgent, fmworkerRewards]) {
       );
       assert.deepEqual(await rows("wallets"), wallet);
       assert.deepEqual(await rows("ledger"), ledger);
-      assert.deepEqual(await rows("original_recharge_orders"), paidOrders);
+      assert.deepEqual(
+        await rows("original_recharge_orders"),
+        paidOrders.map((row) => ({
+          plugin_id: "payments",
+          plugin_version: "1.0.0",
+          config_snapshot: null,
+          ...row,
+        })),
+      );
       assert.deepEqual(await rows("fmworker_rewards"), rewards);
       assert.deepEqual(await rows("fmworker_funds"), funds);
     } finally {

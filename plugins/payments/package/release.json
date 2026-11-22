@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "id": "payments",
+  "label": "充值渠道",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "paymentMethods": [
+      {
+        "id": "alipay",
+        "title": "支付宝",
+        "orderField": "out_trade_no",
+        "acknowledgement": "success",
+        "signature": "md5-suffix",
+        "programFile": "alipay.js",
+        "checkoutPath": "/submit.php",
+        "queryPath": "/api.php",
+        "queryKey": "key",
+        "confirmation": {
+          "status": "status",
+          "paid": "1",
+          "trade": "trade_no",
+          "order": "out_trade_no",
+          "amount": "money",
+          "merchant": "pid"
+        },
+        "callbackAmount": "money",
+        "callbackTrade": "trade_no",
+        "callbackMerchant": "pid"
+      },
+      {
+        "id": "usdt_plasma",
+        "title": "USDT-Plasma",
+        "orderField": "order_id",
+        "acknowledgement": "ok",
+        "signature": "hmac-sha256",
+        "programFile": "usdt_plasma.js",
+        "createPath": "/payments/gmpay/v1/order/create-transaction",
+        "queryPath": "/pay/check-status/{trade}",
+        "confirmation": {
+          "status": "data.status",
+          "paid": "2",
+          "trade": "data.trade_id"
+        },
+        "callbackAmount": "amount",
+        "callbackTrade": "trade_id",
+        "callbackMerchant": "pid",
+        "notice": "使用 Plasma 网络转账，应付 USDT 数量以收银台为准。"
+      }
+    ],
+    "settingsPages": [],
+    "hostCapabilities": []
+  }
+}

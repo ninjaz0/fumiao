@@ -10,9 +10,7 @@
   "dependencies": {
     "@fumiao/image-import": "workspace:*",
     "@fumiao/platform": "workspace:*",
-    "@fumiao/plugin-payments": "workspace:*",
     "@fumiao/plugin-sdk": "workspace:*",
-    "@fumiao/plugin-storyboard": "workspace:*",
     "@fumiao/web-compat": "workspace:*",
     "@nestjs/common": "catalog:",
     "@nestjs/platform-express": "catalog:",

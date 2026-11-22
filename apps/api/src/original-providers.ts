@@ -1,3 +1,4 @@
+import { Payments } from "@fumiao/platform/payments.js";
 import { loadProgram } from "@fumiao/platform/plugin-program.js";
 import {
   StudioPackages,
@@ -100,6 +101,13 @@ export class OriginalProviderController {
         input.revision,
         input.values,
       );
+    });
+  }
+  @Post("plugins/:id/payment-methods/:method")
+  configurePayment(@Req() req: Request,@Param("id") plugin:string,@Param("method") method:string,@Body() body:unknown) {
+    return this.admin(req, actor => {
+      const input=z.object({revision:z.number().int().positive(),enabled:z.boolean(),config:z.unknown().optional()}).strict().parse(body);
+      return new Payments(this.identity.p).configure(actor,method,{...input,plugin});
     });
   }
   @Post("plugins/:id/panel")

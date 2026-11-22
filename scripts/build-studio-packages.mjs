@@ -36,6 +36,8 @@ const releases = [
     id: "compatible-chat",
     entry: 'export { chatStreaming as adapter } from "../chat/src/stream.js";',
   },
+  { id: "storyboard" },
+  { id: "payments" },
   { id: "example-extension" },
   { id: "example-asset-tags" },
   { id: "example-review-notes" },
@@ -88,7 +90,7 @@ async function buildAdapter(root, entry) {
   return gzipSync(result.outputFiles[0].contents);
 }
 async function packContributions(root, contributes) {
-  for (const page of [...(contributes.settingsPages ?? []), ...(contributes.events ?? []), ...(contributes.actions ?? [])]) {
+  for (const page of [...(contributes.settingsPages ?? []), ...(contributes.events ?? []), ...(contributes.actions ?? []), ...(contributes.exporters ?? []), ...(contributes.paymentMethods ?? [])]) {
     if (page.programFile) {
       page.program = await expression(join(root, page.programFile));
       delete page.programFile;
