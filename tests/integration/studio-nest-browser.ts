@@ -708,6 +708,66 @@ export async function studioBrowser(
     await expect(assistant.locator(".fm-chat-prose")).toHaveText(chatReply, {
       timeout: apiTimeout,
     });
+    const sentId = await page
+      .locator(".fm-chat-conversation-row.selected")
+      .getAttribute("data-conversation");
+    const other = await context.request.post("/api/chats", {
+      headers: { Origin: web, "X-Workspace-Id": String(workspace) },
+      data: { model: "deepseek-flash" },
+    });
+    assert.equal(other.status(), 200, await other.text());
+    const { conversation: otherConversation } = await other.json();
+    await nav("home");
+    await nav("chat");
+    const selectConversation = async (id: string) => {
+      const row = page.locator(
+        `[data-conversation="${id}"] .fm-chat-conversation-open`,
+      );
+      if ((await row.getAttribute("aria-current")) !== "page")
+        await row.click();
+      await expect(
+        page.getByText("正在载入对话…", { exact: true }),
+      ).not.toBeVisible();
+    };
+    await selectConversation(sentId!);
+    let release!: () => void;
+    let received!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const intercepted = new Promise<void>((resolve) => {
+      received = resolve;
+    });
+    const messagePath = `**/api/chats/${sentId}/messages`;
+    await page.route(messagePath, async (route) => {
+      const response = await route.fetch();
+      received();
+      await held;
+      await route.fulfill({ response });
+    });
+    try {
+      await edit.fill("延迟发送的 A 消息");
+      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await intercepted;
+      await selectConversation(otherConversation.id);
+      await edit.fill("B 的未发送草稿");
+      release();
+      await expect(
+        page.getByRole("button", { name: "发送", exact: true }),
+      ).toBeEnabled();
+      await expect(edit).toHaveValue("B 的未发送草稿");
+      await selectConversation(sentId!);
+      await expect(edit).not.toHaveValue("B 的未发送草稿");
+      await selectConversation(otherConversation.id);
+      await expect(edit).toHaveValue("B 的未发送草稿");
+      await selectConversation(sentId!);
+      console.log(
+        "Verified delayed chat send keeps conversation drafts isolated",
+      );
+    } finally {
+      release();
+      await page.unroute(messagePath);
+    }
     await edit.fill(chatDraft);
     await assistant.getByRole("button", { name: "放入画布" }).click();
     const picker = page.getByRole("region", { name: "放入画布" });

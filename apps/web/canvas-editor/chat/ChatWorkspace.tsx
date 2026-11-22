@@ -89,7 +89,7 @@ export function ChatWorkspace(props:Props){
   try{
    const result=await req<Snapshot>('/api/chats/'+active.conversation.id+'/messages',{uid:pending.current.uid,model,text:retry?'':draft,expected_revision:active.conversation.revision,price_revision:config!.pricing.revision,retry:retry||null,context});
    if(context?.writeback&&props.onApply){const reply=[...result.messages].reverse().find(m=>m.role==='assistant');if(reply)saveWrites(current=>({...current,[reply.id]:{cid:result.conversation.id,uid:current[reply.id]?.uid||crypto.randomUUID()}}))}
-   update(result);const sentId=active.conversation.id;setDraft(latest=>{if(latest===draft){sessionStorage.removeItem(scope+'-draft-');sessionStorage.removeItem(scope+'-draft-'+sentId);return ''}sessionStorage.setItem(scope+'-draft-'+sentId,latest);return latest});pending.current=null;follow.current=true;await loadConfig();
+   update(result);const sentId=active.conversation.id;setDraft(latest=>{if(current.current!==sentId){if(sessionStorage.getItem(scope+'-draft-'+sentId)===draft)sessionStorage.removeItem(scope+'-draft-'+sentId);return latest}if(latest===draft){sessionStorage.removeItem(scope+'-draft-');sessionStorage.removeItem(scope+'-draft-'+sentId);return ''}sessionStorage.setItem(scope+'-draft-'+sentId,latest);return latest});pending.current=null;follow.current=true;await loadConfig();
   }catch(e){if(e instanceof ApiError&&e.status===409){update(await req('/api/chats/'+active.conversation.id));await loadConfig()}throw e}
  });
  const stop=()=>safely(async()=>{update(await req('/api/chats/'+cid+'/stop',{}));await loadConfig()});
