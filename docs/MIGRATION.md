@@ -2,7 +2,7 @@
 
 ## 迁移前
 
-1. 在独立目标上完成 `API_PROTOCOL=original pnpm db:migrate`，Docker 使用 `docker compose up --build migrate`。使用空 PostgreSQL 及专用私有对象目录或桶。设置 `STUDIO_LEGACY_SOURCE` 为该实例的稳定标识，并与 `--source` 一致。已有工作区需直接导入，`bootstrap` 会拒绝配置了来源标识的目标库。
+1. 在独立目标上完成 `pnpm db:migrate`，Docker 使用 `docker compose up --build migrate`。使用空 PostgreSQL 及专用私有对象目录或桶。设置 `STUDIO_LEGACY_SOURCE` 为该实例的稳定标识，并与 `--source` 一致。已有工作区需直接导入，`bootstrap` 会拒绝配置了来源标识的目标库。
 2. 原站暂停写入，等待生成、对话和合成完成，核对未确认任务及充值订单。积分（含贡献合格积分）冻结须为零，过期但未核对的订单也须处理。
 3. 使用 SQLite 备份 API 或停止写入后的等价一致性快照，和同一时间点的对象及头像备份一起留存。SQLite 使用 WAL 时仅拷贝运行中的主文件无法保证完整。工具读取备份，导出另存为新文件。
 4. 记录旧库和对象恢复点，限制目标的业务流量。保留同步的媒体备份、旧导出及目标配置供复跑和对账。

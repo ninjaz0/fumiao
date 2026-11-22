@@ -1,10 +1,8 @@
-import { notFound } from "next/navigation";
-import { originalMode, proxy } from "../../../proxy-backend";
+import { proxy } from "../../../proxy-backend";
 
 export const dynamic = "force-dynamic";
 
 function paymentReturn(request: Request) {
-  if (!originalMode()) notFound();
   return proxy(request);
 }
 

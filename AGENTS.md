@@ -8,11 +8,11 @@
 | --- | --- | --- |
 | 首页、登录、工作台、设置 | `apps/web/proxy.ts`、`apps/web/auth/`、`apps/web/studio/` | 从公开路由验证匿名及登录状态。复用已有组件、布局、文案和交互。 |
 | 画布和分镜 | `apps/web/canvas-editor/`、`packages/original-api/src/canvases.ts` | 保存携带预期版本；并发冲突要保留用户草稿，并告知哪个保存失败。 |
-| 网关、会话、权限、媒体 | `packages/web-compat/`、`apps/api/src/original*.ts`、`packages/original-api/` | Studio 和 v2 有各自的会话和标识符。验证工作区隔离、私有媒体权限和 Range 读取。 |
+| 网关、会话、权限、媒体 | `packages/web-compat/`、`apps/api/src/original*.ts`、`packages/original-api/` | 验证工作区隔离、私有媒体权限和 Range 读取。 |
 | 模型、队列、积分、支付 | `apps/worker/`、`packages/platform/`、`packages/plugin-sdk/`、`plugins/` | 提供方逻辑放入版本化插件。已接单任务保留插件、价格、计费和配置快照；重试、重启和并发回调应只结算一次。 |
 | 兼容资源、路由、旧数据 | `baseline/production/manifest.json`、`baseline/contracts/routes.json`、`migrations/` | 固定静态资源的字节和哈希属于兼容契约。数据库升级还要覆盖老库、在途任务和已有回执。[迁移说明](docs/MIGRATION.md) |
 
-服务栈为 Next.js / React、NestJS、PostgreSQL 18、Redis 8 / BullMQ 和私有存储。Compose 的 `api` 使用 Studio 的 original 协议，`api-v2` 服务 advanced 协议，`worker` 消费队列。排查 `/studio` 时先确定网关实际转发到了哪个服务。
+服务栈为 Next.js / React、NestJS、PostgreSQL 18、Redis 8 / BullMQ 和私有存储。Compose 的 `api` 提供 Studio 协议，`worker` 消费队列，`web` 把 `/api`、`/agent`、`/media` 转发给 `api`。
 
 ## 一项任务一个工作目录
 
@@ -42,7 +42,7 @@ python3 scripts/worktree.py down
 - `up` 从当前 checkout 构建开发镜像、创建专属网络与 PG / Redis / 媒体卷、执行迁移。新库自动创建合成管理员 `admin`。末尾输出本任务的 `/studio` 地址和本机密码文件位置。再次运行会复用本任务的数据与密钥。
 - 项目名由 checkout 的绝对路径生成。每个项目使用独立的回环端口及 `*.localhost` 主机名，浏览器会话也按主机隔离。使用脚本打印的完整地址。`http://localhost:3000/studio` 供负责人在提 PR 前验收任务分支的修复。
 - 测试配置及管理员口令按项目保存在 `${XDG_STATE_HOME:-$HOME/.local/state}/fumiao/` 下。用合成用户、私有测试媒体和模拟提供方复现。日志、截图与 PR 只保留诊断所需信息，隐去 Cookie、密钥、商户参数和用户内容。
-- Next 开发服务加载 Web 改动；Studio API、v2 API 和 Worker 通过 Node watch 重载已导入的源码。修改依赖、原生解码器或 SQL 迁移后重新运行 `up`。Linux 容器使用镜像内的依赖，Next 缓存属于本任务。
+- Next 开发服务加载 Web 改动；Studio API 和 Worker 通过 Node watch 重载已导入的源码。修改依赖、原生解码器或 SQL 迁移后重新运行 `up`。Linux 容器使用镜像内的依赖，Next 缓存属于本任务。
 - `logs [服务名]` 读取当前项目最近的日志，`status` 列出服务。需要查测试库时，在 status 输出中确认 PG 容器名，再用 `docker exec -it <本任务的postgres容器> psql -U fumiao -d fumiao`。检查任务 ID、账本、画布版本等最小数据。
 
 ### 任务结束时清理 Docker 环境
@@ -62,7 +62,7 @@ python3 scripts/worktree.py down
 | 本地改动后 | 后端和共享库跑 `pnpm typecheck`；Web 跑 `pnpm typecheck:web`；按影响范围跑 `pnpm exec tsx --test tests/advanced/canvases.test.ts` 等对应文件 | 前端类型、后端类型和目标行为。未配置真实数据库时部分并发用例会跳过。 |
 | 平台变更、提 PR 前 | `pnpm test`、`pnpm build` | 平台与插件测试、类型检查和生产前端构建。可用专属的 `TEST_DATABASE_URL`、`TEST_REDIS_URL` 运行真实并发测试。 |
 | 浏览器、网关、Worker 或任务链路变更 | 构建后运行 `pnpm exec playwright install chromium`、`pnpm test:studio` | 正式入口登录、生成、支付回跳、媒体、画布、任务结算、进程重启、路由响应。套件自行启动临时 PG/Redis 和回环模拟服务，需要 `initdb`、`postgres`、`redis-server`、FFmpeg。 |
-| 涉及 advanced、恢复、多副本或 HTTPS | 按改动选择 `pnpm test:web`、`pnpm test:studio:restore`、`pnpm test:studio:replicas` 或 `pnpm test:studio:https` | `test:web` 走 advanced 模式。专门套件的附加依赖与演练步骤在运维手册中。 |
+| 涉及恢复、多副本或 HTTPS | 按改动选择 `pnpm test:studio:restore`、`pnpm test:studio:replicas` 或 `pnpm test:studio:https` | 专门套件的附加依赖与演练步骤在运维手册中。 |
 
 ## 从问题到合并
 
@@ -71,6 +71,6 @@ python3 scripts/worktree.py down
 3. **更新验收实例。** 从该 SHA 的干净 checkout 构建本机固定 Docker 实例 `fumiao-acceptance`。沿用该实例已有的环境配置和数据卷，执行 `docker compose -p fumiao-acceptance -f compose.yaml up -d --build --wait`。确认迁移成功、服务就绪，用测试账号在 `http://localhost:3000/studio` 复测后，把地址、提交 SHA 和验收步骤交给负责人。
 4. **负责人验收。** 负责人在固定实例检查本次修复。验收期间保持该版本在线。负责人提出问题时，回到第 2 步修复并更新实例，交给负责人复验。
 5. **提 PR。** 收到负责人验收通过的确认后，用已验收的提交向 `main` 提 PR。说明用户能看到的变化、验收步骤、实际执行的检查及尚未验证的部分。UI 改动注明路由与视口，必要时附截图。
-6. **合并。** GitHub Actions 的 **verify** 运行平台测试、生产构建、advanced 冒烟、Chromium 正式入口验收和 Docker 镜像构建。检查通过后合入 `main`。检查失败时在同一 PR 修复并复查，若修复改变已验收的行为，合并前更新固定实例并请负责人复验。
+6. **合并。** GitHub Actions 的 **verify** 运行平台测试、生产构建、Chromium 正式入口验收和 Docker 镜像构建。检查通过后合入 `main`。检查失败时在同一 PR 修复并复查，若修复改变已验收的行为，合并前更新固定实例并请负责人复验。
 
 生产发布由负责人单独批准。涉及数据库、任务格式、钱包或媒体存储的 PR 写明兼容性、在途任务影响及恢复方法。部署与恢复使用对应版本的运维手册。

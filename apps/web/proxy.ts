@@ -1,64 +1,63 @@
 import { NextRequest, NextResponse } from "next/server";
 import { originalHeaders } from "../../packages/web-compat/src/ui";
-import { originalBackend, originalMode } from "./proxy-backend";
+import { backend } from "./proxy-backend";
 
-/** Migrated React pages need framework scripts and per-response nonces. */
+const unavailable = () =>
+  new NextResponse("服务暂时不可用，请稍后重试", {
+    status: 503,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "private, no-store",
+      "retry-after": "5",
+    },
+  });
+const redirect = (request: NextRequest, location: string) => {
+  const response = NextResponse.redirect(new URL(location, request.url), 307);
+  response.headers.set("cache-control", "private, no-store");
+  return response;
+};
+
+/** React pages need framework scripts and per-response nonces. */
 export async function proxy(request: NextRequest) {
   const { pathname, search, searchParams } = request.nextUrl;
   if (
+    pathname === "/compat-auth" ||
     pathname === "/compat-canvas" ||
     pathname === "/compat-canvas-editor" ||
     pathname === "/compat-studio"
   )
     return new NextResponse(null, { status: 404 });
+  const read = ["GET", "HEAD"].includes(request.method);
   const auth = pathname === "/studio";
   const canvas = pathname === "/canvas";
-  const editor =
-    /^\/canvas\/[^/]+$/.test(pathname) &&
-    originalMode() &&
-    process.env.STUDIO_CANVAS_EDITOR !== "legacy" &&
-    searchParams.get("canvas_ui") !== "legacy" &&
-    ["GET", "HEAD"].includes(request.method);
+  const editor = /^\/canvas\/[^/]+$/.test(pathname);
   const compat = auth || canvas || editor;
   if (!compat && pathname !== "/") return NextResponse.next();
+  if (compat && !read) return new NextResponse(null, { status: 405 });
   let studio = false;
-  if (auth && originalMode() && searchParams.get("studio_ui") === "legacy")
-    return NextResponse.next();
-  if (canvas && !originalMode()) return NextResponse.next();
   if (auth || canvas) {
-    if (!["GET", "HEAD"].includes(request.method)) return NextResponse.next();
     // React auth requires a definite guest, and the authenticated React pages
-    // require a definite member. Let the pinned pages handle probe failures.
+    // require a definite member.
     try {
       const headers = new Headers();
       const cookie = request.headers.get("cookie");
       if (cookie) headers.set("cookie", cookie);
-      const state = await fetch(new URL("/api/workspaces", originalBackend()), {
+      const state = await fetch(new URL("/api/workspaces", backend()), {
         headers,
         cache: "no-store",
         redirect: "manual",
         signal: AbortSignal.any([request.signal, AbortSignal.timeout(3000)]),
       });
       await state.body?.cancel();
-      studio = auth && originalMode() && state.ok;
-      if (auth ? !studio && state.status !== 401 : !state.ok)
-        return NextResponse.next();
+      studio = auth && state.ok;
+      if (!state.ok && state.status !== 401) return unavailable();
+      if (canvas && !state.ok) return redirect(request, "/studio");
     } catch {
-      return NextResponse.next();
+      return unavailable();
     }
   }
-  const location = compat
-    ? null
-    : process.env.STUDIO_MODE === "advanced"
-      ? "/advanced"
-      : searchParams.has("workspace") || searchParams.has("recharge")
-        ? "/studio" + search
-        : null;
-  if (location) {
-    const redirect = NextResponse.redirect(new URL(location, request.url), 307);
-    redirect.headers.set("cache-control", "private, no-store");
-    return redirect;
-  }
+  if (!compat && (searchParams.has("workspace") || searchParams.has("recharge")))
+    return redirect(request, "/studio" + search);
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const security = originalHeaders("text/html; charset=utf-8");
   const csp = security
@@ -98,6 +97,7 @@ export const config = {
     "/studio",
     "/canvas",
     "/canvas/:project",
+    "/compat-auth",
     "/compat-canvas",
     "/compat-canvas-editor",
     "/compat-studio",

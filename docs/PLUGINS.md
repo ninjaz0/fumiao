@@ -195,7 +195,7 @@ PORT=4100 pnpm exec tsx plugins/example-studio/server.ts
 
 ## 按模型注册 Studio 参数
 
-原生适配器通过 `modelForm(model)` 注册比例、清晰度、时长、参考模式等控件和默认值。平台按插件 ID 和版本保存这份声明，Studio 通过 `/api/state` 的 `model_forms[模型 ID]` 读取当前生效的版本。画布使用已注册画布提交能力的模型。已有的 v2 远程连接会在启动时补齐表单。
+原生适配器通过 `modelForm(model)` 注册比例、清晰度、时长、参考模式等控件和默认值。平台按插件 ID 和版本保存这份声明，Studio 通过 `/api/state` 的 `model_forms[模型 ID]` 读取当前生效的版本。画布使用已注册画布提交能力的模型。已有的远程连接会在启动时补齐表单。
 
 新远程插件可声明 `originalSubmission: {"version":3}`。每个模型的 `inputSchema` 同时定义可编辑参数和服务端验证规则。以下视频模型允许 480P 搭配 5 秒、1080P 搭配 8 秒，并接受自定义的镜头运动参数。
 

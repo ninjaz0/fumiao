@@ -7,7 +7,6 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
 import { Queue, QueueEvents, Worker } from "bullmq";
-import { createApp } from "../../apps/api/src/main.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
 import { one } from "../../packages/platform/src/db.js";
@@ -162,10 +161,9 @@ function requester(url: string) {
   };
 }
 
-test("old contribution credentials and jobs cannot dispatch or settle through Nest or either GPU protocol", async () => {
+test("old contribution credentials and jobs cannot dispatch or settle through Nest or the GPU agent protocol", async () => {
   const f = await databaseFixture(historicalSchema);
   let nest: Awaited<ReturnType<typeof createOriginalApp>> | undefined;
-  let advanced: Awaited<ReturnType<typeof createApp>> | undefined;
   try {
     await f.p.registry.installBuiltins(f.db, true);
     await oldVersion(f, retiredGpu);
@@ -224,11 +222,8 @@ test("old contribution credentials and jobs cannot dispatch or settle through Ne
     );
     const cookie = "fm_session=" + token;
     nest = await createOriginalApp(f.p);
-    advanced = await createApp(f.p);
     await nest.listen(0, "127.0.0.1");
-    await advanced.listen(0, "127.0.0.1");
     const request = requester(await nest.getUrl());
-    const requestAdvanced = requester(await advanced.getUrl());
     const pair = await request("/api/pairs", {
       cookie,
       json: { name: "Paired control", models: [audioModel] },
@@ -380,25 +375,6 @@ test("old contribution credentials and jobs cannot dispatch or settle through Ne
         ).status,
         409,
       );
-    assert.equal(
-      (
-        await requestAdvanced("/agent/v2/claim", {
-          method: "POST",
-          token: oldToken,
-        })
-      ).status,
-      401,
-    );
-    assert.equal(
-      (
-        await requestAdvanced("/agent/v2/jobs/" + oldJob.id + "/result", {
-          method: "PUT",
-          token: oldToken,
-          bytes: wavFixture(),
-        })
-      ).status,
-      401,
-    );
     const oldNode = await one(
       f.db,
       "SELECT public_id FROM gpu_nodes WHERE id=$1",
@@ -516,7 +492,6 @@ test("old contribution credentials and jobs cannot dispatch or settle through Ne
     );
   } finally {
     await nest?.close();
-    await advanced?.close();
     await f.cleanup();
   }
 });

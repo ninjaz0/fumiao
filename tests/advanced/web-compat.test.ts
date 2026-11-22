@@ -75,7 +75,6 @@ test("gateway keeps original protocol, private ranges, cookies, redirects and de
         body,
       }),
       upstream.url,
-      true,
     );
     assert.equal(seen.url, "/api/assets?workspace=17");
     assert.equal(seen.headers.cookie, "fm_session=original");
@@ -97,14 +96,12 @@ test("gateway keeps original protocol, private ranges, cookies, redirects and de
     const redirect = await forward(
       new Request("http://public.test/redirect"),
       upstream.url,
-      true,
     );
     assert.equal(redirect.status, 307);
     assert.equal(redirect.headers.get("location"), "/studio?workspace=2");
     const empty = await forward(
       new Request("http://public.test/empty", { method: "HEAD" }),
       upstream.url,
-      true,
     );
     assert.equal(empty.status, 204);
     assert.equal(await empty.text(), "");
@@ -136,7 +133,6 @@ test("SSE arrives before completion and abort closes upstream; failed writes are
         signal: controller.signal,
       }),
       upstream.url,
-      true,
     );
     const reader = response.body!.getReader();
     const first = await reader.read();
@@ -163,7 +159,6 @@ test("SSE arrives before completion and abort closes upstream; failed writes are
         body: "{}",
       }),
       upstream.url,
-      true,
     );
     assert.equal(failed.status, 502);
     assert.deepEqual(await failed.json(), { detail: "后端暂时不可用" });
@@ -174,7 +169,6 @@ test("SSE arrives before completion and abort closes upstream; failed writes are
         body: "{}",
       }),
       "",
-      true,
     );
     assert.equal(unconfigured.status, 502);
     assert.deepEqual(await unconfigured.json(), { detail: "后端暂时不可用" });
@@ -186,9 +180,8 @@ test("SSE arrives before completion and abort closes upstream; failed writes are
 test("original assets are pinned, unknown paths and modified source fail closed", async () => {
   const root = process.cwd();
   const ui = new OriginalUI(root);
-  assert.equal(await ui.verify(), 26);
-  assert.match(await ui.html("index.html"), /name="fm-chat-script"/);
-  assert.match(await ui.html("home.html", true), /data-session="member"/);
+  assert.equal(await ui.verify(), 17);
+  await assert.rejects(ui.file("studio.js"));
   await assert.rejects(ui.file("../../.env"));
   const tmp = await mkdtemp(join(tmpdir(), "fumiao-ui-pinning-"));
   try {
@@ -198,11 +191,11 @@ test("original assets are pinned, unknown paths and modified source fail closed"
       await readFile(join(root, "baseline/production/manifest.json")),
     );
     await writeFile(
-      join(tmp, "baseline/production/static/studio.js"),
+      join(tmp, "baseline/production/static/studio.css"),
       "tampered",
     );
     await assert.rejects(
-      new OriginalUI(tmp).file("studio.js"),
+      new OriginalUI(tmp).file("studio.css"),
       /hash mismatch/,
     );
   } finally {

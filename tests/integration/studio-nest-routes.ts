@@ -68,6 +68,14 @@ async function checkNext(response: Response, { method, path }: Contract) {
   if (path === "/studio/") {
     assert.equal(response.status, 308);
     assert.equal(response.headers.get("location"), "/studio?q=a%20b&q=%2F");
+  } else if (path === "/canvas") {
+    // The probe is anonymous; the canvas list is a member page.
+    assert.equal(response.status, 307);
+    assert.equal(
+      new URL(response.headers.get("location")!, "http://probe.invalid")
+        .pathname,
+      "/studio",
+    );
   } else {
     assert.equal(response.status, 200);
     if (path.startsWith("/static/") || path.startsWith("/avatars/")) {
@@ -88,9 +96,7 @@ async function checkNext(response: Response, { method, path }: Contract) {
             ? /data-session="guest"/
             : path === "/studio"
               ? /id="app"/
-              : path === "/canvas"
-                ? /\/static\/canvas\.js/
-                : /id="canvas-root"/;
+              : /id="canvas-root"/;
         assert.match(html, pageMarker);
       }
     }

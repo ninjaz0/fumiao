@@ -37,7 +37,6 @@ import { gpuText } from "../../plugins/gpu/src/text.js";
 import { imagesText } from "../../plugins/images/src/text.js";
 import { museText } from "../../plugins/muse/src/text.js";
 import { chatProviderFixture } from "../helpers/chat-provider.js";
-import { originalUI } from "../../packages/web-compat/src/ui.js";
 import { studioBrowser } from "./studio-nest-browser.js";
 import { verifyStudioHTTPS } from "./studio-nest-https.js";
 import { studioPayment } from "./studio-nest-payment.js";
@@ -831,7 +830,6 @@ async function start() {
   let { postgres, redis } = data;
   // The test-only database connection uses the same isolated settings.
   Object.assign(env, profileEnv, {
-    API_PROTOCOL: "original",
     API_HOST: host,
     PORT: String(apiPort),
     PUBLIC_URL: webOrigin,
@@ -1197,8 +1195,7 @@ async function start() {
       ],
       {
         ...previewEnv,
-        STUDIO_MODE: "original",
-        LEGACY_API_INTERNAL_URL: apiOrigin,
+        API_INTERNAL_URL: apiOrigin,
         FUMIAO_REPOSITORY_ROOT: process.cwd(),
         NEXT_TELEMETRY_DISABLED: "1",
       },
@@ -1206,11 +1203,8 @@ async function start() {
     await eventually("Next outage gateway", () => listenReady(webPort), web);
     await verifyOutage();
     const unavailable = await fetch(webOrigin + "/studio");
-    assert.equal(unavailable.status, 200);
-    assert.equal(
-      await unavailable.text(),
-      await originalUI().html("index.html"),
-    );
+    assert.equal(unavailable.status, 503);
+    assert.equal(unavailable.headers.get("retry-after"), "5");
   }
 }
 
