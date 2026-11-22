@@ -372,6 +372,7 @@ export function readDraft(state: StudioState): DraftSession {
   try {
     saved = JSON.parse(sessionStorage.getItem(key) ?? "null");
   } catch {}
+  const storedTypes = saved?.referenceTypes;
   const draft = { ...initialDraft, ...saved?.draft };
   if (saved?.draft && !state.studio_plugins) {
     if (!["image", "audio"].includes(draft.kind)) draft.kind = "video";
@@ -385,14 +386,25 @@ export function readDraft(state: StudioState): DraftSession {
     !modelAvailable(state, selectedModel(draft))
       ? draft
       : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft));
-  const storedTypes = saved?.referenceTypes;
   return {
     parent: typeof saved?.parent === "number" ? saved.parent : null,
     retainedSeed:
       typeof saved?.retainedSeed === "number" ? saved.retainedSeed : null,
-    suspendedImageDraft: readSnapshot(state, saved?.suspendedImageDraft, storedTypes),
-    suspendedAudioDraft: readSnapshot(state, saved?.suspendedAudioDraft, storedTypes),
-    suspendedMediaDraft: readSnapshot(state, saved?.suspendedMediaDraft, storedTypes),
+    suspendedImageDraft: readSnapshot(
+      state,
+      saved?.suspendedImageDraft,
+      storedTypes,
+    ),
+    suspendedAudioDraft: readSnapshot(
+      state,
+      saved?.suspendedAudioDraft,
+      storedTypes,
+    ),
+    suspendedMediaDraft: readSnapshot(
+      state,
+      saved?.suspendedMediaDraft,
+      storedTypes,
+    ),
     ...restoreDraftReferences(state, normalizedDraft, saved?.refs, storedTypes),
     submitId: saved?.submitId || crypto.randomUUID(),
   };
