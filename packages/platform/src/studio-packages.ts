@@ -18,6 +18,7 @@ import {
 import {
   contributesSchema,
   contributionProblems,
+  contributedPages,
   packageContributions,
   settingsScopes,
   type PageAction,
@@ -152,6 +153,7 @@ export const packageFile = z
           (f.contributes?.paymentMethods?.length ||
             f.contributes?.exporters?.length ||
             f.contributes?.events?.length ||
+            f.contributes?.pages?.length ||
             f.contributes?.actions?.length))) &&
       (!f.manifest || !!f.program || !!f.manifest.chat || !!f.studioProgram),
     "插件必须声明一种执行方式",
@@ -214,6 +216,7 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
     ["verify", contributions.paymentMethods],
     ["callback", contributions.paymentMethods],
     ["plan", contributions.exporters],
+    ["view", contributions.pages],
     ["handle", contributions.events],
     ["run", contributions.actions],
   ] as const) {
@@ -434,8 +437,9 @@ function permissionSummary(
     );
   if (next.nodePools)
     lines.push(added("节点池 · 接入、派发和成片验收", !prior?.nodePools));
-  for (const page of next.settingsPages) {
-    const old = prior?.settingsPages.find((p) => p.id === page.id);
+  const priorPages = prior ? contributedPages(prior) : [];
+  for (const page of contributedPages(next)) {
+    const old = priorPages.find(p => p.id === page.id && p.placement === page.placement);
     const broaderAudience =
       old?.audience === "admin" && page.audience === "member";
     const broaderVisibility =
@@ -451,7 +455,7 @@ function permissionSummary(
     );
     lines.push(
       [
-        "设置页「" +
+        (page.placement === "studio" ? "工作台页面「" : "设置页「") +
           page.title +
           "」(" +
           page.id +

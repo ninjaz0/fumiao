@@ -1,4 +1,5 @@
 import type { MouseEvent } from "react";
+import type { PluginPageEntry } from "@fumiao/plugin-sdk/contributions";
 import { Chevron, Icon } from "./Icon";
 import {
   displayName,
@@ -14,7 +15,7 @@ const nav = [
   ["library", "资产", "library"],
   ["queue", "任务队列", "queue"],
 ] as const;
-export type Destination = (typeof nav)[number][0];
+export type Destination = (typeof nav)[number][0] | PluginPageEntry["key"];
 export type SidebarMenu = "workspaces" | "account";
 export type Menu = SidebarMenu | "detail-more";
 
@@ -62,7 +63,7 @@ export function Sidebar({
   open,
 }: {
   state: StudioState;
-  page: "home" | "queue" | "library" | "chat" | "settings";
+  page: Exclude<Destination, "canvas"> | "settings";
   collapsed: boolean;
   menu: Menu | null;
   accountOpened: boolean;
@@ -72,9 +73,11 @@ export function Sidebar({
 }) {
   const space = state.workspaces.find(({ id }) => id === state.workspace_id)!;
   const name = displayName(state.me);
-  const destinations = page === "settings"
-    ? [...nav, ["settings", "设置", "settings"] as const]
-    : nav;
+  const destinations = [
+    ...nav,
+    ...(state.studio_pages ?? []).map(p => [p.key, p.title, p.icon] as const),
+    ...(page === "settings" ? [["settings", "设置", "settings"] as const] : []),
+  ];
   return (
     <>
       <aside className="side">

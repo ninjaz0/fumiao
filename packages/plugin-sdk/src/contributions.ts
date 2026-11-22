@@ -1,3 +1,4 @@
+import { viewLeaves } from "./view-blocks.js";
 import { nodePoolSchema } from "./node-pools.js";
 import { z } from "zod";
 
@@ -336,6 +337,10 @@ export const contributesSchema = z
     events: z.array(eventSubscription).max(eventTypes.length).optional(),
     actions: z.array(resourceAction).max(16).optional(),
     settingsPages: z.array(settingsPageSchema).max(8).default([]),
+    pages: z
+      .array(settingsPageSchema.omit({ group: true, visibleWhen: true }))
+      .max(8)
+      .optional(),
     settings: settingsDeclarationSchema.optional(),
     hostCapabilities: z
       .array(z.enum(hostCapabilities))
@@ -358,10 +363,26 @@ export const contributesSchema = z
 export type Contributes = z.infer<typeof contributesSchema>;
 
 /** A page after legacy normalization. Legacy pages keep the GPU panel shape. */
-export type ResolvedPage = SettingsPage & { legacy?: true };
+export type ResolvedPage = SettingsPage & {
+  legacy?: true;
+  placement?: "studio";
+};
 export type ResolvedContributions = Omit<Contributes, "settingsPages"> & {
   settingsPages: ResolvedPage[];
 };
+
+/** Settings and workspace pages share the same namespaced view/action endpoints. */
+export function contributedPages(c: ResolvedContributions): ResolvedPage[] {
+  return [
+    ...c.settingsPages,
+    ...(c.pages ?? []).map((page): ResolvedPage => ({
+      ...page,
+      placement: "studio",
+      group: "services",
+      visibleWhen: "enabled",
+    })),
+  ];
+}
 
 export interface ContributionContext {
   mode: "request" | "pull";
@@ -423,7 +444,7 @@ export function contributionProblems(
       problems.push("事件、操作或表单字段标识重复");
   }
   const pageIds = new Set<string>();
-  for (const page of c.settingsPages) {
+  for (const page of contributedPages(c)) {
     if (pageIds.has(page.id)) problems.push("设置页标识重复：" + page.id);
     pageIds.add(page.id);
     if (new Set(page.scopes).size !== page.scopes.length)
@@ -713,12 +734,6 @@ export const blockSchema = z.discriminatedUnion("type", [
 ]);
 export type ViewBlock = z.infer<typeof blockSchema>;
 
-export function viewLeaves(blocks: readonly ViewBlock[]): ViewLeaf[] {
-  return blocks.flatMap((block) =>
-    block.type === "tabs" ? block.tabs.flatMap((tab) => tab.blocks) : [block],
-  );
-}
-
 const v1View = z
   .object({
     schema: z.literal(1),
@@ -771,7 +786,7 @@ export type ProgramActionOutput = z.infer<typeof programActionOutputSchema>;
 /** Entry of `/api/state` → `plugin_pages`, ordered by group, order, title. */
 export interface PluginPageEntry {
   /** Settings tab key: `plugin:<pluginId>:<pageId>`. */
-  key: string;
+  key: `plugin:${string}:${string}`;
   plugin: string;
   page: string;
   title: string;
@@ -779,14 +794,17 @@ export interface PluginPageEntry {
   group: PageGroup;
   order: number;
   audience: "admin" | "member";
+  placement?: "studio";
   /** Legacy pages are rendered by the existing GPU PluginPanel. */
   legacy: boolean;
   /** Package release; changes invalidate cached views. */
   version: string;
 }
 
-export const pageTabKey = (plugin: string, page: string) =>
-  "plugin:" + plugin + ":" + page;
+export const pageTabKey = (
+  plugin: string,
+  page: string,
+): PluginPageEntry["key"] => `plugin:${plugin}:${page}`;
 
 /** POST /api/plugins/:plugin/pages/:page/actions/:action */
 export const actionRequestSchema = z

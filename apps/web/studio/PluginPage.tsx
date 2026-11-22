@@ -9,7 +9,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { viewLeaves } from "@fumiao/plugin-sdk/contributions";
+import { viewLeaves } from "@fumiao/plugin-sdk/view-blocks";
 import type {
   ActionRequest,
   ActionResult,

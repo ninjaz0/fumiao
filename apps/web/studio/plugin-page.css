@@ -184,3 +184,10 @@
   max-height: 60vh;
   object-fit: contain;
 }
+.side nav:has([data-nav^="plugin:"]) {
+  min-height: 0;
+  overflow-y: auto;
+}
+#view > .plugin-page {
+  padding: clamp(16px, 4vw, 40px);
+}

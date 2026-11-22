@@ -1,3 +1,4 @@
+import { viewLeaves } from "@fumiao/plugin-sdk/view-blocks.js";
 import { PluginMedia } from "./plugin-media.js";
 import { z } from "zod";
 import {
@@ -6,6 +7,7 @@ import {
 } from "@fumiao/original-api/identity.js";
 import {
   actionRequestSchema,
+  contributedPages,
   hostOperations,
   memberScopes,
   packageContributions,
@@ -13,7 +15,6 @@ import {
   pageTabKey,
   programActionOutputSchema,
   settingsScopes,
-  viewLeaves,
   viewSchema,
   type ActionRequest,
   type ActionResult,
@@ -82,6 +83,7 @@ type Audit = {
 };
 
 function visible(release: Release, page: ResolvedPage) {
+  if (page.placement === "studio") return release.enabled && !release.removing;
   return page.visibleWhen === "installed" || release.enabled;
 }
 
@@ -200,7 +202,7 @@ export class PluginPages {
     const { rows } = await sql.query<Release>(releaseQuery);
     const entries: PluginPageEntry[] = [];
     for (const pkg of rows) {
-      for (const page of packageContributions(pkg).settingsPages) {
+      for (const page of contributedPages(packageContributions(pkg))) {
         if (
           !visible(pkg, page) ||
           (page.audience === "admin" && actor.role !== "admin")
@@ -213,6 +215,7 @@ export class PluginPages {
           title: page.title,
           icon: page.icon,
           group: page.group,
+          ...(page.placement && { placement: page.placement }),
           order: page.order,
           audience: page.audience,
           legacy: !!page.legacy,
@@ -246,7 +249,9 @@ export class PluginPages {
     ).rows;
     if (audit && release) audit.version = release.version;
     const contributions = release && packageContributions(release);
-    const page = contributions?.settingsPages.find((p) => p.id === pageId);
+    const page =
+      contributions &&
+      contributedPages(contributions).find((p) => p.id === pageId);
     if (audit)
       audit.kind = page?.actions.find((a) => a.id === audit.action)?.kind;
     // An upload can outlast a role change. Use the live actor for this operation.
@@ -324,8 +329,15 @@ export class PluginPages {
     const input: PageInput = {};
     // Member pages are workspace- and owner-scoped, including their pending count.
     const member = page.audience === "member";
-    const filter = member ? " AND j.workspace_id=$2 AND j.owner_id=$3" : "";
-    const params = member ? [pkg.id, workspace, actor.id] : [pkg.id];
+    const scoped = member || page.placement === "studio";
+    const filter =
+      (scoped ? " AND j.workspace_id=$2" : "") +
+      (member ? " AND j.owner_id=$3" : "");
+    const params = [
+      pkg.id,
+      ...(scoped ? [workspace] : []),
+      ...(member ? [actor.id] : []),
+    ];
     if (page.scopes.includes("plugin")) {
       const { pending } = await one(
         sql,

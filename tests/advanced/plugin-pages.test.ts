@@ -1,6 +1,8 @@
 import { seedLegacyPackage, legacyPackage } from "../helpers/legacy-studio.js";
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { StudioPackages } from "@fumiao/platform/studio-packages.js";
 import { randomUUID } from "node:crypto";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
@@ -172,6 +174,66 @@ test("Studio lists installed pages in group/order/title order and authorizes dir
     (await f.call("/api/plugins/extra/pages/tools/view")).status,
     404,
   );
+});
+
+test("installed workspace pages use the live audience, workspace and release", async (t) => {
+  const f = await setup(t);
+  const file = JSON.parse(
+    await readFile(
+      "plugins/example-review-board/example-review-board.fmplugin.json",
+      "utf8",
+    ),
+  );
+  const pkg = new StudioPackages(f.p);
+  const url = "/api/plugins/example-review-board/pages/board/view";
+  const nav = async (token: string) =>
+    (await f.ok("/api/state", {}, token)).studio_pages.map(
+      (p: PluginPageEntry) => p.key,
+    );
+  const key = "plugin:example-review-board:board";
+  const preview = await pkg.preview(f.admin, file);
+  assert.match(JSON.stringify(preview), /工作台页面「审片清单」/);
+  await assert.rejects(
+    pkg.preview(f.admin, {
+      ...file,
+      contributes: {
+        ...file.contributes,
+        settingsPages: file.contributes.pages,
+      },
+    }),
+    /标识重复/,
+  );
+  await pkg.install(f.admin, file);
+  assert.deepEqual(await nav(f.memberSession), []);
+  assert.equal((await f.call(url)).status, 404);
+  await pkg.change(f.admin, file.id, 1, "enable");
+  assert.deepEqual(await nav(f.memberSession), [key]);
+  assert.equal(
+    (await f.ok("/api/state")).plugin_pages.some(
+      (p: PluginPageEntry) => p.key === key,
+    ),
+    false,
+  );
+  assert.equal((await f.ok(url, {}, f.memberSession)).schema, 2);
+  assert.equal(
+    (await f.call(url, {}, f.memberSession, f.personal.public_id)).status,
+    403,
+  );
+  const upgrade = {
+    ...file,
+    version: "1.1.0",
+    contributes: {
+      ...file.contributes,
+      pages: [{ ...file.contributes.pages[0], audience: "admin" }],
+    },
+  };
+  await pkg.install(f.admin, upgrade, 2);
+  assert.deepEqual(await nav(f.memberSession), []);
+  assert.deepEqual(await nav(f.session), [key]);
+  assert.equal((await f.call(url, {}, f.memberSession)).status, 403);
+  await pkg.change(f.admin, file.id, 3, "disable");
+  assert.equal((await f.call(url)).status, 404);
+  assert.deepEqual(await nav(f.session), []);
 });
 
 test("versioned view blocks validate nested actions, permissions and workspace media", async (t) => {
