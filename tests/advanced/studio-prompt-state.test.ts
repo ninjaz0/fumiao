@@ -730,6 +730,54 @@ test("#88 changeCreation isolates audio draft from video/image drafts and restor
   assert.equal(freshVideo.suspendedAudioDraft?.draft.prompt, "欢迎使用弗淼语音生成");
 });
 
+test("restoring a saved reference draft removes deleted image tokens and renumbers survivors", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState();
+  const session = readDraft(state);
+  // Existing drafts have only the ordered IDs, without saved media types.
+  sessionStorage.setItem(
+    "fm-draft-1-workspace-1",
+    JSON.stringify({
+      ...session,
+      refs: ["img1", "img2"],
+      draft: {
+        ...session.draft,
+        prompt: "Start <Picture 1>; end <Picture 2>.",
+      },
+    }),
+  );
+
+  const next = makeState({ assets: state.assets.filter(({ id }) => id !== "img1") });
+  const restored = readDraft(next);
+  assert.deepEqual(restored.refs, ["img2"]);
+  assert.equal(restored.draft.prompt, "Start ; end <Picture 1>.");
+  assert.equal(generationRequest(next, restored).body.prompt, restored.draft.prompt);
+
+  writeDraft(next, restored);
+  assert.equal(readDraft(next).draft.prompt, restored.draft.prompt);
+});
+
+test("restoring a saved draft uses the deleted reference's original media type", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState();
+  const session = readDraft(state);
+  writeDraft(state, {
+    ...session,
+    refs: ["vid1", "img1", "aud1"],
+    draft: {
+      ...session.draft,
+      prompt: "<Picture 1> with <Video 1> and <Audio 1>",
+    },
+  });
+
+  const next = makeState({ assets: state.assets.filter(({ id }) => id === "img1") });
+  const restored = readDraft(next);
+  assert.deepEqual(restored.refs, ["img1"]);
+  assert.equal(restored.draft.prompt, "<Picture 1> with  and ");
+});
+
 test("#88 readDraft stays compatible with legacy storage drafts and loadJob isolates audio/media", (t) => {
   const env = installFakeEnv();
   t.after(() => env.restore());

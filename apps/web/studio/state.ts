@@ -265,6 +265,10 @@ export type DraftSession = DraftSnapshot & {
   suspendedAudioDraft: DraftSnapshot | null;
   suspendedMediaDraft: DraftSnapshot | null;
 };
+type ReferenceType = "Picture" | "Video" | "Audio";
+type StoredReferenceTypes = Partial<
+  Record<string, Exclude<ReferenceType, "Picture">>
+>;
 function draftSnapshot(session: DraftSession): DraftSnapshot {
   return {
     draft: session.draft,
@@ -279,7 +283,39 @@ export function suspendAudioDraft(session: DraftSession): DraftSnapshot | null {
     ? draftSnapshot(session)
     : session.suspendedAudioDraft;
 }
-function readSnapshot(state: StudioState, value: unknown): DraftSnapshot | null {
+function restoreDraftReferences(
+  state: StudioState,
+  draft: Draft,
+  storedRefs: string[] | undefined,
+  storedTypes: StoredReferenceTypes | undefined,
+) {
+  if (draft.kind === "audio")
+    return { draft: { ...draft, packs: [] }, refs: [] };
+  const previousRefs = Array.isArray(storedRefs)
+    ? storedRefs.filter((id) => typeof id === "string")
+    : [];
+  const refs = previousRefs.filter((id) => referenceAsset(state, id));
+  if (refs.length === previousRefs.length || frames(draft)) return { draft, refs };
+  const prompt = reindexPromptReferences(
+    state,
+    draft.prompt,
+    packReferences({ draft, refs: previousRefs }),
+    packReferences({ draft, refs }),
+    (id) => {
+      const type = storedTypes?.[id];
+      // Older drafts don't store types; a missing asset defaults to Picture.
+      return type === "Video" || type === "Audio"
+        ? type
+        : referenceType(state, id);
+    },
+  );
+  return { draft: { ...draft, prompt }, refs };
+}
+function readSnapshot(
+  state: StudioState,
+  value: unknown,
+  storedTypes: StoredReferenceTypes | undefined,
+): DraftSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Partial<DraftSnapshot>;
   if (!raw.draft || typeof raw.draft !== "object") return null;
@@ -290,18 +326,8 @@ function readSnapshot(state: StudioState, value: unknown): DraftSnapshot | null 
       draft.model = state.images.default_model;
     if (!state.video_models[draft.videoModel]) draft.videoModel = H3;
   }
-  const isAudio = draft.kind === "audio";
   return {
-    draft: isAudio ? { ...draft, packs: [] } : draft,
-    refs: isAudio
-      ? []
-      : Array.isArray(raw.refs)
-        ? raw.refs.filter(
-            (id): id is string =>
-              typeof id === "string" &&
-              state.assets.some((asset) => asset.id === id),
-          )
-        : [],
+    ...restoreDraftReferences(state, draft, raw.refs, storedTypes),
     parent: typeof raw.parent === "number" ? raw.parent : null,
     retainedSeed: typeof raw.retainedSeed === "number" ? raw.retainedSeed : null,
     submitId:
@@ -340,7 +366,9 @@ export function readDraft(state: StudioState): DraftSession {
     sessionStorage.setItem(key, legacy);
     sessionStorage.removeItem(legacyKey);
   }
-  let saved: Partial<DraftSession> | null = null;
+  let saved: Partial<DraftSession & {
+    referenceTypes: StoredReferenceTypes;
+  }> | null = null;
   try {
     saved = JSON.parse(sessionStorage.getItem(key) ?? "null");
   } catch {}
@@ -351,31 +379,39 @@ export function readDraft(state: StudioState): DraftSession {
       draft.model = state.images.default_model;
     if (!state.video_models[draft.videoModel]) draft.videoModel = H3;
   }
-  const isAudio = draft.kind === "audio";
   const normalizedDraft =
     saved?.draft &&
     state.studio_plugins &&
     !modelAvailable(state, selectedModel(draft))
       ? draft
       : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft));
+  const storedTypes = saved?.referenceTypes;
   return {
     parent: typeof saved?.parent === "number" ? saved.parent : null,
     retainedSeed:
       typeof saved?.retainedSeed === "number" ? saved.retainedSeed : null,
-    suspendedImageDraft: readSnapshot(state, saved?.suspendedImageDraft),
-    suspendedAudioDraft: readSnapshot(state, saved?.suspendedAudioDraft),
-    suspendedMediaDraft: readSnapshot(state, saved?.suspendedMediaDraft),
-    refs: isAudio
-      ? []
-      : (saved?.refs || []).filter((id) =>
-          state.assets.some((asset) => asset.id === id),
-        ),
-    draft: isAudio ? { ...normalizedDraft, packs: [] } : normalizedDraft,
+    suspendedImageDraft: readSnapshot(state, saved?.suspendedImageDraft, storedTypes),
+    suspendedAudioDraft: readSnapshot(state, saved?.suspendedAudioDraft, storedTypes),
+    suspendedMediaDraft: readSnapshot(state, saved?.suspendedMediaDraft, storedTypes),
+    ...restoreDraftReferences(state, normalizedDraft, saved?.refs, storedTypes),
     submitId: saved?.submitId || crypto.randomUUID(),
   };
 }
 export function writeDraft(state: StudioState, session: DraftSession) {
-  sessionStorage.setItem(keyFor(state), JSON.stringify(session));
+  const refs = new Set([
+    ...session.refs,
+    ...(session.suspendedImageDraft?.refs ?? []),
+    ...(session.suspendedMediaDraft?.refs ?? []),
+  ]);
+  const referenceTypes = Object.fromEntries(
+    [...refs]
+      .map((id) => [id, referenceType(state, id)] as const)
+      .filter(([, type]) => type !== "Picture"),
+  );
+  sessionStorage.setItem(
+    keyFor(state),
+    JSON.stringify({ ...session, referenceTypes }),
+  );
 }
 
 export const selectedModel = (draft: Draft) =>
@@ -727,7 +763,7 @@ export function packReferences(session: Pick<DraftSession, "draft" | "refs">) {
 }
 export const referenceAsset = (state: StudioState, id: string | null) =>
   state.assets.find((asset) => asset.id === id);
-export function referenceType(state: StudioState, id: string) {
+export function referenceType(state: StudioState, id: string): ReferenceType {
   const kind = referenceAsset(state, id)?.kind;
   return kind === "ref_video"
     ? "Video"
@@ -771,16 +807,27 @@ export function reindexPrompt(
   nextRefs: string[],
   plain = false,
 ) {
-  if (plain || !prompt) return prompt;
+  return plain
+    ? prompt
+    : reindexPromptReferences(nextState, prompt, prevRefs, nextRefs, (id) =>
+        referenceType(prevState, id),
+      );
+}
+function reindexPromptReferences(
+  nextState: StudioState,
+  prompt: string,
+  prevRefs: string[],
+  nextRefs: string[],
+  previousType: (id: string) => ReferenceType,
+) {
+  if (!prompt) return prompt;
   return prompt.replace(
     /<(Picture|Video|Audio) (\d+)>/g,
-    (match, type: "Picture" | "Video" | "Audio", digits: string) => {
+    (match, type: ReferenceType, digits: string) => {
       const index = Number(digits);
       if (!Number.isSafeInteger(index) || index < 1 || String(index) !== digits)
         return match;
-      const id = prevRefs.filter(
-        (ref) => referenceType(prevState, ref) === type,
-      )[index - 1];
+      const id = prevRefs.filter((ref) => previousType(ref) === type)[index - 1];
       if (!id) return match;
       if (!nextRefs.includes(id)) return "";
       const nextType = referenceType(nextState, id);
