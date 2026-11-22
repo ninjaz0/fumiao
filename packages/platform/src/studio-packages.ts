@@ -247,6 +247,12 @@ async function inspectPackage(file: PackageFile) {
       );
     }
   }
+  if (manifest.artifactValidation?.version === 3)
+    requireValue(
+      file.manifest && contributions.hostCapabilities.includes("media"),
+      400,
+      "宿主成品验收需要 media 能力",
+    );
   if (manifest.chat?.sandbox || (file.manifest?.chat && !file.program)) {
     const sandbox = manifest.chat?.sandbox;
     requireValue(

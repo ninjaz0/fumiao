@@ -368,6 +368,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: 'catalog:'
         version: 3.1170.0
+      '@fumiao/image-import':
+        specifier: workspace:*
+        version: link:../image-import
       '@fumiao/media-runtime':
         specifier: workspace:*
         version: link:../media-runtime

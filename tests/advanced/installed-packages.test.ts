@@ -588,6 +588,158 @@ test("update source pins package identity and checksum before activation and pre
   }
 });
 
+test("portable image outputs use the host decoder before storage and settlement", async () => {
+  const f = await setup();
+  const id = "portable-image",
+    model = id + "-model";
+  let bytes = await sharp({
+    create: { width: 24, height: 16, channels: 3, background: "#345678" },
+  })
+    .withMetadata({ orientation: 6 })
+    .jpeg()
+    .toBuffer();
+  const seen = { count: 0 };
+  const server = createServer((_req, res) => {
+    seen.count++;
+    res.end(
+      JSON.stringify({
+        url: "data:image/jpeg;base64," + bytes.toString("base64"),
+      }),
+    );
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const baseUrl =
+    "http://127.0.0.1:" + (server.address() as { port: number }).port;
+  const file = {
+    format: 1,
+    id,
+    label: id,
+    version: "1.0.0",
+    adapterVersion: "1.0.0",
+    contributes: { version: 1, hostCapabilities: ["media"] },
+    manifest: {
+      id,
+      label: id,
+      version: "1.0.0",
+      contractVersion: 1,
+      mode: "request",
+      originalSubmission: { version: 3 },
+      artifactValidation: {
+        version: 3,
+        errors: {
+          imageFormat: "图片格式不受支持",
+          imageDecode: "无法解码图片",
+          video: "视频无效",
+          failed: "未保存成品",
+        },
+      },
+      configSchema: {
+        type: "object",
+        properties: {
+          baseUrl: { type: "string" },
+          apiKey: { type: "string", writeOnly: true },
+        },
+        required: ["baseUrl", "apiKey"],
+      },
+      models: [
+        {
+          id: model,
+          label: model,
+          kind: "image",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+          studio: {
+            order: 1,
+            priceOrder: 1,
+            descriptor: { kind: "image", label: model },
+            prices: [
+              {
+                tier: "standard",
+                amount: 1,
+                label: "图片",
+                match: { type: "object" },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    program:
+      "({request(){return {path:'/images',body:{}}},result({raw}){return {state:'completed',artifacts:[{url:raw.url}]}}})",
+  };
+  try {
+    await assert.rejects(
+      f.packages.install(f.actor, { ...file, contributes: { version: 1 } }),
+      /media/,
+    );
+    await f.packages.install(f.actor, file);
+    await f.p.createConnection(
+      f.actor,
+      {
+        pluginId: id,
+        version: file.adapterVersion,
+        name: id,
+        config: { baseUrl, apiKey: "fixture" },
+      },
+      true,
+    );
+    await f.packages.change(f.actor, id, 1, "enable");
+    await f.db.query("UPDATE wallets SET balance=10");
+    const gen = new OriginalGeneration(f.p);
+    const execute = async () => {
+      const { id: publicId } = await gen.submit(
+        f.actor,
+        await gen.parse("image", {
+          model,
+          prompt: "fixture",
+          uid: randomUUID(),
+          params: {},
+        }),
+      );
+      const job = await one(f.db, "SELECT id FROM jobs WHERE public_id=$1", [
+        publicId,
+      ]);
+      const executor = new Executor(f.p);
+      await executor.execute(job.id);
+      await executor.execute(job.id);
+      return one(f.db, "SELECT * FROM jobs WHERE id=$1", [job.id]);
+    };
+    const ok = await execute();
+    assert.equal(ok.state, "completed", ok.error);
+    const asset = await one(
+      f.db,
+      "SELECT a.* FROM assets a JOIN job_assets j ON a.id=j.asset_id WHERE j.job_id=$1 AND j.role='output'",
+      [ok.id],
+    );
+    assert.equal(asset.metadata.width, 16);
+    assert.equal(asset.metadata.height, 24);
+    assert.deepEqual(await f.p.storage.read(asset.object_key), bytes);
+    bytes = Buffer.from("invalid");
+    const bad = await execute();
+    assert.equal(bad.state, "failed");
+    assert.equal(bad.error, "无法解码图片");
+    assert.equal(seen.count, 2);
+    assert.equal(
+      (
+        await one(
+          f.db,
+          "SELECT count(*)::int AS refunds FROM ledger WHERE job_id=$1 AND action='refund'",
+          [bad.id],
+        )
+      ).refunds,
+      1,
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+    await f.cleanup();
+  }
+});
+
 test("portable packages share a declared model across services without changing frozen jobs", async () => {
   const f = await setup(),
     app = await createOriginalApp(f.p),

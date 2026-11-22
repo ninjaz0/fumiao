@@ -35,9 +35,26 @@ export const preparedInputSchema = z
   .strict();
 export type PreparedInput = z.infer<typeof preparedInputSchema>;
 export { InputPreparationError } from "./submission-errors.js";
-export const artifactValidationPolicySchema = z
-  .object({ version: z.union([z.literal(1), z.literal(2)]) })
+const outputMessage = z.string().min(1).max(300);
+export const providerMediaPolicySchema = z
+  .object({
+    version: z.literal(3),
+    errors: z
+      .object({
+        imageFormat: outputMessage,
+        imageDecode: outputMessage,
+        video: outputMessage,
+        failed: outputMessage,
+        recovering: outputMessage.optional(),
+      })
+      .strict(),
+  })
   .strict();
+export type ProviderMediaPolicy = z.infer<typeof providerMediaPolicySchema>;
+export const artifactValidationPolicySchema = z.union([
+  z.object({ version: z.union([z.literal(1), z.literal(2)]) }).strict(),
+  providerMediaPolicySchema,
+]);
 export type ArtifactValidationPolicy = z.infer<
   typeof artifactValidationPolicySchema
 >;

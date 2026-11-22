@@ -10,6 +10,7 @@ import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
 import { PluginRegistry } from "@fumiao/platform/plugins.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { inspectProviderOutput } from "@fumiao/platform/provider-output.js";
 import { Executor } from "@fumiao/platform/executor.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { OriginalGeneration } from "@fumiao/original-api/generation.js";
@@ -152,6 +153,37 @@ test("provider validation keeps WebM bytes, public media metadata and once-only 
       path,
     ]);
     const bytes = await readFile(path);
+    const policy = {
+      version: 3 as const,
+      errors: {
+        imageFormat: "图片格式",
+        imageDecode: "图片内容",
+        video: "视频无效",
+        failed: "保存失败",
+        recovering: "恢复失败",
+      },
+    };
+    const signal = new AbortController().signal;
+    assert.deepEqual(
+      await inspectProviderOutput(policy, bytes, "video", false, signal),
+      {
+        mime: "video/webm",
+        width: 32,
+        height: 24,
+        duration: 1,
+        fps: "25/1",
+      },
+    );
+    await assert.rejects(
+      inspectProviderOutput(
+        policy,
+        Buffer.from("invalid"),
+        "video",
+        true,
+        signal,
+      ),
+      /恢复失败/,
+    );
     f.setBytes(bytes);
     for (const model of ["muse-video", "flow:veo-3.1-quality"]) {
       const job = await f.submit(model, "video");

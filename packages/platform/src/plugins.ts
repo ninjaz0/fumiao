@@ -463,7 +463,18 @@ export class PluginRegistry {
         400,
         "输入冻结需要已安装的本地适配器和结果契约",
       );
-    if (manifest.artifactValidation)
+    if (manifest.artifactValidation?.version === 3) {
+      requireValue(
+        portable &&
+          !endpoint &&
+          manifest.mode === "request" &&
+          manifest.models.every(
+            (m) => m.kind === "image" || m.kind === "video",
+          ),
+        400,
+        "宿主成品验收需要沙箱图片或视频提供方",
+      );
+    } else if (manifest.artifactValidation)
       requireValue(
         !endpoint &&
           local?.validateArtifact &&

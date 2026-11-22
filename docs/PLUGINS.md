@@ -224,6 +224,8 @@ PORT=4100 pnpm exec tsx plugins/example-studio/server.ts
 
 初装注册目录，连接启用后可提交。升级仍通过下节的显式目录激活。服务端在接受请求时冻结版本、配置、引用及价格。排队任务依然遵守连接启用状态、并发限制和当前工作区模型权限。同一用户、插件和创作类型的 UID 在同一空间重试会返回原任务，在其他空间重试会被拒绝。远程工作台契约覆盖通用图片、视频和语音表单，专属模型控件、画布提交、时长预测和本地适配器能力各有独立契约。
 
+沙箱图片或视频提供方可在清单里声明 `artifactValidation.version = 3`，并申请 `media` 能力。宿主在写入私有存储和结算前解码图片，或验证视频容器、尺寸、时长、旋转和第一帧。程序通过 `artifactValidation.errors` 的 `imageFormat`、`imageDecode`、`video`、`failed` 和可选的 `recovering` 字段提供失败提示。已接单任务使用冻结版本的声明。
+
 运行 `pnpm build && pnpm test:studio:remote-provider` 可用临时 PostgreSQL、Redis、私有存储和回环提供方复现。需要 Chromium、`initdb`、`postgres`、`redis-server`、`ffmpeg` 和 `ffprobe`。PostgreSQL 和 Redis 可分别用 `PG_BINDIR` 和 `REDIS_SERVER` 指定。
 
 ## 按模型注册 Studio 参数

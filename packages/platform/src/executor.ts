@@ -16,6 +16,7 @@ import {
   type Receipt,
 } from "@fumiao/plugin-sdk/index.js";
 import { requireValue } from "./security.js";
+import { inspectProviderOutput } from "./provider-output.js";
 import { inspectMedia } from "./media.js";
 import { artifactCapacity } from "./capacity.js";
 import { JobTiming } from "./timing.js";
@@ -811,7 +812,16 @@ export class Executor {
         bytes = Buffer.concat(chunks);
       }
       let metadata: Record<string, any> & { mime: string };
-      if (version?.manifest.artifactValidation?.version === 2) {
+      const validation = version?.manifest.artifactValidation;
+      if (validation?.version === 3) {
+        metadata = await inspectProviderOutput(
+          validation,
+          bytes,
+          job.kind,
+          Boolean(job.receipt),
+          signal,
+        );
+      } else if (validation?.version === 2) {
         const plugin = await p.registry.resolve(
           p.db,
           job.plugin_id,
