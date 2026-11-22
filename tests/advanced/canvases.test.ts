@@ -99,6 +99,53 @@ test("Native canvas keeps original UTF-8 text and public keys, isolated from pro
     await f.cleanup();
   }
 });
+test("Canvas saves replace the node index with exactly the saved node IDs", async () => {
+  const f = await canvasesFixture();
+  try {
+    const project = await f.canvases.create(f.admin, {});
+    const indexed = async () =>
+      (
+        await f.db.query(
+          "SELECT node FROM canvas_nodes WHERE project_id=(SELECT id FROM documents WHERE public_id=$1) ORDER BY node",
+          [project.id],
+        )
+      ).rows.map((row) => row.node);
+    assert.deepEqual(await indexed(), []);
+    const first = await f.canvases.save(f.admin, project.id, {
+      expected_revision: project.revision,
+      title: "Index",
+      document: { nodes: [node("removed"), node("retained")] },
+    });
+    assert.deepEqual(await indexed(), ["removed", "retained"]);
+    const second = await f.canvases.save(f.admin, project.id, {
+      expected_revision: first.revision,
+      title: "Index",
+      document: {
+        nodes: [node("retained", "text", { text: "updated" }), node("added")],
+      },
+    });
+    assert.deepEqual(await indexed(), ["added", "retained"]);
+    const before = await f.canvases.get(f.admin, project.id);
+    await assert.rejects(
+      f.canvases.save(f.admin, project.id, {
+        expected_revision: second.revision,
+        title: "Rejected",
+        document: { nodes: [node("duplicate"), node("duplicate")] },
+      }),
+      { status: 400 },
+    );
+    assert.deepEqual(await indexed(), ["added", "retained"]);
+    assert.deepEqual(await f.canvases.get(f.admin, project.id), before);
+    await f.canvases.save(f.admin, project.id, {
+      expected_revision: second.revision,
+      title: "Empty",
+      document: { nodes: [] },
+    });
+    assert.deepEqual(await indexed(), []);
+  } finally {
+    await f.cleanup();
+  }
+});
 test("Canvas saves protect references and roll back document, revision and relations together", async () => {
   const f = await canvasesFixture();
   try {

@@ -177,10 +177,10 @@ export class OriginalCanvases {
   }
   async nodes(sql: Sql, id: string, document: CanvasDocument) {
     await sql.query("DELETE FROM canvas_nodes WHERE project_id=$1", [id]);
-    for (const node of document.nodes)
+    if (document.nodes.length)
       await sql.query(
-        "INSERT INTO canvas_nodes(project_id,node) VALUES($1,$2)",
-        [id, node.id],
+        "INSERT INTO canvas_nodes(project_id,node) SELECT $1,unnest($2::text[])",
+        [id, document.nodes.map((node) => node.id)],
       );
   }
   async create(user: Actor, value: unknown, selected?: string) {
