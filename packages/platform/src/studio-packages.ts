@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { nodePoolHooks } from "@fumiao/plugin-sdk/node-pools.js";
 import { purgePluginData } from "./plugin-host.js";
 import { portablePlugin } from "./portable-plugin.js";
-import { officialAdapter } from "./distribution/official-adapter.js";
+import { archivedAdapter } from "./distribution/archived-adapters.js";
 import {
   manifestSchema,
   type ProviderPlugin,
@@ -187,7 +187,7 @@ export function parsePackageFile(value: unknown): PackageFile {
 
 async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
   const binding = file.adapterModule
-    ? await officialAdapter(file.id, file.adapterVersion, file.adapterModule)
+    ? await archivedAdapter(file.id, file.adapterVersion, file.adapterModule)
     : undefined;
   const manifest: Manifest = file.extensionOnly
     ? {
@@ -805,7 +805,7 @@ export class StudioPackages {
     }
     // Only reviewed local runtime contracts can implement privileged operations.
     requireValue(file.adapterModule, 400, "插件文件缺少适配器");
-    const adapter = await this.p.registry.registerModule(
+    const adapter = await this.p.registry.registerArchive(
       file.id,
       file.adapterVersion,
       file.adapterModule,

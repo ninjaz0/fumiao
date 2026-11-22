@@ -1,14 +1,13 @@
 import type { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
 import { sandboxChat } from "./sandbox-chat.js";
 import { nodeStudioPlugin } from "./node-studio-policy.js";
-import { readFile } from "node:fs/promises";
 import { portablePlugin } from "./portable-plugin.js";
 import {
-  approvedAdapterVersions,
-  officialAdapter,
-  reservedAdapterId,
-  type OfficialAdapter,
-} from "./distribution/official-adapter.js";
+  archivedAdapterVersions,
+  archivedAdapter,
+  hasArchivedAdapter,
+  archivedPackage,
+} from "./distribution/archived-adapters.js";
 import { packageContributions } from "@fumiao/plugin-sdk/contributions.js";
 import type { PairedAgentProtocol } from "@fumiao/plugin-sdk/paired-agent.js";
 import { validator } from "./schema.js";
@@ -36,7 +35,6 @@ import { OriginalPairedAgent as Agent } from "./node-agent.js";
 export class PluginRegistry {
   private builtins = new Map<string, ProviderPlugin>();
   private protocols = new Map<string, PairedAgentProtocol>();
-  private extensions = new Map<string, OfficialAdapter>();
   async nodeExtension(sql: Sql, pluginId?: string) {
     if (await hasStudioPackages(sql)) {
       const row = await one(
@@ -85,14 +83,12 @@ export class PluginRegistry {
   }
   async pairedAgent(sql: Sql, provider: string, version: string) {
     await this.resolve(sql, provider, version);
-    const bundled = this.extensions.get(provider + "@" + version)?.protocol;
-    if (bundled) return bundled;
     if (!this.protocols.has(provider)) await this.historical();
     return this.protocols.get(provider);
   }
-  async registerModule(id: string, version: string, code: string) {
-    const loaded = await officialAdapter(id, version, code);
-    this.extensions.set(id + "@" + version, loaded);
+  async registerArchive(id: string, version: string, code: string) {
+    const loaded = await archivedAdapter(id, version, code);
+    if (loaded.protocol) this.protocols.set(id, loaded.protocol);
     this.remember(loaded.adapter);
     return loaded.adapter;
   }
@@ -128,7 +124,7 @@ export class PluginRegistry {
       JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
       WHERE p.installed AND NOT (r.package ?| array['remote','adapterModule','manifest'])
       AND (NOT (r.package ? 'restored') OR (v.id || '@' || v.version)=ANY($1::text[]))`,
-        [approvedAdapterVersions],
+        [archivedAdapterVersions],
       )
     ).rows;
     for (const row of rows) {
@@ -139,24 +135,10 @@ export class PluginRegistry {
           remote: { endpoint: row.endpoint, manifest: row.manifest },
         };
         await this.installOn(sql, row.manifest, row.endpoint, false);
-      } else if (reservedAdapterId(row.id)) {
-        const archive =
-          row.id === "gpu" && row.version === "1.11.0"
-            ? "package/legacy-1.0.0"
-            : row.id === "compatible-chat" && row.version === "1.2.0"
-              ? "package/legacy-1.2.1"
-              : row.id;
-        const packaged = JSON.parse(
-          await readFile(
-            new URL(
-              "../../../plugins/" + row.id + "/" + archive + ".fmplugin.json",
-              import.meta.url,
-            ),
-            "utf8",
-          ),
-        );
-        if (packaged.adapterModule && packaged.adapterVersion === row.version) {
-          const adapter = await this.registerModule(
+      } else if (hasArchivedAdapter(row.id)) {
+        const packaged = await archivedPackage(row.id, row.version);
+        if (packaged) {
+          const adapter = await this.registerArchive(
             row.id,
             row.version,
             packaged.adapterModule,
@@ -299,7 +281,7 @@ export class PluginRegistry {
     requireValue(
       !sandbox ||
         (!this.builtins.has(manifest.id + "@" + manifest.version) &&
-          !approvedAdapterVersions.includes(
+          !archivedAdapterVersions.includes(
             manifest.id + "@" + manifest.version,
           )),
       409,
@@ -447,7 +429,7 @@ export class PluginRegistry {
         (portable || (endpoint && validRemoteEndpoint(endpoint))) &&
           (manifest.mode === "request" ||
             (portable && manifest.originalSubmission?.version === 3)) &&
-          !reservedAdapterId(manifest.id) &&
+          !hasArchivedAdapter(manifest.id) &&
           ![...this.builtins.values()].some(
             (p) => p.manifest.id === manifest.id,
           ) &&
@@ -636,7 +618,7 @@ export class PluginRegistry {
           "SELECT code FROM studio_adapter_modules WHERE id=$1 AND version=$2",
           [id, version],
         );
-        if (native) return this.registerModule(id, version, native.code);
+        if (native) return this.registerArchive(id, version, native.code);
       }
       if (row.manifest.originalSubmission?.version === 4) {
         const release = await one(
