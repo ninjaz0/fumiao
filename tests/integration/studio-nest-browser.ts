@@ -26,6 +26,82 @@ const chatReply = "隔离验收回复";
 const canvasTitle = "隔离工作台画布";
 const apiTimeout = 20_000;
 
+async function checkMobileSidebar(page: Page) {
+  const viewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 375, height: 667 });
+  const sidebar = page.locator(".side");
+  const expand = sidebar.getByRole("button", { name: "展开侧边栏" });
+  const collapse = sidebar.getByRole("button", { name: "收起侧边栏" });
+  const brand = sidebar.getByRole("button", { name: "去首页" });
+  const account = sidebar.getByRole("button", { name: "账户" });
+  const backdrop = page.locator(".rail-backdrop");
+  const workspace = page.locator(".workspace");
+  const focused = () =>
+    page.evaluate(() => {
+      const element = document.activeElement;
+      return element?.getAttribute("aria-label") ?? element?.tagName;
+    });
+
+  await expect(expand).toBeVisible();
+  await settings(page);
+  await setTab(page, "plugins");
+  await expand.focus();
+  await page.keyboard.press("Enter");
+  await expect(backdrop).toBeVisible();
+  await expect(collapse).toBeFocused();
+
+  await account.focus();
+  await page.keyboard.press("Tab");
+  const afterTab = await focused();
+  await brand.focus();
+  await page.keyboard.press("Shift+Tab");
+  const afterShiftTab = await focused();
+  const workspaceInert = (await workspace.getAttribute("inert")) !== null;
+  await page.keyboard.press("Escape");
+  await expect
+    .poll(async () => ({
+      afterTab,
+      afterShiftTab,
+      workspaceInert,
+      closedOnEscape: !(await backdrop.isVisible()),
+      afterEscape: await focused(),
+    }))
+    .toEqual({
+      afterTab: "去首页",
+      afterShiftTab: "账户",
+      workspaceInert: true,
+      closedOnEscape: true,
+      afterEscape: "展开侧边栏",
+    });
+  await expect(workspace).toHaveJSProperty("inert", false);
+
+  await page.keyboard.press("Enter");
+  await expect(collapse).toBeFocused();
+  await account.focus();
+  await page.keyboard.press("Enter");
+  const accountMenu = page.locator("#popover");
+  const menuSettings = accountMenu.getByRole("button", { name: "设置" });
+  await expect(menuSettings).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(menuSettings).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(account).toBeFocused();
+  await expect(backdrop).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(expand).toBeFocused();
+  await expect(backdrop).toBeHidden();
+
+  await expand.click();
+  await backdrop.click();
+  await expect(expand).toBeFocused();
+  await expect(workspace).toHaveJSProperty("inert", false);
+  await page.setViewportSize(viewport);
+  await expand.click();
+  await page.keyboard.press("Escape");
+  await expect(collapse).toBeVisible();
+  await expect(workspace).toHaveJSProperty("inert", false);
+}
+
 async function checkImageToVideoFrames(page: Page, studio: string, state: StudioState) {
   const image = state.jobs.find((job) => job.kind === "image" && job.result);
   assert.ok(image?.result);
@@ -326,6 +402,7 @@ export async function studioBrowser(
       }));
     })).toBeLessThanOrEqual(0.5);
     await sidebar.getByRole("button", { name: "展开侧边栏" }).click();
+    await checkMobileSidebar(page);
     await nav("home");
     await expect(currentSettings).toHaveCount(0);
     await settings(page);
