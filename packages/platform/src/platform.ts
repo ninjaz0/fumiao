@@ -506,10 +506,13 @@ export class Platform {
       input.version,
     );
     requireValue(!plugin.retired, 400, "此插件版本已退役");
-    if (plugin.manifest.chat)
+    if (plugin.manifest.chat) {
+      // Installation already holds this row before touching release and chat locks.
+      await sql.query("SELECT price_revision FROM studio_policy FOR SHARE");
       await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
         "original-chat-settings",
       ]);
+    }
     requireValue(
       validator.validate(plugin.manifest.configSchema, input.config),
       400,
