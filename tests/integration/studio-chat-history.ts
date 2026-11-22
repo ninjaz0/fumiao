@@ -3,7 +3,6 @@ import { pathToFileURL } from "node:url";
 import { chromium, expect, type Page } from "@playwright/test";
 
 export async function verifyChatHistory(page: Page) {
-  const evidence = process.env.EVIDENCE_DIR;
   let fail = true;
   let empty = false;
   let release!: () => void;
@@ -30,25 +29,14 @@ export async function verifyChatHistory(page: Page) {
     ).toBeEnabled();
     await expect(page.getByText("正在载入对话…", { exact: true })).toBeHidden();
     const history = page.locator(".fm-chat-history-items");
-    if (process.env.CAPTURE_BEFORE) {
-      await expect(
-        history.getByText("暂无对话", { exact: true }),
-      ).toBeVisible();
-      await expect(page.locator(".fm-chat-error")).toContainText(
-        "对话历史暂不可用",
-      );
-      await page.screenshot({ path: `${evidence}/before.png` });
-    }
     await expect(history.getByRole("alert")).toContainText("对话历史暂不可用");
     await expect(history.getByText("暂无对话", { exact: true })).toBeHidden();
-    if (evidence) await page.screenshot({ path: `${evidence}/after.png` });
     fail = false;
     await history.getByRole("button", { name: "重试", exact: true }).click();
     await expect(
       history.locator(".fm-chat-conversation-row").first(),
     ).toBeVisible();
     await expect(history.getByRole("alert")).toBeHidden();
-    if (evidence) await page.screenshot({ path: `${evidence}/retry.png` });
     fail = true;
     await expect(history.getByRole("alert")).toBeVisible({ timeout: 15000 });
     fail = false;
