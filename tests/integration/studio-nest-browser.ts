@@ -26,6 +26,75 @@ const chatReply = "隔离验收回复";
 const canvasTitle = "隔离工作台画布";
 const apiTimeout = 20_000;
 
+async function checkCreditHistoryRefresh(page: Page, state: StudioState) {
+  const entries = Array.from({ length: 100 }, (_, index) => ({
+    id: 101 - index,
+    action: "adjust",
+    amount: 1,
+    created: 1700000000 + 101 - index,
+    note: `credit-pagination-${101 - index}`,
+  }));
+  let live = false;
+  let failMore = true;
+  await page.route("**/api/state", (route) =>
+    route.fulfill({
+      json: {
+        ...state,
+        credits: {
+          ...state.credits,
+          available: state.credits.available + Number(live),
+        },
+        credit_history: live
+          ? [
+              { ...entries[0], id: 102, note: "credit-live-update" },
+              ...entries.slice(0, 49),
+            ]
+          : entries.slice(0, 50),
+      },
+    }),
+  );
+  await page.route("**/api/credits?before=*", (route) => {
+    if (failMore) {
+      failMore = false;
+      return route.fulfill({ status: 500, headers: { "x-fumiao-web": "next" }, json: { detail: "分页暂不可用" } });
+    }
+    const before = Number(
+      new URL(route.request().url()).searchParams.get("before"),
+    );
+    return route.fulfill({
+      json: {
+        history: entries.filter((entry) => entry.id < before).slice(0, 50),
+      },
+    });
+  });
+  await page.goto(`/studio?workspace=${state.workspace_id}`);
+  await settings(page);
+  await setTab(page, "credits");
+  await request(page, "/api/credits?before=52", "GET", () =>
+    page.locator('[data-act="credit-more"]').click(),
+  );
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(50);
+  await expect(page.locator('[data-act="credit-more"]')).toBeEnabled();
+  await page.locator('[data-act="credit-more"]').click();
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(100);
+  const older = page
+    .locator(".credit-ledger-row")
+    .filter({ hasText: /credit-pagination-2\+1/ });
+  await expect(older).toBeVisible();
+  live = true;
+  await expect(page.locator(".credit-ledger-row").first()).toContainText(
+    "credit-live-update",
+    { timeout: 15000 },
+  );
+  await expect(older).toBeVisible();
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(101);
+  await page.locator('[data-act="credit-more"]').click();
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(101);
+  await expect(page.locator('[data-act="credit-more"]')).toHaveCount(0);
+  console.log("Credit history live refresh preserves loaded pages: passed");
+  await page.close();
+}
+
 async function checkMobileSidebar(page: Page) {
   const viewport = page.viewportSize()!;
   await page.setViewportSize({ width: 375, height: 667 });
@@ -421,6 +490,7 @@ export async function studioBrowser(
     const nav = (name: string) =>
       page.locator(`nav [data-nav="${name}"]`).click();
     const available = (await state()).credits.available;
+    await checkCreditHistoryRefresh(await context.newPage(), await state());
     const sidebar = page.locator(".side");
     const currentSettings = sidebar.locator('nav [data-nav="settings"]');
     await expect(currentSettings).toHaveCount(0);

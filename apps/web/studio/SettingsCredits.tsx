@@ -68,10 +68,21 @@ export function Credits({
   notify: Notify;
 }) {
   const { credits, workspace_id: workspace } = state;
-  const [rows, setRows] = useState(state.credit_history || []);
-  const [before, setBefore] = useState(
-    rows.length === 50 ? rows.at(-1)?.id : undefined,
-  );
+  const [loaded, setLoaded] = useState<{
+    rows: CreditEntry[];
+    before: number | undefined;
+  } | null>(null);
+  const latest = state.credit_history || [];
+  const rows = Array.from(
+    new Map(
+      [...(loaded?.rows || []), ...latest].map((row) => [row.id, row]),
+    ).values(),
+  ).sort((a, b) => b.id - a.id);
+  const before = loaded
+    ? loaded.before
+    : latest.length === 50
+      ? latest.at(-1)?.id
+      : undefined;
   const [busy, setBusy] = useState(false);
 
   async function more(button: HTMLButtonElement) {
@@ -83,10 +94,11 @@ export function Credits({
         "/api/credits?before=" + before,
       );
       if (!button.isConnected) return;
-      setRows((rows) => [...rows, ...result.history]);
-      setBefore(
-        result.history.length === 50 ? result.history.at(-1)?.id : undefined,
-      );
+      setLoaded({
+        rows: [...rows, ...result.history],
+        before:
+          result.history.length === 50 ? result.history.at(-1)?.id : undefined,
+      });
     } catch (error) {
       notify((error as Error).message);
     } finally {
