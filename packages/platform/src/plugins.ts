@@ -1,3 +1,5 @@
+import type { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
+import { sandboxChat } from "./sandbox-chat.js";
 import { nodeStudioPlugin } from "./node-studio-policy.js";
 import { readFile } from "node:fs/promises";
 import { portablePlugin } from "./portable-plugin.js";
@@ -59,6 +61,7 @@ export class PluginRegistry {
   constructor(
     plugins?: ProviderPlugin[],
     protocols: readonly PairedAgentProtocol[] = [],
+    private readonly chatTransport?: typeof chatHttp,
   ) {
     this.custom = !!plugins;
     for (const plugin of plugins ?? []) this.remember(plugin);
@@ -134,25 +137,21 @@ export class PluginRegistry {
         };
         await this.installOn(sql, row.manifest, row.endpoint, false);
       } else if (reservedAdapterId(row.id)) {
-        let packaged = JSON.parse(
+        const archive =
+          row.id === "gpu" && row.version === "1.11.0"
+            ? "package/legacy-1.0.0"
+            : row.id === "compatible-chat" && row.version === "1.2.0"
+              ? "package/legacy-1.2.1"
+              : row.id;
+        const packaged = JSON.parse(
           await readFile(
             new URL(
-              "../../../plugins/" + row.id + "/" + row.id + ".fmplugin.json",
+              "../../../plugins/" + row.id + "/" + archive + ".fmplugin.json",
               import.meta.url,
             ),
             "utf8",
           ),
         );
-        if (row.id === "gpu" && row.version === "1.11.0")
-          packaged = JSON.parse(
-            await readFile(
-              new URL(
-                "../../../plugins/gpu/package/legacy-1.0.0.fmplugin.json",
-                import.meta.url,
-              ),
-              "utf8",
-            ),
-          );
         if (packaged.adapterModule && packaged.adapterVersion === row.version) {
           const adapter = await this.registerModule(
             row.id,
@@ -281,12 +280,14 @@ export class PluginRegistry {
     );
     const manifest = manifestSchema.parse(value) as Manifest;
     const sandbox =
-      studioProgram &&
-      portable &&
-      manifest.mode === "pull" &&
-      manifest.originalSubmission?.version === 4
-        ? await nodeStudioPlugin(manifest, studioProgram)
-        : undefined;
+      manifest.chat?.sandbox && portable && !endpoint
+        ? await sandboxChat(manifest, this.chatTransport)
+        : studioProgram &&
+            portable &&
+            manifest.mode === "pull" &&
+            manifest.originalSubmission?.version === 4
+          ? await nodeStudioPlugin(manifest, studioProgram)
+          : undefined;
     requireValue(
       manifest.originalSubmission?.version !== 4 || sandbox,
       400,
@@ -351,6 +352,10 @@ export class PluginRegistry {
       requireValue(
         !endpoint &&
           manifest.mode === "request" &&
+          (!manifest.chat.sandbox ||
+            (sandbox &&
+              !manifest.originalSubmission &&
+              manifest.models.every((m) => m.kind === "chat"))) &&
           local?.chatStream &&
           local.chatTitle &&
           local.chatProbe &&
@@ -358,7 +363,7 @@ export class PluginRegistry {
           local.chatConfigured &&
           local.chatConfigure,
         400,
-        "对话流需要已安装的本地适配器",
+        "对话流需要已安装的对话适配器",
       );
       const providers = manifest.chat.providers,
         models = providers.flatMap((p) => p.models);
@@ -609,6 +614,11 @@ export class PluginRegistry {
       !row.endpoint &&
       !Object.hasOwn(row.manifest, "fmworkerResources")
     ) {
+      if (row.manifest.chat?.sandbox)
+        return sandboxChat(
+          manifestSchema.parse(row.manifest),
+          this.chatTransport,
+        );
       if (await hasStudioPackages(db)) {
         const native = await one(
           db,

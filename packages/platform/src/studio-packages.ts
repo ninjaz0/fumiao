@@ -1,3 +1,4 @@
+import { sandboxChat } from "./sandbox-chat.js";
 import { nodeStudioPlugin } from "./node-studio-policy.js";
 import { createHash } from "node:crypto";
 import { nodePoolHooks } from "@fumiao/plugin-sdk/node-pools.js";
@@ -143,8 +144,11 @@ export const packageFile = z
           !f.nodeClient &&
           !f.studioProgram &&
           !f.equivalentModels &&
-          (f.contributes?.paymentMethods?.length || f.contributes?.exporters?.length || f.contributes?.events?.length || f.contributes?.actions?.length))) &&
-      (!f.manifest || !!f.program),
+          (f.contributes?.paymentMethods?.length ||
+            f.contributes?.exporters?.length ||
+            f.contributes?.events?.length ||
+            f.contributes?.actions?.length))) &&
+      (!f.manifest || !!f.program || !!f.manifest.chat),
     "插件必须声明一种执行方式",
   )
   .refine(
@@ -243,6 +247,25 @@ async function inspectPackage(file: PackageFile) {
       );
     }
   }
+  if (manifest.chat?.sandbox || (file.manifest?.chat && !file.program)) {
+    const sandbox = manifest.chat?.sandbox;
+    requireValue(
+      file.manifest &&
+        sandbox &&
+        !file.program &&
+        !file.studioProgram &&
+        !manifest.originalSubmission &&
+        manifest.mode === "request" &&
+        manifest.models.length &&
+        manifest.models.every((m) => m.kind === "chat") &&
+        contributions.hostCapabilities.includes("secrets") &&
+        contributions.http &&
+        canonical([...sandbox.origins].sort()) ===
+          canonical([...contributions.http.origins].sort()),
+      400,
+      "沙箱对话需要声明 HTTP 目标和连接密钥注入",
+    );
+  }
   const studio = manifest.originalSubmission?.version === 4;
   requireValue(
     studio === !!file.studioProgram &&
@@ -304,9 +327,11 @@ async function inspectPackage(file: PackageFile) {
     : (binding?.adapter ??
       (file.remote
         ? remotePlugin(manifest, file.remote.endpoint)
-        : file.studioProgram
-          ? await nodeStudioPlugin(manifest, file.studioProgram)
-          : portablePlugin(manifest)));
+        : manifest.chat?.sandbox
+          ? await sandboxChat(manifest)
+          : file.studioProgram
+            ? await nodeStudioPlugin(manifest, file.studioProgram)
+            : portablePlugin(manifest)));
   return { adapter, manifest, contributions };
 }
 
@@ -418,6 +443,14 @@ function permissionSummary(
         added(
           "读取工作区私有素材、转码、拼接和抽帧",
           !prior?.hostCapabilities.includes("media"),
+        ),
+    );
+  if (next.hostCapabilities.includes("secrets"))
+    lines.push(
+      "宿主能力：" +
+        added(
+          "对管理员配置的服务地址注入连接密钥",
+          !prior?.hostCapabilities.includes("secrets"),
         ),
     );
   if (next.http)
@@ -623,7 +656,10 @@ export class StudioPackages {
   ) {
     const current = await one(
       this.p.db,
-      "SELECT p.*,r.package->'remote'->>'endpoint' AS endpoint FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE installed AND p.id=$1",
+      `SELECT p.*,r.package->'remote'->>'endpoint' AS endpoint,v.manifest AS old_manifest
+        FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+        LEFT JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
+        WHERE installed AND p.id=$1`,
       [file.id],
     );
     if (!current || current.version === file.version) return [];
@@ -681,6 +717,20 @@ export class StudioPackages {
         409,
         "现有配置缺少新版要求的字段",
       );
+      if (adapter.manifest.chat?.sandbox && previous.apiKey) {
+        const origin = (m: Manifest, c: Record<string, unknown>) => {
+          const provider = m.chat?.providers.find((p) => p.id === c.provider);
+          return URL.parse(String(c.baseUrl || provider?.defaultConfig.baseUrl))
+            ?.origin;
+        };
+        const savedOrigin =
+          current.old_manifest && origin(current.old_manifest, previous);
+        requireValue(
+          savedOrigin && savedOrigin === origin(adapter.manifest, config),
+          409,
+          "不能向新的服务地址转发已有密钥",
+        );
+      }
       if (adapter.manifest.mode === "request")
         requireValue(
           await adapter.health(config, AbortSignal.timeout(10000)),
@@ -697,7 +747,8 @@ export class StudioPackages {
         m.id === file.id &&
           m.version === file.adapterVersion &&
           (m.originalSubmission?.version === 3 ||
-            m.originalSubmission?.version === 4) &&
+            m.originalSubmission?.version === 4 ||
+            !!m.chat?.sandbox) &&
           (m.mode === "request" || !!file.contributes?.nodePools),
         400,
         "独立服务插件清单无效",
@@ -866,7 +917,11 @@ export class StudioPackages {
           "插件程序声明了未知操作",
         );
       }
-      if (file.manifest && !contributions.nodePools) {
+      if (
+        file.manifest &&
+        !inspected.chat?.sandbox &&
+        !contributions.nodePools
+      ) {
         const hooks = (await loadProgram(file.program!))(
           "describe",
         ) as string[];

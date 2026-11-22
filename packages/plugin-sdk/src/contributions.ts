@@ -79,10 +79,17 @@ export const memberScopes: readonly PageScope[] = [
  *
  * - nodes: node pairing and control, through `host` page actions.
  * - http:  HTTPS requests to the origins listed in `contributes.http`.
+ * - secrets: inject the saved connection credential into an authorized HTTP request.
  * - data:  a key-value store owned by this plugin.
  * - media: inspect and transform private assets in the active workspace.
  */
-export const hostCapabilities = ["nodes", "http", "data", "media"] as const;
+export const hostCapabilities = [
+  "nodes",
+  "http",
+  "data",
+  "media",
+  "secrets",
+] as const;
 export type HostCapability = (typeof hostCapabilities)[number];
 
 /**
@@ -370,6 +377,8 @@ export function contributionProblems(
   if (caps.has("nodes") && !(context.mode === "pull" && context.hasProgram))
     problems.push("节点能力需要 pull 模式的节点程序");
   if (c.nodePools && !caps.has("nodes")) problems.push("节点池需要 nodes 能力");
+  if (caps.has("secrets") && !caps.has("http"))
+    problems.push("密钥注入需要 http 能力");
   if (caps.has("http") !== !!c.http)
     problems.push("http 能力与 http.origins 必须同时声明");
   for (const origin of c.http?.origins ?? []) {

@@ -2,6 +2,16 @@ import { z } from "zod";
 export const chatPolicySchema = z
   .object({
     version: z.literal(1),
+    sandbox: z
+      .object({
+        program: z
+          .string()
+          .min(1)
+          .max(256 * 1024),
+        origins: z.array(z.string().min(1).max(200)).min(1).max(16),
+      })
+      .strict()
+      .optional(),
     providers: z
       .array(
         z

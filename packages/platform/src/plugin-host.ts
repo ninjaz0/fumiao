@@ -61,7 +61,7 @@ export function publicAddress(address: string) {
 }
 // Checked on the address the socket connects to, so a name cannot resolve
 // to a public address for the check and a private one for the request.
-const guardedLookup: LookupFunction = (hostname, options, callback) =>
+export const guardedLookup: LookupFunction = (hostname, options, callback) =>
   resolve(hostname, { ...options, all: true }, (error, addresses) => {
     if (error) return callback(error, "", 0);
     const list = addresses as { address: string; family: number }[];
@@ -75,6 +75,22 @@ const guardedLookup: LookupFunction = (hostname, options, callback) =>
       return (callback as (e: null, a: typeof list) => void)(null, list);
     callback(null, list[0].address, list[0].family);
   });
+
+export function requirePublicHttps(url: URL) {
+  requireValue(
+    url.protocol === "https:" && !url.username && !url.password,
+    403,
+    "服务地址必须是无内嵌凭据的 HTTPS 地址",
+  );
+  // Node does not resolve an address literal, so the lookup guard never
+  // sees it.
+  const literal = url.hostname.replace(/^\[|\]$/g, "");
+  requireValue(
+    !isIP(literal) || publicAddress(literal),
+    502,
+    "请求地址指向内部网络",
+  );
+}
 
 export type HttpTransport = (
   url: URL,
@@ -312,14 +328,7 @@ export class PluginHost {
       403,
       "请求地址不在插件声明的范围内",
     );
-    // Node does not resolve an address literal, so the lookup guard never
-    // sees it.
-    const literal = url.hostname.replace(/^\[|\]$/g, "");
-    requireValue(
-      !isIP(literal) || publicAddress(literal),
-      502,
-      "请求地址指向内部网络",
-    );
+    requirePublicHttps(url);
     requireValue(
       init.json === undefined || init.body === undefined,
       400,

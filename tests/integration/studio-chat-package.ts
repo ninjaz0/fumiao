@@ -9,7 +9,9 @@ export async function verifyChatPackage(page: Page) {
   try {
     await page
       .getByLabel("选择插件文件")
-      .setInputFiles("plugins/compatible-chat/compatible-chat.fmplugin.json");
+      .setInputFiles(
+        "plugins/compatible-chat/package/legacy-1.2.1.fmplugin.json",
+      );
     const imported = await request(
       page,
       "/api/admin/plugins/import",
@@ -75,6 +77,16 @@ export async function verifyChatPackage(page: Page) {
     );
     await settings(page);
     await setTab(page, "plugins");
+    // The new release only connects to public HTTPS services. An old loopback
+    // connection still drains and the administrator can inspect its upgrade.
+    await page
+      .getByLabel("选择插件文件")
+      .setInputFiles("plugins/compatible-chat/compatible-chat.fmplugin.json");
+    await expect(
+      page.getByText(/对管理员配置的服务地址注入连接密钥/),
+    ).toBeVisible();
+    const cancel = page.getByRole("button", { name: "取消", exact: true });
+    await cancel.click();
   } finally {
     await provider.cleanup();
   }

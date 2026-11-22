@@ -31,6 +31,7 @@ import { OriginalChatSettings } from "@fumiao/original-api/chat-settings.js";
 import { OriginalChats } from "@fumiao/original-api/chats.js";
 import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
 import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
+import { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
 import { chatProviderFixture } from "../helpers/chat-provider.js";
 const load = async (id: string): Promise<PackageFile> =>
   JSON.parse(
@@ -39,6 +40,13 @@ const load = async (id: string): Promise<PackageFile> =>
 const legacyGpu = async (): Promise<PackageFile> =>
   JSON.parse(
     await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
+  );
+const legacyChat = async (): Promise<PackageFile> =>
+  JSON.parse(
+    await readFile(
+      "plugins/compatible-chat/package/legacy-1.2.1.fmplugin.json",
+      "utf8",
+    ),
   );
 async function setup(through?: string) {
   const f = await databaseFixture(through);
@@ -227,95 +235,169 @@ for (const id of ["flow", "muse"]) {
     },
   );
 }
-test("chat package drains accepted replies and can be reinstalled with fresh credentials", async () => {
+for (const release of ["native", "sandbox"])
+  test(
+    release +
+      " chat package drains accepted replies and can be reinstalled with fresh credentials",
+    async () => {
+      const f = await setup(),
+        wire = await chatProviderFixture();
+      const file =
+        release === "native"
+          ? await legacyChat()
+          : await load("compatible-chat");
+      // The transport fixture represents one authorized upstream HTTPS origin.
+      const send: typeof chatHttp = (url, init) => {
+        assert.equal(url.origin, "https://provider.example");
+        return chatHttp(new URL(url.pathname, wire.origin), {
+          ...init,
+          lookup: undefined,
+        });
+      };
+      const registry = () =>
+        new PluginRegistry(
+          undefined,
+          [],
+          release === "sandbox" ? send : undefined,
+        );
+      f.p.registry = registry();
+      const settings = new OriginalChatSettings(f.p),
+        chats = new OriginalChats(f.p);
+      const models = async () =>
+        Object.keys((await settings.config(f.actor)).models).sort();
+      const pkg = async () => (await f.packages.list(f.actor))[0];
+      const change = async (action: "enable" | "disable" | "remove") =>
+        f.packages.change(f.actor, file.id, (await pkg()).revision, action);
+      const connect = (model: string) =>
+        f.p.createConnection(
+          f.actor,
+          {
+            name: model,
+            pluginId: file.id,
+            version: file.adapterVersion,
+            config:
+              release === "native"
+                ? wire.config(model)
+                : {
+                    ...wire.config(model),
+                    baseUrl:
+                      "https://provider.example" +
+                      new URL(wire.config(model).baseUrl).pathname,
+                  },
+          },
+          true,
+        );
+      try {
+        assert.deepEqual(await models(), []);
+        await f.packages.install(f.actor, file);
+        await connect("gpt-4.1");
+        await connect("deepseek-flash");
+        await assert.rejects(connect("deepseek-flash"), { status: 409 });
+        assert.deepEqual(await models(), []);
+        await change("enable");
+        assert.deepEqual(await models(), ["deepseek-flash", "gpt-4.1"]);
+        await f.db.query("UPDATE wallets SET balance=10");
+        const { conversation } = await chats.create(f.actor, {});
+        const draft = {
+          uid: randomUUID(),
+          model: "gpt-4.1",
+          text: "插件回复验证",
+          expected_revision: conversation.revision,
+          price_revision: (await settings.config(f.actor)).pricing.revision,
+        };
+        const send = () => chats.send(f.actor, conversation.id, draft);
+        await change("disable");
+        await assert.rejects(send, { status: 403 });
+        await change("enable");
+        await send();
+        const turn = await one(f.db, "SELECT id FROM chat_turns WHERE uid=$1", [
+          draft.uid,
+        ]);
+        await change("remove");
+        assert.equal((await pkg()).removing, true);
+        assert.deepEqual(await models(), []);
+        await send(); // Retrying the accepted UID during removal returns the same turn.
+        f.p.registry = registry();
+        wire.setWire("stream", {
+          raw: 'data: {"choices":[{"delta":{"content":"已完成"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        });
+        const runtime = new ChatRuntime(new ChatExecution(chats));
+        await runtime.execute(turn.id);
+        await runtime.execute(turn.id);
+        assert.equal(
+          (await chats.get(f.actor, conversation.id)).messages.at(-1)?.content,
+          "已完成",
+        );
+        assert.deepEqual(
+          wire.requests.filter((r) => r.body?.stream).map((r) => r.path),
+          ["/v1/chat/completions"],
+        );
+        assert.deepEqual(
+          await one(
+            f.db,
+            "SELECT balance::int,held::int FROM wallets JOIN chat_charges USING(workspace_id) WHERE turn_id=$1",
+            [turn.id],
+          ),
+          { balance: 9, held: 0 },
+        );
+        await f.packages.finishRemovals();
+        assert.deepEqual(await f.packages.list(f.actor), []);
+        assert.deepEqual((await settings.read(f.actor)).providers, {});
+        await f.packages.install(f.actor, file);
+        assert.ok(
+          Object.values((await settings.read(f.actor)).providers).every(
+            (p) => !p.configured,
+          ),
+        );
+        await connect("deepseek-flash");
+        await change("enable");
+        assert.deepEqual(await models(), ["deepseek-flash"]);
+      } finally {
+        await wire.cleanup();
+        await f.cleanup();
+      }
+    },
+  );
+
+test("sandbox chat import freezes the program, requires HTTP and secrets, and reloads without a native module", async () => {
   const f = await setup(),
-    wire = await chatProviderFixture();
-  const file = await load("compatible-chat");
-  const settings = new OriginalChatSettings(f.p),
-    chats = new OriginalChats(f.p);
-  const models = async () =>
-    Object.keys((await settings.config(f.actor)).models).sort();
-  const pkg = async () => (await f.packages.list(f.actor))[0];
-  const change = async (action: "enable" | "disable" | "remove") =>
-    f.packages.change(f.actor, file.id, (await pkg()).revision, action);
-  const connect = (model: string) =>
-    f.p.createConnection(
-      f.actor,
-      {
-        name: model,
-        pluginId: file.id,
-        version: file.adapterVersion,
-        config: wire.config(model),
-      },
-      true,
-    );
+    file = await load("compatible-chat");
   try {
-    assert.deepEqual(await models(), []);
+    const preview = await f.packages.preview(f.actor, file);
+    assert.match(JSON.stringify(preview), /注入连接密钥/);
+    assert.equal(file.adapterModule, undefined);
+    const denied = structuredClone(file);
+    denied.contributes!.hostCapabilities = ["http"];
+    await assert.rejects(f.packages.install(f.actor, denied), /密钥注入/);
     await f.packages.install(f.actor, file);
-    await connect("gpt-4.1");
-    await connect("deepseek-flash");
-    await assert.rejects(connect("deepseek-flash"), { status: 409 });
-    assert.deepEqual(await models(), []);
-    await change("enable");
-    assert.deepEqual(await models(), ["deepseek-flash", "gpt-4.1"]);
-    await f.db.query("UPDATE wallets SET balance=10");
-    const { conversation } = await chats.create(f.actor, {});
-    const draft = {
-      uid: randomUUID(),
-      model: "gpt-4.1",
-      text: "插件回复验证",
-      expected_revision: conversation.revision,
-      price_revision: (await settings.config(f.actor)).pricing.revision,
-    };
-    const send = () => chats.send(f.actor, conversation.id, draft);
-    await change("disable");
-    await assert.rejects(send, { status: 403 });
-    await change("enable");
-    await send();
-    const turn = await one(f.db, "SELECT id FROM chat_turns WHERE uid=$1", [
-      draft.uid,
-    ]);
-    await change("remove");
-    assert.equal((await pkg()).removing, true);
-    assert.deepEqual(await models(), []);
-    await send(); // Retrying the accepted UID during removal returns the same turn.
-    f.p.registry = new PluginRegistry();
-    wire.setWire("stream", {
-      raw: 'data: {"choices":[{"delta":{"content":"已完成"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
-    });
-    const runtime = new ChatRuntime(new ChatExecution(chats));
-    await runtime.execute(turn.id);
-    await runtime.execute(turn.id);
+    const restarted = new PluginRegistry();
+    const plugin = await restarted.resolve(f.db, file.id, file.adapterVersion);
+    assert.equal(plugin.chatProvider!({ provider: "deepseek" }), "deepseek");
     assert.equal(
-      (await chats.get(f.actor, conversation.id)).messages.at(-1)?.content,
-      "已完成",
+      await plugin.health(
+        { provider: "deepseek", baseUrl: "https://127.0.0.1" },
+        new AbortController().signal,
+      ),
+      false,
     );
-    assert.deepEqual(
-      wire.requests.filter((r) => r.body?.stream).map((r) => r.path),
-      ["/v1/chat/completions"],
-    );
-    assert.deepEqual(
+    assert.equal(
       await one(
         f.db,
-        "SELECT balance::int,held::int FROM wallets JOIN chat_charges USING(workspace_id) WHERE turn_id=$1",
-        [turn.id],
+        "SELECT 1 FROM studio_adapter_modules WHERE id=$1 AND version=$2",
+        [file.id, file.adapterVersion],
       ),
-      { balance: 9, held: 0 },
+      undefined,
     );
-    await f.packages.finishRemovals();
-    assert.deepEqual(await f.packages.list(f.actor), []);
-    assert.deepEqual((await settings.read(f.actor)).providers, {});
-    await f.packages.install(f.actor, file);
-    assert.ok(
-      Object.values((await settings.read(f.actor)).providers).every(
-        (p) => !p.configured,
-      ),
+    const changed = structuredClone(file);
+    changed.version = "2.0.1";
+    const chat = changed.manifest!.chat as { sandbox: { program: string } };
+    chat.sandbox.program += " ";
+    const [installed] = await f.packages.list(f.actor);
+    await assert.rejects(
+      f.packages.install(f.actor, changed, installed.revision),
+      /同一插件版本内容不可修改/,
     );
-    await connect("deepseek-flash");
-    await change("enable");
-    assert.deepEqual(await models(), ["deepseek-flash"]);
   } finally {
-    await wire.cleanup();
     await f.cleanup();
   }
 });
@@ -823,7 +905,7 @@ test("an authenticated Git update uses the repository default branch and its com
 
 test("a previously restored chat connection adopts the packaged adapter on restart", async () => {
   const f = await databaseFixture("033_studio_plugin_profile.sql"),
-    file = await load("compatible-chat");
+    file = await legacyChat();
   try {
     await f.p.registry.initializeStudio(f.db, false);
     await f.db.transaction((sql) =>
