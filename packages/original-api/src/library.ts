@@ -94,6 +94,77 @@ export class OriginalLibrary {
       [row.id],
     );
   }
+  private async resolveBulk(sql: Sql, keys: string[]) {
+    const items = new Map<string, Selection>();
+    const jobs = keys.filter((k) => /^job:[1-9][0-9]{0,15}$/.test(k));
+    const assets = keys.filter((k) => /^asset:[0-9a-f]{32}$/.test(k));
+    for (const key of jobs) items.set(key, { kind: "job", row: undefined });
+    for (const key of assets) items.set(key, { kind: "asset", row: undefined });
+    if (jobs.length)
+      for (const row of (
+        await sql.query(
+          "SELECT * FROM jobs WHERE public_id=ANY($1::bigint[]) AND deleted_at IS NULL",
+          [jobs.map((k) => k.slice(4))],
+        )
+      ).rows)
+        items.set("job:" + row.public_id, { kind: "job", row });
+    if (assets.length) {
+      for (const row of (
+        await sql.query(
+          `SELECT DISTINCT ON (a.public_id) j.*,a.public_id AS asset_key FROM jobs j JOIN job_assets r ON r.job_id=j.id AND r.role='output' JOIN assets a ON a.id=r.asset_id WHERE a.public_id=ANY($1::text[]) AND j.deleted_at IS NULL ORDER BY a.public_id,j.public_id`,
+          [assets.map((k) => k.slice(6))],
+        )
+      ).rows)
+        items.set("asset:" + row.asset_key, { kind: "job", row });
+      const refs = assets.filter((k) => !items.get(k)!.row);
+      if (refs.length)
+        for (const row of (
+          await sql.query(
+            "SELECT * FROM assets WHERE public_id=ANY($1::text[]) AND original_kind IN ('ref','ref_video','ref_audio')",
+            [refs.map((k) => k.slice(6))],
+          )
+        ).rows)
+          items.set("asset:" + row.public_id, { kind: "asset", row });
+    }
+    return items;
+  }
+  private selection(items: Map<string, Selection>, key: string) {
+    const item = items.get(key);
+    requireValue(item, 400, "资产标识无效");
+    return item;
+  }
+  private bulkAccess(sql: Sql, user: Actor, workspace: string) {
+    let checked = false;
+    return async (item: Selection) => {
+      requireValue(
+        item.row.workspace_id === workspace,
+        404,
+        "内容不存在或无权访问",
+      );
+      if (!checked) {
+        await this.access(sql, user, item, workspace);
+        checked = true;
+      }
+    };
+  }
+  private async resultsBulk(sql: Sql, items: Map<string, Selection>) {
+    const ids = [
+      ...new Set(
+        [...items.values()]
+          .filter((i) => i.kind === "job" && i.row)
+          .map((i) => i.row.id),
+      ),
+    ];
+    const rows = ids.length
+      ? (
+          await sql.query(
+            "SELECT DISTINCT ON (r.job_id) a.*,r.job_id FROM assets a JOIN job_assets r ON r.asset_id=a.id WHERE r.job_id=ANY($1::uuid[]) AND r.role='output' ORDER BY r.job_id,a.created_at,a.public_id",
+            [ids],
+          )
+        ).rows
+      : [];
+    return new Map(rows.map((row) => [row.job_id, row]));
+  }
   async favorites(sql: Sql, user: Actor, workspace: string) {
     return (
       await sql.query(
@@ -114,18 +185,23 @@ export class OriginalLibrary {
       await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
         "favorites:" + user.id,
       ]);
+      const keys = [...new Set<string>(body.keys)];
+      const access = this.bulkAccess(sql, user, workspace.id);
+      const initial = await this.resolveBulk(sql, keys);
+      const initialResults = body.favorite
+        ? await this.resultsBulk(sql, initial)
+        : new Map();
       const selections: Selection[] = [];
-      for (const key of new Set<string>(body.keys)) {
-        const item = await this.resolve(sql, key);
+      for (const key of keys) {
+        const item = this.selection(initial, key);
         if (!item.row) {
           requireValue(!body.favorite, 404, "部分资产已删除，请刷新后重试");
           continue;
         }
-        await this.access(sql, user, item, workspace.id);
+        await access(item);
         if (item.kind === "job" && body.favorite)
           requireValue(
-            item.row.state === "completed" &&
-              (await this.result(sql, item.row)),
+            item.row.state === "completed" && initialResults.get(item.row.id),
             409,
             "只有已完成的作品可以收藏",
           );
@@ -143,42 +219,65 @@ export class OriginalLibrary {
           [ids],
         );
       }
-      for (const key of new Set<string>(body.keys)) {
-        const item = await this.resolve(sql, key);
+      const current = await this.resolveBulk(sql, keys);
+      for (const kind of ["job", "asset"] as const) {
+        const ids = [
+          ...new Set(
+            [...current.values()]
+              .filter((i) => i.kind === kind && i.row)
+              .map((i) => i.row.id),
+          ),
+        ];
+        const rows = ids.length
+          ? (
+              await sql.query(
+                `SELECT * FROM ${kind === "job" ? "jobs" : "assets"} WHERE id=ANY($1::uuid[])${kind === "job" ? " AND deleted_at IS NULL" : ""} ORDER BY id FOR KEY SHARE`,
+                [ids],
+              )
+            ).rows
+          : [];
+        const locked = new Map(rows.map((row) => [row.id, row]));
+        for (const item of current.values())
+          if (item.kind === kind && item.row)
+            item.row = locked.get(item.row.id);
+      }
+      const results = body.favorite
+        ? await this.resultsBulk(sql, current)
+        : new Map();
+      const writes: Selection[] = [];
+      for (const key of keys) {
+        const item = this.selection(current, key);
         if (!item.row) {
           requireValue(!body.favorite, 404, "部分资产已删除，请刷新后重试");
           continue;
         }
-        const table = item.kind === "job" ? "jobs" : "assets";
-        item.row = await one(
-          sql,
-          `SELECT * FROM ${table} WHERE id=$1${item.kind === "job" ? " AND deleted_at IS NULL" : ""} FOR KEY SHARE`,
-          [item.row.id],
-        );
-        if (!item.row) {
-          requireValue(!body.favorite, 404, "部分资产已删除，请刷新后重试");
-          continue;
-        }
-        await this.access(sql, user, item, workspace.id);
+        await access(item);
         if (item.kind === "job" && body.favorite)
           requireValue(
-            item.row.state === "completed" &&
-              (await this.result(sql, item.row)),
+            item.row.state === "completed" && results.get(item.row.id),
             409,
             "只有已完成的作品可以收藏",
           );
-        const column = item.kind === "job" ? "job_id" : "asset_id";
-        if (body.favorite)
-          await sql.query(
-            `INSERT INTO favorites(user_id,${column}) VALUES($1,$2) ON CONFLICT DO NOTHING`,
-            [user.id, item.row.id],
-          );
-        else
-          await sql.query(
-            `DELETE FROM favorites WHERE user_id=$1 AND ${column}=$2`,
-            [user.id, item.row.id],
-          );
+        writes.push(item);
       }
+      if (body.favorite)
+        await sql.query(
+          `INSERT INTO favorites(user_id,job_id,asset_id) SELECT $1,job_id,asset_id FROM unnest($2::uuid[],$3::uuid[]) WITH ORDINALITY AS selected(job_id,asset_id,ord) ORDER BY ord ON CONFLICT DO NOTHING`,
+          [
+            user.id,
+            writes.map((i) => (i.kind === "job" ? i.row.id : null)),
+            writes.map((i) => (i.kind === "asset" ? i.row.id : null)),
+          ],
+        );
+      else
+        await sql.query(
+          "DELETE FROM favorites WHERE user_id=$1 AND (job_id=ANY($2::uuid[]) OR asset_id=ANY($3::uuid[]))",
+          [
+            user.id,
+            writes.filter((i) => i.kind === "job").map((i) => i.row.id),
+            writes.filter((i) => i.kind === "asset").map((i) => i.row.id),
+          ],
+        );
       return { favorites: await this.favorites(sql, user, workspace.id) };
     });
   }
@@ -305,14 +404,18 @@ export class OriginalLibrary {
         ),
         manifest: ArchiveEntry[] = [],
         seen = new Set<string>();
-      for (const key of new Set<string>(body.keys)) {
-        const item = await this.resolve(sql, key);
+      const keys = [...new Set<string>(body.keys)];
+      const items = await this.resolveBulk(sql, keys);
+      const access = this.bulkAccess(sql, user, workspace.id);
+      const results = await this.resultsBulk(sql, items);
+      for (const key of keys) {
+        const item = this.selection(items, key);
         requireValue(item.row, 404, "部分资产已删除，请刷新后重试");
-        await this.access(sql, user, item, workspace.id);
+        await access(item);
         let asset = item.row,
           name = "素材-" + String(item.row.public_id).slice(0, 12);
         if (item.kind === "job") {
-          asset = await this.result(sql, item.row);
+          asset = results.get(item.row.id);
           requireValue(
             item.row.state === "completed" && item.row.result,
             409,
