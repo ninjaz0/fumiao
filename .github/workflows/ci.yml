@@ -59,7 +59,6 @@ jobs:
       - run: pnpm images:prepare
       - run: pnpm test
       - run: pnpm build
-      - run: pnpm test:web
       - run: pnpm exec playwright install --with-deps chromium
       - name: Verify /studio with the production build
         run: pnpm test:studio

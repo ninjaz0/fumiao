@@ -4,16 +4,10 @@ import { readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 
 export const publicAssets = new Set([
-  "studio.js",
   "studio.css",
   "mark.svg",
-  "theme.js",
-  "canvas.js",
   "canvas.css",
-  "chat.js",
   "chat.css",
-  "flowpicker.js",
-  "home.js",
   "home.css",
 ]);
 type Manifest = { files: Record<string, { sha256: string; size: number }> };
@@ -53,33 +47,6 @@ export class OriginalUI {
     if (!publicAssets.has(name)) throw new Error("Unknown fingerprinted asset");
     await this.file(name);
     return (await this.metadata()).files["static/" + name].sha256.slice(0, 20);
-  }
-  async html(name: "home.html" | "index.html" | "canvas.html", member = false) {
-    const source = (await this.file(name)).toString("utf8");
-    const versions = Object.fromEntries(
-      await Promise.all(
-        [...publicAssets].map(async (asset) => [
-          asset,
-          await this.version(asset),
-        ]),
-      ),
-    );
-    let html = source.replace(
-      /(["'])\/static\/([a-z.]+)\1/g,
-      (match, quote, asset) =>
-        versions[asset]
-          ? `${quote}/static/${asset}?v=${versions[asset]}${quote}`
-          : match,
-    );
-    if (name === "home.html") {
-      if (member)
-        html = html.replace('data-session="guest"', 'data-session="member"');
-    } else
-      html = html.replace(
-        "</head>",
-        `<meta name="fm-chat-script" content="/static/chat.js?v=${versions["chat.js"]}"></head>`,
-      );
-    return html;
   }
   async verify() {
     const names = Object.keys((await this.metadata()).files)

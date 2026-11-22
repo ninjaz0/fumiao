@@ -14,14 +14,14 @@ flowchart LR
  E --> P
  E --> S
  E --> M[Muse / Flow / 远程插件]
- G[GPU v2 Worker] --> A
+ G[GPU 节点] --> A
 ```
 
 API、worker、Web 可分别扩容。数据库保存可恢复任务状态；Redis 队列只负责分发。启用多副本前改用共享 S3，统一所有实例的 `ENCRYPTION_KEY`，并控制数据库连接总量（当前每进程连接池上限 15）。不要让单个插件的并发超过其上游许可。
 
 ## 启动顺序
 
-Compose 默认启动原协议 NestJS。先运行 `docker compose build` 和 `docker compose up migrate`，然后初始化管理员或导入旧实例。API 启动检查 PostgreSQL、活跃管理员、配置中的导入标识、私有磁盘路径及 BullMQ Redis；Web 和 worker 在 API 健康后启动。Web 在运行时读 `LEGACY_API_INTERNAL_URL`，镜像无需包含环境配置。详见 [Docker 初始化](../README.md#docker-compose-启动) 和 [导入步骤](MIGRATION.md#导出与导入)。
+Compose 启动 Studio 协议的 NestJS。先运行 `docker compose build` 和 `docker compose up migrate`，然后初始化管理员或导入旧实例。API 启动检查 PostgreSQL、活跃管理员、配置中的导入标识、私有磁盘路径及 BullMQ Redis；Web 和 worker 在 API 健康后启动。Web 在运行时读 `API_INTERNAL_URL`，镜像无需包含环境配置。详见 [Docker 初始化](../README.md#docker-compose-启动) 和 [导入步骤](MIGRATION.md#导出与导入)。
 
 `WORKER_CONCURRENCY` 控制单个 worker 处理数，默认 8。连接的并发是所有 worker 合计的数据库约束。GPU 连接的并发同样跨节点生效。
 

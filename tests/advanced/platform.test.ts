@@ -30,7 +30,6 @@ import {
   legacyId,
 } from "../../packages/platform/src/importer.js";
 import { sign, fen, zpay } from "../../plugins/payments/src/index.js";
-import { createApp } from "../../apps/api/src/main.js";
 import { OriginalCredits } from "../../packages/original-api/src/credits.js";
 import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
 
@@ -364,58 +363,6 @@ test("asset references and optimistic document saves enforce workspace boundarie
       /素材/,
     );
   } finally {
-    await f.cleanup();
-  }
-});
-test("Nest entry points enforce session authentication, CSRF and input validation", async () => {
-  const f = await fixture(mock);
-  const app = await createApp(f.p);
-  try {
-    await app.listen(0, "127.0.0.1");
-    const base = await app.getUrl();
-    assert.equal((await fetch(base + "/api/workspaces")).status, 401);
-    const login = await fetch(base + "/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "admin", password: "safe-test-password" }),
-    });
-    assert.equal(login.status, 201);
-    const cookie = login.headers.get("set-cookie")!.split(";")[0];
-    assert.match(login.headers.get("set-cookie")!, /HttpOnly/);
-    assert.equal(
-      (await fetch(base + "/api/workspaces", { headers: { cookie } })).status,
-      200,
-    );
-    assert.equal(
-      (
-        await fetch(base + "/api/workspaces", {
-          method: "POST",
-          headers: {
-            cookie,
-            Origin: "https://evil.invalid",
-            "Content-Type": "application/json",
-          },
-          body: '{"name":"bad"}',
-        })
-      ).status,
-      403,
-    );
-    assert.equal(
-      (
-        await fetch(base + "/api/jobs", {
-          method: "POST",
-          headers: {
-            cookie,
-            "Content-Type": "application/json",
-            "X-Workspace-Id": f.wid,
-          },
-          body: "{}",
-        })
-      ).status,
-      400,
-    );
-  } finally {
-    await app.close();
     await f.cleanup();
   }
 });

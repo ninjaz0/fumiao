@@ -264,30 +264,6 @@ export class Platform {
       )
     ).rows;
   }
-  async createWorkspace(user: Actor, value: unknown) {
-    this.admin(user);
-    const input = z
-      .object({
-        name: z.string().trim().min(1).max(80),
-        members: z.array(uuid).max(1000).default([]),
-      })
-      .parse(value);
-    return this.db.transaction(async (sql) => {
-      const id = randomUUID();
-      await sql.query(
-        "INSERT INTO workspaces(id,name,owner_id,kind) VALUES($1,$2,$3,'team')",
-        [id, input.name, user.id],
-      );
-      await sql.query("INSERT INTO wallets(workspace_id) VALUES($1)", [id]);
-      for (const uid of new Set(input.members))
-        await sql.query(
-          "INSERT INTO members(workspace_id,user_id) VALUES($1,$2)",
-          [id, uid],
-        );
-      await this.audit(sql, user, "workspace.create", id);
-      return { id };
-    });
-  }
   async updateWorkspace(user: Actor, wid: string, value: unknown) {
     this.admin(user);
     const input = z
@@ -441,14 +417,6 @@ export class Platform {
       await this.db.query(
         "SELECT * FROM ledger WHERE workspace_id=$1 ORDER BY created_at DESC LIMIT 100",
         [wid],
-      )
-    ).rows;
-  }
-  async connections(user: Actor) {
-    this.admin(user);
-    return (
-      await this.db.query(
-        "SELECT id,name,plugin_id,plugin_version,revision,enabled,concurrency FROM connections WHERE NOT removed AND NOT fmworker_resource_driver ORDER BY name",
       )
     ).rows;
   }
@@ -763,17 +731,6 @@ export class Platform {
         AbortSignal.timeout(10000),
       ),
     };
-  }
-  async models(user: Actor, wid: string) {
-    await this.workspace(this.db, user, wid);
-    return (
-      await this.db.query(
-        `SELECT m.*,c.name AS provider,c.plugin_id FROM models m JOIN connections c ON c.id=m.connection_id
-      LEFT JOIN model_permissions p ON p.model_id=m.id AND p.workspace_id=$1
-      WHERE c.enabled=true AND studio_plugin_accepts(c.plugin_id) AND studio_service_selected(m.catalog_id,c.id) AND (m.catalog_id IS NOT NULL OR m.enabled=true) AND COALESCE(p.enabled,true)=true AND studio_model_allowed(m.catalog_id,$1) ORDER BY c.name,m.label`,
-        [wid],
-      )
-    ).rows;
   }
   async setModel(user: Actor, id: string, value: unknown) {
     this.admin(user);

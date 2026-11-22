@@ -27,7 +27,6 @@ services:
     command: [pnpm, 'db:migrate']
     env_file: '${FUMIAO_SERVICE_ENV:-.env}'
     environment: &environment
-      API_PROTOCOL: original
       API_HOST: '0.0.0.0'
       DATABASE_URL: 'postgresql://fumiao:${POSTGRES_PASSWORD}@postgres:5432/fumiao'
       REDIS_URL: 'redis://redis:6379'
@@ -51,11 +50,6 @@ services:
       timeout: 5s
       retries: 20
     restart: unless-stopped
-  api-v2:
-    <<: *api
-    environment:
-      <<: *environment
-      API_PROTOCOL: advanced
   worker:
     build: .
     command: [pnpm, worker]
@@ -69,15 +63,11 @@ services:
     build: .
     command: [pnpm, 'start:web']
     environment:
-      LEGACY_API_INTERNAL_URL: 'http://api:4000'
-      API_INTERNAL_URL: 'http://api-v2:4000'
-      STUDIO_MODE: '${STUDIO_MODE:-original}'
-      STUDIO_CANVAS_EDITOR: '${STUDIO_CANVAS_EDITOR:-}'
+      API_INTERNAL_URL: 'http://api:4000'
       STUDIO_MEDIA_ORIGIN: '${STUDIO_MEDIA_ORIGIN:-}'
     ports: ['127.0.0.1:${FUMIAO_WEB_PORT:-3000}:3000']
     depends_on:
       api: {condition: service_healthy}
-      api-v2: {condition: service_healthy}
     restart: unless-stopped
 volumes:
   postgres:

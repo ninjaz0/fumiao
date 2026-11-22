@@ -49,22 +49,6 @@ export class Payments {
     });
     return { ok: true };
   }
-  async list(actor: Actor, wid: string) {
-    await this.p.workspace(this.p.db, actor, wid);
-    return {
-      channels: (
-        await this.p.db.query(
-          "SELECT method FROM payment_channels WHERE enabled=true",
-        )
-      ).rows,
-      orders: (
-        await this.p.db.query(
-          "SELECT * FROM payment_orders WHERE workspace_id=$1 AND owner_id=$2 ORDER BY created_at DESC LIMIT 30",
-          [wid, actor.id],
-        )
-      ).rows.map(publicOrder),
-    };
-  }
   async create(actor: Actor, wid: string, value: unknown) {
     const input = z
       .object({
@@ -190,39 +174,6 @@ export class Payments {
         [id, trade],
       );
     });
-  }
-  async refresh(actor: Actor, id: string) {
-    uuid.parse(id);
-    const order = await one(
-      this.p.db,
-      "SELECT * FROM payment_orders WHERE id=$1 AND owner_id=$2",
-      [id, actor.id],
-    );
-    requireValue(order, 404, "订单不存在");
-    await this.p.workspace(this.p.db, actor, order.workspace_id);
-    if (order.state !== "paid") {
-      const allowed = await one(
-        this.p.db,
-        "UPDATE payment_orders SET checked_at=now() WHERE id=$1 AND (checked_at IS NULL OR checked_at<now()-interval '10 seconds') RETURNING id",
-        [id],
-      );
-      if (!allowed) return publicOrder(order);
-      try {
-        const trade = await this.adapters[order.method].verify(
-          paymentOrder(order),
-          paymentConfig.parse(this.p.vault.open(order.config_snapshot)),
-        );
-        if (trade) await this.settle(id, trade);
-      } catch {
-        return {
-          ...publicOrder(order),
-          warning: "支付结果暂未确认，请稍后查询，避免重复支付",
-        };
-      }
-    }
-    return publicOrder(
-      await one(this.p.db, "SELECT * FROM payment_orders WHERE id=$1", [id]),
-    );
   }
   async callback(method: string, values: Record<string, unknown>) {
     const adapter = this.adapters[method];

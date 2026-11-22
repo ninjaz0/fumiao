@@ -27,9 +27,6 @@ services:
   api:
     <<: *dev
     command: [node, --watch, --import, tsx, apps/api/src/main.ts]
-  api-v2:
-    <<: *dev
-    command: [node, --watch, --import, tsx, apps/api/src/main.ts]
   worker:
     <<: *dev
     command: [node, --watch, --import, tsx, apps/worker/src/main.ts]

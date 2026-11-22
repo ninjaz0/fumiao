@@ -55,7 +55,6 @@ pnpm dev:web
 
 ```sh
 pnpm build
-pnpm test:web
 pnpm exec playwright install chromium
 pnpm test:studio
 ```

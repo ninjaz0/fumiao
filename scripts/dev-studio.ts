@@ -54,7 +54,6 @@ if (
   throw new Error("Studio and API ports must be different valid ports");
 const apiEnv = {
   ...process.env,
-  API_PROTOCOL: "original",
   API_HOST: "127.0.0.1",
   PORT: String(apiPort),
   PUBLIC_URL: publicUrl,
@@ -157,8 +156,7 @@ try {
     ],
     {
       ...process.env,
-      STUDIO_MODE: "original",
-      LEGACY_API_INTERNAL_URL: apiOrigin,
+      API_INTERNAL_URL: apiOrigin,
       FUMIAO_REPOSITORY_ROOT: root,
       NEXT_TELEMETRY_DISABLED: "1",
     },
