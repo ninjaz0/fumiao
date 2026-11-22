@@ -16,7 +16,7 @@ import {
 import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
 import { PluginRegistry } from "@fumiao/platform/plugins.js";
 import { Executor } from "@fumiao/platform/executor.js";
-import { one } from "@fumiao/platform/db.js";
+import { migrate, one } from "@fumiao/platform/db.js";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
@@ -35,8 +35,12 @@ const load = async (id: string): Promise<PackageFile> =>
   JSON.parse(
     await readFile("plugins/" + id + "/" + id + ".fmplugin.json", "utf8"),
   );
-async function setup() {
-  const f = await databaseFixture();
+const legacyGpu = async (): Promise<PackageFile> =>
+  JSON.parse(
+    await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
+  );
+async function setup(through?: string) {
+  const f = await databaseFixture(through);
   await f.p.registry.initializeStudio(f.db, false);
   const identity = new OriginalIdentity(f.p),
     user = { name: "admin", password: randomUUID() };
@@ -316,8 +320,8 @@ test("chat package drains accepted replies and can be reinstalled with fresh cre
 });
 
 test("GPU package installs its administrator panel while disabled and removes the pairing capability", async () => {
-  const f = await setup(),
-    file = await load("gpu");
+  const f = await setup("036_plugin_data.sql"),
+    file = await legacyGpu();
   const app = await createOriginalApp(f.p);
   try {
     await assert.rejects(
@@ -396,6 +400,20 @@ test("GPU package installs its administrator panel while disabled and removes th
     await f.packages.change(f.actor, "gpu", 2, "disable");
     const claimed = (await call("/agent/claim", { method: "POST" })).job;
     assert.equal(claimed.id, job.id);
+    const snapshot = async () =>
+      Promise.all(
+        ["jobs", "ledger", "wallets", "gpu_pairings", "gpu_nodes"].map(
+          async (table) =>
+            (await f.db.query("SELECT * FROM " + table + " ORDER BY 1")).rows,
+        ),
+      );
+    const prior = await snapshot();
+    await migrate(f.db);
+    assert.deepEqual(await snapshot(), prior);
+    assert.equal(
+      (await call("/agent/claim", { method: "POST" })).job.ticket,
+      claimed.ticket,
+    );
     const wav = wavFixture();
     for (let i = 44; i < wav.length; i += 2) wav.writeInt16LE(1100, i);
     const delivered = await call("/agent/jobs/" + job.id + "/result", {
@@ -869,7 +887,7 @@ test("a previously restored chat connection adopts the packaged adapter on resta
 
 test("current installation upgrades its configured GPU service without requiring fresh pairing", async () => {
   const f = await databaseFixture("033_studio_plugin_profile.sql");
-  const file = await load("gpu");
+  const file = await legacyGpu();
   try {
     await f.p.registry.initializeStudio(f.db, false);
     await f.db.transaction((sql) =>
@@ -1100,4 +1118,469 @@ test("blank canvases save sticky edits and list runs across zero-plugin, v3 pack
   } finally {
     await f.cleanup();
   }
+});
+
+test("a portable node pool pairs, claims and settles its pinned release alongside GPU", async (t) => {
+  const f = await setup();
+  t.after(() => f.cleanup());
+  const file = await load("example-node-pool");
+  const gpu = await legacyGpu();
+  await f.packages.install(f.actor, gpu);
+  await assert.rejects(
+    f.packages.preview(f.actor, {
+      ...file,
+      program:
+        "({capabilities:1,eligible(){},dispatch(){},receipt(){},artifactRules(){}})",
+    }),
+    { status: 400 },
+  );
+  await assert.rejects(
+    f.packages.install(f.actor, {
+      ...file,
+      nodeClient: {
+        ...file.nodeClient,
+        "agent.tgz": Buffer.from("broken").toString("base64"),
+      },
+    }),
+    { status: 400 },
+  );
+  await f.packages.install(f.actor, file);
+  await f.packages.change(f.actor, file.id, 1, "enable");
+  const app = await createOriginalApp(f.p);
+  await app.listen(0, "127.0.0.1");
+  t.after(() => app.close());
+  const url = await app.getUrl();
+  const root = "/agent/" + file.id;
+  const token = secret();
+  const request = async (path: string, body?: object, expected = 200) => {
+    const response = await fetch(url + path, {
+      method: body ? "POST" : "GET",
+      headers: {
+        "content-type": "application/json",
+        cookie: "fm_session=" + f.session,
+        authorization: "Bearer " + token,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await response.json();
+    assert.equal(response.status, expected, JSON.stringify(data));
+    return data;
+  };
+  const client = await fetch(url + root + "/client/agent.tgz");
+  assert.deepEqual(
+    Buffer.from(await client.arrayBuffer()),
+    Buffer.from(file.nodeClient!["agent.tgz"], "base64"),
+  );
+  const pair = await request(
+    "/api/plugins/" + file.id + "/pages/nodes/actions/pair",
+    { payload: { name: "test", models: ["comfy-image"] } },
+  );
+  const code = pair.result.value.split(" ").at(-1);
+  await request("/agent/enroll", { code, secret: token }, 403);
+  await request(root + "/enroll", { code, secret: token });
+  await request(root + "/enroll", { code, secret: secret() }, 403);
+  await request("/agent/registration", undefined, 403);
+  await request(root + "/heartbeat", {
+    stage: "ready",
+    capabilities: { ready: true },
+  });
+  const gen = new OriginalGeneration(f.p);
+  const catalog = new StudioCatalog(f.db);
+  const prices = await catalog.prices();
+  await f.db.transaction((sql) =>
+    catalog.savePrices(
+      sql,
+      Object.fromEntries(prices.items.map((p) => [p.key, 0])),
+      prices.revision,
+    ),
+  );
+  const job = await gen.submit(
+    f.actor,
+    await gen.parse("image", {
+      uid: randomUUID(),
+      model: "comfy-image",
+      prompt: "test",
+      params: {},
+    }),
+  );
+  const newer = {
+    ...file,
+    version: "1.1.1",
+    program: file.program!.replace(
+      "return { prompt: job.input.prompt };",
+      "return { updated: true };",
+    ),
+  };
+  await f.packages.install(f.actor, newer, 2);
+  const claim = (await request(root + "/claim", {})).job;
+  assert.equal(claim.id, job.id);
+  assert.deepEqual(claim.instruction, { prompt: "test" });
+  assert.equal((await request(root + "/claim", {})).job.ticket, claim.ticket);
+  const bytes = await sharp({
+    create: { width: 12, height: 12, channels: 3, background: "white" },
+  })
+    .png()
+    .toBuffer();
+  const endpoint = root + "/jobs/" + job.id + "/result";
+  const result = async (data: Buffer, report: unknown) =>
+    fetch(url + endpoint, {
+      method: "PUT",
+      body: new Uint8Array(data),
+      headers: {
+        authorization: "Bearer " + token,
+        "X-Job-Ticket": claim.ticket,
+        "X-SHA256": createHash("sha256").update(data).digest("hex"),
+        "X-Job-Timing": JSON.stringify(report),
+      },
+    });
+  assert.equal((await result(bytes, {})).status, 422);
+  assert.equal(
+    (await result(Buffer.from("invalid"), { prompt_id: "test" })).status,
+    422,
+  );
+  const [a, b] = await Promise.all([
+    result(bytes, { prompt_id: "test" }),
+    result(bytes, { prompt_id: "test" }),
+  ]);
+  assert.equal(a.status, 200, await a.clone().text());
+  assert.deepEqual(await a.json(), await b.json());
+  const settled = await one(
+    f.db,
+    `SELECT j.state, j.package_version,
+     (SELECT count(*)::int FROM job_assets WHERE job_id=j.id AND role='output') AS outputs,
+     (SELECT count(*)::int FROM ledger WHERE job_id=j.id AND action='spend') AS charges
+     FROM jobs j WHERE j.public_id=$1`,
+    [job.id],
+  );
+  assert.deepEqual(settled, {
+    state: "completed",
+    package_version: file.version,
+    outputs: 1,
+    charges: 1,
+  });
+});
+
+test("GPU 2.0 dispatches H3 and Breeze through its sandbox, validates media and fences protocol changes", async (t) => {
+  const f = await setup();
+  t.after(() => f.cleanup());
+  const file = await load("gpu");
+  assert.equal(file.adapterModule, undefined);
+  const old = await legacyGpu();
+  await f.packages.install(f.actor, old);
+  await f.packages.change(f.actor, "gpu", 1, "enable");
+  const nodes = new OriginalNodes(f.p, "gpu");
+  const oldPair = await nodes.pair(f.actor, {
+    name: "旧节点",
+    models: ["MiniMax H3"],
+  });
+  const revoked = secret();
+  await nodes.enroll({
+    code: oldPair.command.split(" ").at(-1)!,
+    secret: revoked,
+  });
+  await f.packages.install(f.actor, file, 2);
+  const app = await createOriginalApp(f.p);
+  await app.listen(0, "127.0.0.1");
+  t.after(() => app.close());
+  const url = await app.getUrl(),
+    token = secret();
+  const call = async (
+    path: string,
+    body?: object,
+    expected = 200,
+    bearer = token,
+  ) => {
+    const r = await fetch(url + path, {
+      method: body ? "POST" : "GET",
+      headers: {
+        "content-type": "application/json",
+        cookie: "fm_session=" + f.session,
+        authorization: "Bearer " + bearer,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await r.json();
+    assert.equal(r.status, expected, JSON.stringify(data));
+    return data;
+  };
+  const root = "/agent/gpu";
+  await call(root + "/registration", undefined, 403, revoked);
+  const panel = "/api/plugins/gpu/pages/nodes";
+  assert.equal((await call(panel + "/view", {})).title, "GPU 实例");
+  const pair = await call(panel + "/actions/pair", {
+    payload: { name: "验收节点", models: ["MiniMax H3", "breeze-tts-2"] },
+  });
+  assert.match(pair.result.value, /\/agent\/gpu\/client\/install.sh/);
+  await call(root + "/enroll", {
+    code: pair.result.value.split(" ").at(-1),
+    secret: token,
+  });
+  const beat = {
+    stage: "ready",
+    ready_models: ["MiniMax H3", "breeze-tts-2"],
+    video_steps: [4, 20],
+    workflow: "h3-v6-native-inputs-turbo4",
+    execution_plan: { mode: "serial" },
+  };
+  assert.equal(
+    (await call(root + "/heartbeat", beat)).execution_mode,
+    "serial",
+  );
+  const lane = (
+    device: number,
+    gpu_total_gib: number,
+    gpu_budget_gib: number,
+    ram_budget_gib: number,
+  ) => ({
+    backend: "cuda",
+    device,
+    gpu_total_gib,
+    gpu_budget_gib,
+    ram_budget_gib,
+  });
+  const parallel = {
+    mode: "parallel",
+    policy: "gpu-budget-v1",
+    lanes: {
+      "MiniMax H3": lane(0, 160, 140, 160),
+      "breeze-tts-2": lane(1, 48, 24, 64),
+    },
+    reserve_vram_gib: { "0": 16, "1": 4 },
+    ram_total_gib: 320,
+    reserve_ram_gib: 32,
+  };
+  await call(
+    root + "/heartbeat",
+    { ...beat, execution_plan: { ...parallel, ram_total_gib: 100 } },
+    400,
+  );
+  assert.equal(
+    (await call(root + "/heartbeat", { ...beat, execution_plan: parallel }))
+      .execution_mode,
+    "parallel",
+  );
+  assert.equal((await call(root + "/claim", {})).job, null);
+  await call(root + "/heartbeat", beat);
+  const prices = await new StudioCatalog(f.db).prices();
+  await f.db.transaction((sql) =>
+    new StudioCatalog(f.db).savePrices(
+      sql,
+      Object.fromEntries(prices.items.map((p) => [p.key, 1])),
+      prices.revision,
+    ),
+  );
+  await f.db.query("UPDATE wallets SET balance=10");
+  const gen = new OriginalGeneration(f.p);
+  const submit = async (
+    kind: "video" | "audio",
+    model: string,
+    extra: object = {},
+  ) =>
+    gen.submit(
+      f.actor,
+      await gen.parse(kind, {
+        model,
+        prompt: "测试",
+        uid: randomUUID(),
+        ...extra,
+      }),
+    );
+  const h3 = await submit("video", "MiniMax H3", {
+    h3: { mode: "frames" },
+    sampling_steps: 4,
+  });
+  const audio = await submit("audio", "breeze-tts-2");
+  await assert.rejects(f.packages.install(f.actor, old, 3, true), {
+    status: 409,
+    message: "请先排空在途任务，再切换节点协议",
+  });
+  const settled: string[] = [];
+  for (const id of [h3.id, audio.id]) {
+    const job = (await call(root + "/claim", {})).job;
+    assert.equal(job.id, id);
+    assert.equal(
+      (
+        await call(root + "/heartbeat", {
+          ...beat,
+          stage: "busy",
+          ticket: job.ticket,
+        })
+      ).held,
+      true,
+    );
+    const inst = job.instruction;
+    const result = async (data: Buffer, report: object, status: number) => {
+      const response = await fetch(url + root + "/jobs/" + id + "/result", {
+        method: "PUT",
+        body: new Uint8Array(data),
+        headers: {
+          authorization: "Bearer " + token,
+          "X-Job-Ticket": job.ticket,
+          "X-SHA256": createHash("sha256").update(data).digest("hex"),
+          "X-Job-Timing": JSON.stringify(report),
+        },
+      });
+      const value = await response.json();
+      assert.equal(response.status, status, JSON.stringify(value));
+      return value;
+    };
+    let data: Buffer,
+      report: Record<string, unknown> = {};
+    if (inst.kind === "video") {
+      const path = join(f.directory, "fixture.mp4");
+      execFileSync("ffmpeg", [
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=s=864x480:r=24",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=32000:cl=stereo",
+        "-t",
+        String(124 / 24),
+        "-threads",
+        "2",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
+        path,
+      ]);
+      data = await readFile(path);
+      const { inputFingerprint } =
+        await import("@fumiao/plugin-gpu/artifacts.js");
+      report = {
+        h3_input_fingerprint: inputFingerprint(inst.h3_inputs),
+        sampling_steps: 4,
+        fast_mode: true,
+      };
+      await result(data, { ...report, sampling_steps: 20 }, 422);
+      await result(
+        data,
+        { ...report, h3_input_fingerprint: "0".repeat(64) },
+        422,
+      );
+      await result(data.subarray(0, 100), report, 422);
+    } else {
+      data = wavFixture();
+      await result(data, report, 422);
+      data.writeInt16LE(512, 44);
+    }
+    const first = await result(data, report, 200);
+    assert.deepEqual(await result(data, report, 200), first);
+    settled.push(first.id);
+    await call(root + "/heartbeat", beat);
+  }
+  assert.equal(new Set(settled).size, 2);
+  const ledger = await one(
+    f.db,
+    "SELECT count(*)::int AS n FROM ledger WHERE job_id IN (SELECT id FROM jobs WHERE plugin_id='gpu' AND package_version=$1 AND state='completed') AND action='spend'",
+    [file.version],
+  );
+  assert.equal(ledger.n, 2);
+});
+
+test("sandbox media tools process private workspace assets and remove rolled-back outputs", async (t) => {
+  const { PluginPages } = await import("@fumiao/platform/plugin-pages.js");
+  const f = await setup();
+  t.after(() => f.cleanup());
+  const file = await load("example-node-pool");
+  assert.match(
+    (await f.packages.preview(f.actor, file)).changes.join(" "),
+    /私有素材/,
+  );
+  await f.packages.install(f.actor, file);
+  const pages = new PluginPages(f.p);
+  const workspace = await one(
+    f.db,
+    "SELECT * FROM workspaces WHERE owner_id=$1",
+    [f.actor.id],
+  );
+  const id = randomUUID(),
+    path = join(f.directory, "input.mp4");
+  execFileSync("ffmpeg", [
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=s=64x48:r=24",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440",
+    "-t",
+    "0.5",
+    "-c:v",
+    "libx264",
+    "-threads",
+    "1",
+    "-c:a",
+    "aac",
+    path,
+  ]);
+  const bytes = await readFile(path);
+  await f.p.storage.put(id, bytes, "video/mp4");
+  const { public_id: asset } = await one(
+    f.db,
+    "INSERT INTO assets(id,workspace_id,owner_id,object_key,mime,size,state,original_kind) VALUES($1,$2,$3,$4,'video/mp4',$5,'ready','video') RETURNING public_id",
+    [id, workspace.id, f.actor.id, id, bytes.length],
+  );
+  const act = (name: string, payload: object, space = workspace.public_id) =>
+    pages.action(f.actor, String(space), file.id, "media", name, { payload });
+  assert.match((await act("probe", { asset })).notice!, /video\/mp4.*64 × 48/);
+  const converted = async (name: string, payload: object, mime: string) => {
+    const id = (await act(name, payload)).notice!.split(" ").at(-1);
+    const a = await one(f.db, "SELECT * FROM assets WHERE public_id=$1", [id]);
+    assert.equal(a.workspace_id, workspace.id);
+    assert.equal(a.owner_id, f.actor.id);
+    assert.equal(a.mime, mime);
+    assert.equal((await f.p.storage.stat(a.object_key)).size, Number(a.size));
+    return a;
+  };
+  await converted("frame", { asset, seconds: 0.1 }, "image/png");
+  await converted("transcode", { asset, format: "wav" }, "audio/wav");
+  const joined = await converted(
+    "concat",
+    { assets: asset + "\n" + asset, format: "mp4" },
+    "video/mp4",
+  );
+  assert.ok(
+    joined.metadata.duration >= 0.95 && joined.metadata.duration <= 1.1,
+  );
+  const other = await one(
+    f.db,
+    "INSERT INTO workspaces(id,kind,name,owner_id) VALUES(gen_random_uuid(),'team','隔离工作区',$1) RETURNING public_id",
+    [f.actor.id],
+  );
+  await assert.rejects(act("probe", { asset }, other.public_id), {
+    status: 422,
+  });
+  await assert.rejects(act("frame", { asset, seconds: 2 }), { status: 422 });
+  await assert.rejects(
+    act("transcode", { asset: "file:///tmp/input", format: "wav" }),
+    { status: 422 },
+  );
+  const updated = structuredClone(file);
+  updated.version = "1.1.1";
+  const page = updated.contributes!.settingsPages.find(
+    (p) => p.id === "media",
+  )!;
+  page.program =
+    '({view(){return {schema:1,title:"测试",blocks:[]}},async action(id,p,_,host){await host.media.transcode(p.asset,{format:"wav"});throw Error("rollback")}})';
+  await f.packages.install(f.actor, updated, 1);
+  const { readdir } = await import("node:fs/promises");
+  const before = await readdir(f.directory);
+  await assert.rejects(act("transcode", { asset }), { status: 422 });
+  assert.deepEqual(await readdir(f.directory), before);
+  const audit = await one(
+    f.db,
+    "SELECT detail,outcome FROM studio_plugin_audit WHERE plugin_id=$1 ORDER BY id DESC LIMIT 1",
+    [file.id],
+  );
+  assert.equal(audit.outcome, "failed");
+  assert.match(audit.detail, /media.transcode×1/);
 });

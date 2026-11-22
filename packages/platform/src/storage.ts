@@ -38,7 +38,12 @@ export interface Storage {
     key: string,
   ): Promise<{ size: number; mime?: string; modified?: number }>;
   remove(key: string, signal?: AbortSignal): Promise<void>;
-  stream(key: string, start?: number, end?: number): Promise<Readable>;
+  stream(
+    key: string,
+    start?: number,
+    end?: number,
+    signal?: AbortSignal,
+  ): Promise<Readable>;
   availableBytes?(): Promise<number>;
   downloadUrl?(
     key: string,
@@ -78,8 +83,13 @@ export class DiskStorage implements Storage {
   async read(key: string) {
     return readFile(this.path(key));
   }
-  async stream(key: string, start?: number, end?: number) {
-    const stream = createReadStream(this.path(key), { start, end });
+  async stream(
+    key: string,
+    start?: number,
+    end?: number,
+    signal?: AbortSignal,
+  ) {
+    const stream = createReadStream(this.path(key), { start, end, signal });
     await once(stream, "open");
     return stream;
   }
@@ -158,13 +168,19 @@ export class S3Storage implements Storage {
       { abortSignal: signal },
     );
   }
-  async stream(key: string, start?: number, end?: number) {
+  async stream(
+    key: string,
+    start?: number,
+    end?: number,
+    signal?: AbortSignal,
+  ) {
     const result = await this.client.send(
       new GetObjectCommand({
         Bucket: this.bucket,
         Key: key,
         Range: start === undefined ? undefined : `bytes=${start}-${end ?? ""}`,
       }),
+      { abortSignal: signal },
     );
     return result.Body as Readable;
   }

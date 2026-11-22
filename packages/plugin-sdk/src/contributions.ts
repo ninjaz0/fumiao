@@ -1,3 +1,4 @@
+import { nodePoolSchema } from "./node-pools.js";
 import { z } from "zod";
 
 /*
@@ -79,8 +80,9 @@ export const memberScopes: readonly PageScope[] = [
  * - nodes: node pairing and control, through `host` page actions.
  * - http:  HTTPS requests to the origins listed in `contributes.http`.
  * - data:  a key-value store owned by this plugin.
+ * - media: inspect and transform private assets in the active workspace.
  */
-export const hostCapabilities = ["nodes", "http", "data"] as const;
+export const hostCapabilities = ["nodes", "http", "data", "media"] as const;
 export type HostCapability = (typeof hostCapabilities)[number];
 
 /**
@@ -91,6 +93,9 @@ export type HostCapability = (typeof hostCapabilities)[number];
  *
  * | Function    | Arguments                                   | Result                                         |
  * |-------------|---------------------------------------------|------------------------------------------------|
+ * | media.probe | asset public ID | media metadata |
+ * | media.transcode / media.concat | asset ID or ordered IDs, { format: "mp4" or "wav" } | new asset ID and metadata |
+ * | media.extractFrame | asset ID, { seconds } | new PNG asset ID and metadata |
  * | http.fetch  | url, { method?, headers?, json? \| body? }   | { status, ok, contentType, text, json }        |
  * | data.get    | key, { scope? }                             | stored value or null                           |
  * | data.list   | prefix?, { scope? }                         | { keys, more }                                 |
@@ -101,6 +106,10 @@ export type HostCapability = (typeof hostCapabilities)[number];
  * followed. A failed call rejects with an Error carrying a short message.
  */
 export const hostFunctions = {
+  "media.probe": { capability: "media", access: "read" },
+  "media.transcode": { capability: "media", access: "write" },
+  "media.concat": { capability: "media", access: "write" },
+  "media.extractFrame": { capability: "media", access: "write" },
   "http.fetch": { capability: "http", access: "write" },
   "data.get": { capability: "data", access: "read" },
   "data.list": { capability: "data", access: "read" },
@@ -222,6 +231,7 @@ export type SettingsDeclaration = z.infer<typeof settingsDeclarationSchema>;
 export const contributesSchema = z
   .object({
     version: z.literal(CONTRIBUTIONS_VERSION),
+    nodePools: nodePoolSchema.optional(),
     settingsPages: z.array(settingsPageSchema).max(8).default([]),
     settings: settingsDeclarationSchema.optional(),
     hostCapabilities: z
@@ -263,6 +273,7 @@ export function contributionProblems(
     problems.push("宿主能力重复");
   if (caps.has("nodes") && !(context.mode === "pull" && context.hasProgram))
     problems.push("节点能力需要 pull 模式的节点程序");
+  if (c.nodePools && !caps.has("nodes")) problems.push("节点池需要 nodes 能力");
   if (caps.has("http") !== !!c.http)
     problems.push("http 能力与 http.origins 必须同时声明");
   for (const origin of c.http?.origins ?? []) {

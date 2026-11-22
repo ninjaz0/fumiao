@@ -11,7 +11,7 @@ import {
   Res,
 } from "@nestjs/common";
 import { pairedPluginAvailable } from "@fumiao/platform/studio-plugin-profile.js";
-import type { Request, Response } from "express";
+import type { Response } from "express";
 import { resolve } from "node:path";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 
@@ -22,10 +22,7 @@ import {
   ValidationError,
   type Fields,
 } from "@fumiao/original-api/validation.js";
-import {
-  DomainError,
-  requireValue,
-} from "@fumiao/platform/security.js";
+import { DomainError, requireValue } from "@fumiao/platform/security.js";
 import {
   originalSessionToken,
   type OriginalAuthRequest,
@@ -70,6 +67,18 @@ export function originalNodeRequest(
     res: Response,
     next: () => void,
   ) => {
+    const scoped =
+      /^\/agent\/([a-z][a-z0-9-]{1,63})\/(enroll|registration|heartbeat|claim|jobs\/.*|client\/[^/]+)(\/?)$/.exec(
+        path,
+      );
+    const originalPath = path;
+    if (scoped) {
+      req.nodePool = scoped[1];
+      path =
+        (scoped[2].startsWith("client/")
+          ? "/connect/" + scoped[2].slice(7)
+          : "/agent/" + scoped[2]) + scoped[3];
+    }
     const target = path.replace(/\/+$/, "");
     if (
       !/^\/(?:api\/(?:pairs|nodes)|agent\/(?:enroll|registration|heartbeat|claim|jobs)|connect)(?:\/|$)/i.test(
@@ -79,7 +88,14 @@ export function originalNodeRequest(
       return false;
     try {
       requireValue(
-        await pairedPluginAvailable(identity.p.db),
+        req.nodePool
+          ? await one(
+              identity.p.db,
+              `SELECT 1 FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+          WHERE p.id=$1 AND p.installed AND r.package->'contributes' ? 'nodePools'`,
+              [req.nodePool],
+            )
+          : await pairedPluginAvailable(identity.p.db),
         404,
         "尚未安装实例接入插件",
       );
@@ -90,8 +106,11 @@ export function originalNodeRequest(
         routes.some((r) => r.path.test(target))
       ) {
         const url =
-          target.split("/").map(encodeURIComponent).join("/") +
-          req.url.slice(req.path.length);
+          originalPath
+            .replace(/\/+$/, "")
+            .split("/")
+            .map(encodeURIComponent)
+            .join("/") + req.url.slice(req.path.length);
         res
           .status(307)
           .location(req.protocol + "://" + req.get("host") + url)
@@ -136,11 +155,12 @@ export function originalNodeRequest(
 @Controller()
 export class OriginalNodesController {
   constructor(@Inject(OriginalIdentity) private identity: OriginalIdentity) {}
-  private async nodes() {
+  private async nodes(pool?: string) {
     const { NodeManagement } = await this.identity.p.registry.nodeExtension(
       this.identity.p.db,
+      pool,
     );
-    return new NodeManagement(this.identity.p);
+    return new NodeManagement(this.identity.p, pool ?? "gpu");
   }
   @Get("api/pairs/default-name")
   async defaultName() {
@@ -162,9 +182,12 @@ export class OriginalNodesController {
   }
   @Post("agent/enroll")
   @HttpCode(200)
-  async enroll(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  async enroll(
+    @Req() req: OriginalAuthRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     try {
-      return await (await this.nodes()).enroll(req.body);
+      return await (await this.nodes(req.nodePool)).enroll(req.body);
     } catch (error) {
       if (!(error instanceof Error && error.name === "BoundNodeCredential"))
         throw error;
@@ -173,13 +196,17 @@ export class OriginalNodesController {
     }
   }
   @Get("agent/registration")
-  async registration(@Req() req: Request) {
-    return (await this.nodes()).registration(
+  async registration(@Req() req: OriginalAuthRequest) {
+    return (await this.nodes(req.nodePool)).registration(
       req.headersDistinct.authorization?.[0] ?? "",
     );
   }
   @Get("connect/:file")
-  async download(@Param("file") file: string, @Res() res: Response) {
+  async download(
+    @Param("file") file: string,
+    @Req() req: OriginalAuthRequest,
+    @Res() res: Response,
+  ) {
     requireValue(
       ["install.sh", "agent.tgz", "agent.tgz.sha256"].includes(file),
       404,
@@ -189,17 +216,20 @@ export class OriginalNodesController {
     if (await hasStudioPackages(this.identity.p.db)) {
       const row = await one(
         this.identity.p.db,
-        `SELECT r.package->'nodeClient'->>$1 AS bytes FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE p.installed AND r.package ? 'nodeClient' LIMIT 1`,
-        [file],
+        `SELECT r.package->'nodeClient'->>$1 AS bytes FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE p.id=$2 AND p.installed AND r.package ? 'nodeClient'`,
+        [file, req.nodePool ?? "gpu"],
       );
       if (row?.bytes) {
         res.send(Buffer.from(row.bytes, "base64"));
         return;
       }
     }
+    requireValue(!req.nodePool, 404, "节点安装文件不存在");
     return new Promise<void>((done, reject) => {
-      res.sendFile(file, { root: resolve("plugins/gpu/distribution") }, (error) =>
-        error ? reject(error) : done(),
+      res.sendFile(
+        file,
+        { root: resolve("plugins/gpu/distribution") },
+        (error) => (error ? reject(error) : done()),
       );
     });
   }

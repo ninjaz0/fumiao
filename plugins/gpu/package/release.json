@@ -2,7 +2,52 @@
   "format": 1,
   "id": "gpu",
   "label": "GPU 节点",
-  "version": "1.0.0",
-  "adapterVersion": "1.11.0",
-  "updateUrl": "https://raw.githubusercontent.com/ninjaz0/fumiao/main/plugins/gpu/update.json"
+  "version": "2.0.0",
+  "adapterVersion": "2.0.0",
+  "updateUrl": "https://raw.githubusercontent.com/ninjaz0/fumiao/main/plugins/gpu/update.json",
+  "contributes": {
+    "version": 1,
+    "nodePools": {
+      "version": 1
+    },
+    "hostCapabilities": ["nodes", "media"],
+    "settingsPages": [
+      {
+        "id": "nodes",
+        "title": "GPU 节点",
+        "icon": "gpu",
+        "scopes": ["plugin", "nodes", "jobs"],
+        "programFile": "panel.js",
+        "actions": [
+          {
+            "id": "pair",
+            "kind": "host",
+            "operation": "nodes.pair"
+          },
+          {
+            "id": "drain",
+            "kind": "host",
+            "operation": "nodes.drain"
+          },
+          {
+            "id": "resume",
+            "kind": "host",
+            "operation": "nodes.resume"
+          },
+          {
+            "id": "remove",
+            "kind": "host",
+            "operation": "nodes.remove"
+          },
+          {
+            "id": "stop",
+            "kind": "host",
+            "operation": "nodes.stop"
+          }
+        ],
+        "group": "account",
+        "order": 0
+      }
+    ]
+  }
 }

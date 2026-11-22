@@ -689,7 +689,7 @@ export async function verifyRemoteProvider(
     assert.equal(calls.length, 3);
     await setTab(page, "plugins");
     const gpuFile = JSON.parse(
-      await readFile("plugins/gpu/gpu.fmplugin.json", "utf8"),
+      await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
     );
     await chooseFile(gpuFile);
     await page.getByRole("button", { name: "确认导入" }).click();

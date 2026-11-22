@@ -10,6 +10,7 @@ x-dev: &dev
     # Keep Linux dependencies and the Next cache inside this Compose project.
     - /app/apps/web/node_modules
     - next:/app/apps/web/.next
+    - ./packages/media-runtime:/app/packages/media-runtime:ro
     - ./packages/image-import/src:/app/packages/image-import/src:ro
     - ./packages/original-api:/app/packages/original-api:ro
     - ./packages/platform:/app/packages/platform:ro

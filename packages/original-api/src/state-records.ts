@@ -67,7 +67,8 @@ export class OriginalStateRecords {
       await sql.query(
         `SELECT n.*,u.public_id AS owner_public_id,COALESCE(NULLIF(u.nickname,''),u.name) AS contributor
       FROM gpu_nodes n JOIN users u ON u.id=n.owner_id JOIN connections c ON c.id=n.connection_id
-      WHERE n.control!='removed' AND NOT c.fmworker_resource_driver AND ($1='admin' OR n.owner_id=$2)
+      WHERE n.control!='removed' AND NOT c.fmworker_resource_driver
+        AND NOT EXISTS (SELECT 1 FROM plugin_versions v WHERE v.id=c.plugin_id AND v.version=c.plugin_version AND v.manifest->>'mode'='pull' AND v.manifest->'originalSubmission'->>'version' IN ('3','4')) AND ($1='admin' OR n.owner_id=$2)
         AND NOT EXISTS (SELECT 1 FROM fmworker_resources r WHERE r.node_id=n.id) ORDER BY n.public_id DESC`,
         [user.role, user.id],
       )

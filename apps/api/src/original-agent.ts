@@ -56,6 +56,7 @@ const profile: Field = {
   },
 };
 const beatFields: Fields = {
+  capabilities: { kind: "dictionary", ...optional },
   lane_model: { kind: "string", max: 80, ...optional },
   can_accept: { ...flag, default: true },
   execution_plan: { kind: "dictionary", ...optional },
@@ -164,11 +165,12 @@ async function resultBody(req: Request) {
 @Controller()
 export class OriginalAgentController {
   constructor(@Inject(OriginalIdentity) private identity: OriginalIdentity) {}
-  private async agent() {
+  private async agent(req: Request & { nodePool?: string }) {
     const { Agent } = await this.identity.p.registry.nodeExtension(
       this.identity.p.db,
+      req.nodePool,
     );
-    return new Agent(this.identity.p);
+    return new Agent(this.identity.p, req.nodePool ?? "gpu", !!req.nodePool);
   }
   @Post("agent/heartbeat")
   @HttpCode(200)
@@ -187,7 +189,7 @@ export class OriginalAgentController {
             ),
         ),
       );
-    return (await this.agent()).heartbeat(credentials(req), {
+    return (await this.agent(req)).heartbeat(credentials(req), {
       ...beat,
       timing: report,
     });
@@ -195,12 +197,12 @@ export class OriginalAgentController {
   @Post("agent/claim")
   @HttpCode(200)
   async claim(@Req() req: Request) {
-    return (await this.agent()).claim(credentials(req));
+    return (await this.agent(req)).claim(credentials(req));
   }
   @Get("agent/jobs/:i/receipt")
   async receipt(@Req() req: Request, @Param("i") id: string) {
     const credential = credentials(req);
-    return (await this.agent()).receipt(credential, pathId(id, "i"));
+    return (await this.agent(req)).receipt(credential, pathId(id, "i"));
   }
   @Get("agent/jobs/:i/ref/:key")
   async reference(
@@ -211,7 +213,7 @@ export class OriginalAgentController {
   ) {
     const credential = credentials(req);
     const asset = await (
-      await this.agent()
+      await this.agent(req)
     ).reference(credential, pathId(id, "i"), key);
     const { storage } = this.identity.p;
     const mime = "application/octet-stream";
@@ -237,7 +239,7 @@ export class OriginalAgentController {
   @HttpCode(200)
   async error(@Req() req: Request, @Param("i") id: string) {
     const credential = credentials(req);
-    return (await this.agent()).error(
+    return (await this.agent(req)).error(
       credential,
       pathId(id, "i"),
       req.body.detail,
@@ -247,7 +249,7 @@ export class OriginalAgentController {
   async complete(@Req() req: Request, @Param("i") id: string) {
     const credential = credentials(req);
     const number = pathId(id, "i");
-    return (await this.agent()).complete(
+    return (await this.agent(req)).complete(
       credential,
       number,
       () => resultBody(req),

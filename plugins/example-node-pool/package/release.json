@@ -1,0 +1,119 @@
+{
+  "format": 1,
+  "id": "example-node-pool",
+  "label": "ComfyUI 节点池",
+  "version": "1.1.0",
+  "adapterVersion": "1.0.0",
+  "contributes": {
+    "version": 1,
+    "nodePools": {
+      "version": 1
+    },
+    "hostCapabilities": ["nodes", "media"],
+    "settingsPages": [
+      {
+        "id": "nodes",
+        "title": "ComfyUI 节点",
+        "icon": "gpu",
+        "scopes": ["nodes"],
+        "programFile": "panel.js",
+        "actions": [
+          {
+            "id": "pair",
+            "kind": "host",
+            "operation": "nodes.pair"
+          },
+          {
+            "id": "drain",
+            "kind": "host",
+            "operation": "nodes.drain"
+          },
+          {
+            "id": "resume",
+            "kind": "host",
+            "operation": "nodes.resume"
+          },
+          {
+            "id": "remove",
+            "kind": "host",
+            "operation": "nodes.remove"
+          }
+        ]
+      },
+      {
+        "id": "media",
+        "title": "素材处理示例",
+        "icon": "film",
+        "group": "services",
+        "scopes": [],
+        "programFile": "media.js",
+        "actions": [
+          {
+            "id": "probe",
+            "kind": "program"
+          },
+          {
+            "id": "transcode",
+            "kind": "program"
+          },
+          {
+            "id": "concat",
+            "kind": "program"
+          },
+          {
+            "id": "frame",
+            "kind": "program"
+          }
+        ]
+      }
+    ]
+  },
+  "manifest": {
+    "id": "example-node-pool",
+    "label": "ComfyUI 节点池",
+    "version": "1.0.0",
+    "contractVersion": 1,
+    "mode": "pull",
+    "originalSubmission": {
+      "version": 3
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "models": [
+      {
+        "id": "comfy-image",
+        "label": "ComfyUI 图像",
+        "kind": "image",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {},
+          "x-references": {
+            "max": 0
+          }
+        },
+        "studio": {
+          "order": 1000,
+          "priceOrder": 1000,
+          "descriptor": {
+            "kind": "image",
+            "label": "ComfyUI 图像"
+          },
+          "prices": [
+            {
+              "tier": "standard",
+              "label": "标准",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

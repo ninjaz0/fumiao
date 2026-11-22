@@ -6,6 +6,12 @@ export const originalPolicySchema = z.discriminatedUnion("version", [
   z.object({ version: z.literal(1) }).strict(),
   z.object({ version: z.literal(2) }).strict(),
   z.object({ version: z.literal(3) }).strict(),
+  z
+    .object({
+      version: z.literal(4),
+      studioDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .strict(),
 ]);
 export type OriginalPolicy = z.infer<typeof originalPolicySchema>;
 export type OriginalDraft = {
@@ -71,20 +77,7 @@ export interface OriginalSubmission {
     },
   ): Promise<OriginalPrepared>;
 }
-export class OriginalSubmissionError extends Error {
-  constructor(
-    message: string,
-    readonly status: 400 | 403 | 404 | 409 | 429 | 503 = 400,
-  ) {
-    super(message);
-  }
-}
-
-export function originalParent(
-  draft: OriginalDraft,
-  parent: OriginalTask | undefined,
-  kind: OriginalPlan["parentKind"],
-) {
-  if (draft.parent && (!parent || (kind !== "any" && parent.kind !== kind)))
-    throw new OriginalSubmissionError("内容不存在或无权访问", 404);
-}
+export {
+  OriginalSubmissionError,
+  originalParent,
+} from "./submission-errors.js";

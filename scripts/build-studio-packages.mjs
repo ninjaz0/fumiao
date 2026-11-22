@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { build } from "esbuild";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve, relative, join } from "node:path";
@@ -29,16 +30,14 @@ const releases = [
   },
   {
     id: "gpu",
-    entry:
-      'export { gpuText as adapter } from "./src/text.js";' +
-      'export {gpuPairedAgent as protocol} from "./src/paired-agent.js";export {OriginalNodes as NodeManagement} from "./src/node-management.js";export {OriginalPairedAgent as Agent} from "./src/agent-dispatch.js";',
-    program: true,
+    sandboxBuild: "package/build.mjs",
   },
   {
     id: "compatible-chat",
     entry: 'export { chatStreaming as adapter } from "../chat/src/stream.js";',
   },
   { id: "example-extension" },
+  { id: "example-node-pool", program: true, clientBuild: "client/pack.py" },
 ];
 async function buildAdapter(root, entry) {
   const result = await build({
@@ -100,9 +99,35 @@ async function packContributions(root, contributes) {
     delete contributes.settings.migrateFile;
   }
 }
-for (const { id, entry, program } of releases) {
+for (const { id, entry, program, sandboxBuild, clientBuild } of releases) {
   const root = "plugins/" + id,
     file = JSON.parse(await readFile(root + "/package/release.json", "utf8"));
+  if (sandboxBuild) {
+    const legacy = JSON.parse(
+      await readFile(join(root, "package/legacy-1.0.0.fmplugin.json"), "utf8"),
+    );
+    const pinned =
+      "b418dad85380eed9df512cac18d952dc550e616ebd32ff38aa17b09f840b2df6";
+    const legacyBytes = await readFile(
+      join(root, "package/provider-" + legacy.adapterVersion + ".js.gz"),
+    );
+    if (
+      hash(legacyBytes) !== pinned ||
+      !legacyBytes.equals(Buffer.from(legacy.adapterModule, "base64"))
+    )
+      throw Error("Published GPU adapter digest mismatch");
+    trusted[id + "@" + legacy.adapterVersion] = pinned;
+    Object.assign(
+      file,
+      JSON.parse(
+        execFileSync(
+          process.execPath,
+          ["--import", "tsx", join(root, sandboxBuild), file.adapterVersion],
+          { encoding: "utf8" },
+        ),
+      ),
+    );
+  }
   if (entry) {
     const packed = await buildAdapter(root, entry);
     trusted[id + "@" + file.adapterVersion] = hash(packed);
@@ -111,15 +136,18 @@ for (const { id, entry, program } of releases) {
   if (file.contributes)
     await packContributions(root + "/package", file.contributes);
   if (program) file.program = await expression(root + "/package/program.js");
-  if (id === "gpu") {
-    file.settingsPage = {
-      title: "GPU 节点",
-      render: await expression(root + "/package/panel.js"),
-    };
+  if (sandboxBuild)
+    file.nodeClient = JSON.parse(
+      execFileSync("python3", [join(root, "package/build-client.py")], {
+        encoding: "utf8",
+      }),
+    );
+  else if (file.contributes?.nodePools) {
+    if (clientBuild) execFileSync("python3", [join(root, clientBuild)]);
     file.nodeClient = {};
     for (const name of ["agent.tgz", "install.sh", "agent.tgz.sha256"])
       file.nodeClient[name] = (
-        await readFile("plugins/gpu/distribution/" + name)
+        await readFile(root + "/distribution/" + name)
       ).toString("base64");
   }
   const path = id + ".fmplugin.json",
@@ -130,7 +158,9 @@ for (const { id, entry, program } of releases) {
     json({
       id,
       version: file.version,
-      notes: "首次发布",
+      notes: sandboxBuild
+        ? "节点池协议升级，排空任务后重新接入实例"
+        : "首次发布",
       package: path,
       sha256: hash(data),
     }),

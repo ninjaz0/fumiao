@@ -49,7 +49,7 @@ export async function pairedPluginAvailable(sql: Sql) {
     sql,
     `SELECT 1 FROM ${await listedStudioCatalog(sql)} c JOIN plugin_versions v
     ON (v.id,v.version)=(c.plugin_id,c.plugin_version)
-    WHERE v.manifest->>'mode'='pull' AND v.manifest->'originalState'->'fields' ? 'gpu_models' LIMIT 1`,
+    WHERE v.manifest->>'mode'='pull' AND v.manifest->'originalState'->'fields' ? 'gpu_models' AND v.manifest->'originalSubmission'->>'version'='1' LIMIT 1`,
   );
   return Boolean(adapter) || !(await studioPluginProfile(sql));
 }

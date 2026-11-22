@@ -8,8 +8,8 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@fumiao/original-api": "workspace:*",
-    "@fumiao/platform": "workspace:*",
-    "@fumiao/plugin-sdk": "workspace:*"
+    "@fumiao/media-runtime": "workspace:*",
+    "@fumiao/plugin-sdk": "workspace:*",
+    "@noble/hashes": "1.8.0"
   }
 }

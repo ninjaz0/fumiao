@@ -1,5 +1,3 @@
-import type { OriginalNodes } from "@fumiao/original-api/nodes.js";
-import type { OriginalPairedAgent } from "@fumiao/original-api/paired-agent.js";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { readFileSync } from "node:fs";
@@ -18,8 +16,6 @@ export const reservedAdapterId = (id: string) =>
 export type OfficialAdapter = {
   adapter: ProviderPlugin;
   protocol?: PairedAgentProtocol;
-  NodeManagement?: typeof OriginalNodes;
-  Agent?: typeof OriginalPairedAgent;
 };
 export async function officialAdapter(
   id: string,

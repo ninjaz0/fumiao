@@ -1,13 +1,12 @@
-import { hasStudioPackages } from "@fumiao/platform/studio-plugin-profile.js";
+import { hasStudioPackages } from "./studio-plugin-profile.js";
 import { timingSafeEqual } from "node:crypto";
-import { one, type Sql } from "@fumiao/platform/db.js";
-import { executableJob } from "@fumiao/platform/retired-jobs.js";
-import { Executor } from "@fumiao/platform/executor.js";
-import { GpuGateway } from "@fumiao/platform/gpu.js";
-import type { Platform } from "@fumiao/platform/platform.js";
-import { hash, requireValue } from "@fumiao/platform/security.js";
-import { JobTiming } from "@fumiao/platform/timing.js";
-import type { OriginalActor } from "@fumiao/original-api/identity.js";
+import { one, type Sql } from "./db.js";
+import { executableJob } from "./retired-jobs.js";
+import { Executor } from "./executor.js";
+import { GpuGateway } from "./gpu.js";
+import type { Actor, Platform } from "./platform.js";
+import { hash, requireValue } from "./security.js";
+import { JobTiming } from "./timing.js";
 
 const numbered = /^弗淼([0-9]{1,9})$(?![\s\S])/u;
 const defaultName = (n: number) => "弗淼" + String(n).padStart(3, "0");
@@ -44,7 +43,10 @@ export class BoundNodeCredential extends Error {
 
 export class OriginalNodes {
   private gpu: GpuGateway;
-  constructor(private p: Platform) {
+  constructor(
+    private p: Platform,
+    private pluginId?: string,
+  ) {
     this.gpu = new GpuGateway(p);
   }
 
@@ -52,17 +54,18 @@ export class OriginalNodes {
     return { name: defaultName(await nextNumber(this.p.db)) };
   }
 
-  async pair(actor: OriginalActor, input: { name: string; models: string[] }) {
+  async pair(actor: Actor, input: { name: string; models: string[] }) {
     this.p.admin(actor);
     return this.p.db.transaction(async (sql) => {
       const candidates = (
         await sql.query(
           `SELECT v.id,v.version FROM plugin_versions v
-          WHERE v.manifest->>'mode'='pull' AND v.manifest->'originalState'->'fields' ? 'gpu_models'
+          WHERE v.id=$1 AND v.manifest->>'mode'='pull' AND (v.manifest->'originalState'->'fields' ? 'gpu_models' OR v.manifest->'originalSubmission'->>'version'='3')
           AND EXISTS (SELECT 1 FROM studio_catalog s WHERE s.plugin_id=v.id AND s.plugin_version=v.version)`,
+          [this.pluginId ?? "gpu"],
         )
       ).rows;
-      requireValue(candidates.length === 1, 503, "GPU 接入暂不可用");
+      requireValue(candidates.length === 1, 503, "节点接入暂不可用");
       const version = candidates[0];
       if (
         (await one(sql, "SELECT to_regclass('studio_packages') AS name")).name
@@ -78,18 +81,16 @@ export class OriginalNodes {
           "节点插件正在移除",
         );
       }
-      requireValue(
-        await this.p.registry.pairedAgent(sql, version.id, version.version),
-        503,
-        "GPU 接入暂不可用",
-      );
       const plugin = await this.p.registry.resolve(
         sql,
         version.id,
         version.version,
       );
-      requireValue(plugin.originalState, 503, "GPU 接入暂不可用");
-      const advertised = plugin.originalState.configuration({
+      const portable = [3, 4].includes(
+        plugin.manifest.originalSubmission?.version ?? 0,
+      );
+      requireValue(portable || plugin.originalState, 503, "节点池暂不可用");
+      const advertised = plugin.originalState?.configuration({
         stamp: Date.now() / 1000,
         catalog: {},
         imageEnabled: true,
@@ -101,22 +102,24 @@ export class OriginalNodes {
           400,
           "请选择至少一个支持的模型",
         );
-        const slug = advertised?.[id]?.slug;
+        const slug = advertised?.[id]?.slug ?? (portable ? id : undefined);
         requireValue(
-          typeof slug === "string" && /^[a-z0-9-]+$(?![\s\S])/.test(slug),
+          typeof slug === "string" && /^[a-z0-9._-]+$(?![\s\S])/.test(slug),
           503,
-          "GPU 接入暂不可用",
+          "节点接入暂不可用",
         );
         return slug;
       });
       requireValue(models.length > 0, 400, "请选择至少一个支持的模型");
       const connections = (
         await sql.query(
-          `SELECT id FROM connections WHERE plugin_id=$1 AND plugin_version=$2 ${(await hasStudioPackages(sql)) ? "AND NOT removed" : ""} AND NOT fmworker_resource_driver FOR SHARE`,
+          portable
+            ? "SELECT id FROM node_pools WHERE plugin_id=$1 AND plugin_version=$2 AND NOT removed FOR SHARE"
+            : `SELECT id FROM connections WHERE plugin_id=$1 AND plugin_version=$2 ${(await hasStudioPackages(sql)) ? "AND NOT removed" : ""} AND NOT fmworker_resource_driver FOR SHARE`,
           [version.id, version.version],
         )
       ).rows;
-      requireValue(connections.length === 1, 503, "GPU 接入暂不可用");
+      requireValue(connections.length === 1, 503, "节点接入暂不可用");
       const owner = await one(
         sql,
         "SELECT id FROM users WHERE id=$1 AND active AND deleted_at IS NULL FOR SHARE",
@@ -159,12 +162,13 @@ export class OriginalNodes {
         /\/+$/,
         "",
       );
-      return {
-        command: `curl -fsSL ${shellQuote(site + "/connect/install.sh")} -o /tmp/fumiao-install.sh && FUMIAO_SITE=${shellQuote(site)} bash /tmp/fumiao-install.sh --models=${slugs.join(",")} ${code}`,
-        expires,
-        name,
-        models,
-      };
+      const installer = portable
+        ? "/agent/" + version.id + "/client/install.sh"
+        : "/connect/install.sh";
+      const command = portable
+        ? `script=$(mktemp) && curl -fsSL ${shellQuote(site + installer)} -o "$script" && FUMIAO_SITE=${shellQuote(site)} bash "$script" --models=${slugs.join(",")} ${code}`
+        : `curl -fsSL ${shellQuote(site + installer)} -o /tmp/fumiao-install.sh && FUMIAO_SITE=${shellQuote(site)} bash /tmp/fumiao-install.sh --models=${slugs.join(",")} ${code}`;
+      return { command, expires, name, models };
     });
   }
 
@@ -177,9 +181,9 @@ export class OriginalNodes {
         sql,
         `SELECT u.id FROM gpu_pairings p JOIN users u ON u.id=p.owner_id
           JOIN connections c ON c.id=p.connection_id
-          WHERE NOT c.fmworker_resource_driver AND p.token=$1 AND p.label IS NOT NULL AND u.active AND u.deleted_at IS NULL
+          WHERE NOT c.fmworker_resource_driver AND p.token=$1 AND ($2::text IS NULL OR c.plugin_id=$2) AND p.label IS NOT NULL AND u.active AND u.deleted_at IS NULL
           FOR SHARE OF u`,
-        [digest],
+        [digest, this.pluginId],
       );
       requireValue(owner, 403, "配对码已过期或无效");
       const pair = await one(
@@ -244,10 +248,10 @@ export class OriginalNodes {
       `SELECT n.public_id,n.models,n.control,p.token AS paired_code_hash
         FROM gpu_nodes n JOIN gpu_pairings p ON p.claimed_node_id=n.id
         JOIN connections c ON c.id=n.connection_id
-        WHERE n.token_hash=$1 AND n.enabled AND NOT n.archived AND n.control!='removed'
+        WHERE n.token_hash=$1 AND ($2::text IS NULL OR c.plugin_id=$2) AND n.enabled AND NOT n.archived AND n.control!='removed'
           AND NOT c.fmworker_resource_driver
           AND NOT EXISTS (SELECT 1 FROM fmworker_resources r WHERE r.node_id=n.id)`,
-      [hash(authorization.slice(7))],
+      [hash(authorization.slice(7)), this.pluginId],
     );
     requireValue(node, 403, "实例凭据已撤销");
     return {
@@ -258,7 +262,7 @@ export class OriginalNodes {
     };
   }
 
-  async manage(actor: OriginalActor, id: number, action: string) {
+  async manage(actor: Actor, id: number, action: string) {
     this.p.admin(actor);
     const control = controls.get(action);
     requireValue(control, 400, "未知操作");
@@ -267,9 +271,9 @@ export class OriginalNodes {
         sql,
         `UPDATE gpu_nodes n SET control=$2,enabled=n.enabled AND $2!='removed'
           FROM connections c WHERE c.id=n.connection_id AND NOT c.fmworker_resource_driver
-          AND public_id=$1 AND control!='removed'
+          AND public_id=$1 AND ($3::text IS NULL OR c.plugin_id=$3) AND control!='removed'
           AND NOT EXISTS (SELECT 1 FROM fmworker_resources r WHERE r.node_id=n.id) RETURNING n.id`,
-        [id, control],
+        [id, control, this.pluginId],
       );
       requireValue(node, 404, "实例不存在");
       if (action === "stop" || action === "remove")

@@ -1,3 +1,4 @@
+import type { PluginMedia } from "./plugin-media.js";
 import { lookup as resolve } from "node:dns";
 import { request as httpsRequest } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
@@ -166,6 +167,7 @@ export class PluginHost {
     private readonly sql: Sql,
     private readonly grant: HostGrant,
     private readonly http: HttpTransport = transport,
+    private readonly media?: { session: PluginMedia; actor: string },
   ) {}
 
   /** Function names this invocation may call. */
@@ -196,6 +198,19 @@ export class PluginHost {
     requireValue(this.granted.includes(fn), 403, "插件未声明此宿主能力");
     this.used[fn] = (this.used[fn] ?? 0) + 1;
     switch (fn) {
+      case "media.probe":
+      case "media.transcode":
+      case "media.concat":
+      case "media.extractFrame":
+        requireValue(this.media, 403, "无法访问工作区媒体");
+        return this.media.session.call(
+          this.sql,
+          this.grant.workspace,
+          this.media.actor,
+          fn,
+          args,
+          signal,
+        );
       case "http.fetch":
         return this.fetch(args, signal);
       case "data.get":

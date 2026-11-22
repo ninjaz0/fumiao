@@ -517,7 +517,7 @@ export class Platform {
     );
     if (
       studio &&
-      ((plugin.originalState &&
+      ((plugin.manifest.mode === "pull" && managed) || (plugin.originalState &&
         (!managed ||
           plugin.manifest.mode === "pull" ||
           plugin.manifest.originalImageSettings)) ||
