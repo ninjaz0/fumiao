@@ -242,6 +242,7 @@ const initialDraft = {
 export type Draft = typeof initialDraft & {
   params?: FormValues;
   h3?: H3Options;
+  suspendedH3Frames?: H3Options;
   packs?: Pack[];
   flowSourceJob?: number | null;
   h3ReferenceDraft?: {
@@ -468,10 +469,17 @@ export function seedError(form: ModelForm | undefined, raw: string): string {
 export function normalizeParams(state: StudioState, draft: Draft): Draft {
   const form = modelForm(state, draft);
   const flow = flowSpec(state, selectedModel(draft));
+  const supportsH3 = draft.kind === "video" && form?.referenceModes && !flow;
+  const suspendedH3Frames = supportsH3
+    ? undefined
+    : frames(draft)
+      ? draft.h3
+      : draft.suspendedH3Frames;
   if (flow) {
     return {
       ...draft,
       h3: undefined,
+      suspendedH3Frames,
       params: undefined,
       ratio: flow.ratio || draft.ratio,
       seconds: String(flow.seconds ?? draft.seconds),
@@ -487,9 +495,17 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
     ? normalizeForm(form, { ...draftValues(draft), ...draft.params })
     : {};
   const seed = typeof draft.seed === "string" ? draft.seed.trim() : "";
+  const h3 = supportsH3
+    ? h3Options(draft.suspendedH3Frames ?? draft.h3)
+    : undefined;
+  if (h3 && draft.suspendedH3Frames) {
+    if (!referenceAsset(state, h3.first_frame)) h3.first_frame = null;
+    if (!referenceAsset(state, h3.last_frame)) h3.last_frame = null;
+  }
   return {
     ...draft,
-    h3: form?.referenceModes ? h3Options(draft.h3) : undefined,
+    h3,
+    suspendedH3Frames,
     flowSourceJob: null,
     params: form?.parameterObject ? values : undefined,
     ratio: String(values.ratio ?? draft.ratio),
@@ -1103,6 +1119,32 @@ export function changeH3Mode(
     },
   };
 }
+export function imageToVideoDraft(
+  state: StudioState,
+  previous: DraftSession,
+  result: string,
+): DraftSession {
+  const draft = {
+    ...previous.draft,
+    kind: "video" as const,
+    prompt: "",
+    quality: "480",
+    seconds: "5",
+    seed: "",
+  };
+  const session: DraftSession = {
+    ...previous,
+    draft: normalizeParams(state, ensureModel(state, draft)),
+    refs: [],
+    parent: null,
+    retainedSeed: null,
+    suspendedAudioDraft: suspendAudioDraft(previous),
+    suspendedMediaDraft: null,
+  };
+  return frames(session.draft)
+    ? assignFrame(state, session, result, "first_frame")
+    : { ...session, refs: [result] };
+}
 export function assignFrame(
   state: StudioState,
   session: DraftSession,
@@ -1433,7 +1475,7 @@ export function generationRequest(
           : draft.imageQuality,
       },
     };
-  const { h3, ...values } = draft;
+  const { h3, suspendedH3Frames, ...values } = draft;
   return {
     kind,
     path: "/api/jobs",
