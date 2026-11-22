@@ -491,12 +491,15 @@ export class OriginalIdentity {
         "UPDATE workspaces SET name=$2,revision=revision+1 WHERE id=$1",
         [row.id, name],
       );
-      await sql.query("DELETE FROM members WHERE workspace_id=$1", [row.id]);
-      for (const member of members)
-        await sql.query(
-          "INSERT INTO members(workspace_id,user_id) VALUES($1,$2)",
-          [row.id, member.id],
-        );
+      const ids = members.map((member) => member.id);
+      await sql.query(
+        "DELETE FROM members WHERE workspace_id=$1 AND NOT (user_id=ANY($2::uuid[]))",
+        [row.id, ids],
+      );
+      await sql.query(
+        "INSERT INTO members(workspace_id,user_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING",
+        [row.id, ids],
+      );
       await this.p.audit(sql, user, "workspace.update", row.id);
       return (await this.spaces(sql, user)).find((w) => w.id === id);
     });

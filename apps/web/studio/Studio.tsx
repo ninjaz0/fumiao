@@ -871,6 +871,43 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     setDialog({ content, opener, adminOnly });
   }
 
+  function actionButtons(jobId?: number, assetId?: string) {
+    const entries = state?.plugin_actions ?? [];
+    return entries.flatMap((entry) => {
+      const target = entry.target === "asset" ? assetId : jobId;
+      if (!target || !state) return [];
+      const space = String(state.workspace_id);
+      return [
+        <button
+          className="menu-item"
+          key={entry.plugin + "/" + entry.id}
+          onClick={() => {
+            const requestId = crypto.randomUUID();
+            showDialog(
+              {
+                kind: "plugin-action",
+                entry,
+                run: async (values) => {
+                  const response = await api<{ notice: string }>(
+                    space,
+                    `/api/plugins/${entry.plugin}/actions/${entry.id}`,
+                    { requestId, version: entry.version, target, values },
+                  );
+                  notify(response.notice);
+                  await refresh(true);
+                },
+              },
+              anchor.current,
+              entry.audience === "admin",
+            );
+          }}
+        >
+          {entry.title}
+        </button>,
+      ];
+    });
+  }
+
   function preview(id: string, button: HTMLButtonElement) {
     showDialog(
       {
@@ -1515,7 +1552,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     favorite={favorite}
                     cancel={cancel}
                     pageTo={(id) => transition({ job: id })}
-                    locate={(job) => showResult(job.id, resultTab(job.kind), true)}
+                    locate={(job) =>
+                      showResult(job.id, resultTab(job.kind), true)
+                    }
                     preview={preview}
                     edit={editJob}
                     again={submit}
@@ -1536,6 +1575,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     close={closeDetail}
                     favorite={favorite}
                     use={useAsset}
+                    more={
+                      actionButtons(undefined, image.id).length
+                        ? (button) => openMenu("detail-more", button)
+                        : undefined
+                    }
                     remove={deleteImage}
                   />
                 ) : page === "home" && !detail ? (
@@ -1617,6 +1661,12 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                           }
                         : null
                     }
+                    pluginButtons={
+                      library.keys.length === 1 &&
+                      library.keys[0].startsWith("asset:")
+                        ? actionButtons(undefined, library.keys[0].slice(6))
+                        : []
+                    }
                     actions={{
                       favorite,
                       edit: editJob,
@@ -1639,7 +1689,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           <main
             className="loading-screen"
             role={bootstrapError ? "alert" : "status"}
-            aria-label={bootstrapError ? "工作台加载失败" : "弗淼 AIGC 正在加载"}
+            aria-label={
+              bootstrapError ? "工作台加载失败" : "弗淼 AIGC 正在加载"
+            }
             aria-busy={!bootstrapError}
           >
             <div className="loading-brand">
@@ -1770,6 +1822,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         {state &&
           menu === "detail-more" &&
           !menuHidden &&
+          actionButtons(job?.id, job?.result ?? image?.id)}
+        {state &&
+          menu === "detail-more" &&
+          !menuHidden &&
           job &&
           (isOwner(state, job) ? (
             <button
@@ -1780,7 +1836,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             >
               删除
             </button>
-          ) : (
+          ) : actionButtons(job.id, job.result).length ? null : (
             <span className="empty-note">暂无更多操作</span>
           ))}
         {state && session && menu && isComposerMenu(menu) && !menuHidden && (

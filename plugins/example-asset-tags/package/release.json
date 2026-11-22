@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "id": "example-asset-tags",
+  "label": "素材自动分类",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "data"
+    ],
+    "events": [
+      {
+        "type": "asset.created",
+        "programFile": "classify.js"
+      }
+    ],
+    "actions": [
+      {
+        "id": "classification",
+        "title": "查看素材分类",
+        "target": "asset",
+        "audience": "member",
+        "programFile": "classification.js"
+      }
+    ]
+  }
+}

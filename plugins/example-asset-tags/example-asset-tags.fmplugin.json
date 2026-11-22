@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "id": "example-asset-tags",
+  "label": "素材自动分类",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "data"
+    ],
+    "events": [
+      {
+        "type": "asset.created",
+        "program": "{\n  async handle(event, host) {\n    const type = event.resource.mime.split(\"/\")[0];\n    const category = { image: \"图片\", video: \"视频\", audio: \"音频\" }[type] || \"其他\";\n    await host.data.put(\"asset/\" + event.resource.id, category);\n    return true;\n  },\n}"
+      }
+    ],
+    "actions": [
+      {
+        "id": "classification",
+        "title": "查看素材分类",
+        "target": "asset",
+        "audience": "member",
+        "program": "{\n  async run(asset, values, host) {\n    const label = await host.data.get(\"asset/\" + asset.id);\n    return { notice: label ? \"素材分类：\" + label : \"暂无分类记录\" };\n  },\n}"
+      }
+    ]
+  }
+}

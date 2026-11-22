@@ -37,6 +37,8 @@ const releases = [
     entry: 'export { chatStreaming as adapter } from "../chat/src/stream.js";',
   },
   { id: "example-extension" },
+  { id: "example-asset-tags" },
+  { id: "example-review-notes" },
   { id: "example-node-pool", program: true, clientBuild: "client/pack.py" },
 ];
 async function buildAdapter(root, entry) {
@@ -86,7 +88,7 @@ async function buildAdapter(root, entry) {
   return gzipSync(result.outputFiles[0].contents);
 }
 async function packContributions(root, contributes) {
-  for (const page of contributes.settingsPages ?? []) {
+  for (const page of [...(contributes.settingsPages ?? []), ...(contributes.events ?? []), ...(contributes.actions ?? [])]) {
     if (page.programFile) {
       page.program = await expression(join(root, page.programFile));
       delete page.programFile;

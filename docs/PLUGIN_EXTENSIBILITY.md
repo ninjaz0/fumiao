@@ -155,3 +155,22 @@ QuickJS 沿用现有限制（16 MB 内存、100 ms、2 MB 输出），无网络�
 3. **成员页操作**与用户级设置。
 4. **事件订阅**：任务完成 / 失败、插件状态变化的只读事件，经 QuickJS 或远程端点处理，带重放保护。
 5. **更多宿主能力**：如 `storage.export`（受控导出到私有存储）、`chat.tools`。每项能力单独评审并在确认页展示。
+
+## 工作区事件与资源菜单
+
+包可在 `contributes.events`、`contributes.actions` 声明事件处理函数和菜单操作。扩展在安装确认页列出，启用后对所有工作区生效。纯扩展包声明 `extensionOnly: true`，无需提供模型、服务连接或密钥。提供方包也能使用同一契约。
+
+| 声明 | 宿主调用 | 授权范围 |
+| --- | --- | --- |
+| `events: [{ type, program }]` | `async handle({ id, type, workspace, resource }, host)`，返回可序列化的 JSON 值 | 工作区由产生事件的事务确定。任务和素材事件的媒体产物归原资源所有者，成员变动事件只提供成员公开号，不提供媒体能力。 |
+| `actions: [{ id, title, target, audience, fields?, program }]` | `async run(resource, values, host)`，返回 `{ notice }`，最多 300 字 | `target` 为 `asset` 或 `job`。受众默认为管理员，`member` 对拥有当前工作区访问权的成员开放。宿主渲染和校验最多 300 字的文本字段 `{ name, label, required? }`。 |
+
+任务完成、失败事件分别为 `job.completed`、`job.failed`，资源包含公开任务号、类型和状态。`asset.created` 在素材首次就绪时产生，包含公开素材 ID、MIME 和字节数。`member.added` 和 `member.removed` 对应工作区成员关系的增删。插件按清单调用 `host.data`、`host.http` 和 `host.media`，事件和菜单的数据读写均限于当前工作区。可用 `host.http.fetch` 将事件送往管理员在安装时核准的 HTTPS 域名。
+
+业务事务与待投递记录一起提交。Worker 锁定一条投递并单独执行，程序失败时回滚本次写入和媒体，按 5、10、20、40 秒退避，第五次失败后在 `studio_event_deliveries` 保留 `dead=true` 的记录。管理员可按投递 ID 关联 `studio_plugin_audit.target` 查看尝试记录。停用、升级或卸载会撤销订阅，旧待投递记录随后丢弃。只处理订阅启用后发生的事件。事件处理程序创建的素材不会再次触发自动化。
+
+事件向外部服务投递为至少一次语义。使用事件 `id` 作为对方的幂等键。菜单调用为 `POST /api/plugins/:plugin/actions/:action`，提交当前包版本 `version`、资源公开 ID `target`、表单对象 `values` 和 UUID `requestId`。宿主将菜单请求 ID 提供为 `resource.requestId`，同一操作者重试成功请求时返回已保存的结果。插件调用外部服务时也应传递这个键。包内程序只在 QuickJS 中运行。
+
+[素材自动分类示例](../plugins/example-asset-tags/example-asset-tags.fmplugin.json)在新素材就绪时按 MIME 归类。在素材或任务成品的菜单点「查看素材分类」可以读取结果。[审片备注示例](../plugins/example-review-notes/example-review-notes.fmplugin.json)在任务的「更多」菜单中保存、查看当前工作区的备注。
+
+迁移 038 只为新发生的业务变更排队，已有任务、素材与账本沿用原记录。升级前按运维手册备份数据库和媒体。回退到无法读取新版清单的宿主时，恢复升级前的同一时间点备份。

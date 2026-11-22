@@ -1,4 +1,4 @@
-import type { PluginPageEntry } from "@fumiao/plugin-sdk/contributions";
+import type { MenuEntry, PluginPageEntry } from "@fumiao/plugin-sdk/contributions";
 import type { InstalledSettingsPage } from "@fumiao/plugin-sdk/settings-pages";
 import { resolve as resolveFlow } from "../canvas-editor/flowPicker";
 import {
@@ -137,6 +137,7 @@ export type Job = {
 export type StudioState = {
   settings_pages?: InstalledSettingsPage[];
   studio_plugins?: boolean;
+  plugin_actions?: MenuEntry[];
   plugin_pages?: PluginPageEntry[];
   gpu_node_settings?: {id:string;version:string;title:string;enabled:boolean;pending:number}|null;
   model_forms: Record<string, ModelForm>;

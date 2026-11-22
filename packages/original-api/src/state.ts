@@ -4,6 +4,7 @@ import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import { studioPluginProfile, pairedPluginAvailable, listedStudioCatalog } from "@fumiao/platform/studio-plugin-profile.js";
+import { resourceMenus } from "@fumiao/platform/plugin-extensions.js";
 import { PluginPages } from "@fumiao/platform/plugin-pages.js";
 import { installedSettingsPages } from "@fumiao/platform/studio-packages.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
@@ -109,6 +110,7 @@ export class OriginalState {
             ),
             assets: await records.assets(sql, workspace.id),
             nodes: actor.role === "admin" && await pairedPluginAvailable(sql) ? await records.nodes(sql, actor, stamp) : [],
+            plugin_actions: await resourceMenus(sql, actor),
             plugin_pages: await new PluginPages(this.p).list(sql, actor),
             ...(actor.role === "admin" && { settings_pages: await installedSettingsPages(sql) }),
             gpu_node_settings: nodePage ?? null,

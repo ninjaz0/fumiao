@@ -202,6 +202,7 @@ type LibraryActions = {
 };
 
 export function Library({
+  pluginButtons,
   library,
   state,
   delta,
@@ -209,6 +210,7 @@ export function Library({
   referencePicking,
   actions,
 }: {
+  pluginButtons?: ReactNode;
   library: ReturnType<typeof useLibrary>;
   state: StudioState;
   delta: number;
@@ -331,6 +333,7 @@ export function Library({
                   aria-live="polite"
                 >{`已选择 ${keys.length} 项内容`}</span>
                 <div className="bulk-actions">
+                  {pluginButtons}
                   <button
                     data-act="batch-delete"
                     disabled={!library.removable || !!activity}

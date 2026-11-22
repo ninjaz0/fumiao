@@ -11,10 +11,9 @@ import type { Request } from "express";
 import { z } from "zod";
 import { readOriginalBody } from "@fumiao/original-api/canvas-http.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
-import {
-  DomainError,
-  requireValue,
-} from "@fumiao/platform/security.js";
+import { DomainError, requireValue } from "@fumiao/platform/security.js";
+import { resourceAction } from "@fumiao/platform/plugin-extensions.js";
+import { PluginMedia } from "@fumiao/platform/plugin-media.js";
 import { PluginPages } from "@fumiao/platform/plugin-pages.js";
 import { originalSessionToken } from "./original-request.js";
 
@@ -26,7 +25,7 @@ export function isPluginPageAction(req: Request) {
   );
 }
 
-@Controller("api/plugins/:plugin/pages/:page")
+@Controller("api/plugins/:plugin")
 export class OriginalPluginPagesController {
   private readonly pages: PluginPages;
   constructor(
@@ -35,7 +34,51 @@ export class OriginalPluginPagesController {
     this.pages = new PluginPages(identity.p);
   }
 
-  @Post("view")
+  @Post("actions/:action")
+  @HttpCode(200)
+  async menu(
+    @Req() req: Request,
+    @Param("plugin") plugin: string,
+    @Param("action") action: string,
+    @Body() body: unknown,
+  ) {
+    const identity = this.identity,
+      actor = await identity.actor(originalSessionToken(req));
+    const session = new PluginMedia(identity.p.storage);
+    try {
+      const result = await identity.p.db.transaction(async (sql) => {
+        const {
+          rows: [current],
+        } = await sql.query<typeof actor>(
+          "SELECT * FROM users WHERE id=$1 AND active AND deleted_at IS NULL FOR SHARE",
+          [actor.id],
+        );
+        requireValue(current, 401, "请先登录");
+        const space = await identity.activeWorkspace(
+          sql,
+          current,
+          req.get("X-Workspace-Id"),
+        );
+        requireValue(space, 403, "无法访问这个工作区");
+        return resourceAction(
+          sql,
+          session,
+          current,
+          space.id,
+          plugin,
+          action,
+          body,
+        );
+      });
+      if (result instanceof DomainError) throw result;
+      return result;
+    } catch (error) {
+      await session.rollback();
+      throw error;
+    }
+  }
+
+  @Post("pages/:page/view")
   @HttpCode(200)
   async view(
     @Req() req: Request,
@@ -52,7 +95,7 @@ export class OriginalPluginPagesController {
     return this.pages.view(actor, req.get("X-Workspace-Id"), plugin, page);
   }
 
-  @Post("actions/:action")
+  @Post("pages/:page/actions/:action")
   @HttpCode(200)
   async action(
     @Req() req: Request,

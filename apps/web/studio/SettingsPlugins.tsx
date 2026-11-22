@@ -840,8 +840,7 @@ export function PluginSettings({
                   <div>
                     <strong>{p.label}</strong> <code>{p.version}</code>
                     <small>
-                      {p.choices.length} 个模型 ·{" "}
-                      {p.mode === "pull" ? "节点服务" : "接口服务"}
+                      {p.mode === "extension" ? "工作区扩展" : p.choices.length + " 个模型 · " + (p.mode === "pull" ? "节点服务" : "接口服务")}
                     </small>
                   </div>
                   {opened !== p.id && toggle}
@@ -858,7 +857,7 @@ export function PluginSettings({
                 </div>
                 <div className="plugin-card-foot">
                   <small>
-                    {p.mode === "pull"
+                    {p.mode === "extension" ? "在宿主沙箱中运行" : p.mode === "pull"
                       ? "由配对节点处理任务"
                       : servicesError
                         ? "服务清单读取失败"
@@ -904,7 +903,7 @@ export function PluginSettings({
                   ).length;
                   const duplicateIds = findDuplicateModelIds(p.id, plugins);
                   const needsService =
-                    p.mode !== "pull" &&
+                    p.mode === "request" &&
                     services !== undefined &&
                     pluginServices.length === 0;
                   return (
@@ -938,6 +937,8 @@ export function PluginSettings({
                         <p className="plugin-section-desc">
                           {p.removing
                             ? "已提交移除请求；待已受理任务结束后自动卸载，期间不再受理新任务。"
+                            : p.mode === "extension"
+                              ? (p.enabled ? "已启用此插件声明的事件订阅和菜单操作。" : "开启后，工作区可以使用此插件声明的事件订阅和菜单操作。")
                             : p.enabled
                               ? "关闭后，所有工作区将停止接收新任务。已受理的任务继续运行。"
                               : needsService
@@ -946,6 +947,7 @@ export function PluginSettings({
                         </p>
                       </section>
 
+                      {p.mode !== "extension" && <>
                       <section className="plugin-drawer-section">
                         <div className="plugin-drawer-section-head">
                           <div className="plugin-section-title">
@@ -1492,6 +1494,7 @@ export function PluginSettings({
                         </div>
                       </section>
 
+                      </>}
                       <details
                         className="plugin-drawer-details"
                         open={

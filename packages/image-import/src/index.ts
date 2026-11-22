@@ -112,7 +112,9 @@ export class ImageImporter {
         workerData: { input: job.input, output: job.output, mode: job.mode },
       });
       const result = await new Promise<ImageResult>((resolve, reject) => {
-        worker!.once("message", (message) =>
+        worker!.on("message", (message) => {
+          // Node watch also posts dependency notifications on this port.
+          if (typeof message?.ok !== "boolean") return;
           message.ok
             ? resolve(message.result)
             : reject(
@@ -122,8 +124,8 @@ export class ImageImporter {
                       message.domain ? 400 : 500,
                       message.message,
                     ),
-              ),
-        );
+              );
+        });
         worker!.once("error", reject);
         worker!.once("exit", () =>
           reject(new Error("Image worker exited before replying")),
