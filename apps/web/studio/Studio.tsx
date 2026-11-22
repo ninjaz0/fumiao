@@ -54,7 +54,6 @@ import {
   addImages,
   assignFrame,
   checkImages,
-  emptyH3,
   ensureModel,
   flowIssue,
   frames,
@@ -75,6 +74,7 @@ import {
   removeDraftPack,
   resultTab,
   selectedModel,
+  submittedDraft,
   syncDraftReferences,
   quote,
   readDraft,
@@ -1266,19 +1266,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         if (!sameSpace(space, active.current) || leaving.current) return;
         const latest = currentDraft.current!;
         if (!job && latest.submitId === session.submitId) {
-          const { h3ReferenceDraft, ...values } = latest.draft;
-          updateDraft({
-            ...latest,
-            refs: [],
-            parent: null,
-            retainedSeed: null,
-            draft: {
-              ...values,
-              prompt: "",
-              packs: [],
-              h3: { ...emptyH3, mode: h3Options(values.h3).mode },
-            },
-          });
+          updateDraft(submittedDraft(latest));
         }
         notify("已加入生成队列");
         await refresh();
