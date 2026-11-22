@@ -175,6 +175,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const currentDraft = useRef<DraftSession | null>(null);
   const workspaceId = useRef<string | null>(null);
   const stateRead = useRef(0);
+  const pendingStateReads = useRef(0);
   const leaving = useRef(false);
   const onLibraryRead = useRef<
     ((before: StudioState, after: StudioState) => void) | null
@@ -274,6 +275,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       retryBootstrap.current = false;
       setBootstrapError("");
       const version = ++stateRead.current;
+      ++pendingStateReads.current;
       try {
         const next = await api<StudioState>(workspaceId.current, "/api/state");
         if (version !== stateRead.current || leaving.current) return;
@@ -441,6 +443,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           retryBootstrap.current = true;
           setBootstrapError((error as Error).message);
         } else notify((error as Error).message);
+      } finally {
+        --pendingStateReads.current;
       }
     },
     [closeMenu, notify, persist],
@@ -475,7 +479,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       if (
         (active.current || retryBootstrap.current) &&
         !document.hidden &&
-        !busy.current.has("upload")
+        !busy.current.has("upload") &&
+        !pendingStateReads.current
       )
         void refresh();
     }, 6000);
