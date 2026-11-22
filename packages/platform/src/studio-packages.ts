@@ -1,3 +1,4 @@
+import { purgePluginData } from "./plugin-host.js";
 import { portablePlugin } from "./portable-plugin.js";
 import { officialAdapter } from "./distribution/official-adapter.js";
 import {
@@ -285,6 +286,23 @@ function permissionSummary(
     lines.push(
       "宿主能力：" +
         added("节点管理", !prior?.hostCapabilities.includes("nodes")),
+    );
+  if (next.http)
+    lines.push(
+      "宿主能力：访问外部服务 " +
+        next.http.origins
+          .map((origin) =>
+            added(origin, !prior?.http?.origins.includes(origin)),
+          )
+          .join("、"),
+    );
+  if (next.hostCapabilities.includes("data"))
+    lines.push(
+      "宿主能力：" +
+        added(
+          "保存插件数据（全站与工作区）",
+          !prior?.hostCapabilities.includes("data"),
+        ),
     );
   const settings = settingsScopes.filter((scope) => next.settings?.[scope]);
   if (settings.length)
@@ -891,6 +909,7 @@ export class StudioPackages {
     )
       return;
     await this.settings.purge(sql, id);
+    await purgePluginData(sql, id);
     await sql.query(
       "DELETE FROM studio_model_service WHERE connection_id IN (SELECT id FROM connections WHERE plugin_id=$1)",
       [id],

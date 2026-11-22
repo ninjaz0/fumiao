@@ -2,7 +2,7 @@
   "format": 1,
   "id": "example-extension",
   "label": "模型目录示例",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "adapterVersion": "1.0.0",
   "remote": {
     "endpoint": "http://127.0.0.1:4100",
@@ -139,7 +139,31 @@
           }
         ],
         "program": "{\n  view({ settings, models }) {\n    const { showDisabled } = settings.workspace.values;\n    const label = showDisabled ? \"隐藏停用模型\" : \"显示停用模型\";\n    return {\n      schema: 1,\n      title: \"示例模型概览\",\n      primary: {\n        action: \"toggle-disabled\",\n        label,\n        confirm: {\n          title: label,\n          summary: \"更改当前工作区的模型列表显示方式。\",\n        },\n      },\n      blocks: [\n        {\n          type: \"list\",\n          empty: \"当前没有符合显示条件的模型。\",\n          rows: models\n            .filter((model) => showDisabled || model.enabled)\n            .map((model) => ({\n              id: model.id,\n              title:\n                settings.global.values.labelMode === \"id\"\n                  ? model.id\n                  : model.label,\n              status: model.enabled ? \"已启用\" : \"已停用\",\n            })),\n        },\n      ],\n    };\n  },\n  action(id, payload, { settings }) {\n    if (id !== \"toggle-disabled\") throw Error(\"未知操作\");\n    const showDisabled = !settings.workspace.values.showDisabled;\n    return {\n      settings: { workspace: { showDisabled } },\n      notice: showDisabled\n        ? \"当前工作区已显示停用模型\"\n        : \"当前工作区已隐藏停用模型\",\n    };\n  },\n}"
+      },
+      {
+        "id": "notes",
+        "title": "工作区备注",
+        "icon": "sliders",
+        "group": "services",
+        "order": 102,
+        "audience": "admin",
+        "visibleWhen": "installed",
+        "scopes": [],
+        "actions": [
+          {
+            "id": "add-note",
+            "kind": "program"
+          },
+          {
+            "id": "remove-note",
+            "kind": "program"
+          }
+        ],
+        "program": "{\n  // Hooks may be async. `host` holds the functions this package declared:\n  // a view can read, an action can also write.\n  async view(input, host) {\n    const { keys } = await host.data.list(\"notes/\");\n    const rows = [];\n    for (const key of keys) {\n      const note = await host.data.get(key);\n      rows.push({\n        id: key,\n        title: note.text,\n        status: note.savedAt,\n        actions: [\n          {\n            action: \"remove-note\",\n            label: \"删除\",\n            payload: { key },\n            confirm: { title: \"删除备注\", summary: note.text },\n          },\n        ],\n      });\n    }\n    return {\n      schema: 1,\n      title: \"工作区备注\",\n      blocks: [\n        {\n          type: \"form\",\n          id: \"add\",\n          presentation: \"inline\",\n          fields: [\n            { name: \"text\", label: \"备注\", type: \"text\", required: true },\n          ],\n          submit: { action: \"add-note\", label: \"保存备注\" },\n        },\n        { type: \"list\", empty: \"当前工作区还没有备注。\", rows },\n      ],\n    };\n  },\n  async action(id, payload, input, host) {\n    if (id === \"add-note\") {\n      const text = String(payload.text || \"\").trim();\n      if (!text) throw Error(\"备注不能为空\");\n      const { keys } = await host.data.list(\"notes/\");\n      const next =\n        keys.reduce((max, key) => Math.max(max, Number(key.slice(6))), 0) + 1;\n      await host.data.put(\"notes/\" + String(next).padStart(6, \"0\"), {\n        text: text.slice(0, 200),\n        savedAt: payload.savedAt || \"\",\n      });\n      return { notice: \"备注已保存\" };\n    }\n    if (id === \"remove-note\") {\n      await host.data.delete(String(payload.key));\n      return { notice: \"备注已删除\" };\n    }\n    throw Error(\"未知操作\");\n  },\n}"
       }
+    ],
+    "hostCapabilities": [
+      "data"
     ]
   }
 }

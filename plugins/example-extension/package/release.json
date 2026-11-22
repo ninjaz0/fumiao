@@ -2,7 +2,7 @@
   "format": 1,
   "id": "example-extension",
   "label": "模型目录示例",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "adapterVersion": "1.0.0",
   "remote": {
     "endpoint": "http://127.0.0.1:4100",
@@ -12,13 +12,21 @@
       "version": "1.0.0",
       "contractVersion": 1,
       "mode": "request",
-      "originalSubmission": { "version": 3 },
+      "originalSubmission": {
+        "version": 3
+      },
       "configSchema": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["apiKey"],
+        "required": [
+          "apiKey"
+        ],
         "properties": {
-          "apiKey": { "type": "string", "minLength": 1, "writeOnly": true }
+          "apiKey": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true
+          }
         }
       },
       "models": [
@@ -30,18 +38,25 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {},
-            "x-references": { "max": 0 }
+            "x-references": {
+              "max": 0
+            }
           },
           "studio": {
             "order": 1000,
             "priceOrder": 1000,
-            "descriptor": { "kind": "image", "label": "示例色卡" },
+            "descriptor": {
+              "kind": "image",
+              "label": "示例色卡"
+            },
             "prices": [
               {
                 "tier": "standard",
                 "label": "标准",
                 "amount": 0,
-                "match": { "type": "object" }
+                "match": {
+                  "type": "object"
+                }
               }
             ]
           }
@@ -55,11 +70,16 @@
       "global": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["labelMode"],
+        "required": [
+          "labelMode"
+        ],
         "properties": {
           "labelMode": {
             "type": "string",
-            "enum": ["name", "id"],
+            "enum": [
+              "name",
+              "id"
+            ],
             "default": "name"
           }
         }
@@ -67,9 +87,14 @@
       "workspace": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["showDisabled"],
+        "required": [
+          "showDisabled"
+        ],
         "properties": {
-          "showDisabled": { "type": "boolean", "default": true }
+          "showDisabled": {
+            "type": "boolean",
+            "default": true
+          }
         }
       },
       "migrateFile": "migrate.js"
@@ -83,8 +108,16 @@
         "order": 100,
         "audience": "admin",
         "visibleWhen": "installed",
-        "scopes": ["settings"],
-        "actions": [{ "id": "save", "kind": "settings", "scope": "global" }],
+        "scopes": [
+          "settings"
+        ],
+        "actions": [
+          {
+            "id": "save",
+            "kind": "settings",
+            "scope": "global"
+          }
+        ],
         "programFile": "display.js"
       },
       {
@@ -95,10 +128,42 @@
         "order": 101,
         "audience": "admin",
         "visibleWhen": "installed",
-        "scopes": ["settings", "models"],
-        "actions": [{ "id": "toggle-disabled", "kind": "program" }],
+        "scopes": [
+          "settings",
+          "models"
+        ],
+        "actions": [
+          {
+            "id": "toggle-disabled",
+            "kind": "program"
+          }
+        ],
         "programFile": "overview.js"
+      },
+      {
+        "id": "notes",
+        "title": "工作区备注",
+        "icon": "sliders",
+        "group": "services",
+        "order": 102,
+        "audience": "admin",
+        "visibleWhen": "installed",
+        "scopes": [],
+        "actions": [
+          {
+            "id": "add-note",
+            "kind": "program"
+          },
+          {
+            "id": "remove-note",
+            "kind": "program"
+          }
+        ],
+        "programFile": "notes.js"
       }
+    ],
+    "hostCapabilities": [
+      "data"
     ]
   }
 }

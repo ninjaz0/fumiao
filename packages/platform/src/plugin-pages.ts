@@ -26,7 +26,8 @@ import {
 import { one, type Sql } from "./db.js";
 import { officialAdapter } from "./distribution/official-adapter.js";
 import { Platform } from "./platform.js";
-import { loadProgram } from "./plugin-program.js";
+import { PluginHost, type HttpTransport } from "./plugin-host.js";
+import { loadProgram, runProgram } from "./plugin-program.js";
 import { PluginSettingsStore } from "./plugin-settings.js";
 import { DomainError, requireValue } from "./security.js";
 
@@ -74,6 +75,8 @@ type Audit = {
   version: string | null;
   kind?: PageAction["kind"];
   target: string | null;
+  /** Host functions a program action called, e.g. `data.put×1`. */
+  calls?: string;
 };
 
 function visible(release: Release, page: ResolvedPage) {
@@ -83,11 +86,22 @@ function visible(release: Release, page: ResolvedPage) {
 async function invoke(
   source: string,
   hook: "action" | "view",
-  ...args: unknown[]
+  args: unknown[],
+  host?: PluginHost,
 ) {
   try {
-    return (await loadProgram(source))(hook, ...args);
-  } catch {
+    return host
+      ? await runProgram(source, hook, args, host.granted, host.call)
+      : (await loadProgram(source))(hook, ...args);
+  } catch (error) {
+    // A limit the host enforced is the administrator's to see; what went
+    // wrong inside the program is not.
+    const limit =
+      host?.limit ??
+      (error instanceof DomainError && error.status === 408
+        ? error
+        : undefined);
+    if (limit) throw new DomainError(422, limit.message);
     throw new DomainError(
       422,
       hook === "view" ? "插件设置页输出无效" : "插件操作程序执行失败",
@@ -133,7 +147,24 @@ const pairPayload = z
 
 export class PluginPages {
   private readonly settings = new PluginSettingsStore();
-  constructor(private readonly p: Platform) {}
+  constructor(
+    private readonly p: Platform,
+    private readonly http?: HttpTransport,
+  ) {}
+
+  private pluginHost(sql: Sql, ctx: Context, mode: "read" | "write") {
+    return new PluginHost(
+      sql,
+      {
+        pluginId: ctx.release.id,
+        workspace: ctx.workspace,
+        contributions: ctx.contributions,
+        mode,
+        scopes: ctx.page.audience === "member" ? ["workspace"] : settingsScopes,
+      },
+      this.http,
+    );
+  }
 
   async list(sql: Sql, actor: OriginalActor): Promise<PluginPageEntry[]> {
     const { rows } = await sql.query<Release>(releaseQuery);
@@ -348,15 +379,22 @@ export class PluginPages {
       const ctx = await this.context(sql, actor, selected, plugin, page);
       const input = await this.input(sql, ctx);
       if (ctx.page.legacy)
-        return invoke("({view:" + ctx.page.program + "\n})", "view", {
-          enabled: ctx.release.enabled,
-          pending: input.plugin!.pending,
-          nodes: input.nodes!.nodes,
-          models: input.nodes!.nodeModels,
-          jobs: input.jobs,
-        });
+        return invoke("({view:" + ctx.page.program + "\n})", "view", [
+          {
+            enabled: ctx.release.enabled,
+            pending: input.plugin!.pending,
+            nodes: input.nodes!.nodes,
+            models: input.nodes!.nodeModels,
+            jobs: input.jobs,
+          },
+        ]);
       return validateView(
-        await invoke(ctx.page.program, "view", input),
+        await invoke(
+          ctx.page.program,
+          "view",
+          [input],
+          this.pluginHost(sql, ctx, "read"),
+        ),
         ctx.page,
       );
     });
@@ -443,6 +481,7 @@ export class PluginPages {
     ctx: Context,
     action: PageAction,
     request: ActionRequest,
+    audit: Audit,
   ): Promise<ActionResult> {
     const write = async (
       scope: SettingsScope,
@@ -474,15 +513,19 @@ export class PluginPages {
         return { refresh: true };
       case "program": {
         const input = await this.input(sql, ctx);
-        const output = programActionOutputSchema.safeParse(
-          await invoke(
+        const host = this.pluginHost(sql, ctx, "write");
+        let result;
+        try {
+          result = await invoke(
             ctx.page.program,
             "action",
-            action.id,
-            request.payload,
-            input,
-          ),
-        );
+            [action.id, request.payload, input],
+            host,
+          );
+        } finally {
+          audit.calls = host.summary() || undefined;
+        }
+        const output = programActionOutputSchema.safeParse(result);
         requireValue(output.success, 422, "插件操作输出无效");
         for (const scope of settingsScopes) {
           const values = output.data.settings?.[scope];
@@ -541,8 +584,14 @@ export class PluginPages {
         requireValue(declaration, 404, "插件未声明此操作");
         if (body instanceof DomainError) throw body;
         requireValue(parsed.success, 400, "插件操作请求无效");
-        const result = await this.execute(sql, ctx, declaration, parsed.data);
-        await this.audit(sql, audit, "succeeded", null);
+        const result = await this.execute(
+          sql,
+          ctx,
+          declaration,
+          parsed.data,
+          audit,
+        );
+        await this.audit(sql, audit, "succeeded", audit.calls ?? null);
         return result;
       });
     } catch (error) {
@@ -554,7 +603,7 @@ export class PluginPages {
         this.p.db,
         audit,
         failure.status < 500 && failure.status !== 422 ? "rejected" : "failed",
-        failure.message,
+        [failure.message, audit.calls].filter(Boolean).join(" · "),
       );
       throw failure;
     }
