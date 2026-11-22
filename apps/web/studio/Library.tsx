@@ -18,6 +18,7 @@ import { JobCard, kindLabel } from "./History";
 import { Icon } from "./Icon";
 import { mediaURL, type Asset, type Job, type StudioState } from "./state";
 import { MAX_ASSET_SELECTION } from "../../../packages/original-api/src/asset-limits";
+import { groupHistoryJobs } from "./library-history";
 import { allAssetsSelected, selectAllAssets } from "./library-selection";
 
 export type LibraryTab = "videos" | "images" | "audio";
@@ -186,13 +187,6 @@ export function useLibrary(
   };
 }
 
-function dateLabel(timestamp: number) {
-  const date = new Date(timestamp * 1000);
-  return date.toDateString() === new Date().toDateString()
-    ? "今天"
-    : `${date.getMonth() + 1}月${date.getDate()}日`;
-}
-
 type ReferencePicking = { ids: Set<string>; finish: () => void };
 type LibraryActions = {
   favorite: (key: string, saved: boolean) => void;
@@ -246,21 +240,18 @@ export function Library({
     surface.current!.classList.toggle("is-selecting", selecting);
   }, [filter, selecting, library.redraw]);
   const images = filter.tab === "images";
-  const groups: { date: string; jobs: Job[] }[] = [];
-  for (const job of visibleJobs) {
-    if (
-      referencePicking &&
-      (job.status !== "done" ||
-        !state.assets.some(
-          (asset) =>
-            asset.id === job.result && (!asset.kind || asset.kind === "ref"),
-        ))
-    )
-      continue;
-    const date = dateLabel(job.created);
-    if (groups.at(-1)?.date !== date) groups.push({ date, jobs: [] });
-    groups.at(-1)!.jobs.push(job);
-  }
+  const groups = groupHistoryJobs(
+    referencePicking
+      ? visibleJobs.filter(
+          (job) =>
+            job.status === "done" &&
+            state.assets.some(
+              (asset) =>
+                asset.id === job.result && (!asset.kind || asset.kind === "ref"),
+            ),
+        )
+      : visibleJobs,
+  );
 
   function checkbox(key: string, label: string) {
     if (referencePicking)
@@ -413,10 +404,10 @@ export function Library({
                 {filter.scope === "favorites" ? "暂无收藏" : "暂无相关资产"}
               </div>
             )}
-          {groups.map(({ date, jobs }) => (
+          {groups.map(({ label, jobs }) => (
             <JobGroup
               key={jobs[0].id}
-              date={date}
+              date={label}
               jobs={jobs}
               state={state}
               delta={delta}
