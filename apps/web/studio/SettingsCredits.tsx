@@ -75,7 +75,7 @@ export function Credits({
   const { credits, workspace_id: workspace } = state;
   const latest = state.credit_history;
   const [previous, setPrevious] = useState(latest);
-  const [ledger, setHistory] = useState({
+  const [ledger, setLedger] = useState({
     rows: latest,
     before: latest.length === 50 ? latest.at(-1)?.id : undefined,
     epoch: 0,
@@ -89,9 +89,9 @@ export function Credits({
       latest.length === 50 &&
       (!rows.length || latest.at(-1)!.id > rows[0].id)
     ) {
-      setHistory({ rows: latest, before: latest.at(-1)?.id, epoch: epoch + 1 });
+      setLedger({ rows: latest, before: latest.at(-1)?.id, epoch: epoch + 1 });
     } else {
-      setHistory({ ...ledger, rows: mergeCreditRows(rows, latest) });
+      setLedger({ ...ledger, rows: mergeCreditRows(rows, latest) });
     }
   }
 
@@ -105,12 +105,12 @@ export function Credits({
         "/api/credits?before=" + before,
       );
       if (!button.isConnected) return;
-      setHistory((history) =>
-        history.epoch !== startEpoch
-          ? history
+      setLedger((current) =>
+        current.epoch !== startEpoch
+          ? current
           : {
-              ...history,
-              rows: mergeCreditRows(history.rows, result.history),
+              ...current,
+              rows: mergeCreditRows(current.rows, result.history),
               before:
                 result.history.length === 50
                   ? result.history.at(-1)?.id
