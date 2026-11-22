@@ -14,7 +14,7 @@ export function parseStoryboard(text:string):SuggestedShot[]{
 export function AiStoryboard({workspace,userId,project,onApply}:{workspace:number;userId:number;project:string;onApply:(shots:SuggestedShot[])=>Promise<void>}){
  const key=`fm-storyboard-${userId}-${workspace}-${project}`;
  const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(()=>{try{return parseStoryboard(localStorage.getItem(key+'-proposal')||'[]')}catch{return []}}),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
- const lastMessage=useRef(0);const pending=useRef<any>(null);
+ const lastMessage=useRef(Number(localStorage.getItem(key+'-message'))||0);const pending=useRef<any>(null);
  const req=(path:string,body?:unknown)=>chatRequest(workspace,path,body);
  const updateConfig=(c:any)=>{setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')};
  useEffect(()=>{let active=true;const refresh=()=>req('/api/chat/config').then(c=>{if(active)updateConfig(c)}).catch(e=>{if(active)setError(e.message)});void refresh();const timer=setInterval(()=>void refresh(),10000);try{pending.current=JSON.parse(localStorage.getItem(key+'-pending')||'null')}catch{}return()=>{active=false;clearInterval(timer)}},[workspace]);
@@ -26,7 +26,7 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
    if(!m)return;
    if(m.state==='running')return;
    pending.current=null;localStorage.removeItem(key+'-pending');
-   if(lastMessage.current===m.id)return;lastMessage.current=m.id;
+   if(lastMessage.current===m.id)return;lastMessage.current=m.id;localStorage.setItem(key+'-message',String(m.id));
    if(m.state!=='complete'){setError(m.error||'生成未完成，积分已退回');return;}
    setComplete(true);try{setShots(parseStoryboard(m.content));setError('')}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}
   };
@@ -45,7 +45,7 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
     pending.current={cid:chat,body:{uid:crypto.randomUUID(),model,text,expected_revision:c.conversation.revision,price_revision:config.pricing.revision}};
     localStorage.setItem(key+'-pending',JSON.stringify(pending.current));
    }
-   const p=pending.current;setCid(p.cid);setComplete(false);const snapshot=await req('/api/chats/'+p.cid+'/messages',p.body);setRunning(!!snapshot.conversation.active_turn);const reply=[...snapshot.messages].reverse().find((m:any)=>m.role==='assistant');if(reply?.state==='complete'){setComplete(true);try{setShots(parseStoryboard(reply.content))}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}}
+   const p=pending.current;setCid(p.cid);setComplete(false);const snapshot=await req('/api/chats/'+p.cid+'/messages',p.body);setRunning(!!snapshot.conversation.active_turn);const reply=[...snapshot.messages].reverse().find((m:any)=>m.role==='assistant');if(reply?.state==='complete'){lastMessage.current=reply.id;localStorage.setItem(key+'-message',String(reply.id));setComplete(true);try{setShots(parseStoryboard(reply.content))}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}}
   }catch(e){if((e as any).status && (e as any).status<500){pending.current=null;localStorage.removeItem(key+'-pending');void req('/api/chat/config').then(updateConfig);}setError((e as Error).message)}finally{setBusy(false)}
  };
  return <div className="ai-storyboard">
