@@ -480,10 +480,94 @@ export async function studioBrowser(
     assert.ok(Number.isSafeInteger(priceRevision));
     await expect(page.locator("#toast")).toHaveText("价格已保存");
     await nav("home");
+    const composerCreation = page.locator('.composer [data-menu="creation"]');
+    await composerCreation.focus();
+    await page.keyboard.press("Enter");
+    const composerPopover = page.locator("#popover");
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(composerPopover.getByRole("option", { name: "图片生成" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(composerPopover.getByRole("option", { name: "语音生成" })).toBeFocused();
+    await composerCreation.evaluate((trigger) => {
+      window.document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      (trigger as HTMLButtonElement).click();
+    });
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    await composerCreation.evaluate((trigger) => {
+      window.document.querySelector<HTMLElement>(
+        '#popover [aria-selected="true"]',
+      )!.click();
+      (trigger as HTMLButtonElement).click();
+    });
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    console.log("Verified immediate same-menu reopen focuses the selected option after Escape and selection");
+    await page.keyboard.press("Escape");
+    await expect(composerPopover).toBeHidden();
+    await expect(composerCreation).toBeFocused();
+    for (const selector of [
+      '[data-menu="h3-mode"]',
+      '[data-menu="format"]',
+      '[data-menu="advanced"]',
+      '[data-act="reference"]',
+      '[data-menu="mention"]',
+      '[data-menu="image-model"]',
+      '[data-menu="duration"]',
+    ]) {
+      const trigger = page.locator(`.composer ${selector}`);
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => composerPopover.evaluate(
+        (element) => element.contains(window.document.activeElement),
+      )).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect(composerPopover).toBeHidden();
+      await expect(trigger).toBeFocused();
+    }
+    console.log("Verified composer popover focus, arrow/Tab navigation and Escape restoration");
+    await page.locator('#files').setInputFiles({
+      name: "mention-focus.png", mimeType: "image/png", buffer: bytes,
+    });
+    await expect(page.locator('.composer [data-act="reference"]')).toHaveAttribute(
+      "aria-label", "管理参考内容，已添加 1 个素材",
+    );
+    const mentionPrompt = page.locator("#prompt");
+    await mentionPrompt.fill("");
+    await mentionPrompt.press("@");
+    await expect(composerPopover).toBeVisible();
+    await expect(mentionPrompt).toBeFocused();
+    await page.keyboard.type("continued");
+    await expect(mentionPrompt).toHaveText("@continued");
+    await page.keyboard.press("Escape");
+    await expect(composerPopover).toBeHidden();
+    await expect(mentionPrompt).toBeFocused();
+    await mentionPrompt.fill("");
+    await mentionPrompt.press("@");
+    await expect(mentionPrompt).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(composerPopover.locator(".ref-entry").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(composerPopover).toBeHidden();
+    await expect(mentionPrompt).toBeFocused();
+    const mentionTrigger = page.locator('.composer [data-menu="mention"]');
+    await mentionTrigger.click();
+    await expect(composerPopover.locator(".ref-entry").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(mentionTrigger).toBeFocused();
+    await page.locator('.composer [data-act="reference"]').click();
+    await composerPopover.locator('[data-act="unref"]').click();
+    await page.keyboard.press("Escape");
+    console.log("Verified typed mention keeps prompt focus, continued typing and Escape restoration");
     await page.locator('.composer [data-menu="creation"]').click();
+    await page.evaluate(() => window.document.dispatchEvent(new Event("scroll")));
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
     await page
       .locator('#popover [data-act="creation"][data-value="image"]')
       .click();
+    await expect(composerCreation).toBeFocused();
+    console.log("Verified creation menu survives queued scroll and restores live trigger focus after selection");
     await page.locator("#prompt").fill(imagePrompt);
     await expect(page.locator(".composer-credit")).toHaveAttribute(
       "aria-label",
@@ -528,6 +612,9 @@ export async function studioBrowser(
     assert.deepEqual(await media.body(), bytes);
     assert.deepEqual(providerErrors, []);
     assert.deepEqual(providerPrompts, [imagePrompt]);
+    await expect(page.locator(`#job-${jobId} .asset-preview img`)).toHaveAttribute(
+      "src", "/media/" + result, { timeout: apiTimeout },
+    );
     await page
       .locator(`#job-${jobId} .asset-preview`)
       .click({ timeout: apiTimeout });
