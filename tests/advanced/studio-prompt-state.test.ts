@@ -25,8 +25,10 @@ import {
   normalizeParams,
   packReferences,
   pruneDraftPacks,
+  pruneDraftAssets,
   readDraft,
   removeDraftPack,
+  referenceIssue,
   seedError,
   submittedDraft,
   syncDraftReferences,
@@ -576,6 +578,58 @@ test("#88 plain mode prevents rendering/reading media chips in audio mode", (t) 
   );
 });
 
+test("deleted assets are removed from restored H3 frames and saved references", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState();
+  const base = readDraft(state);
+  const snapshot = {
+    ...base,
+    draft: {
+      ...base.draft,
+      kind: "video" as const,
+      videoModel: H3,
+      h3: {
+        mode: "frames" as const,
+        first_frame: "img1",
+        last_frame: "img2",
+        video_audio: ["vid1", "aud1"],
+      },
+      h3ReferenceDraft: {
+        refs: ["img1", "img2", "vid1"],
+        prompt: "<Picture 1> <Picture 2> <Video 1>",
+        packs: [],
+        video_audio: ["vid1", "aud1"],
+      },
+    },
+  };
+  writeDraft(state, { ...snapshot, suspendedMediaDraft: snapshot });
+  assert.equal(pruneDraftAssets(state, snapshot), snapshot);
+  const refreshedState = { ...state, assets: [] };
+  const refreshed = pruneDraftAssets(refreshedState, snapshot);
+  assert.deepEqual(activeReferences(refreshed), []);
+  assert.equal(referenceIssue(refreshedState, refreshed), "");
+  const request = generationRequest(refreshedState, refreshed);
+  for (const id of ["img1", "img2", "vid1", "aud1"])
+    assert.equal(JSON.stringify(request.body).includes(JSON.stringify(id)), false);
+  assert.equal(referenceIssue(state, snapshot), "");
+  const restored = readDraft({
+    ...state,
+    assets: state.assets.filter((a) => ["img2", "aud1"].includes(a.id)),
+  });
+  for (const draft of [restored.draft, restored.suspendedMediaDraft!.draft]) {
+    assert.equal(draft.h3?.first_frame, null);
+    assert.equal(draft.h3?.last_frame, "img2");
+    assert.deepEqual(draft.h3?.video_audio, ["aud1"]);
+    assert.deepEqual(draft.h3ReferenceDraft?.refs, ["img2"]);
+    assert.deepEqual(draft.h3ReferenceDraft?.video_audio, ["aud1"]);
+  }
+  const empty = readDraft({ ...state, assets: [] });
+  assert.deepEqual(activeReferences(empty), []);
+  assert.equal(empty.draft.h3?.last_frame, null);
+  assert.deepEqual(empty.draft.h3?.video_audio, []);
+});
+
 test("switching away from H3 keeps both frame slots for the return to H3", (t) => {
   const env = installFakeEnv();
   t.after(() => env.restore());
@@ -614,6 +668,10 @@ test("switching away from H3 keeps both frame slots for the return to H3", (t) =
 
   // Removing the last frame while Muse is active must not restore its stale ID.
   state.assets = state.assets.filter(({ id }) => id !== "img2");
+  const refreshedOther = pruneDraftAssets(state, other);
+  assert.equal(refreshedOther.draft.suspendedH3Frames?.last_frame, null);
+  assert.equal(other.draft.suspendedH3Frames?.last_frame, "img2");
+  assert.deepEqual(select(other, H3).draft.h3, { ...expected, last_frame: null });
   const afterDeletion = select(readDraft(state), H3);
   assert.deepEqual(afterDeletion.draft.h3, { ...expected, last_frame: null });
   assert.deepEqual(activeReferences(afterDeletion), ["img1"]);

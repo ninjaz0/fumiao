@@ -67,6 +67,7 @@ import {
   normalizeParams,
   packReferences,
   promptLimit,
+  pruneDraftAssets,
   pruneDraftPacks,
   referenceAsset,
   referenceIssue,
@@ -330,18 +331,20 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
               h3ReferenceDraft: afterPacks.draft.h3ReferenceDraft,
             }
           : priorDraft.draft;
-        const nextBase: DraftSession =
+        const nextBase: DraftSession = pruneDraftAssets(
+          next,
           mergedDraft !== priorDraft.draft ||
-          afterPacks !== priorDraft ||
-          lostRef ||
-          lostParent
+            afterPacks !== priorDraft ||
+            lostRef ||
+            lostParent
             ? {
                 ...afterPacks,
                 draft: mergedDraft,
                 refs,
                 ...(lostParent ? { parent: null, retainedSeed: null } : {}),
               }
-            : priorDraft;
+            : priorDraft,
+        );
         const nextSession =
           nextBase === priorDraft
             ? priorDraft
