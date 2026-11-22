@@ -320,18 +320,30 @@ async function checkPackRefreshRace(page: Page, studio: string, state: StudioSta
       await route.fulfill({ json: { packs: [pack] } });
     }
   });
+  await page.route("**/api/me", (route) =>
+    route.fulfill({ json: { ...state.me, nickname: "资料已保存" } }),
+  );
   try {
     await page.goto(studio);
     const refs = page.locator(".reference-deck-count");
     await expect(refs).toHaveText("2");
+    await expect.poll(() => packReads, { timeout: apiTimeout }).toBe(2);
+    // Polls wait for the held read, so supersede it with the refresh a profile save starts.
+    await page.locator(".account").click();
+    await page.locator('.menu-item[data-nav="settings"]').click();
+    await page.locator('[data-act="settings-tab"][data-value="profile"]').click();
+    await page.locator("#nickname").fill("资料已保存");
+    await page.getByRole("button", { name: "保存更改" }).click();
     await expect(page.locator(".account")).toHaveAttribute("title", "刷新已完成", {
       timeout: apiTimeout,
     });
+    assert.equal(stateReads, 3);
     const failed = page.waitForResponse((r) =>
       new URL(r.url()).pathname === "/api/asset-packs" && r.status() === 503,
     );
     release();
     await (await failed).finished();
+    await page.locator('nav [data-nav="home"]').click();
     // Type again so the mounted composer persists the draft after the late response.
     await page.locator("#prompt").fill("保留新引用");
     await expect(refs).toHaveText("2");
