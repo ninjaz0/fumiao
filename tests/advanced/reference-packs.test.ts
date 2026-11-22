@@ -3,8 +3,12 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
-import { one, migrate } from "../../packages/platform/src/db.js";
-import { ReferencePacks } from "../../packages/platform/src/packs.js";
+import { createOriginalApp } from "../../apps/api/src/original.js";
+import { one, migrate, type Sql } from "../../packages/platform/src/db.js";
+import {
+  packPurposes,
+  ReferencePacks,
+} from "../../packages/platform/src/packs.js";
 import { legacyId } from "../../packages/platform/src/importer.js";
 import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
 import { OriginalPacks } from "../../packages/original-api/src/packs.js";
@@ -194,6 +198,116 @@ test("reference packs preserve shared edits, revisions, ordered media and canvas
   } finally {
     await f.cleanup();
   }
+});
+
+test("Studio lists packs in order with a fixed database read count", async (t) => {
+  const f = await fixture();
+  t.after(() => f.cleanup());
+  const app = await createOriginalApp(f.p);
+  t.after(() => app.close());
+  await app.listen(0, "127.0.0.1");
+  const token = await f.identity.login(
+    { name: "member", password: "pack-test-password" },
+    "list-fixture",
+  );
+  const endpoint = (await app.getUrl()) + "/api/asset-packs";
+  let reads = 0;
+  const countReads = (sql: Sql): Sql => ({
+    query(statement, params) {
+      if (/^SELECT\b/i.test(statement)) reads++;
+      return sql.query(statement, params);
+    },
+  });
+  const transaction = f.db.transaction.bind(f.db);
+  t.mock.method(
+    f.db,
+    "query",
+    countReads({ query: f.db.query.bind(f.db) }).query,
+  );
+  t.mock.method(f.db, "transaction", (fn: (sql: Sql) => Promise<unknown>) =>
+    transaction((sql) => fn(countReads(sql))),
+  );
+  const list = async (selected = f.selected) => {
+    reads = 0;
+    const response = await fetch(endpoint, {
+      headers: { Cookie: "fm_session=" + token, "X-Workspace-Id": selected },
+    });
+    return { status: response.status, body: await response.json(), reads };
+  };
+
+  assert.deepEqual(await list(), {
+    status: 200,
+    body: { packs: [], purposes: packPurposes },
+    reads: 3,
+  });
+  const first = await f.packs.save(f.admin, f.draft, f.selected);
+  const onePack = await list();
+  assert.equal(onePack.status, 200);
+  assert.deepEqual(onePack.body, { packs: [first], purposes: packPurposes });
+  const second = await f.packs.save(
+    f.member,
+    { ...f.draft, name: "反向\0引用", media: [...f.draft.media].reverse() },
+    f.selected,
+  );
+  const personal = await one(
+    f.db,
+    "SELECT id,public_id FROM workspaces WHERE kind='personal' AND owner_id=$1",
+    [f.admin.id],
+  );
+  const emptyKey = "e".repeat(32);
+  const updated = 1_700_000_000;
+  await f.db.query(
+    `INSERT INTO documents(id,workspace_id,owner_id,kind,title,body,updated_at,public_id,deleted)
+     VALUES (gen_random_uuid(),$1,$2,'pack','Empty','{}',to_timestamp($5 - 1),$4,false),
+            (gen_random_uuid(),$1,$2,'pack','Deleted','{}',to_timestamp($5),'11111111111111111111111111111111',true),
+            (gen_random_uuid(),$3,$2,'pack','Private','{}',to_timestamp($5),'22222222222222222222222222222222',false)`,
+    [f.team.id, f.admin.id, personal.id, emptyKey, updated],
+  );
+  await f.db.query(
+    "UPDATE documents SET updated_at=to_timestamp($1) WHERE public_id=ANY($2::text[])",
+    [updated, [first.id, second.id]],
+  );
+  const multiple = await list();
+  assert.equal(multiple.status, 200);
+  assert.deepEqual(multiple.body, {
+    packs: [
+      ...[first, second]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((pack) => ({ ...pack, updated })),
+      {
+        id: emptyKey,
+        workspace: Number(f.team.public_id),
+        owner: Number(f.admin.public_id),
+        name: "Empty",
+        purpose: "subject",
+        description: "",
+        revision: 1,
+        updated: updated - 1,
+        media: [],
+      },
+    ],
+    purposes: packPurposes,
+  });
+  assert.equal((await list(String(personal.public_id))).status, 403);
+
+  await f.db.query("UPDATE documents SET body=$2 WHERE public_id=$1", [
+    emptyKey,
+    JSON.stringify({ assets: [randomUUID()] }),
+  ]);
+  const invalid = await list();
+  assert.equal(invalid.status, 409);
+  assert.deepEqual(invalid.body, { detail: "素材包引用已失效" });
+
+  await f.db.query("DELETE FROM members WHERE workspace_id=$1 AND user_id=$2", [
+    f.team.id,
+    f.member.id,
+  ]);
+  assert.equal((await list()).status, 403);
+  await assert.rejects(f.packs.packs.list(f.member, f.team.id), {
+    status: 404,
+  });
+  assert.equal(onePack.reads, 4);
+  assert.equal(multiple.reads, onePack.reads);
 });
 
 test("task pack expansion freezes ordered references and descriptions before later edits and idempotent retries", async () => {
