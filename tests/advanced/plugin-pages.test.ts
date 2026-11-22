@@ -174,6 +174,87 @@ test("Studio lists installed pages in group/order/title order and authorizes dir
   );
 });
 
+test("versioned view blocks validate nested actions, permissions and workspace media", async (t) => {
+  const f = await setup(t);
+  const asset = await one(
+    f.db,
+    `INSERT INTO assets(id,workspace_id,owner_id,object_key,mime,size,state)
+    VALUES(gen_random_uuid(),$1,$2,gen_random_uuid()::text,'image/png',10,'ready') RETURNING public_id`,
+    [f.team.id, f.admin.id],
+  );
+  const media = {
+    type: "media",
+    asset: asset.public_id,
+    kind: "image",
+    label: "预览",
+  };
+  const progress = { type: "progress", value: 2, max: 5, label: "任务" };
+  const table = {
+    type: "table",
+    title: "任务",
+    columns: ["模型", "状态"],
+    rows: [["测试", "就绪"]],
+  };
+  const tabs = (blocks: unknown[]) => ({
+    type: "tabs",
+    label: "概览",
+    tabs: [
+      { id: "overview", label: "进度", blocks },
+      { id: "more", label: "其他", blocks: [] },
+    ],
+  });
+  const configure = (blocks: unknown[], capabilities = ["media"], schema = 2) =>
+    f.contributes({
+      version: 1,
+      hostCapabilities: capabilities,
+      settingsPages: [
+        page("reports", {
+          audience: "member",
+          program: `({ view() { return ${JSON.stringify({ schema, title: "工作区", blocks })}; } })`,
+        }),
+      ],
+    });
+  const view = "reports/view";
+  await configure([tabs([media, progress, table])]);
+  assert.deepEqual((await f.ok(view, {}, f.memberSession)).blocks, [
+    tabs([media, progress, table]),
+  ]);
+  assert.equal(
+    (await f.call(view, {}, f.session, f.personal.public_id)).status,
+    422,
+  );
+  await configure([tabs([media])], []);
+  assert.equal((await f.call(view)).status, 403);
+  for (const blocks of [
+    [tabs([{ ...media, kind: "audio" }])],
+    [{ ...media, asset: "https://example.com/media" }],
+    [tabs([{ ...progress, value: 6 }])],
+    [{ ...table, rows: [["缺列"]] }],
+    [tabs([tabs([])])],
+    [tabs(Array(40).fill(progress))],
+    [
+      tabs([
+        {
+          type: "list",
+          empty: "暂无",
+          rows: [
+            {
+              id: 1,
+              title: "操作",
+              actions: [{ action: "unknown", label: "继续" }],
+            },
+          ],
+        },
+      ]),
+    ],
+  ]) {
+    await configure(blocks);
+    assert.equal((await f.call(view)).status, 422);
+  }
+  await configure([table], [], 1);
+  assert.equal((await f.call(view)).status, 422);
+});
+
 test("scope projection restricts member jobs to the caller and workspace and exposes only declared fields", async (t) => {
   const f = await setup(t);
   await f.contributes({

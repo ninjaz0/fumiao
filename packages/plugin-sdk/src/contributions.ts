@@ -587,7 +587,7 @@ export const fieldSchema = z
   .strict();
 export type ViewField = z.infer<typeof fieldSchema>;
 
-export const blockSchema = z.discriminatedUnion("type", [
+const v1Block = z.discriminatedUnion("type", [
   z
     .object({ type: z.literal("notice"), tone: z.enum(tones), text: text(500) })
     .strict(),
@@ -653,17 +653,99 @@ export const blockSchema = z.discriminatedUnion("type", [
     })
     .strict(),
 ]);
+const leafBlock = z.discriminatedUnion("type", [
+  ...v1Block.options,
+  z
+    .object({
+      type: z.literal("table"),
+      title: label,
+      columns: z.array(label).min(1).max(12),
+      rows: z.array(z.array(text(500)).max(12)).max(200),
+    })
+    .strict()
+    .refine((table) =>
+      table.rows.every((row) => row.length === table.columns.length),
+    ),
+  z
+    .object({
+      type: z.literal("media"),
+      asset: z.string().regex(/^[0-9a-f]{32}$/),
+      kind: z.enum(["image", "video", "audio"]),
+      label,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("progress"),
+      label,
+      value: z.number().nonnegative(),
+      max: z.number().positive(),
+    })
+    .strict()
+    .refine((progress) => progress.value <= progress.max),
+]);
+export type ViewLeaf = z.infer<typeof leafBlock>;
+
+export const blockSchema = z.discriminatedUnion("type", [
+  ...leafBlock.options,
+  z
+    .object({
+      type: z.literal("tabs"),
+      label,
+      tabs: z
+        .array(
+          z
+            .object({
+              id: slug,
+              label,
+              blocks: z.array(leafBlock).max(40),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(12),
+    })
+    .strict()
+    .refine(
+      (group) =>
+        new Set(group.tabs.map((tab) => tab.id)).size === group.tabs.length,
+    ),
+]);
 export type ViewBlock = z.infer<typeof blockSchema>;
 
-export const viewSchema = z
+export function viewLeaves(blocks: readonly ViewBlock[]): ViewLeaf[] {
+  return blocks.flatMap((block) =>
+    block.type === "tabs" ? block.tabs.flatMap((tab) => tab.blocks) : [block],
+  );
+}
+
+const v1View = z
   .object({
     schema: z.literal(1),
     title: label,
     description: text(500).optional(),
     primary: buttonSchema.optional(),
-    blocks: z.array(blockSchema).max(40),
+    blocks: z.array(v1Block).max(40),
   })
   .strict();
+
+export const viewSchema = z.discriminatedUnion("schema", [
+  v1View,
+  v1View
+    .extend({
+      schema: z.literal(2),
+      blocks: z.array(blockSchema).max(40),
+    })
+    .refine((view) => {
+      const leaves = viewLeaves(view.blocks);
+      const forms = leaves.filter((block) => block.type === "form");
+      return (
+        leaves.length +
+          view.blocks.filter((block) => block.type === "tabs").length <=
+          40 && new Set(forms.map((form) => form.id)).size === forms.length
+      );
+    }),
+]);
 export type View = z.infer<typeof viewSchema>;
 
 /** Output of a program action hook, validated by the host. */

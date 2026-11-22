@@ -13,6 +13,7 @@ import {
   pageTabKey,
   programActionOutputSchema,
   settingsScopes,
+  viewLeaves,
   viewSchema,
   type ActionRequest,
   type ActionResult,
@@ -110,11 +111,12 @@ async function invoke(
   }
 }
 
-function validateView(output: unknown, page: ResolvedPage) {
+async function validateView(sql: Sql, output: unknown, ctx: Context) {
   const result = viewSchema.safeParse(output);
   requireValue(result.success, 422, "插件设置页输出无效");
-  const { primary, blocks } = result.data;
-  const declared = (id: string) => page.actions.some((a) => a.id === id);
+  const { primary } = result.data;
+  const blocks = viewLeaves(result.data.blocks);
+  const declared = (id: string) => ctx.page.actions.some((a) => a.id === id);
   const button = (b: ViewButton) =>
     (b.opensForm
       ? blocks.some(
@@ -136,6 +138,27 @@ function validateView(output: unknown, page: ResolvedPage) {
     422,
     "插件设置页输出无效",
   );
+  const media = blocks.filter((block) => block.type === "media");
+  if (media.length) {
+    requireValue(
+      ctx.contributions.hostCapabilities.includes("media"),
+      403,
+      "插件未声明媒体能力",
+    );
+    const assets = await sql.query<{ public_id: string; kind: string }>(
+      `SELECT public_id,split_part(mime,'/',1) AS kind FROM assets
+       WHERE workspace_id=$1 AND state='ready' AND public_id=ANY($2::text[])`,
+      [ctx.workspace, media.map((block) => block.asset)],
+    );
+    const kinds = new Map(
+      assets.rows.map((asset) => [asset.public_id, asset.kind]),
+    );
+    requireValue(
+      media.every((block) => kinds.get(block.asset) === block.kind),
+      422,
+      "媒体预览不可用",
+    );
+  }
   return result.data;
 }
 
@@ -403,9 +426,10 @@ export class PluginPages {
           ]);
         const host = this.pluginHost(sql, ctx, "read");
         try {
-          return validateView(
+          return await validateView(
+            sql,
             await invoke(ctx.page.program, "view", [input], host),
-            ctx.page,
+            ctx,
           );
         } finally {
           if (host.used["media.probe"]) {
