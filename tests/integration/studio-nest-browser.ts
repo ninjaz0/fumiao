@@ -718,6 +718,21 @@ export async function studioBrowser(
         (await document()).document.nodes.map((item) => item.text),
       )
       .toEqual([chatReply]);
+    const conversationId = await page
+      .locator(".fm-chat-conversation-row.selected")
+      .getAttribute("data-conversation");
+    await assistant.getByRole("button", { name: "放入画布" }).click();
+    await expect(picker).toBeVisible();
+    await page.getByRole("button", { name: "新对话", exact: true }).click();
+    await expect(picker).toBeHidden();
+    await page
+      .locator(
+        `[data-conversation="${conversationId}"] .fm-chat-conversation-open`,
+      )
+      .click();
+    await expect(assistant.locator(".fm-chat-prose")).toHaveText(chatReply);
+    await expect(edit).toHaveValue(chatDraft);
+    await expect(picker).toBeHidden();
     const headers = { Origin: web, "X-Workspace-Id": String(workspace) };
     const project = await document();
     for (const [i, title] of ["固定参考图", "拖动参考图"].entries()) {
