@@ -349,10 +349,7 @@ export function Settings({
         {tab === "general" && <General />}
         {tab === "credits" && (
           <Credits
-            key={JSON.stringify([
-              creditState.credits,
-              creditState.credit_history,
-            ])}
+            key={`${creditState.me.id}:${workspace}`}
             state={creditState}
             recharge={(button) => void openRecharge("recharge", button)}
             history={(button) => void openRecharge("history", button)}
