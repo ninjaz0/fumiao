@@ -46,7 +46,7 @@ export function ChatWorkspace(props:Props){
  const confirmPendingDraft=()=>{if(pendingDraft===null)return;updateDraft(pendingDraft);input.current?.focus()};
  const cancelPendingDraft=()=>{setPendingDraft(null);input.current?.focus()};
  const choose=(id:string)=>{setDraft(sessionStorage.getItem(scope+'-draft-'+id)||'');setPendingDraft(null);const found=list.find(c=>c.id===id);if(found&&config?.models[found.model])setModel(found.model);current.current=id;setCid(id);setData(null);setError('');setRename(null);setPicker(null);setHistory(false);pending.current=null;setLoading(!!id);follow.current=true;setNewBelow(false);sessionStorage.setItem(scope+'-active',id)};
- useEffect(()=>{alive.current=true;setListLoading(true);setListError('');void Promise.all([loadConfig(),loadList().catch(()=>{})]).catch(e=>setError(e.message)).finally(()=>setLoading(false));const timer=setInterval(()=>{void loadConfig().catch(()=>{});void loadList().catch(()=>{})},10000);return()=>{alive.current=false;clearInterval(timer)}},[workspace,project,node]);
+ useEffect(()=>{alive.current=true;setListLoading(true);setListError('');void Promise.all([loadConfig(),inline?loadList():loadList().catch(()=>{})]).catch(e=>setError(e.message)).finally(()=>setLoading(false));const timer=setInterval(()=>{void loadConfig().catch(()=>{});void loadList().catch(()=>{})},10000);return()=>{alive.current=false;clearInterval(timer)}},[workspace,project,node]);
  useEffect(()=>{if(input.current&&!inline){input.current.style.height='0px';input.current.style.height=Math.min(input.current.scrollHeight,180)+'px'}},[draft,cid,inline]);
  useEffect(()=>{
   if(!cid)return;let closed=false;const url='/api/chats/'+cid;
