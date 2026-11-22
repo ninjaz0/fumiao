@@ -21,7 +21,7 @@ export function StorageSettings({
   return (
     <div className="settings-section">
       <h2>存储空间</h2>
-      <p className="console-description">查看当前空间的媒体用量和任务预留容量。</p>
+      <p className="console-description">查看全站所有空间共用的媒体用量和任务预留容量。</p>
       <div className="ledger-card">
         <div className="storage-total">
           <strong>{`${gb(used)} GB`}</strong>
@@ -56,7 +56,7 @@ export function StorageSettings({
           data-nav="library"
           onClick={viewLibrary}
         >
-          管理资产
+          管理当前空间资产
         </button>
       </div>
     </div>
