@@ -30,6 +30,7 @@ import {
 } from "@fumiao/platform/security.js";
 import { originalSessionToken } from "./original-request.js";
 
+const publisherConfirmation = z.string().regex(/^[a-f0-9]{64}$/).optional();
 const install = z.object({
   manifest: z.record(z.string(), z.unknown()),
   endpoint: z.string().min(1),
@@ -66,6 +67,7 @@ export class OriginalProviderController {
   importPackage(@Req() req: Request, @Body() body: unknown) {
     const input = z.object({
       file: z.unknown(),
+      confirmPublisher: publisherConfirmation,
       supplements: upgradeFields,
       revision: z.number().int().optional(),
     });
@@ -77,6 +79,7 @@ export class OriginalProviderController {
         data.revision,
         false,
         data.supplements,
+        data.confirmPublisher,
       );
     });
   }
@@ -240,6 +243,7 @@ export class OriginalProviderController {
           .object({
             revision: z.number().int(),
             sha256: z.string(),
+            confirmPublisher: publisherConfirmation,
             supplements: upgradeFields,
           })
           .parse(body),
@@ -253,7 +257,10 @@ export class OriginalProviderController {
     @Body() body: unknown,
   ) {
     return this.admin(req, async (actor) => {
-      const { revision } = z.object({ revision: z.number().int() }).parse(body);
+      const { revision, confirmPublisher } = z.object({
+        revision: z.number().int(),
+        confirmPublisher: publisherConfirmation,
+      }).parse(body);
       const row = await one(
         this.identity.p.db,
         "SELECT r.package FROM studio_packages p JOIN studio_package_releases r ON r.id=p.id AND r.version=p.previous_version WHERE p.installed AND p.id=$1",
@@ -265,6 +272,8 @@ export class OriginalProviderController {
         row.package,
         revision,
         true,
+        {},
+        confirmPublisher,
       );
     });
   }

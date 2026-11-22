@@ -129,13 +129,14 @@ async function readSource(
       409,
       "插件包校验失败",
     );
-    const file = parsePackageFile(JSON.parse(raw.toString("utf8")));
+    const value: unknown = JSON.parse(raw.toString("utf8"));
+    const file = parsePackageFile(value);
     requireValue(
       file.id === info.id && file.version === info.version,
       409,
       "插件文件与更新清单不一致",
     );
-    return { info, file };
+    return { info, file: value };
   } catch (error) {
     if (error instanceof DomainError) throw error;
     throw new DomainError(502, "无法读取更新源，请检查地址、清单和只读凭据");
@@ -181,6 +182,7 @@ export class StudioUpdates {
       actor: Actor;
       revision: number;
       sha256: string;
+      confirmPublisher?: string;
       supplements?: Record<string, Record<string, unknown>>;
     },
   ) {
@@ -218,6 +220,7 @@ export class StudioUpdates {
           apply.revision,
           false,
           apply.supplements,
+          apply.confirmPublisher,
         );
       }
       const update = newer(info.version, row.version) ? info : null;
