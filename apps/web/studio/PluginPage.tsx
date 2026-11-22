@@ -9,6 +9,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { viewLeaves } from "@fumiao/plugin-sdk/view-blocks";
 import type {
   ActionRequest,
   ActionResult,
@@ -17,11 +18,13 @@ import type {
   ViewBlock,
   ViewButton,
   ViewField,
+  ViewLeaf,
 } from "@fumiao/plugin-sdk/contributions";
 import { ApiError } from "../canvas/api";
 import { api } from "./api";
 import { openDialogFor } from "./AssetDialog";
 import { Icon } from "./Icon";
+import { mediaURL } from "./state";
 import type { AdminOpen } from "./settings-admin";
 import "./plugin-page.css";
 
@@ -45,6 +48,70 @@ export type PluginPageClient = ReturnType<typeof pluginPageClient>;
 type FormBlock = Extract<ViewBlock, { type: "form" }>;
 type FieldValue = string | string[] | boolean;
 type Values = Record<string, FieldValue>;
+
+function ViewTabs({
+  block,
+  render,
+}: {
+  block: Extract<ViewBlock, { type: "tabs" }>;
+  render: (block: ViewLeaf) => ReactNode;
+}) {
+  const prefix = useId();
+  const [selected, setSelected] = useState(block.tabs[0].id);
+  const active = block.tabs.some((tab) => tab.id === selected)
+    ? selected
+    : block.tabs[0].id;
+  return (
+    <div className="plugin-tabs">
+      <div role="tablist" aria-label={block.label}>
+        {block.tabs.map((tab, index) => (
+          <button
+            type="button"
+            role="tab"
+            key={tab.id}
+            id={prefix + "-tab-" + tab.id}
+            aria-controls={prefix + "-panel-" + tab.id}
+            aria-selected={active === tab.id}
+            tabIndex={active === tab.id ? 0 : -1}
+            onClick={() => setSelected(tab.id)}
+            onKeyDown={(event) => {
+              const count = block.tabs.length;
+              const next = {
+                ArrowLeft: (index + count - 1) % count,
+                ArrowRight: (index + 1) % count,
+                Home: 0,
+                End: count - 1,
+              }[event.key];
+              if (next === undefined) return;
+              event.preventDefault();
+              const id = block.tabs[next].id;
+              setSelected(id);
+              document.getElementById(prefix + "-tab-" + id)?.focus();
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {block.tabs.map((tab) => (
+        <section
+          key={tab.id}
+          role="tabpanel"
+          tabIndex={0}
+          id={prefix + "-panel-" + tab.id}
+          aria-labelledby={prefix + "-tab-" + tab.id}
+          hidden={tab.id !== active}
+        >
+          {tab.blocks.map((child, index) => (
+            <Fragment key={child.type === "form" ? child.id : index}>
+              {render(child)}
+            </Fragment>
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
 
 function initialValues(
   form: FormBlock,
@@ -237,7 +304,7 @@ function PageForm({
   async function replaceDraft() {
     setBusy(true);
     try {
-      const latest = (await reload()).blocks.find(
+      const latest = viewLeaves((await reload()).blocks).find(
         (b): b is FormBlock =>
           b.type === "form" &&
           b.id === form.id &&
@@ -484,7 +551,7 @@ export function PluginPage({
     if (!writable) return null;
     async function run(source: HTMLElement) {
       if (b.opensForm) {
-        const form = view?.blocks.find(
+        const form = viewLeaves(view?.blocks ?? []).find(
           (f): f is FormBlock =>
             f.type === "form" &&
             f.id === b.opensForm &&
@@ -526,8 +593,71 @@ export function PluginPage({
     );
   }
 
-  function blockContent(block: ViewBlock) {
+  function blockContent(block: ViewBlock): ReactNode {
     switch (block.type) {
+      case "tabs":
+        return <ViewTabs block={block} render={blockContent} />;
+      case "table":
+        return (
+          <div className="plugin-table">
+            <table>
+              <caption>{block.title}</caption>
+              <thead>
+                <tr>
+                  {block.columns.map((column, i) => (
+                    <th key={i} scope="col">
+                      {column}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {block.rows.map((row, i) => (
+                  <tr key={i}>
+                    {row.map((cell, j) => (
+                      <td key={j}>{cell}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      case "progress":
+        return (
+          <label className="plugin-progress">
+            {block.label}
+            <progress value={block.value} max={block.max} />
+            <span>
+              {block.value} / {block.max}
+            </span>
+          </label>
+        );
+      case "media": {
+        const url = mediaURL(block.asset);
+        return (
+          <figure className="plugin-media">
+            {block.kind === "image" ? (
+              <img src={url} alt={block.label} loading="lazy" />
+            ) : block.kind === "video" ? (
+              <video
+                src={url}
+                controls
+                preload="metadata"
+                aria-label={block.label}
+              />
+            ) : (
+              <audio
+                src={url}
+                controls
+                preload="metadata"
+                aria-label={block.label}
+              />
+            )}
+            <figcaption>{block.label}</figcaption>
+          </figure>
+        );
+      }
       case "notice":
         return (
           <p className="plugin-notice" role="status" data-tone={block.tone}>

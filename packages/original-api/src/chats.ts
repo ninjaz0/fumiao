@@ -23,6 +23,7 @@ import {
   parseChatSend,
   type ChatContextInput,
 } from "./chat-draft.js";
+import { freezeChatTools } from "./chat-tools.js";
 import { chatCanvasContext } from "./chat-canvas.js";
 export type ChatFinish = {
   state: "complete" | "failed" | "stopped" | "interrupted";
@@ -516,6 +517,8 @@ export class OriginalChats {
           connection.row?.id ?? null,
         ],
       );
+      if (connection.plugin.manifest.chat?.sandbox?.tools)
+        await freezeChatTools(sql, turn.id, actor.role);
       const priceKey = body.model + "|reply",
         price = await one(
           sql,

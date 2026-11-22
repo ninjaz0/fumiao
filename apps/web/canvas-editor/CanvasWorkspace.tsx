@@ -1,3 +1,5 @@
+import type { CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
+import { PluginNodeForm, PluginNodePorts, PluginNodeOutputs } from "./PluginNode";
 import { matches, normalizeForm } from "@fumiao/plugin-sdk/model-form";
 import React, {
   createContext,
@@ -91,6 +93,7 @@ import {
   matchViewportFocusShortcut,
   isCanvasComposerOpen,
   hasCanvasSelectionToolbar,
+  linkedValue,
   type CanvasClipboard,
   type CanvasNode,
   type Kind,
@@ -115,6 +118,7 @@ const icons: Record<Kind, LucideIcon> = {
   image: ImageIcon,
   video: Film,
   sticky: StickyNote,
+  plugin: Settings2,
 };
 function freePosition(
   nodes: CanvasNode[],
@@ -289,7 +293,7 @@ type ContextValue = {
   setEditing: (id: string | null) => void;
 };
 const NodeContext = createContext<ContextValue>(null!);
-type NodeData = { item: CanvasNode; media: string | null; run?: Job };
+type NodeData = { videoPort:boolean; item: CanvasNode; media: string | null; run?: Job };
 type RFNode = FlowNode<NodeData, "content">;
 const ContentNode = memo(function ContentNode({
   data,
@@ -342,7 +346,7 @@ const ContentNode = memo(function ContentNode({
           } else if (media) ctx.preview(n);
         }}
       >
-        {isText ? (
+        {n.extension ? <PluginNodeOutputs extension={n.extension}/> : isText ? (
           editing ? (
             <textarea
               autoFocus
@@ -424,6 +428,7 @@ const ContentNode = memo(function ContentNode({
           </div>
         )}
       </div>
+      {n.extension && <PluginNodePorts definition={n.extension.definition}/>}
       {["image", "video"].includes(n.type) && (
         <Handle
           type="target"
@@ -432,7 +437,7 @@ const ContentNode = memo(function ContentNode({
           aria-label={"连接到 " + n.title}
         />
       )}
-      {["text", "image"].includes(n.type) && (
+      {(["text", "image"].includes(n.type) || (n.type === "video" && data.videoPort)) && (
         <>
           <Handle
             type="source"
@@ -440,7 +445,7 @@ const ContentNode = memo(function ContentNode({
             className="reference-handle"
             aria-label={"从 " + n.title + " 连接"}
           />
-          {selected && (
+          {selected && n.type !== "video" && (
             <button
               className="node-add nodrag"
               aria-label={"从 " + n.title + " 新建连接"}
@@ -768,25 +773,33 @@ export function CanvasWorkspace({
     }),
     [edit, doc.begin, doc.end, viewport.zoom, editing, runs],
   );
+  const videoPort =
+    !!studio.canvas_nodes?.some((n) =>
+      n.inputs.some((p) => p.kind === "video"),
+    ) ||
+    doc.value.document.nodes.some((n) =>
+      n.extension?.definition.inputs.some((p) => p.kind === "video"),
+    );
   const nodes = useMemo(
     () =>
       doc.value.document.nodes.map((n) => ({
         id: n.id,
         type: "content" as const,
         position: { x: n.x, y: n.y },
-        data: { item: n, ...resolveNode(n, runs) },
+        data: { item: n, videoPort, ...resolveNode(n, runs) },
         width: n.width,
         height: n.height,
         style: { width: n.width, height: n.height },
         selected: selected.includes(n.id),
         ariaLabel: names[n.type] + "节点 " + n.title,
       })),
-    [doc.value.document.nodes, runs, selected],
+    [doc.value.document.nodes, runs, selected, videoPort],
   );
   const edges = useMemo(
     () =>
       doc.value.document.edges.map((e) => ({
         ...e,
+        sourceHandle: e.sourcePort, targetHandle:e.targetPort,
         type: "default",
         selected: selectedEdges.includes(e.id),
         hidden: !showEdges,
@@ -863,6 +876,8 @@ export function CanvasWorkspace({
         doc.ref.current.document,
         connection.source,
         connection.target,
+        connection.sourceHandle,
+        connection.targetHandle,
       );
       if (error) {
         notify(error);
@@ -878,6 +893,8 @@ export function CanvasWorkspace({
               id: crypto.randomUUID(),
               source: connection.source,
               target: connection.target,
+              ...(connection.sourceHandle && {sourcePort:connection.sourceHandle}),
+              ...(connection.targetHandle && {targetPort:connection.targetHandle}),
             },
           ],
         },
@@ -963,6 +980,7 @@ export function CanvasWorkspace({
     type: Kind,
     source?: string,
     point?: { x: number; y: number },
+    definition?: CanvasNodeEntry,
   ) => {
     if (doc.ref.current.document.nodes.length >= 200) {
       notify("每张画布最多 200 个节点");
@@ -986,6 +1004,15 @@ export function CanvasWorkspace({
       y,
       doc.ref.current.document.nodes.filter((n) => n.type === type).length + 1,
     );
+    if (definition) {
+      node.title = definition.title;
+      node.extension = {
+        definition,
+        values: Object.fromEntries(
+          definition.fields.map((f) => [f.id, f.default]),
+        ),
+      };
+    }
     if (type === 'image' || type === 'video') {
       node.params.model=Object.keys(type==='image'?studio.images.models||{}:studio.video_models||{}).find(availableModel) || '';
       node.params.seconds = Number(studio.model_forms[node.params.model]?.fields.seconds?.default ?? node.params.seconds);
@@ -1196,6 +1223,7 @@ export function CanvasWorkspace({
         edges: [
           ...d.document.edges,
           ...source.edges.map((e) => ({
+            ...e,
             id: crypto.randomUUID(),
             source: mapping.get(e.source)!,
             target: mapping.get(e.target)!,
@@ -1514,6 +1542,28 @@ export function CanvasWorkspace({
       setSubmitting(null);
     }
   };
+  const pluginRequest = useRef<{ key: string; uid: string } | null>(null);
+  async function executePlugin(id: string) {
+    setSubmitting(id);
+    try {
+      const revision = await doc.flush();
+      const snapshot = JSON.stringify(doc.ref.current);
+      const key = id + ":" + revision;
+      if (pluginRequest.current?.key !== key)
+        pluginRequest.current = { key, uid: crypto.randomUUID() };
+      const result = await api<Project>(
+        `/api/canvases/${project.id}/nodes/${id}/execute`,
+        { expected_revision: revision, uid: pluginRequest.current.uid },
+      );
+      doc.acceptRemote(result, snapshot, "运行节点");
+      pluginRequest.current = null;
+      notify("节点运行完成");
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setSubmitting(null);
+    }
+  }
   const incoming = single
     ? doc.value.document.edges
         .filter((e) => e.target === single.id)
@@ -1522,10 +1572,8 @@ export function CanvasWorkspace({
           node: doc.value.document.nodes.find((n) => n.id === e.source)!,
         }))
     : [];
-  const missing = incoming.find(({ node }) =>
-    node.type === "text" ? !node.text.trim() : !resolveNode(node, runs).media,
-  );
-  const linkedReferenceMedia = incoming.filter(({node})=>node.type==='image').map(({node})=>resolveNode(node,runs).media);
+  const missing = incoming.find(({node,edge}) => !linkedValue(node,edge,runs).value?.trim());
+  const linkedReferenceMedia = incoming.map(({node,edge})=>linkedValue(node,edge,runs)).filter(v=>v.kind==='image').map(v=>v.value ?? null);
   const h3Native=single?.type==="video" && !!form?.referenceModes;
   const h3Options=single?.params.h3 || {mode:"reference" as const,video_audio:[]};
   const h3Frames=h3Native&&h3Options.mode==="frames";
@@ -1538,7 +1586,7 @@ export function CanvasWorkspace({
     if (!target) throw new Error('节点已移除，请重新选择');
     if (target.type==='video' && target.params.model==='MiniMax H3' && target.params.h3?.mode==='frames')
       throw new Error('首尾帧模式请使用首帧和尾帧选择器');
-    const incomingIds = document.edges.filter(e=>e.target===target.id).map(e=>document.nodes.find(n=>n.id===e.source)).filter((n):n is CanvasNode=>Boolean(n&&n.type==='image')).map(n=>resolveNode(n,runs).media).filter((id):id is string=>Boolean(id));
+    const incomingIds = document.edges.filter(e=>e.target===target.id).map(e=>linkedValue(document.nodes.find(n=>n.id===e.source)!,e,runs)).filter(v=>v.kind==="image").map(v=>v.value).filter((id):id is string=>Boolean(id));
     const direct = [...incomingIds,...(target.params.h3_refs||[])];
     const keptPacks = images ? target.asset_packs||[] : (target.asset_packs||[]).filter(p=>p.id!==pack.id);
     const existing = [...new Set([...direct,...keptPacks.flatMap(p=>packMedia[p.id]||[])])];
@@ -1568,7 +1616,7 @@ export function CanvasWorkspace({
   const firstFrame = single?.type === "video" && !!form?.referenceModes &&
     !single.params.h3 && referenceMedia.length === 1 ? referenceMedia[0] : null;
   const submittedInput=current?.run?.inputs;
-  const combinedPrompt=[...incoming.filter(({node})=>node.type==='text').map(({node})=>node.text.trim()),...(single?.prompt.trim()?[single.prompt.trim()]:[])].join('\n\n');
+  const combinedPrompt=[...incoming.map(({node,edge})=>linkedValue(node,edge,runs)).filter(v=>v.kind==='text').map(v=>v.value?.trim() ?? ''),...(single?.prompt.trim()?[single.prompt.trim()]:[])].join('\n\n');
   const sourceChanged=current?.run?.status==='done' && submittedInput &&
     (submittedInput.prompt!==combinedPrompt || JSON.stringify(submittedInput.refs||[])!==JSON.stringify(linkedReferenceMedia) ||
      JSON.stringify(submittedInput.asset_packs||[])!==JSON.stringify(single?.asset_packs||[]) ||
@@ -1578,7 +1626,7 @@ export function CanvasWorkspace({
   const cropRatio = outputSize ? `${outputSize[sizeOffset]} / ${outputSize[sizeOffset + 1]}` : "16 / 9";
   const hasPrompt = Boolean(
     single?.prompt.trim() ||
-      incoming.some(({ node }) => node.type === "text" && node.text.trim()),
+      incoming.some(({node,edge}) => {const source = linkedValue(node,edge,runs); return source.kind === "text" && source.value?.trim();}),
   );
   const pendingRuns = current?.list.filter(job=>['queued','running'].includes(job.status)) || [];
   const pendingRun = pendingRuns.length > 0;
@@ -1761,7 +1809,7 @@ export function CanvasWorkspace({
           onEdgesChange={onEdgesChange}
           onConnect={connect}
           isValidConnection={(c) =>
-            !connectionError(doc.ref.current.document, c.source, c.target)
+            !connectionError(doc.ref.current.document, c.source, c.target,c.sourceHandle,c.targetHandle)
           }
           onNodeDragStart={() => {
             dragging.current = true;
@@ -2024,6 +2072,9 @@ export function CanvasWorkspace({
             onClick={() => add(kind)}
           />
         ))}
+        {(studio.canvas_nodes ?? []).map(def => <IconButton
+          key={def.plugin + "/" + def.id} icon={Settings2} label={"添加" + def.title}
+          onClick={() => add("plugin",undefined,undefined,def)}/>)}
         <div className="menu-divider" />
         <IconButton
           icon={FolderOpen}
@@ -2209,6 +2260,15 @@ export function CanvasWorkspace({
           />
         </div>
       )}
+      {single?.extension && (
+        <section className="node-composer plugin-node-form" style={composerPosition} aria-label={single.title + "参数"}>
+          <PluginNodeForm extension={single.extension}
+            available={!!studio.canvas_nodes?.some(n => n.id === single.extension!.definition.id && n.plugin === single.extension!.definition.plugin && n.version === single.extension!.definition.version)}
+            busy={!!submitting}
+            change={values => edit(single.id,{extension:{...single.extension!,values}})}
+            run={() => void executePlugin(single.id)}/>
+        </section>
+      )}
       {showComposer && (
         <section
           className="node-composer"
@@ -2219,7 +2279,8 @@ export function CanvasWorkspace({
           {incoming.length > 0 && !h3Native && (
             <div className="reference-list">
               {incoming.map(({ node, edge }, index) => {
-                const key = resolveNode(node, runs).media;
+                const output = linkedValue(node,edge,runs);
+                const key = output.kind === "image" && output.value;
                 return (
                   <div
                     className="reference-chip"

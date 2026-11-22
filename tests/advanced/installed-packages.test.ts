@@ -554,7 +554,7 @@ test("sandbox chat import freezes the program, requires HTTP and secrets, and re
       undefined,
     );
     const changed = structuredClone(file);
-    changed.version = "2.0.1";
+    changed.version = "2.1.1";
     const chat = changed.manifest!.chat as { sandbox: { program: string } };
     chat.sandbox.program += " ";
     const [installed] = await f.packages.list(f.actor);

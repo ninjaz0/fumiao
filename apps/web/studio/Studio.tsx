@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent,
@@ -48,6 +49,7 @@ import {
   type Menu,
 } from "./Navigation";
 import { Settings } from "./Settings";
+import { PluginPage, pluginPageClient } from "./PluginPage";
 import { WorkspaceDialog } from "./SettingsWorkspaces";
 import { adminSettingsTabs, type SettingsTab } from "./settings-tabs";
 import {
@@ -90,7 +92,7 @@ import {
   type StudioState,
 } from "./state";
 
-type Page = "home" | "queue" | "library" | "chat" | "settings";
+type Page = Exclude<Destination, "canvas"> | "settings";
 type Detail = { job: number } | { image: string };
 type StudioMenu = Menu | ComposerMenu;
 function isComposerMenu(menu: StudioMenu): menu is ComposerMenu {
@@ -198,6 +200,17 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       ? state?.assets.find(({ id }) => id === detail.image)
       : undefined;
 
+  const studioPage = state?.studio_pages?.find((entry) => entry.key === page);
+  const plugin = studioPage?.plugin;
+  const pluginPage = studioPage?.page;
+  const workspace = state?.workspace_id;
+  const pageClient = useMemo(
+    () =>
+      workspace && plugin && pluginPage
+        ? pluginPageClient(workspace, plugin, pluginPage)
+        : undefined,
+    [workspace, plugin, pluginPage],
+  );
   const ready = !!state && !!session;
   const mobileDrawerOpen = narrowScreen && !collapsed;
   const sidebarPopoverOpen =
@@ -213,7 +226,12 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       setSettingsTab((url.searchParams.get("settings") || "plugins") as SettingsTab);
       url.searchParams.delete("settings");
       history.replaceState(null, "", url);
-    } else return;
+    } else {
+      const requested = url.searchParams.get("page");
+      const entry = active.current?.studio_pages?.find(p => p.key === requested);
+      if (entry) setPage(entry.key);
+      return;
+    }
     setPage("settings");
   }, [ready]);
 
@@ -616,6 +634,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     // The original navigation remounts chat even when it is already selected.
     if (destination === "chat") setChatVisit((visit) => visit + 1);
     if (destination === "settings") setSettingsVisit((visit) => visit + 1);
+    if (destination.startsWith("plugin:") || page.startsWith("plugin:")) {
+      const url = new URL(location.href);
+      if (destination.startsWith("plugin:"))
+        url.searchParams.set("page", destination);
+      else url.searchParams.delete("page");
+      history.replaceState(history.state, "", url);
+    }
     setPage(destination);
     scrollAfterRender.current = () => scrollTo({ top: 0, behavior: "instant" });
   }
@@ -1612,6 +1637,17 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       openCanvas={followCanvas}
                     />
                   </div>
+                ) : page.startsWith("plugin:") ? (
+                  studioPage && pageClient ? (
+                    <PluginPage
+                      key={`${state.me.id}:${state.workspace_id}:${studioPage.key}:${studioPage.version}`}
+                      page={studioPage}
+                      client={pageClient}
+                      open={openAdminDialog}
+                      refresh={refreshSettings}
+                      notify={notify}
+                    />
+                  ) : <p role="status">此插件页面已不可用</p>
                 ) : page === "settings" ? (
                   <Settings
                     state={state}

@@ -1,3 +1,7 @@
+import {
+  acceptsCanvasEdge,
+  canvasSourceKind,
+} from "@fumiao/plugin-sdk/canvas-ports.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import type { CanvasModels } from "@fumiao/platform/canvas-models.js";
 import type { CanvasDocument } from "./canvas-draft.js";
@@ -7,7 +11,9 @@ import { canvasVoiceIds } from "./canvas-values.js";
 export interface CanvasValidationResources {
   media(
     key: string,
-  ): Promise<{ kind: string; authorize(): Promise<void> } | undefined>;
+  ): Promise<
+    { kind: string; mime?: string; authorize(): Promise<void> } | undefined
+  >;
   pack(key: string): Promise<void>;
   voice(
     node: string,
@@ -39,6 +45,23 @@ export async function validateCanvasDocument(
   );
   const refs: CanvasReference[] = [];
   for (const node of document.nodes) {
+    const ext = node.extension;
+    if (ext?.result) {
+      const seenAssets = new Set<string>();
+      for (const port of ext.definition.outputs) {
+        if (port.kind === "text") continue;
+        const id = ext.result[port.id];
+        const asset = await resources.media(id);
+        requireValue(
+          asset && asset.mime?.split("/")[0] === port.kind,
+          400,
+          "插件输出素材不存在或类型不匹配",
+        );
+        await asset.authorize();
+        if (!seenAssets.has(id)) refs.push({ node: node.id, media: id });
+        seenAssets.add(id);
+      }
+    }
     const attached = [...node.params.h3_refs];
     if (node.params.h3)
       attached.push(
@@ -90,6 +113,7 @@ export async function validateCanvasDocument(
     incoming = new Map<string, number>(),
     adjacent = new Map<string, string[]>();
   for (const id of nodes.keys()) adjacent.set(id, []);
+  const occupied = new Set<string>();
   for (const edge of document.edges) {
     const a = nodes.get(edge.source),
       b = nodes.get(edge.target);
@@ -97,16 +121,22 @@ export async function validateCanvasDocument(
       a &&
         b &&
         a.id !== b.id &&
-        ["text", "image"].includes(a.type) &&
-        ["image", "video"].includes(b.type),
+        acceptsCanvasEdge(a, b, edge.sourcePort, edge.targetPort),
       400,
       "这两个节点不能建立参考连线",
     );
-    const pair = JSON.stringify([a.id, b.id]);
+    if (b.type === "plugin") {
+      const target = JSON.stringify([b.id, edge.targetPort]);
+      requireValue(!occupied.has(target), 400, "插件输入端口已连接");
+      occupied.add(target);
+    }
+    const pair = JSON.stringify([a.id, edge.sourcePort, b.id, edge.targetPort]);
     requireValue(!seen.has(pair), 400, "参考连线重复");
     seen.add(pair);
     adjacent.get(a.id)!.push(b.id);
-    const count = (incoming.get(b.id) ?? 0) + Number(a.type === "image");
+    const count =
+      (incoming.get(b.id) ?? 0) +
+      Number(canvasSourceKind(a, edge.sourcePort) === "image");
     incoming.set(b.id, count);
     requireValue(count <= 9, 400, "每个节点最多连接 9 张参考图片");
   }

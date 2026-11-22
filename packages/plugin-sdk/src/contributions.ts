@@ -1,3 +1,6 @@
+import { chatToolSchema } from "./chat-tools.js";
+import { canvasNodeSchema } from "./canvas-nodes.js";
+import { viewLeaves } from "./view-blocks.js";
 import { nodePoolSchema } from "./node-pools.js";
 import { z } from "zod";
 
@@ -303,6 +306,8 @@ export const contributesSchema = z
   .object({
     version: z.literal(CONTRIBUTIONS_VERSION),
     nodePools: nodePoolSchema.optional(),
+    chatTools: z.array(chatToolSchema).max(16).optional(),
+    canvasNodes: z.array(canvasNodeSchema).max(16).optional(),
     paymentMethods: z
       .array(
         z
@@ -336,6 +341,10 @@ export const contributesSchema = z
     events: z.array(eventSubscription).max(eventTypes.length).optional(),
     actions: z.array(resourceAction).max(16).optional(),
     settingsPages: z.array(settingsPageSchema).max(8).default([]),
+    pages: z
+      .array(settingsPageSchema.omit({ group: true, visibleWhen: true }))
+      .max(8)
+      .optional(),
     settings: settingsDeclarationSchema.optional(),
     hostCapabilities: z
       .array(z.enum(hostCapabilities))
@@ -358,10 +367,26 @@ export const contributesSchema = z
 export type Contributes = z.infer<typeof contributesSchema>;
 
 /** A page after legacy normalization. Legacy pages keep the GPU panel shape. */
-export type ResolvedPage = SettingsPage & { legacy?: true };
+export type ResolvedPage = SettingsPage & {
+  legacy?: true;
+  placement?: "studio";
+};
 export type ResolvedContributions = Omit<Contributes, "settingsPages"> & {
   settingsPages: ResolvedPage[];
 };
+
+/** Settings and workspace pages share the same namespaced view/action endpoints. */
+export function contributedPages(c: ResolvedContributions): ResolvedPage[] {
+  return [
+    ...c.settingsPages,
+    ...(c.pages ?? []).map((page): ResolvedPage => ({
+      ...page,
+      placement: "studio",
+      group: "services",
+      visibleWhen: "enabled",
+    })),
+  ];
+}
 
 export interface ContributionContext {
   mode: "request" | "pull";
@@ -414,6 +439,8 @@ export function contributionProblems(
   }
   for (const names of [
     c.paymentMethods?.map((m) => m.id),
+    c.chatTools?.map(t => t.id),
+    c.canvasNodes?.map(n => n.id),
     c.exporters?.map((e) => e.id),
     c.events?.map((e) => e.type),
     c.actions?.map((a) => a.id),
@@ -422,8 +449,10 @@ export function contributionProblems(
     if (names && new Set(names).size !== names.length)
       problems.push("事件、操作或表单字段标识重复");
   }
+  if (!caps.has("media") && c.canvasNodes?.some(node => [...node.inputs,...node.outputs].some(port => port.kind !== "text")))
+    problems.push("画布媒体端口需要 media 能力");
   const pageIds = new Set<string>();
-  for (const page of c.settingsPages) {
+  for (const page of contributedPages(c)) {
     if (pageIds.has(page.id)) problems.push("设置页标识重复：" + page.id);
     pageIds.add(page.id);
     if (new Set(page.scopes).size !== page.scopes.length)
@@ -587,7 +616,7 @@ export const fieldSchema = z
   .strict();
 export type ViewField = z.infer<typeof fieldSchema>;
 
-export const blockSchema = z.discriminatedUnion("type", [
+const v1Block = z.discriminatedUnion("type", [
   z
     .object({ type: z.literal("notice"), tone: z.enum(tones), text: text(500) })
     .strict(),
@@ -653,17 +682,93 @@ export const blockSchema = z.discriminatedUnion("type", [
     })
     .strict(),
 ]);
+const leafBlock = z.discriminatedUnion("type", [
+  ...v1Block.options,
+  z
+    .object({
+      type: z.literal("table"),
+      title: label,
+      columns: z.array(label).min(1).max(12),
+      rows: z.array(z.array(text(500)).max(12)).max(200),
+    })
+    .strict()
+    .refine((table) =>
+      table.rows.every((row) => row.length === table.columns.length),
+    ),
+  z
+    .object({
+      type: z.literal("media"),
+      asset: z.string().regex(/^[0-9a-f]{32}$/),
+      kind: z.enum(["image", "video", "audio"]),
+      label,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("progress"),
+      label,
+      value: z.number().nonnegative(),
+      max: z.number().positive(),
+    })
+    .strict()
+    .refine((progress) => progress.value <= progress.max),
+]);
+export type ViewLeaf = z.infer<typeof leafBlock>;
+
+export const blockSchema = z.discriminatedUnion("type", [
+  ...leafBlock.options,
+  z
+    .object({
+      type: z.literal("tabs"),
+      label,
+      tabs: z
+        .array(
+          z
+            .object({
+              id: slug,
+              label,
+              blocks: z.array(leafBlock).max(40),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(12),
+    })
+    .strict()
+    .refine(
+      (group) =>
+        new Set(group.tabs.map((tab) => tab.id)).size === group.tabs.length,
+    ),
+]);
 export type ViewBlock = z.infer<typeof blockSchema>;
 
-export const viewSchema = z
+const v1View = z
   .object({
     schema: z.literal(1),
     title: label,
     description: text(500).optional(),
     primary: buttonSchema.optional(),
-    blocks: z.array(blockSchema).max(40),
+    blocks: z.array(v1Block).max(40),
   })
   .strict();
+
+export const viewSchema = z.discriminatedUnion("schema", [
+  v1View,
+  v1View
+    .extend({
+      schema: z.literal(2),
+      blocks: z.array(blockSchema).max(40),
+    })
+    .refine((view) => {
+      const leaves = viewLeaves(view.blocks);
+      const forms = leaves.filter((block) => block.type === "form");
+      return (
+        leaves.length +
+          view.blocks.filter((block) => block.type === "tabs").length <=
+          40 && new Set(forms.map((form) => form.id)).size === forms.length
+      );
+    }),
+]);
 export type View = z.infer<typeof viewSchema>;
 
 /** Output of a program action hook, validated by the host. */
@@ -689,7 +794,7 @@ export type ProgramActionOutput = z.infer<typeof programActionOutputSchema>;
 /** Entry of `/api/state` → `plugin_pages`, ordered by group, order, title. */
 export interface PluginPageEntry {
   /** Settings tab key: `plugin:<pluginId>:<pageId>`. */
-  key: string;
+  key: `plugin:${string}:${string}`;
   plugin: string;
   page: string;
   title: string;
@@ -697,14 +802,17 @@ export interface PluginPageEntry {
   group: PageGroup;
   order: number;
   audience: "admin" | "member";
+  placement?: "studio";
   /** Legacy pages are rendered by the existing GPU PluginPanel. */
   legacy: boolean;
   /** Package release; changes invalidate cached views. */
   version: string;
 }
 
-export const pageTabKey = (plugin: string, page: string) =>
-  "plugin:" + plugin + ":" + page;
+export const pageTabKey = (
+  plugin: string,
+  page: string,
+): PluginPageEntry["key"] => `plugin:${plugin}:${page}`;
 
 /** POST /api/plugins/:plugin/pages/:page/actions/:action */
 export const actionRequestSchema = z

@@ -1,3 +1,4 @@
+import { canvasNodeEntries } from "@fumiao/platform/canvas-node-plugins.js";
 import { statfs } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { Platform } from "@fumiao/platform/platform.js";
@@ -89,6 +90,7 @@ export class OriginalState {
             JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
             WHERE p.installed AND v.manifest->>'mode'='pull' AND r.package ? 'settingsPage' LIMIT 1`) : null;
           const spaces = await identity.spaces(sql, actor);
+          const pages = await new PluginPages(this.p).list(sql, actor);
           const out: Record<string, any> = {
             ...(plugins.profile ? { studio_plugins: true } : {}),
             server_time: stamp,
@@ -110,8 +112,10 @@ export class OriginalState {
             ),
             assets: await records.assets(sql, workspace.id),
             nodes: actor.role === "admin" && await pairedPluginAvailable(sql) ? await records.nodes(sql, actor, stamp) : [],
+            canvas_nodes: await canvasNodeEntries(sql),
             plugin_actions: await resourceMenus(sql, actor),
-            plugin_pages: await new PluginPages(this.p).list(sql, actor),
+            plugin_pages: pages.filter(page => !page.placement),
+            studio_pages: pages.filter(page => page.placement === "studio"),
             ...(actor.role === "admin" && { settings_pages: await installedSettingsPages(sql) }),
             gpu_node_settings: nodePage ?? null,
             ...plugins.fields,

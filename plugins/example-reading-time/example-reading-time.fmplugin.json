@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "id": "example-reading-time",
+  "label": "旁白时长估算",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "chatTools": [
+      {
+        "id": "reading-time",
+        "title": "估算旁白时长",
+        "description": "Estimate the speaking time of a Mandarin voiceover script. Use when the user asks how long a script takes to read.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "script": {
+              "type": "string",
+              "description": "旁白正文"
+            },
+            "pace": {
+              "type": "string",
+              "enum": [
+                "舒缓",
+                "自然",
+                "紧凑"
+              ],
+              "description": "朗读速度，默认自然"
+            }
+          },
+          "required": [
+            "script"
+          ],
+          "additionalProperties": false
+        },
+        "program": "{\n  run({ script, pace = \"自然\" }) {\n    const characters = [...script].filter((ch) =>\n      /[\\p{L}\\p{N}]/u.test(ch),\n    ).length;\n    const perMinute = { 舒缓: 180, 自然: 240, 紧凑: 300 }[pace];\n    return JSON.stringify({\n      characters,\n      charactersPerMinute: perMinute,\n      estimatedSeconds: Math.ceil((characters * 60) / perMinute),\n    });\n  },\n}"
+      }
+    ]
+  }
+}

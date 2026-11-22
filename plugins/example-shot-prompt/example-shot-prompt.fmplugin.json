@@ -1,0 +1,45 @@
+{
+  "format": 1,
+  "id": "example-shot-prompt",
+  "label": "镜头提示词",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "canvasNodes": [
+      {
+        "id": "compose",
+        "title": "镜头提示词",
+        "inputs": [
+          {
+            "id": "script",
+            "title": "分镜文案",
+            "kind": "text"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "prompt",
+            "title": "生成提示词",
+            "kind": "text"
+          }
+        ],
+        "fields": [
+          {
+            "id": "framing",
+            "title": "景别",
+            "type": "select",
+            "options": [
+              "全景",
+              "中景",
+              "特写"
+            ],
+            "default": "中景"
+          }
+        ],
+        "program": "{\n  run({ inputs, values }) {\n    return { prompt: values.framing + \"：\" + inputs.script };\n  },\n}"
+      }
+    ]
+  }
+}

@@ -1,4 +1,6 @@
-export type Kind = "text" | "image" | "video" | "sticky";
+import type { CanvasExtension, CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
+import {acceptsCanvasEdge,canvasSourceKind} from "@fumiao/plugin-sdk/canvas-ports";
+export type Kind = "text" | "image" | "video" | "sticky" | "plugin";
 export type H3Options = {mode:"reference"|"frames";first_frame?:string|null;last_frame?:string|null;video_audio?:string[]};
 export type Params = {
   h3?: H3Options|null;
@@ -22,6 +24,7 @@ export type CanvasNode = {
   asset_packs?: {id:string;revision:number;name?:string}[];
   id: string;
   type: Kind;
+  extension?: CanvasExtension;
   title: string;
   x: number;
   y: number;
@@ -35,7 +38,7 @@ export type CanvasNode = {
   use_media?: boolean;
   params: Params;
 };
-export type CanvasEdge = { id: string; source: string; target: string };
+export type CanvasEdge = { id: string; source: string; target: string; sourcePort?:string; targetPort?:string };
 export type Doc = {
   schemaVersion: 1;
   nodes: CanvasNode[];
@@ -86,6 +89,7 @@ export type Job = {
 export type Asset = {kind?:string;seconds?:number;has_audio?:boolean;name?:string; id: string; w: number; h: number; owner: number };
 export type FlowModel = {kind:string;label:string;provider?:string;family?:string;family_label?:string;hidden?:boolean;mode?:string;ratio?:string;seconds?:number;resolution?:string;min_refs?:number;max_refs?:number};
 export type Studio = {
+  canvas_nodes?: CanvasNodeEntry[];
   model_forms: Record<string, import("@fumiao/plugin-sdk/model-form").ModelForm>;
   model_catalog: Record<string,FlowModel>;
   video_models: Record<string,string>;
@@ -131,6 +135,7 @@ export const names: Record<Kind, string> = {
   image: "图片",
   video: "视频",
   sticky: "便签",
+  plugin: "插件",
 };
 export const newNode = (
   type: Kind,
@@ -167,29 +172,50 @@ export function resolveNode(node: CanvasNode, runs: Job[]) {
     media: run ? (run.status === "done" ? run.result : null) : node.media_id,
   };
 }
+export function linkedValue(node: CanvasNode, edge: CanvasEdge, runs: Job[]) {
+  const kind = canvasSourceKind(node, edge.sourcePort);
+  const value = node.extension
+    ? node.extension.result?.[edge.sourcePort!]
+    : kind === "text"
+      ? node.text
+      : resolveNode(node, runs).media;
+  return { kind, value };
+}
 export function connectionError(
   doc: Doc,
   source: string,
   target: string,
+  from?: string | null,
+  to?: string | null,
 ): string {
   const a = doc.nodes.find((n) => n.id === source),
     b = doc.nodes.find((n) => n.id === target);
-  if (
-    !a ||
-    !b ||
-    source === target ||
-    !["text", "image"].includes(a.type) ||
-    !["image", "video"].includes(b.type)
-  )
+  if (!a || !b || source === target || !acceptsCanvasEdge(a, b, from, to))
     return "这两个节点不能连接";
-  if (doc.edges.some((e) => e.source === source && e.target === target))
+  if (
+    b.type === "plugin" &&
+    doc.edges.some((e) => e.target === target && e.targetPort === to)
+  )
+    return "插件输入端口已连接";
+  if (
+    doc.edges.some(
+      (e) =>
+        e.source === source &&
+        e.target === target &&
+        e.sourcePort === (from ?? undefined) &&
+        e.targetPort === (to ?? undefined),
+    )
+  )
     return "已经连接";
   if (
-    a.type === "image" &&
+    canvasSourceKind(a, from) === "image" &&
     doc.edges.filter(
       (e) =>
         e.target === target &&
-        doc.nodes.find((n) => n.id === e.source)?.type === "image",
+        canvasSourceKind(
+          doc.nodes.find((n) => n.id === e.source)!,
+          e.sourcePort,
+        ) === "image",
     ).length >= 9
   )
     return "最多连接 9 张参考图片";
@@ -400,7 +426,7 @@ export function isCanvasComposerOpen(
   editing: string | null,
 ): boolean {
   return Boolean(
-    single && !editing && ["image", "video", "text"].includes(single.type),
+    single && !editing && ["image", "video", "text", "plugin"].includes(single.type),
   );
 }
 

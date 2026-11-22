@@ -1,3 +1,4 @@
+import { viewLeaves } from "@fumiao/plugin-sdk/view-blocks.js";
 import { PluginMedia } from "./plugin-media.js";
 import { z } from "zod";
 import {
@@ -6,6 +7,7 @@ import {
 } from "@fumiao/original-api/identity.js";
 import {
   actionRequestSchema,
+  contributedPages,
   hostOperations,
   memberScopes,
   packageContributions,
@@ -81,6 +83,7 @@ type Audit = {
 };
 
 function visible(release: Release, page: ResolvedPage) {
+  if (page.placement === "studio") return release.enabled && !release.removing;
   return page.visibleWhen === "installed" || release.enabled;
 }
 
@@ -110,11 +113,12 @@ async function invoke(
   }
 }
 
-function validateView(output: unknown, page: ResolvedPage) {
+async function validateView(sql: Sql, output: unknown, ctx: Context) {
   const result = viewSchema.safeParse(output);
   requireValue(result.success, 422, "插件设置页输出无效");
-  const { primary, blocks } = result.data;
-  const declared = (id: string) => page.actions.some((a) => a.id === id);
+  const { primary } = result.data;
+  const blocks = viewLeaves(result.data.blocks);
+  const declared = (id: string) => ctx.page.actions.some((a) => a.id === id);
   const button = (b: ViewButton) =>
     (b.opensForm
       ? blocks.some(
@@ -136,6 +140,27 @@ function validateView(output: unknown, page: ResolvedPage) {
     422,
     "插件设置页输出无效",
   );
+  const media = blocks.filter((block) => block.type === "media");
+  if (media.length) {
+    requireValue(
+      ctx.contributions.hostCapabilities.includes("media"),
+      403,
+      "插件未声明媒体能力",
+    );
+    const assets = await sql.query<{ public_id: string; kind: string }>(
+      `SELECT public_id,split_part(mime,'/',1) AS kind FROM assets
+       WHERE workspace_id=$1 AND state='ready' AND public_id=ANY($2::text[])`,
+      [ctx.workspace, media.map((block) => block.asset)],
+    );
+    const kinds = new Map(
+      assets.rows.map((asset) => [asset.public_id, asset.kind]),
+    );
+    requireValue(
+      media.every((block) => kinds.get(block.asset) === block.kind),
+      422,
+      "媒体预览不可用",
+    );
+  }
   return result.data;
 }
 
@@ -177,7 +202,7 @@ export class PluginPages {
     const { rows } = await sql.query<Release>(releaseQuery);
     const entries: PluginPageEntry[] = [];
     for (const pkg of rows) {
-      for (const page of packageContributions(pkg).settingsPages) {
+      for (const page of contributedPages(packageContributions(pkg))) {
         if (
           !visible(pkg, page) ||
           (page.audience === "admin" && actor.role !== "admin")
@@ -190,6 +215,7 @@ export class PluginPages {
           title: page.title,
           icon: page.icon,
           group: page.group,
+          ...(page.placement && { placement: page.placement }),
           order: page.order,
           audience: page.audience,
           legacy: !!page.legacy,
@@ -223,7 +249,9 @@ export class PluginPages {
     ).rows;
     if (audit && release) audit.version = release.version;
     const contributions = release && packageContributions(release);
-    const page = contributions?.settingsPages.find((p) => p.id === pageId);
+    const page =
+      contributions &&
+      contributedPages(contributions).find((p) => p.id === pageId);
     if (audit)
       audit.kind = page?.actions.find((a) => a.id === audit.action)?.kind;
     // An upload can outlast a role change. Use the live actor for this operation.
@@ -301,8 +329,15 @@ export class PluginPages {
     const input: PageInput = {};
     // Member pages are workspace- and owner-scoped, including their pending count.
     const member = page.audience === "member";
-    const filter = member ? " AND j.workspace_id=$2 AND j.owner_id=$3" : "";
-    const params = member ? [pkg.id, workspace, actor.id] : [pkg.id];
+    const scoped = member || page.placement === "studio";
+    const filter =
+      (scoped ? " AND j.workspace_id=$2" : "") +
+      (member ? " AND j.owner_id=$3" : "");
+    const params = [
+      pkg.id,
+      ...(scoped ? [workspace] : []),
+      ...(member ? [actor.id] : []),
+    ];
     if (page.scopes.includes("plugin")) {
       const { pending } = await one(
         sql,
@@ -403,9 +438,10 @@ export class PluginPages {
           ]);
         const host = this.pluginHost(sql, ctx, "read");
         try {
-          return validateView(
+          return await validateView(
+            sql,
             await invoke(ctx.page.program, "view", [input], host),
-            ctx.page,
+            ctx,
           );
         } finally {
           if (host.used["media.probe"]) {

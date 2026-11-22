@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "id": "example-review-board",
+  "label": "审片清单",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "data"
+    ],
+    "pages": [
+      {
+        "id": "board",
+        "title": "审片清单",
+        "icon": "film",
+        "audience": "member",
+        "program": "{\n  async view(_input, host) {\n    const board = (await host.data.get(\"board\")) || [];\n    const tabs = [\n      { id: \"pending\", label: \"待审\", reviewed: false },\n      { id: \"done\", label: \"已审\", reviewed: true },\n    ];\n    if (!board.length)\n      return {\n        schema: 2,\n        title: \"审片清单\",\n        blocks: [{ type: \"text\", text: \"从任务菜单选择「加入审片清单」。\" }],\n      };\n    return {\n      schema: 2,\n      title: \"审片清单\",\n      blocks: [\n        {\n          type: \"progress\",\n          label: \"已完成审片\",\n          value: board.filter((row) => row.reviewed).length,\n          max: board.length,\n        },\n        {\n          type: \"tabs\",\n          label: \"审片状态\",\n          tabs: tabs.map((tab) => {\n            const rows = board.filter((row) => row.reviewed === tab.reviewed);\n            return {\n              id: tab.id,\n              label: tab.label,\n              blocks: rows.length\n                ? [\n                    {\n                      type: \"table\",\n                      title: tab.label + \"任务\",\n                      columns: [\"任务编号\"],\n                      rows: rows.map((row) => [\"#\" + row.id]),\n                    },\n                  ]\n                : [{ type: \"text\", text: \"暂无\" + tab.label + \"任务\" }],\n            };\n          }),\n        },\n      ],\n    };\n  },\n}"
+      }
+    ],
+    "actions": [
+      {
+        "id": "queue",
+        "title": "加入审片清单",
+        "target": "job",
+        "audience": "member",
+        "program": "{\n  async run(job, _values, host) {\n    const board = (await host.data.get(\"board\")) || [];\n    if (board.some((row) => row.id === job.id))\n      return { notice: \"任务已在审片清单中\" };\n    if (board.length === 40) {\n      const finished = board.findIndex((row) => row.reviewed);\n      if (finished < 0) return { notice: \"清单已满，请先完成一项审片\" };\n      board.splice(finished, 1);\n    }\n    board.push({ id: job.id, reviewed: false });\n    await host.data.put(\"board\", board);\n    return { notice: \"已加入审片清单\" };\n  },\n}"
+      },
+      {
+        "id": "review",
+        "title": "完成审片",
+        "target": "job",
+        "audience": "member",
+        "program": "{\n  async run(job, _values, host) {\n    const board = (await host.data.get(\"board\")) || [];\n    const row = board.find((item) => item.id === job.id);\n    if (!row) return { notice: \"请先将此任务加入审片清单\" };\n    row.reviewed = true;\n    await host.data.put(\"board\", board);\n    return { notice: \"已完成审片\" };\n  },\n}"
+      }
+    ]
+  }
+}

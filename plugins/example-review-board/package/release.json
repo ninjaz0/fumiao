@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "id": "example-review-board",
+  "label": "审片清单",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": ["data"],
+    "pages": [
+      {
+        "id": "board",
+        "title": "审片清单",
+        "icon": "film",
+        "audience": "member",
+        "programFile": "board.js"
+      }
+    ],
+    "actions": [
+      {
+        "id": "queue",
+        "title": "加入审片清单",
+        "target": "job",
+        "audience": "member",
+        "programFile": "queue.js"
+      },
+      {
+        "id": "review",
+        "title": "完成审片",
+        "target": "job",
+        "audience": "member",
+        "programFile": "review.js"
+      }
+    ]
+  }
+}

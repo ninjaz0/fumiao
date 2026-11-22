@@ -134,3 +134,60 @@
 #modal .plugin-page-dialog [role="alert"] {
   color: var(--danger);
 }
+.plugin-table {
+  overflow-x: auto;
+}
+.plugin-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.plugin-table :is(caption, th, td) {
+  padding: 8px 10px;
+  text-align: start;
+}
+.plugin-table :is(th, td) {
+  border-bottom: 1px solid var(--line);
+}
+.plugin-table caption {
+  font-weight: 600;
+}
+.plugin-tabs [role="tablist"],
+.plugin-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.plugin-tabs [role="tab"] {
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: inherit;
+}
+.plugin-tabs [aria-selected="true"] {
+  border-color: var(--blue);
+}
+.plugin-tabs [role="tabpanel"]:not([hidden]) {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.plugin-media {
+  margin: 0;
+}
+.plugin-media :is(img, video, audio),
+.plugin-progress progress {
+  max-width: 100%;
+}
+.plugin-media :is(img, video) {
+  max-height: 60vh;
+  object-fit: contain;
+}
+.side nav:has([data-nav^="plugin:"]) {
+  min-height: 0;
+  overflow-y: auto;
+}
+#view > .plugin-page {
+  padding: clamp(16px, 4vw, 40px);
+}

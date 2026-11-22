@@ -179,10 +179,10 @@ export function useDocument(project: Project, userId: number) {
       window.removeEventListener("beforeunload", before);
     };
   }, []);
-  const acceptRemote = (result: Project, expectedDraft: string) => {
+  const acceptRemote = (result: Project, expectedDraft: string, operation = "采用回答") => {
     if (JSON.stringify(ref.current) !== expectedDraft) {
       blocked.current = true; setStatus("conflict");
-      setError("采用回答期间画布发生了修改。你的本地草稿已保留，请先处理保存冲突。");
+      setError(operation + "期间画布发生了修改。你的本地草稿已保留，请先处理保存冲突。");
       remember(); throw new Error("画布有新的本地修改，请先处理保存冲突");
     }
     undo.current.push(clone(ref.current)); redo.current = []; setHistoryTick(n => n + 1);

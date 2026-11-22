@@ -105,3 +105,21 @@
     max-width: calc(100vw - 24px);
   }
 }
+.plugin-port-label {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: max-content;
+  max-width: 85px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--cv-text);
+  pointer-events: none;
+  font-size: 11px;
+}
+.target .plugin-port-label { left: 12px; }
+.source .plugin-port-label { right: 12px; }
+.plugin-node-outputs { padding: 14px 60px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.plugin-node-outputs :is(img,video,audio) { max-width: 100%; }
+.plugin-node-form form, .plugin-node-form label { display: grid; gap: 8px; }
+.plugin-node-form form { max-height: 40vh; overflow: auto; }

@@ -42,7 +42,12 @@ export default {
     return {
       path: "chat/completions",
       body:
-        kind === "stream" ? chatPayload(request) : chatTitlePayload(request),
+        kind === "stream"
+          ? {
+              ...chatPayload(request),
+              ...(input.tools?.length ? { tools: input.tools } : {}),
+            }
+          : chatTitlePayload(request),
     };
   },
   event(line) {
@@ -85,6 +90,7 @@ export default {
         : "",
       reason: choice.finish_reason ?? null,
       usage: integers,
+      ...(delta.tool_calls == null ? {} : { toolCalls: delta.tool_calls }),
     };
   },
   title(body) {

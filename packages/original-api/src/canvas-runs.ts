@@ -1,3 +1,4 @@
+import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
@@ -220,8 +221,14 @@ export class OriginalCanvasRuns {
     for (const edge of doc.edges) {
       if (edge.target !== nid) continue;
       const source = nodes.get(edge.source)!;
-      if (source.type === "text") {
-        const text = pythonStrip(source.text);
+      const extValue =
+        source.extension && edge.sourcePort
+          ? source.extension.result?.[edge.sourcePort]
+          : undefined;
+      if (canvasSourceKind(source, edge.sourcePort) === "text") {
+        const text = pythonStrip(
+          source.extension ? (extValue ?? "") : source.text,
+        );
         requireValue(
           text,
           409,
@@ -230,7 +237,9 @@ export class OriginalCanvasRuns {
         texts.push(text);
         sources.push({ node: source.id, text });
       } else {
-        const key = await this.canvases.mediaForNode(sql, p.id, source);
+        const key = source.extension
+          ? extValue
+          : await this.canvases.mediaForNode(sql, p.id, source);
         requireValue(key, 409, `参考图片“${source.title || "图片"}”尚未就绪`);
         if (!refs.includes(key)) refs.push(key);
         sources.push({ node: source.id, media: key });

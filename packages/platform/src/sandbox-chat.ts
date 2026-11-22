@@ -8,6 +8,7 @@ import { decodePythonJson } from "@fumiao/plugin-sdk/json.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import type { Manifest, ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 import { z } from "zod";
+import { toolFragmentSchema } from "@fumiao/plugin-sdk/chat-tools.js";
 import { guardedLookup, requirePublicHttps } from "./plugin-host.js";
 import { loadProgram } from "./plugin-program.js";
 import { requireValue } from "./security.js";
@@ -36,6 +37,7 @@ const event = z.discriminatedUnion("type", [
       type: z.literal("chunk"),
       text: z.unknown(),
       reason: z.unknown(),
+      toolCalls: z.array(toolFragmentSchema).max(8).optional(),
       usage: z
         .record(z.string().min(1).max(64), integer)
         .refine((value) => Object.keys(value).length <= 32),
@@ -197,10 +199,11 @@ export async function sandboxChat(
     async submit() {
       return { state: "failed", error: "对话需要通过会话接口发送" };
     },
-    async *chatStream({ config, model, messages, signal }) {
+    async *chatStream({ config, model, messages, tools, signal }) {
       const response = await open("stream", config, signal, {
         model,
         messages,
+        ...(sandbox.tools && tools?.length ? { tools } : {}),
       });
       try {
         if (response.status !== 200)
@@ -241,7 +244,14 @@ export async function sandboxChat(
                 return [key, Number.isSafeInteger(n) ? n || 0 : BigInt(digits)];
               }),
             );
-            yield { text: value.text, reason: value.reason, usage };
+            yield {
+              text: value.text,
+              reason: value.reason,
+              usage,
+              ...(sandbox.tools && value.toolCalls
+                ? { toolCalls: value.toolCalls }
+                : {}),
+            };
           }
         }
       } catch (error) {

@@ -1,3 +1,4 @@
+import { verifyCanvasPluginNode } from "./studio-canvas-plugin-node.js";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -1001,6 +1002,55 @@ export async function studioBrowser(
       await expect(page.locator(".settings-content h2")).toHaveText(title);
       await expect(page).toHaveURL(web + studio);
     }
+    await setTab(page, "plugins");
+    await page
+      .getByLabel("选择插件文件")
+      .setInputFiles(
+        "plugins/example-review-board/example-review-board.fmplugin.json",
+      );
+    await expect(page.getByText(/工作台页面「审片清单」/)).toBeVisible();
+    await page.getByRole("button", { name: "确认导入", exact: true }).click();
+    const boardSwitch = page.getByRole("switch", { name: "审片清单开关" });
+    const enabled = await request(
+      page,
+      "/api/admin/plugins/example-review-board/state",
+      "POST",
+      () => boardSwitch.click(),
+    );
+    assert.ok(enabled.ok(), await enabled.text());
+    await expect(boardSwitch).toBeChecked();
+    await page.getByRole("button", { name: "关闭插件设置" }).click();
+    const board = sidebar.getByRole("button", {
+      name: "审片清单",
+      exact: true,
+    });
+    await board.click();
+    await expect(page.getByRole("heading", { name: "审片清单" })).toBeVisible();
+    const queueReview = await context.request.post(
+      "/api/plugins/example-review-board/actions/queue",
+      {
+        headers,
+        data: {
+          version: "1.0.0",
+          requestId: crypto.randomUUID(),
+          target: jobId,
+        },
+      },
+    );
+    assert.equal(queueReview.status(), 200, await queueReview.text());
+    await page.reload();
+    await expect(board).toHaveAttribute("aria-current", "page");
+    await expect(
+      page.getByRole("progressbar", { name: /已完成审片/ }),
+    ).toHaveAttribute("max", "1");
+    await expect(page.getByRole("cell", { name: "#" + jobId })).toBeVisible();
+    await page.getByRole("tab", { name: "待审" }).press("ArrowRight");
+    await expect(page.getByRole("tab", { name: "已审" })).toBeFocused();
+    await expect(page.getByText("暂无已审任务")).toBeVisible();
+    await nav("home");
+    await settings(page);
+    await verifyCanvasPluginNode(page, workspace);
+    await page.goto(studio);
     const savedCanvas = await document();
     const before = await state();
     await checkImageToVideoFrames(await context.newPage(), studio, before);
