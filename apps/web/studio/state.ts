@@ -286,6 +286,15 @@ export function suspendAudioDraft(session: DraftSession): DraftSnapshot | null {
     ? draftSnapshot(session)
     : session.suspendedAudioDraft;
 }
+function savedReferenceType(state: StudioState, types?: StoredReferenceTypes) {
+  return (id: string): ReferenceType => {
+    const type = types?.[id];
+    // Older drafts don't store types; a missing asset defaults to Picture.
+    return type === "Video" || type === "Audio"
+      ? type
+      : referenceType(state, id);
+  };
+}
 function restoreDraftReferences(
   state: StudioState,
   draft: Draft,
@@ -304,13 +313,7 @@ function restoreDraftReferences(
     draft.prompt,
     packReferences({ draft, refs: previousRefs }),
     packReferences({ draft, refs }),
-    (id) => {
-      const type = storedTypes?.[id];
-      // Older drafts don't store types; a missing asset defaults to Picture.
-      return type === "Video" || type === "Audio"
-        ? type
-        : referenceType(state, id);
-    },
+    savedReferenceType(state, storedTypes),
   );
   return { draft: { ...draft, prompt }, refs };
 }
@@ -391,7 +394,7 @@ export function readDraft(state: StudioState): DraftSession {
     !modelAvailable(state, selectedModel(draft))
       ? draft
       : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft));
-  return pruneDraftAssets(state, {
+  const session: DraftSession = {
     parent: typeof saved?.parent === "number" ? saved.parent : null,
     retainedSeed:
       typeof saved?.retainedSeed === "number" ? saved.retainedSeed : null,
@@ -412,15 +415,18 @@ export function readDraft(state: StudioState): DraftSession {
     ),
     ...restoreDraftReferences(state, normalizedDraft, saved?.refs, storedTypes),
     submitId: saved?.submitId || crypto.randomUUID(),
-  });
+  };
+  return pruneDraftAssets(state, session, savedReferenceType(state, storedTypes));
 }
 export function writeDraft(state: StudioState, session: DraftSession) {
   const key = keyFor(state);
-  const refs = new Set([
-    ...session.refs,
-    ...(session.suspendedImageDraft?.refs ?? []),
-    ...(session.suspendedMediaDraft?.refs ?? []),
-  ]);
+  const refs = new Set(
+    [session, session.suspendedImageDraft, session.suspendedMediaDraft].flatMap(
+      (snapshot) => snapshot
+        ? [...snapshot.refs, ...(snapshot.draft.h3ReferenceDraft?.refs ?? [])]
+        : [],
+    ),
+  );
   let savedTypes: StoredReferenceTypes | undefined;
   const referenceTypes = Object.fromEntries(
     [...refs].flatMap((id) => {
@@ -456,6 +462,7 @@ function pruneH3Assets(state: StudioState, h3?: H3Options) {
 export function pruneDraftAssets(
   state: StudioState,
   session: DraftSession,
+  previousType = savedReferenceType(state),
 ): DraftSession {
   const exists = (id: string) => !!referenceAsset(state, id);
   function prune(snapshot: DraftSnapshot): DraftSnapshot {
@@ -470,8 +477,19 @@ export function pruneDraftAssets(
       if (
         refs.length !== saved.refs.length ||
         savedAudio.length !== saved.video_audio.length
-      )
-        nextSaved = { ...saved, refs, video_audio: savedAudio };
+      ) {
+        const prompt =
+          refs.length === saved.refs.length
+            ? saved.prompt
+            : reindexPromptReferences(
+                state,
+                saved.prompt,
+                withPackMedia(saved.refs, saved.packs),
+                withPackMedia(refs, saved.packs),
+                previousType,
+              );
+        nextSaved = { ...saved, refs, prompt, video_audio: savedAudio };
+      }
     }
     const changedH3 = h3 !== draft.h3;
     const changedSuspendedH3 = suspendedH3Frames !== draft.suspendedH3Frames;
@@ -846,14 +864,12 @@ export function activeReferences({
     ? [...new Set([first_frame, last_frame].filter((id): id is string => !!id))]
     : refs;
 }
+function withPackMedia(refs: string[], packs: Pack[] | undefined) {
+  return [...new Set([...refs, ...(packs ?? []).flatMap((pack) => pack.media)])];
+}
 export function packReferences(session: Pick<DraftSession, "draft" | "refs">) {
   if (session.draft.kind === "audio") return [];
-  return [
-    ...new Set([
-      ...activeReferences(session),
-      ...(session.draft.packs || []).flatMap((pack) => pack.media),
-    ]),
-  ];
+  return withPackMedia(activeReferences(session), session.draft.packs);
 }
 export const referenceAsset = (state: StudioState, id: string | null) =>
   state.assets.find((asset) => asset.id === id);
@@ -1017,18 +1033,8 @@ function updateSnapshotPacks<T extends DraftSnapshot>(
     const mappedSaved = mapPackList(saved.packs, transform);
     if (mappedSaved.changed) {
       const nextSavedPacks = mappedSaved.packs ?? [];
-      const prevSavedRefs = [
-        ...new Set([
-          ...saved.refs,
-          ...saved.packs.flatMap((pack) => pack.media),
-        ]),
-      ];
-      const nextSavedRefs = [
-        ...new Set([
-          ...saved.refs,
-          ...nextSavedPacks.flatMap((pack) => pack.media),
-        ]),
-      ];
+      const prevSavedRefs = withPackMedia(saved.refs, saved.packs);
+      const nextSavedRefs = withPackMedia(saved.refs, nextSavedPacks);
       const prompt = referencesShifted(
         prevState,
         nextState,
@@ -1260,15 +1266,22 @@ export function changeH3Mode(
     };
   }
   const { h3ReferenceDraft: saved, ...values } = draft;
+  const nextRefs = [
+    ...new Set([...(saved?.refs || refs), ...activeReferences(session)]),
+  ].filter((id) => referenceAsset(state, id));
   const prompt =
     saved && draft.prompt === draft.h3FrameInitialPrompt
-      ? saved.prompt
+      ? reindexPrompt(
+          state,
+          state,
+          saved.prompt,
+          withPackMedia(saved.refs, saved.packs),
+          withPackMedia(nextRefs, saved.packs),
+        )
       : draft.prompt;
   return {
     ...session,
-    refs: [
-      ...new Set([...(saved?.refs || refs), ...activeReferences(session)]),
-    ].filter((id) => referenceAsset(state, id)),
+    refs: nextRefs,
     draft: {
       ...values,
       prompt,

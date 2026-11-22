@@ -27,6 +27,7 @@ import {
   pruneDraftPacks,
   pruneDraftAssets,
   readDraft,
+  referenceType,
   removeDraftPack,
   referenceIssue,
   seedError,
@@ -606,8 +607,11 @@ test("deleted assets are removed from restored H3 frames and saved references", 
   writeDraft(state, { ...snapshot, suspendedMediaDraft: snapshot });
   assert.equal(pruneDraftAssets(state, snapshot), snapshot);
   const refreshedState = { ...state, assets: [] };
-  const refreshed = pruneDraftAssets(refreshedState, snapshot);
+  const refreshed = pruneDraftAssets(refreshedState, snapshot, (id) =>
+    referenceType(state, id),
+  );
   assert.deepEqual(activeReferences(refreshed), []);
+  assert.equal(refreshed.draft.h3ReferenceDraft?.prompt, "  ");
   assert.equal(referenceIssue(refreshedState, refreshed), "");
   const request = generationRequest(refreshedState, refreshed);
   for (const id of ["img1", "img2", "vid1", "aud1"])
@@ -622,6 +626,7 @@ test("deleted assets are removed from restored H3 frames and saved references", 
     assert.equal(draft.h3?.last_frame, "img2");
     assert.deepEqual(draft.h3?.video_audio, ["aud1"]);
     assert.deepEqual(draft.h3ReferenceDraft?.refs, ["img2"]);
+    assert.equal(draft.h3ReferenceDraft?.prompt, " <Picture 1> ");
     assert.deepEqual(draft.h3ReferenceDraft?.video_audio, ["aud1"]);
   }
   const empty = readDraft({ ...state, assets: [] });
@@ -814,6 +819,60 @@ test("restoring a saved reference draft removes deleted image tokens and renumbe
 
   writeDraft(next, restored);
   assert.equal(readDraft(next).draft.prompt, restored.draft.prompt);
+});
+
+test("returning to H3 reference mode after reload restores corrected tokens", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState();
+  const session = readDraft(state);
+  const frames = changeH3Mode(
+    state,
+    {
+      ...session,
+      refs: ["img1", "img2"],
+      draft: { ...session.draft, prompt: "Start <Picture 1>; end <Picture 2>." },
+    },
+    "frames",
+  );
+  writeDraft(state, frames);
+
+  const next = makeState({ assets: state.assets.filter(({ id }) => id !== "img1") });
+  const restoredFrames = readDraft(next);
+  assert.equal(restoredFrames.draft.prompt, frames.draft.prompt);
+  assert.equal(restoredFrames.draft.h3?.first_frame, null);
+  assert.equal(restoredFrames.draft.h3?.last_frame, "img2");
+  const restored = changeH3Mode(next, restoredFrames, "reference");
+  assert.deepEqual(restored.refs, ["img2"]);
+  assert.equal(restored.draft.prompt, "Start ; end <Picture 1>.");
+});
+
+test("returning to H3 reference mode keeps pack tokens bound when frame order changes", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState();
+  const session = readDraft(state);
+  const frames = changeH3Mode(
+    state,
+    {
+      ...session,
+      draft: {
+        ...session.draft,
+        prompt: "<Picture 1> and <Picture 2>",
+        packs: [{ id: "pack-1", revision: 1, media: ["img1", "img2"] }],
+      },
+    },
+    "frames",
+  );
+  const swapped = assignFrame(state, frames, "img2", "first_frame");
+  const restored = changeH3Mode(state, swapped, "reference");
+  assert.deepEqual(packReferences(restored), ["img2", "img1"]);
+  assert.equal(restored.draft.prompt, "<Picture 2> and <Picture 1>");
+  const edited = changeH3Mode(state, {
+    ...swapped,
+    draft: { ...swapped.draft, prompt: "新帧提示词" },
+  }, "reference");
+  assert.equal(edited.draft.prompt, "新帧提示词");
 });
 
 test("restoring a saved draft uses the deleted reference's original media type", (t) => {

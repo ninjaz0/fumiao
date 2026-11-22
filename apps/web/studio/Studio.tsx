@@ -344,6 +344,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                 ...(lostParent ? { parent: null, retainedSeed: null } : {}),
               }
             : priorDraft,
+          (id) => referenceType(prevSpace, id),
         );
         const nextSession =
           nextBase === priorDraft
