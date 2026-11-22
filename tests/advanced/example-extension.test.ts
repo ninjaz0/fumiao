@@ -279,6 +279,62 @@ test("deleting an unmigrated legacy note drains a full batch within the call cap
   );
 });
 
+for (const action of ["add-note", "remove-note"]) {
+  test(`${action} migrates legacy notes when the installation is at the key quota`, async () => {
+    const store = new Map<string, unknown>();
+    for (let i = 1; i <= hostLimits.dataPluginKeys; i++)
+      store.set(`notes/${String(i).padStart(6, "0")}`, {
+        text: `old ${i}`,
+        savedAt: "",
+      });
+    const host = async (name: string, args: unknown[]) => {
+      const key = String(args[0]);
+      if (name === "data.get") return store.get(key) ?? null;
+      if (name === "data.list")
+        return {
+          keys: [...store.keys()]
+            .filter((key) => key.startsWith("notes/"))
+            .sort()
+            .slice(0, hostLimits.dataListKeys),
+          more: true,
+        };
+      if (name === "data.put") {
+        if (!store.has(key) && store.size >= hostLimits.dataPluginKeys)
+          throw Error("插件数据超过容量上限");
+        store.set(key, args[1]);
+        return true;
+      }
+      assert.equal(name, "data.delete");
+      return store.delete(key);
+    };
+    assert.deepEqual(
+      await runProgram(
+        page("notes").program,
+        "action",
+        [action, { text: "new", key: "notes/002000" }, {}],
+        ["data.get", "data.list", "data.put", "data.delete"],
+        host,
+      ),
+      { notice: action === "add-note" ? "备注已保存" : "备注已删除" },
+    );
+    const saved = store.get("notes-v2") as {
+      notes: { id: string; text: string }[];
+    };
+    const migrated = saved.notes.filter((note) => note.id.startsWith("notes/"));
+    assert.equal(migrated.length, 14);
+    assert.ok(migrated.every((note) => !store.has(note.id)));
+    assert.equal(
+      store.size - 1 + saved.notes.length,
+      hostLimits.dataPluginKeys + (action === "add-note" ? 1 : -1),
+    );
+    assert.equal(
+      new Set([...store.keys(), ...saved.notes.map((note) => note.id)]).size,
+      store.size + saved.notes.length,
+    );
+    assert.equal(store.has("notes/002000"), action !== "remove-note");
+  });
+}
+
 test("a full notes collection returns a Chinese notice without writing and remains deletable", async () => {
   const notes = page("notes");
   const saved = {

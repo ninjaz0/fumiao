@@ -106,9 +106,9 @@ export default (() => {
         savedBytes += entryBytes;
         migrated.push(key);
       }
-      await host.data.put("notes-v2", saved);
       for (const key of migrated) await host.data.delete(key);
       if (removedLegacy) await host.data.delete(removedLegacy);
+      await host.data.put("notes-v2", saved);
       return { notice: id === "add-note" ? "备注已保存" : "备注已删除" };
     },
   };
