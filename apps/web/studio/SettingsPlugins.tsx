@@ -65,6 +65,7 @@ type Plugin = {
     service: string | null;
     services: { id: string; name: string }[];
   }[];
+  paymentMethods?: {id:string; title:string; enabled:boolean; configured:boolean}[];
   previousVersion: string | null;
   updateUrl: string | null;
   hasUpdateToken: boolean;
@@ -938,7 +939,7 @@ export function PluginSettings({
                           {p.removing
                             ? "已提交移除请求；待已受理任务结束后自动卸载，期间不再受理新任务。"
                             : p.mode === "extension"
-                              ? (p.enabled ? "已启用此插件声明的事件订阅和菜单操作。" : "开启后，工作区可以使用此插件声明的事件订阅和菜单操作。")
+                              ? (p.enabled ? "此扩展已启用。" : "开启后，工作区可以使用此扩展。")
                             : p.enabled
                               ? "关闭后，所有工作区将停止接收新任务。已受理的任务继续运行。"
                               : needsService
@@ -947,6 +948,36 @@ export function PluginSettings({
                         </p>
                       </section>
 
+                      {p.enabled && p.paymentMethods?.map(method=>(
+                        <section className="plugin-drawer-card" key={method.id}>
+                          <h4>{method.title}</h4>
+                          {method.configured && <label className="plugin-inline">
+                            <input type="checkbox" checked={method.enabled} disabled={busy}
+                              onChange={e=>void action("payment-methods/"+method.id,{enabled:e.target.checked},"渠道已更新")} />
+                            允许新充值
+                          </label>}
+                          <details>
+                            <summary>{method.configured?"更换商户配置":"配置商户"}</summary>
+                            <form className="settings-form" onSubmit={e=>{
+                              e.preventDefault();
+                              const form=e.currentTarget;
+                              const data=new FormData(form);
+                              void run(async()=>{
+                                await call(base+"payment-methods/"+method.id,{revision:p.revision,enabled:method.configured?method.enabled:true,config:{
+                                  gateway:data.get("gateway"),pid:data.get("pid"),key:data.get("key"),cid:data.get("cid")||undefined,
+                                }});
+                                form.reset();
+                              },"商户配置已保存");
+                            }}>
+                              <label>网关 HTTPS 地址<input type="url" name="gateway" required /></label>
+                              <label>商户号<input name="pid" required /></label>
+                              <label>商户密钥<input type="password" name="key" autoComplete="new-password" required /></label>
+                              <label>通道号（可选）<input name="cid" /></label>
+                              <button type="submit" disabled={busy}>保存商户配置</button>
+                            </form>
+                          </details>
+                        </section>
+                      ))}
                       {p.mode !== "extension" && <>
                       <section className="plugin-drawer-section">
                         <div className="plugin-drawer-section-head">

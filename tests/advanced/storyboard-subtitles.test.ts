@@ -4,7 +4,7 @@ import {
   subtitleCues,
   timestamp,
   webVtt,
-} from "@fumiao/plugin-storyboard/subtitles.js";
+} from "@fumiao/platform/composition/subtitles.js";
 
 test("original subtitle weighting uses Unicode code points, punctuation and offsets", () => {
   assert.deepEqual(subtitleCues("猫。\n😀!", 1, 4, 3), [

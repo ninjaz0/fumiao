@@ -21,7 +21,7 @@ import {
   type CreateRecharge,
 } from "@fumiao/original-api/recharge.js";
 import { parseBody } from "@fumiao/original-api/validation.js";
-import { paymentJson } from "@fumiao/plugin-payments/original-values.js";
+import { paymentJson } from "@fumiao/platform/payment/values.js";
 import {
   originalSessionToken,
   originalWorkspace,

@@ -9,6 +9,7 @@ type Order = {
   id: string;
   workspace: number;
   method: string;
+  method_label?: string;
   amount: number;
   credits: number;
   created: number;
@@ -20,7 +21,7 @@ type Order = {
 export type RechargeConfig = {
   min_yuan: number;
   max_yuan: number;
-  methods: { id: string; label: string }[];
+  methods: { id: string; label: string; notice?: string }[];
   orders: Order[];
 };
 
@@ -45,9 +46,6 @@ const orderHints: Record<string, string> = {
 
 function date(stamp: number) {
   return new Date(stamp * 1000).toLocaleString();
-}
-function methodName(method: string) {
-  return method === "alipay" ? "支付宝" : "USDT-Plasma";
 }
 function mergeCreditRows(rows: CreditEntry[], incoming: CreditEntry[]) {
   return Array.from(
@@ -225,6 +223,7 @@ export function RechargeForm({
   const [yuan, setYuan] = useState("10");
   const amountField = useRef<HTMLInputElement>(null);
   const [method, setMethod] = useState(config.methods[0]?.id ?? "");
+  const notice = config.methods.find(option => option.id === method)?.notice;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const request = useRef({ fingerprint: "", uid: "" });
@@ -325,9 +324,7 @@ export function RechargeForm({
           <p>充值暂不可用，请稍后再试</p>
         )}
       </fieldset>
-      <p className="recharge-network" hidden={method !== "usdt_plasma"}>
-        使用 Plasma 网络转账，应付 USDT 数量以收银台为准。
-      </p>
+      {notice && <p className="recharge-network">{notice}</p>}
       <p className="form-message" role="alert">
         {message}
       </p>
@@ -390,7 +387,7 @@ export function RechargeHistory({
             >
               <span>
                 <strong>{`¥${(order.amount / 100).toFixed(2)} · ${order.credits.toLocaleString()} 积分`}</strong>
-                <small>{`${date(order.created)} · ${methodName(order.method)}`}</small>
+                <small>{`${date(order.created)} · ${order.method_label ?? order.method}`}</small>
               </span>
               <span>
                 {(orderLabels[order.state] || "待核对") + " "}
@@ -488,7 +485,7 @@ export function RechargeOrder({
         <dt>充值空间</dt>
         <dd>{workspace?.name || "原充值空间"}</dd>
         <dt>付款方式</dt>
-        <dd>{methodName(order.method)}</dd>
+        <dd>{order.method_label ?? order.method}</dd>
         <dt>订单号</dt>
         <dd className="recharge-order-id">{order.id}</dd>
       </dl>

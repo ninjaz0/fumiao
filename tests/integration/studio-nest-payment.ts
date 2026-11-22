@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { Payments } from "@fumiao/platform/payments.js";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
-import { sign } from "@fumiao/plugin-payments/index.js";
+import { sign } from "@fumiao/platform/payment/wire.js";
 
 export async function studioPayment(directory: string, web: string) {
   const key = join(directory, "payment-key.pem");
@@ -106,11 +106,13 @@ export async function studioPayment(directory: string, web: string) {
   return {
     origin: config.gateway,
     certificate,
-    configure: (platform: Platform, actor: Actor) =>
-      new Payments(platform).configure(actor, "alipay", {
+    configure: async (platform: Platform, actor: Actor) => {
+      await platform.db.query("INSERT INTO studio_packages(id,version,enabled) VALUES('payments','1.0.0',true) ON CONFLICT DO NOTHING");
+      return new Payments(platform).configure(actor, "alipay", {
         enabled: true,
         config,
-      }),
+      });
+    },
     async verifyCallback(id: string, callbackOrigin = web) {
       assert.equal(checkout, id);
       assert.ok(

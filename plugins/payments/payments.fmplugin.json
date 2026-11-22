@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "id": "payments",
+  "label": "充值渠道",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "paymentMethods": [
+      {
+        "id": "alipay",
+        "title": "支付宝",
+        "orderField": "out_trade_no",
+        "acknowledgement": "success",
+        "signature": "md5-suffix",
+        "checkoutPath": "/submit.php",
+        "queryPath": "/api.php",
+        "queryKey": "key",
+        "confirmation": {
+          "status": "status",
+          "paid": "1",
+          "trade": "trade_no",
+          "order": "out_trade_no",
+          "amount": "money",
+          "merchant": "pid"
+        },
+        "callbackAmount": "money",
+        "callbackTrade": "trade_no",
+        "callbackMerchant": "pid",
+        "program": "{\n  async create({ order, merchant, urls }, host) {\n    const fields = {\n      pid: merchant.pid,\n      type: \"alipay\",\n      out_trade_no: order.id,\n      name: urls.name,\n      money: order.money,\n      notify_url: urls.notify,\n      return_url: urls.return,\n    };\n    if (merchant.cid) fields.cid = merchant.cid;\n    return { checkout: await host.payment.checkout(\"/submit.php\", fields) };\n  },\n  async verify({ order, merchant, expected }, host) {\n    const result = await host.payment.query(\"/api.php\", {\n      act: \"order\",\n      pid: merchant.pid,\n      out_trade_no: order.id,\n    });\n    const v = result.values;\n    if (\n      !result.status.code ||\n      !result.status.status ||\n      v.code !== \"1\" ||\n      v.status !== \"1\"\n    )\n      return null;\n    const trade = String(v.trade_no ?? \"\");\n    if (\n      !result.status.pid ||\n      v.pid !== merchant.pid ||\n      v.out_trade_no !== order.id ||\n      v.type !== \"alipay\" ||\n      result.fen.money !== order.amount ||\n      !/^[A-Za-z0-9_-]{1,128}$/.test(trade) ||\n      (expected && trade !== expected)\n    )\n      throw Error(\"Invalid payment confirmation\");\n    return trade;\n  },\n  callback({ order, merchant, document: { values: v, status, fen, numeric } }) {\n    if (\n      !status.pid ||\n      v.pid !== merchant.pid ||\n      v.out_trade_no !== order.id ||\n      fen.money !== order.amount ||\n      v.trade_status !== \"TRADE_SUCCESS\" ||\n      v.type !== \"alipay\"\n    )\n      throw Error(\"Invalid callback\");\n    if (numeric.trade_no != null) throw Error(\"Invalid trade\");\n    return v.trade_no;\n  },\n}"
+      },
+      {
+        "id": "usdt_plasma",
+        "title": "USDT-Plasma",
+        "orderField": "order_id",
+        "acknowledgement": "ok",
+        "signature": "hmac-sha256",
+        "createPath": "/payments/gmpay/v1/order/create-transaction",
+        "queryPath": "/pay/check-status/{trade}",
+        "confirmation": {
+          "status": "data.status",
+          "paid": "2",
+          "trade": "data.trade_id"
+        },
+        "callbackAmount": "amount",
+        "callbackTrade": "trade_id",
+        "callbackMerchant": "pid",
+        "notice": "使用 Plasma 网络转账，应付 USDT 数量以收银台为准。",
+        "program": "{\n  async create({ order, merchant, urls }, host) {\n    const result = await host.payment.post(\n      \"/payments/gmpay/v1/order/create-transaction\",\n      {\n        pid: merchant.pid,\n        order_id: order.id,\n        currency: \"cny\",\n        token: \"usdt\",\n        network: \"plasma\",\n        amount: order.money,\n        notify_url: urls.notify,\n        redirect_url: urls.studio\n          ? urls.return + \"?order=\" + order.id\n          : urls.return,\n        name: urls.name,\n      },\n    );\n    const v = result.values.data;\n    if (\n      !result.status.status_code ||\n      result.values.status_code !== \"200\" ||\n      !v ||\n      v.order_id !== order.id ||\n      result.fen.data?.amount !== order.amount ||\n      typeof v.currency !== \"string\" ||\n      v.currency.toLowerCase() !== \"cny\"\n    )\n      throw Error(\"Invalid creation response\");\n    if (\n      result.numeric.data?.trade_id != null ||\n      result.expiry.data?.expiration_time == null\n    )\n      throw Error(\"Invalid receipt\");\n    return {\n      checkout: v.payment_url,\n      tradeId: v.trade_id,\n      expires: result.expiry.data?.expiration_time,\n    };\n  },\n  async verify({ order, expected }, host) {\n    const trade = order.trade_id || expected;\n    if (typeof trade !== \"string\" || !/^[A-Za-z0-9_-]{1,128}$/.test(trade))\n      return null;\n    if (expected && order.trade_id && order.trade_id !== expected)\n      throw Error(\"Trade mismatch\");\n    const result = await host.payment.query(\"/pay/check-status/\" + trade, {});\n    if (\n      !result.status.status_code ||\n      result.values.status_code !== \"200\" ||\n      result.values.data?.trade_id !== trade ||\n      result.numeric.data?.status !== \"2\"\n    )\n      return null;\n    return trade;\n  },\n  callback({ order, merchant, document: { values: v, fen, status, numeric } }) {\n    if (\n      !status.pid ||\n      v.pid !== merchant.pid ||\n      v.order_id !== order.id ||\n      fen.amount !== order.amount ||\n      !status.status ||\n      v.status !== \"2\" ||\n      typeof v.token !== \"string\" ||\n      v.token.toLowerCase() !== \"usdt\"\n    )\n      throw Error(\"Invalid callback\");\n    if (numeric.trade_id != null) throw Error(\"Invalid trade\");\n    return v.trade_id;\n  },\n}"
+      }
+    ],
+    "settingsPages": [],
+    "hostCapabilities": []
+  }
+}

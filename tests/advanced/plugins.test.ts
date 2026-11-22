@@ -5,7 +5,7 @@ import sharp from "sharp";
 import { muse } from "@fumiao/plugin-muse/index.js";
 import { flow } from "@fumiao/plugin-flow/index.js";
 import { images } from "@fumiao/plugin-images/index.js";
-import { storyboard } from "@fumiao/plugin-storyboard/index.js";
+import { storyboard } from "@fumiao/platform/composition/legacy-provider.js";
 import { remotePlugin } from "@fumiao/plugin-remote/index.js";
 import { inspectMedia } from "@fumiao/platform/media.js";
 import type { Execution } from "@fumiao/plugin-sdk/index.js";

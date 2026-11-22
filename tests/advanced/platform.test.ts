@@ -29,7 +29,9 @@ import {
   importLegacy,
   legacyId,
 } from "@fumiao/platform/importer.js";
-import { sign, fen, zpay } from "@fumiao/plugin-payments/index.js";
+import { sign } from "@fumiao/platform/payment/wire.js";
+import { originalFen as fen } from "@fumiao/platform/payment/values.js";
+import { paymentMethods, paymentProvider } from "@fumiao/platform/payment/methods.js";
 import { OriginalCredits } from "@fumiao/original-api/credits.js";
 import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
 
@@ -466,7 +468,7 @@ test("verified recharge settles exactly once and rejects forged callbacks", asyn
   const f = await fixture(mock);
   let calls = 0;
   const adapter = {
-    ...zpay,
+    ...paymentProvider((await paymentMethods(f.db,{plugin:"payments",version:"1.0.0"})).find(m=>m.id==="alipay")!,false),
     create: async () => {
       calls++;
       return { checkout: "https://payments.example/checkout" };

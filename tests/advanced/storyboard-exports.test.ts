@@ -11,7 +11,7 @@ import { databaseFixture } from "../helpers/database.js";
 import { migrate, one } from "@fumiao/platform/db.js";
 import { S3Storage } from "@fumiao/platform/storage.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
-import { originalStoryboard } from "@fumiao/plugin-storyboard/original.js";
+import { originalStoryboard } from "@fumiao/platform/composition/renderer.js";
 import { OriginalMedia } from "@fumiao/original-api/media.js";
 const exec = promisify(execFile);
 function deferred<T = void>() {
@@ -21,6 +21,9 @@ function deferred<T = void>() {
 }
 async function fixture() {
   const f = await canvasesFixture();
+  await f.db.query(
+    "INSERT INTO studio_packages(id,version,enabled) VALUES('storyboard','1.0.0',true) ON CONFLICT DO NOTHING",
+  );
   const video = await f.asset(randomUUID().replaceAll("-", ""), "video");
   const voice = await f.asset(randomUUID().replaceAll("-", ""), "audio");
   for (const a of [video, voice])
@@ -148,6 +151,33 @@ test("real local composition: acceptance, UID replay, refs, audio padding, embed
       f.db,
       "SELECT id FROM storyboard_exports WHERE public_id=$1",
       [created.id],
+    );
+    const pinned = await one(
+      f.db,
+      "SELECT exporter_plugin,exporter_version,exporter_id FROM storyboard_exports WHERE id=$1",
+      [row.id],
+    );
+    assert.deepEqual(pinned, {
+      exporter_plugin: "storyboard",
+      exporter_version: "1.0.0",
+      exporter_id: "mp4",
+    });
+    await f.db.query(
+      "UPDATE studio_packages SET enabled=false WHERE id='storyboard'",
+    );
+    assert.deepEqual(
+      await f.service.create(f.admin, f.project.id, {
+        uid,
+        expected_revision: 1,
+      }),
+      created,
+    );
+    await assert.rejects(
+      f.service.create(f.admin, f.project.id, {
+        uid: randomUUID(),
+        expected_revision: 1,
+      }),
+      /成片合成服务尚未配置/,
     );
     await f.service.recover();
     await Promise.all([f.service.execute(row.id), f.service.execute(row.id)]);

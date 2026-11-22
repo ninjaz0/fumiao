@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "id": "storyboard",
+  "label": "分镜合成",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "media"
+    ],
+    "exporters": [
+      {
+        "id": "mp4",
+        "title": "分镜 MP4",
+        "programFile": "plan.js"
+      }
+    ],
+    "settingsPages": []
+  }
+}
