@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { libraryBulkFixture } from "../helpers/library-bulk.js";
-import { archiveEntry } from "@fumiao/original-api/library.js";
+import { canvasesFixture } from "../helpers/canvases.js";
+import { archiveEntry, OriginalLibrary } from "@fumiao/original-api/library.js";
 
 test("bulk library preserves mixed selection ordering and request-order errors", async () => {
   const f = await libraryBulkFixture();
@@ -122,6 +123,62 @@ test("bulk library query counts stay constant from 1 to 200 keys", async () => {
         assert.equal(counts[1], counts[0], `${kind} ${action}: ${counts}`);
         assert(counts[1] <= 25, `${kind} ${action}: ${counts}`);
       }
+    }
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("favorites recheck membership after row locks before either write", async () => {
+  const f = await canvasesFixture();
+  try {
+    const library = new OriginalLibrary(f.p);
+    const asset = await f.asset("e".repeat(32), "ref", f.team, f.member);
+    const keys = [`asset:${asset.public_id}`];
+    const transaction = f.db.transaction.bind(f.db);
+    for (const favorite of [true, false]) {
+      if (!favorite) {
+        await f.db.query(
+          "INSERT INTO members(workspace_id,user_id) VALUES($1,$2)",
+          [f.team.id, f.member.id],
+        );
+        await f.db.query(
+          "INSERT INTO favorites(user_id,asset_id) VALUES($1,$2)",
+          [f.member.id, asset.id],
+        );
+      }
+      let revoked = false;
+      f.db.transaction = (fn) =>
+        transaction((sql) =>
+          fn({
+            query: async (statement, params) => {
+              if (!revoked && statement.includes("ORDER BY id FOR KEY SHARE")) {
+                await f.db.query(
+                  "DELETE FROM members WHERE workspace_id=$1 AND user_id=$2",
+                  [f.team.id, f.member.id],
+                );
+                revoked = true;
+              }
+              return sql.query(statement, params);
+            },
+          }),
+        );
+      await assert.rejects(
+        library.changeFavorites(
+          f.member,
+          { keys, favorite },
+          String(f.team.public_id),
+        ),
+        {
+          status: 404,
+          message: "内容不存在或无权访问",
+        },
+      );
+      assert(revoked);
+      assert.deepEqual(
+        await library.favorites(f.db, f.member, f.team.id),
+        favorite ? [] : keys,
+      );
     }
   } finally {
     await f.cleanup();

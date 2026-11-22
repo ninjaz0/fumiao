@@ -244,6 +244,7 @@ export class OriginalLibrary {
       const results = body.favorite
         ? await this.resultsBulk(sql, current)
         : new Map();
+      const currentAccess = this.bulkAccess(sql, user, workspace.id);
       const writes: Selection[] = [];
       for (const key of keys) {
         const item = this.selection(current, key);
@@ -251,7 +252,7 @@ export class OriginalLibrary {
           requireValue(!body.favorite, 404, "部分资产已删除，请刷新后重试");
           continue;
         }
-        await access(item);
+        await currentAccess(item);
         if (item.kind === "job" && body.favorite)
           requireValue(
             item.row.state === "completed" && results.get(item.row.id),
