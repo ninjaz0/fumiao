@@ -63,9 +63,17 @@ async function registeredRoutes(p: Platform) {
 
 const shape = (path: string) => path.replace(/\{[^/{}]+\}|:[^/]+/g, "{}");
 
-async function checkNext(response: Response, { method, path }: Contract) {
+async function checkNext(
+  response: Response,
+  { method, path }: Contract,
+  outage = false,
+) {
   const body = await response.bytes();
-  if (path === "/studio/") {
+  if (outage && (path === "/studio" || path === "/canvas")) {
+    // These pages need a definite session, which only the API can provide.
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get("retry-after"), "5");
+  } else if (path === "/studio/") {
     assert.equal(response.status, 308);
     assert.equal(response.headers.get("location"), "/studio?q=a%20b&q=%2F");
   } else if (path === "/canvas") {
@@ -247,7 +255,8 @@ export async function auditRoutes(
       if (retired) {
         assert.equal(response.status, 410, method + " " + path);
         assert.deepEqual(await response.json(), { detail: "贡献服务已停用" });
-      } else if (nextPaths.has(path)) await checkNext(response, { method, path });
+      } else if (nextPaths.has(path))
+        await checkNext(response, { method, path }, true);
       else {
         assert.equal(response.status, 502, method + " " + path);
         if (method !== "HEAD")
@@ -255,7 +264,7 @@ export async function auditRoutes(
       }
     }
     console.log(
-      "With Nest stopped, 95 forwarded routes return 502, 14 retired routes return 410 and all 11 original local routes still respond",
+      "With Nest stopped, 95 forwarded routes return 502, 14 retired routes return 410 and the 11 local routes respond, with /studio and /canvas answering 503",
     );
   };
 }
