@@ -1,0 +1,7 @@
+.cv-dialog > p.error {
+  color: #a62e2e;
+  background: #fff0ed;
+  padding: 12px 16px;
+  margin: 16px 0;
+  border-radius: 8px;
+}

@@ -63,6 +63,10 @@ try {
   release();
   await expect(page.locator("p.error")).toHaveText("删除失败，请稍后重试");
   await expect(dialog).toBeVisible();
+  if (await dialog.getByRole("alert").isVisible()) {
+    await expect(dialog.getByRole("alert")).toHaveCSS("color", "rgb(166, 46, 46)");
+    await expect(dialog.getByRole("alert")).toHaveCSS("background-color", "rgb(255, 240, 237)");
+  }
   await page.mouse.move(10, 10);
   if (process.env.CANVAS_DELETE_EVIDENCE) {
     await mkdir(process.env.CANVAS_DELETE_EVIDENCE, { recursive: true });
