@@ -1,9 +1,9 @@
-import { loadProgram } from "../../../packages/platform/src/plugin-program.js";
+import { loadProgram } from "@fumiao/platform/plugin-program.js";
 import {
   StudioPackages,
   upgradeFields,
-} from "../../../packages/platform/src/studio-packages.js";
-import { StudioUpdates } from "../../../packages/platform/src/studio-updates.js";
+} from "@fumiao/platform/studio-packages.js";
+import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
 import {
   Body,
   Controller,
@@ -19,14 +19,14 @@ import { z, ZodError } from "zod";
 import {
   OriginalIdentity,
   type OriginalActor,
-} from "../../../packages/original-api/src/identity.js";
-import { StudioCatalog } from "../../../packages/platform/src/catalog.js";
-import { Operations } from "../../../packages/platform/src/operations.js";
-import { one } from "../../../packages/platform/src/db.js";
+} from "@fumiao/original-api/identity.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { Operations } from "@fumiao/platform/operations.js";
+import { one } from "@fumiao/platform/db.js";
 import {
   DomainError,
   requireValue,
-} from "../../../packages/platform/src/security.js";
+} from "@fumiao/platform/security.js";
 import { originalSessionToken } from "./original-request.js";
 
 const install = z.object({

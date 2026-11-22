@@ -3,16 +3,16 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
-import { one } from "../../packages/platform/src/db.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import type { Actor } from "../../packages/platform/src/platform.js";
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { OriginalJobs } from "../../packages/original-api/src/jobs.js";
-import { OriginalLibrary } from "../../packages/original-api/src/library.js";
+import { one } from "@fumiao/platform/db.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import type { Actor } from "@fumiao/platform/platform.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalJobs } from "@fumiao/original-api/jobs.js";
+import { OriginalLibrary } from "@fumiao/original-api/library.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
-import { gpuTiming } from "../../plugins/gpu/src/timing.js";
-import type { ProviderPlugin } from "../../packages/plugin-sdk/src/index.js";
+import { gpuTiming } from "@fumiao/plugin-gpu/timing.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 
 async function fixture() {
   const f = await databaseFixture(),

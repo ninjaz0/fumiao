@@ -1,5 +1,5 @@
 import type { CanvasDocument } from "./canvas-draft.js";
-import { pythonJsonText } from "../../plugin-sdk/src/json.js";
+import { pythonJsonText } from "@fumiao/plugin-sdk/json.js";
 
 /** Keep Python integers exact through request errors and stored run snapshots. */
 export function parseCanvasRunJson(source: string): unknown {

@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { originalUI } from "../../../packages/web-compat/src/ui";
+import { originalUI } from "@fumiao/web-compat/ui";
 import { initializeHomepage } from "../home/bootstrap";
 import { homepageMember } from "../home/session";
 export const metadata = {

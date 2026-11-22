@@ -1,7 +1,7 @@
-import { choices } from "../../../packages/plugin-sdk/src/model-form.js";
+import { choices } from "@fumiao/plugin-sdk/model-form.js";
 import { readFileSync } from "node:fs";
 import { flow } from "./index.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 const catalog = JSON.parse(
   readFileSync(new URL("../models.json", import.meta.url), "utf8"),
 );

@@ -2,13 +2,13 @@ import { museTiming } from "./timing.js";
 import type {
   ProviderPlugin,
   QueueContext,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import {
   healthJson,
   healthTruthy,
   healthInteger,
-} from "../../../packages/plugin-sdk/src/health.js";
-import { queueHealthSchema } from "../../../packages/plugin-sdk/src/queue.js";
+} from "@fumiao/plugin-sdk/health.js";
+import { queueHealthSchema } from "@fumiao/plugin-sdk/queue.js";
 const compare = (a: { id: string | number }, b: { id: string | number }) =>
   typeof a.id === "number" && typeof b.id === "number"
     ? a.id - b.id

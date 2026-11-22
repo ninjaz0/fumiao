@@ -2,7 +2,7 @@ import { z } from "zod";
 import { requireValue } from "./security.js";
 import type { Sql } from "./db.js";
 import { chatBytes } from "./chat-values.js";
-import { pythonJsonText } from "../../plugin-sdk/src/json.js";
+import { pythonJsonText } from "@fumiao/plugin-sdk/json.js";
 
 const number = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const hex = z.string().regex(/^[a-f0-9]{32}$/);

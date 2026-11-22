@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { one } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
-import { chatText } from "../../platform/src/chat-values.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { one } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { chatText } from "@fumiao/platform/chat-values.js";
 import { OriginalChats } from "./chats.js";
 import { OriginalCanvases, canvasConflict } from "./canvases.js";
 import { chatApplyFields } from "./chat-draft.js";

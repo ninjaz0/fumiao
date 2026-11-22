@@ -9,13 +9,13 @@ import {
 } from "@nestjs/common";
 import type { Request } from "express";
 import { z } from "zod";
-import { readOriginalBody } from "../../../packages/original-api/src/canvas-http.js";
-import { OriginalIdentity } from "../../../packages/original-api/src/identity.js";
+import { readOriginalBody } from "@fumiao/original-api/canvas-http.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import {
   DomainError,
   requireValue,
-} from "../../../packages/platform/src/security.js";
-import { PluginPages } from "../../../packages/platform/src/plugin-pages.js";
+} from "@fumiao/platform/security.js";
+import { PluginPages } from "@fumiao/platform/plugin-pages.js";
 import { originalSessionToken } from "./original-request.js";
 
 // Read action bodies after authentication so malformed requests also reach the audit log.

@@ -90,13 +90,15 @@ export function useEstimate(
     if (key.current !== requestKey) setEstimate(undefined);
     key.current = requestKey;
     let live = true;
-    const timer = window.setTimeout(async () => {
-      try {
-        const result = await request(JSON.parse(serialized));
-        if (live) setEstimate(result);
-      } catch {
-        if (live) setEstimate(undefined);
-      }
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await request(JSON.parse(serialized));
+          if (live) setEstimate(result);
+        } catch {
+          if (live) setEstimate(undefined);
+        }
+      })();
     }, 220);
     const repeat = window.setTimeout(() => {
       if (!document.hidden) setRevision((value) => value + 1);

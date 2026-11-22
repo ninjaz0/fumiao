@@ -2,11 +2,11 @@ import { flowDownload } from "./download.js";
 import {
   inspectProviderMedia,
   ProviderMediaError,
-} from "../../muse/src/artifacts.js";
+} from "@fumiao/plugin-muse/artifacts.js";
 import {
   ArtifactValidationError,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 export const flowArtifacts: ProviderPlugin = {
   ...flowDownload,
   manifest: {

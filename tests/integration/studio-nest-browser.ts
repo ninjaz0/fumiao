@@ -6,9 +6,9 @@ import { chromium, expect, type Page } from "@playwright/test";
 import sharp from "sharp";
 import { newNode, type Project } from "../../apps/web/canvas-editor/types.js";
 import { H3, type StudioState } from "../../apps/web/studio/state.js";
-import { one } from "../../packages/platform/src/db.js";
-import type { Actor, Platform } from "../../packages/platform/src/platform.js";
-import { imagesText } from "../../plugins/images/src/text.js";
+import { one } from "@fumiao/platform/db.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { imagesText } from "@fumiao/plugin-images/text.js";
 import type { studioPayment } from "./studio-nest-payment.js";
 import { verifyChatSettingsRetry } from "./studio-chat-settings.js";
 import {

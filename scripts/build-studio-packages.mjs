@@ -55,17 +55,20 @@ async function buildAdapter(root, entry) {
       {
         name: "studio-sdk",
         setup(b) {
+          // Host modules stay external. Installed packages name them by
+          // repository path, so that identifier is part of the format.
           b.onResolve(
             {
               filter:
-                /packages\/(plugin-sdk|platform|original-api|image-import)\/src\//,
+                /^@fumiao\/(plugin-sdk|platform|original-api|image-import)\//,
             },
-            (args) => ({
-              path:
-                "fumiao:" +
-                relative(resolve("."), resolve(args.resolveDir, args.path)),
-              external: true,
-            }),
+            (args) => {
+              const [, name, ...rest] = args.path.split("/");
+              return {
+                path: `fumiao:packages/${name}/src/${rest.join("/")}`,
+                external: true,
+              };
+            },
           );
           b.onLoad({ filter: /plugins\/.*\.ts$/ }, async ({ path }) => {
             let contents = await readFile(path, "utf8");

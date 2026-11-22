@@ -1,34 +1,34 @@
-import { queuedModelPolicy } from "../../../packages/platform/src/studio-plugin-profile.js";
-import { loadProgram } from "../../../packages/platform/src/plugin-program.js";
+import { queuedModelPolicy } from "@fumiao/platform/studio-plugin-profile.js";
+import { loadProgram } from "@fumiao/platform/plugin-program.js";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import type { ArtifactReceipt } from "../../../packages/plugin-sdk/src/preparation.js";
+import type { ArtifactReceipt } from "@fumiao/plugin-sdk/preparation.js";
 import type {
   QueueJob,
   QueueNode,
-} from "../../../packages/plugin-sdk/src/queue.js";
+} from "@fumiao/plugin-sdk/queue.js";
 import type {
   TimingContext,
   TimingReport,
-} from "../../../packages/plugin-sdk/src/timing.js";
+} from "@fumiao/plugin-sdk/timing.js";
 import {
   PairedAgentPlanError,
   type ExecutionPlan,
   type PairedAgentProtocol,
-} from "../../../packages/plugin-sdk/src/paired-agent.js";
-import { one, type Sql } from "../../../packages/platform/src/db.js";
-import { Executor } from "../../../packages/platform/src/executor.js";
-import { GpuGateway } from "../../../packages/platform/src/gpu.js";
-import type { Platform } from "../../../packages/platform/src/platform.js";
+} from "@fumiao/plugin-sdk/paired-agent.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import type { Platform } from "@fumiao/platform/platform.js";
 import {
   DomainError,
   hash,
   requireValue,
   secret,
-} from "../../../packages/platform/src/security.js";
-import { executableJob } from "../../../packages/platform/src/retired-jobs.js";
-import { JobTiming } from "../../../packages/platform/src/timing.js";
+} from "@fumiao/platform/security.js";
+import { executableJob } from "@fumiao/platform/retired-jobs.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
 
 type Profile = NonNullable<NonNullable<TimingContext["node"]>["profile"]>;
 export type Heartbeat = {

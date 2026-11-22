@@ -1,6 +1,12 @@
 import type { NextConfig } from "next";
 const config: NextConfig = {
   poweredByHeader: false,
+  // Workspace packages ship TypeScript source.
+  transpilePackages: [
+    "@fumiao/original-api",
+    "@fumiao/plugin-sdk",
+    "@fumiao/web-compat",
+  ],
   // Keep legacy redirect query bytes (%20, repeated keys) intact in Proxy.
   skipProxyUrlNormalize: true,
   distDir: process.env.FUMIAO_NEXT_DIST || ".next",

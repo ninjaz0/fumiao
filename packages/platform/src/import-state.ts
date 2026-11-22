@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { hash, secret, requireValue } from "./security.js";
 import type { Sql } from "./db.js";
-import { nodeTimingContextSchema } from "../../plugin-sdk/src/timing.js";
+import { nodeTimingContextSchema } from "@fumiao/plugin-sdk/timing.js";
 
 const id = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const epoch = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);

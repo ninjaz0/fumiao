@@ -5,7 +5,7 @@ type Result={id:string;state:string;result:string|null;error:string;revision:num
 export function Composition({project,getRevision,ready,waitingReason}:{project:string;getRevision:()=>Promise<number>;ready:boolean;waitingReason:string}){
  const [results,setResults]=useState<Result[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[pollError,setPollError]=useState(''),[preview,setPreview]=useState<string|null>(null);
  const load=async()=>{const data=await api<{exports:Result[]}>(`/api/canvases/${project}/exports`);setResults(data.exports)};
- useEffect(()=>{let active=true;const poll=async()=>{try{const data=await api<{exports:Result[]}>(`/api/canvases/${project}/exports`);if(active){setResults(data.exports);setPollError('')}}catch(e){if(active)setPollError((e as Error).message)}};void poll();const timer=setInterval(poll,5000);return()=>{active=false;clearInterval(timer)}},[project]);
+ useEffect(()=>{let active=true;const poll=async()=>{try{const data=await api<{exports:Result[]}>(`/api/canvases/${project}/exports`);if(active){setResults(data.exports);setPollError('')}}catch(e){if(active)setPollError((e as Error).message)}};void poll();const timer=setInterval(()=>void poll(),5000);return()=>{active=false;clearInterval(timer)}},[project]);
  const pending=results.some(r=>['queued','running'].includes(r.state));
  const submit=async()=>{
   setBusy(true);setError('');setPollError('');const key='fm-compose-'+project;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { one } from "../../platform/src/db.js";
-import { chatBytes, chatText } from "../../platform/src/chat-values.js";
+import { one } from "@fumiao/platform/db.js";
+import { chatBytes, chatText } from "@fumiao/platform/chat-values.js";
 import type { OriginalChats } from "./chats.js";
 
 /** Durable ownership is separate from the original public turn state. A claimed

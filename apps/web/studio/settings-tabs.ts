@@ -1,4 +1,4 @@
-import type { PluginPageEntry } from "../../../packages/plugin-sdk/src/contributions.js";
+import type { PluginPageEntry } from "@fumiao/plugin-sdk/contributions.js";
 
 export const adminSettingsTabs = [
   "plugins",

@@ -1,4 +1,4 @@
-import type { CanvasSubmissionRule } from "../../plugin-sdk/src/index.js";
+import type { CanvasSubmissionRule } from "@fumiao/plugin-sdk/index.js";
 import type { Sql } from "./db.js";
 import { requireValue } from "./security.js";
 import { listedStudioCatalog } from "./studio-plugin-profile.js";

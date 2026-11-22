@@ -1,4 +1,4 @@
-import { MAX_ASSET_SELECTION } from "../../../packages/original-api/src/asset-limits";
+import { MAX_ASSET_SELECTION } from "@fumiao/original-api/asset-limits";
 
 export function allAssetsSelected(keys: string[], visible: string[]) {
   const count = visible.filter((key) => keys.includes(key)).length;

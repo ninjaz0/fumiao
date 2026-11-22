@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
-import { originalUI } from "../../../../packages/web-compat/src/ui";
+import { originalUI } from "@fumiao/web-compat/ui";
 import Studio from "../../studio/Studio";
 
 export const dynamic = "force-dynamic";

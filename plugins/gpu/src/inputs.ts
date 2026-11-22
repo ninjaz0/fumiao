@@ -5,7 +5,7 @@ import {
   type PreparationAsset,
   type PreparationRequest,
   type PreparedInput,
-} from "../../../packages/plugin-sdk/src/preparation.js";
+} from "@fumiao/plugin-sdk/preparation.js";
 const fail = (message: string): never => {
   throw new InputPreparationError(message);
 };

@@ -1,10 +1,10 @@
 import "reflect-metadata";
-import { runtime } from "../../../packages/platform/src/runtime.js";
-import { configureCapacity } from "../../../packages/platform/src/capacity.js";
+import { runtime } from "@fumiao/platform/runtime.js";
+import { configureCapacity } from "@fumiao/platform/capacity.js";
 import {
   studioConfiguration,
   checkStudio,
-} from "../../../packages/platform/src/studio-runtime.js";
+} from "@fumiao/platform/studio-runtime.js";
 import { createOriginalApp } from "./original.js";
 
 studioConfiguration(process.env);

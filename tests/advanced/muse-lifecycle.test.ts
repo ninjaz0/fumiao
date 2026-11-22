@@ -6,16 +6,16 @@ import {
   museAck,
   museTaskId,
 } from "../helpers/muse-lifecycle.js";
-import { one } from "../../packages/platform/src/db.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { JobTiming } from "../../packages/platform/src/timing.js";
-import { museLifecycle } from "../../plugins/muse/src/lifecycle.js";
-import { museArtifacts } from "../../plugins/muse/src/artifacts.js";
-import { museJson } from "../../plugins/muse/src/json.js";
+import { one } from "@fumiao/platform/db.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
+import { museLifecycle } from "@fumiao/plugin-muse/lifecycle.js";
+import { museArtifacts } from "@fumiao/plugin-muse/artifacts.js";
+import { museJson } from "@fumiao/plugin-muse/json.js";
 import {
   ArtifactDownloadError,
   manifestSchema,
-} from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const row = (f: Awaited<ReturnType<typeof museLifecycleFixture>>, id: string) =>
   one(f.db, "SELECT * FROM jobs WHERE id=$1", [id]);
 

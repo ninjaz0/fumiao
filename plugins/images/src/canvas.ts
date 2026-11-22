@@ -1,5 +1,5 @@
 import { imagesSettings } from "./settings.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 export const imagesCanvas: ProviderPlugin = {
   ...imagesSettings,
   manifest: {

@@ -5,10 +5,10 @@ import {
   displayRatios,
   type FormField,
   type ModelForm,
-} from "../../../packages/plugin-sdk/src/model-form.js";
+} from "@fumiao/plugin-sdk/model-form.js";
 import { readFileSync } from "node:fs";
 
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 const runtime = JSON.parse(
   readFileSync(new URL("../models.json", import.meta.url), "utf8"),
 );

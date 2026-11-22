@@ -4,11 +4,11 @@ import type {
   QueuePlans,
   QueueTools,
   QueueId,
-} from "../../plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import {
   timingFeaturesSchema,
   queueHealthSchema,
-} from "../../plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import {
   Estimator,
   planningPrediction,

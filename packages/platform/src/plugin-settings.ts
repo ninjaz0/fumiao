@@ -6,7 +6,7 @@ import type {
   SettingsDeclaration,
   SettingsScope,
   SettingsValue,
-} from "../../plugin-sdk/src/contributions.js";
+} from "@fumiao/plugin-sdk/contributions.js";
 
 /*
  * Plugin-scoped, non-secret settings (contract v1). Rows live in

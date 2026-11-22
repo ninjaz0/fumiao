@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { chatsFixture } from "../helpers/chats.js";
-import { one } from "../../packages/platform/src/db.js";
-import { chatText } from "../../packages/platform/src/chat-values.js";
-import { chatContext } from "../../packages/platform/src/chat-context.js";
-import type { OriginalActor } from "../../packages/original-api/src/identity.js";
+import { one } from "@fumiao/platform/db.js";
+import { chatText } from "@fumiao/platform/chat-values.js";
+import { chatContext } from "@fumiao/platform/chat-context.js";
+import type { OriginalActor } from "@fumiao/original-api/identity.js";
 
 test("Original chat reservations, stops, retry history and settlement share one PostgreSQL authority and preserve text bytes", async () => {
   const f = await chatsFixture();
@@ -420,7 +420,7 @@ test("Canvas context is an authorized optimistic snapshot; retries validate fres
 
 test("Concurrent chat admission preserves per-owner/global limits across independent application instances", async () => {
   const { OriginalChats } =
-    await import("../../packages/original-api/src/chats.js");
+    await import("@fumiao/original-api/chats.js");
   const f = await chatsFixture();
   try {
     const actors = [f.admin, f.member];

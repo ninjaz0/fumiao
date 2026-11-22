@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import sharp from "sharp";
-import { ImageImporter } from "../../packages/image-import/src/index.js";
+import { ImageImporter } from "@fumiao/image-import/index.js";
 
 test("image workers enforce queue bounds, cancel queued/active work and recover the slot", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fumiao-worker-test-"));

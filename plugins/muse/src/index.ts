@@ -6,7 +6,7 @@ import {
   type ProviderPlugin,
   type Receipt,
   type Execution,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 export function museReceipt(value: any): Receipt {
   if (["completed", "done", "succeeded", "success"].includes(value.status)) {
     const entries = value.data || value.output || [];

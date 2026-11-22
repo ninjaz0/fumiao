@@ -8,11 +8,11 @@ import {
   packageContributions,
   programActionOutputSchema,
   viewSchema,
-} from "../../packages/plugin-sdk/src/contributions.js";
-import { manifestSchema } from "../../packages/plugin-sdk/src/index.js";
-import { loadProgram } from "../../packages/platform/src/plugin-program.js";
-import { validator } from "../../packages/platform/src/schema.js";
-import { validOriginalRemoteModels } from "../../plugins/remote/src/original.js";
+} from "@fumiao/plugin-sdk/contributions.js";
+import { manifestSchema } from "@fumiao/plugin-sdk/index.js";
+import { loadProgram } from "@fumiao/platform/plugin-program.js";
+import { validator } from "@fumiao/platform/schema.js";
+import { validOriginalRemoteModels } from "@fumiao/plugin-remote/original.js";
 
 const directory = new URL("../../plugins/example-extension/", import.meta.url);
 const bytes = readFileSync(

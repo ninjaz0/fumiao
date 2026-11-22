@@ -9,7 +9,7 @@ import {
   preparedInputSchema,
   type PreparationRequest,
   type PreparationAsset,
-} from "../../plugin-sdk/src/preparation.js";
+} from "@fumiao/plugin-sdk/preparation.js";
 export async function prepareSubmission(
   p: Platform,
   sql: Sql,

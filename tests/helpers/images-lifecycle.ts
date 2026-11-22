@@ -2,11 +2,11 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { timingFixture } from "./timing.js";
-import { imagesLifecycle } from "../../plugins/images/src/lifecycle.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { JobTiming } from "../../packages/platform/src/timing.js";
-import { one } from "../../packages/platform/src/db.js";
-import type { ProviderPlugin } from "../../packages/plugin-sdk/src/index.js";
+import { imagesLifecycle } from "@fumiao/plugin-images/lifecycle.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
+import { one } from "@fumiao/platform/db.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 export const imagesModel = "gpt-image-2.6-sunburst";
 export type ImagesWire = {
   raw?: string;

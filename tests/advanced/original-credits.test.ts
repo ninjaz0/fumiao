@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { OriginalCredits } from "../../packages/original-api/src/credits.js";
-import { one } from "../../packages/platform/src/db.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalCredits } from "@fumiao/original-api/credits.js";
+import { one } from "@fumiao/platform/db.js";
 import { databaseFixture } from "../helpers/database.js";
 const password = "safe-test-password";
 async function fixture() {

@@ -10,8 +10,8 @@ import {
   type S3Client,
 } from "@aws-sdk/client-s3";
 import sharp from "sharp";
-import { one } from "../../packages/platform/src/db.js";
-import type { Actor, Platform } from "../../packages/platform/src/platform.js";
+import { one } from "@fumiao/platform/db.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
 import type { chatProviderFixture } from "../helpers/chat-provider.js";
 import type { studioPayment } from "./studio-nest-payment.js";
 import {

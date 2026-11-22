@@ -1,6 +1,6 @@
 import { gpuQueue } from "./queue.js";
 import { referenceImporter } from "./reference-media.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 export const gpuReferences: ProviderPlugin = {
   ...gpuQueue,
   manifest: {

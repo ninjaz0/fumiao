@@ -1,7 +1,7 @@
 import {
   ProviderError,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 export const videoQualities = [480, 768];
 export const videoSeconds = [5, 10, 15];
 export const gpu: ProviderPlugin = {

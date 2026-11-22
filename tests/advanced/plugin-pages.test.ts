@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createOriginalApp } from "../../apps/api/src/original.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { one } from "../../packages/platform/src/db.js";
-import { StudioPackages } from "../../packages/platform/src/studio-packages.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { one } from "@fumiao/platform/db.js";
+import { StudioPackages } from "@fumiao/platform/studio-packages.js";
 import { databaseFixture } from "../helpers/database.js";
-import type { PluginPageEntry } from "../../packages/plugin-sdk/src/contributions.js";
+import type { PluginPageEntry } from "@fumiao/plugin-sdk/contributions.js";
 
 const echo = `({view(input){return {schema:1,title:'输入',blocks:[{type:'text',text:JSON.stringify(input)}]}}})`;
 const page = (id: string, extra: object = {}) => ({

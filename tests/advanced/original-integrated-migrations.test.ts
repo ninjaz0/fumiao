@@ -4,17 +4,17 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { OriginalNodes } from "../../packages/original-api/src/nodes.js";
-import { migrate, one } from "../../packages/platform/src/db.js";
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { Operations } from "../../packages/platform/src/operations.js";
-import { hash, secret } from "../../packages/platform/src/security.js";
+import { OriginalNodes } from "@fumiao/original-api/nodes.js";
+import { migrate, one } from "@fumiao/platform/db.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { Operations } from "@fumiao/platform/operations.js";
+import { hash, secret } from "@fumiao/platform/security.js";
 import {
   importLegacy,
   legacyId,
   type LegacyExport,
-} from "../../packages/platform/src/importer.js";
+} from "@fumiao/platform/importer.js";
 import { databaseFixture } from "../helpers/database.js";
 
 const nodes = "027_original_node_management.sql";

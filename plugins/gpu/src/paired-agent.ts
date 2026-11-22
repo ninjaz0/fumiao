@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import {
   PairedAgentPlanError,
   type PairedAgentProtocol,
-} from "../../../packages/plugin-sdk/src/paired-agent.js";
+} from "@fumiao/plugin-sdk/paired-agent.js";
 import { hardwareSignature } from "./timing.js";
 import { canRunQueueJob } from "./queue.js";
 import { validateReport } from "./artifacts.js";

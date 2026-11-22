@@ -1,6 +1,6 @@
 import type { Request } from "express";
-import { decodePythonJson, pythonJsonText } from "../../plugin-sdk/src/json.js";
-import { DomainError } from "../../platform/src/security.js";
+import { decodePythonJson, pythonJsonText } from "@fumiao/plugin-sdk/json.js";
+import { DomainError } from "@fumiao/platform/security.js";
 import { ValidationError } from "./validation.js";
 import { parseCanvasRunJson } from "./canvas-values.js";
 

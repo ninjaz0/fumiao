@@ -1,5 +1,5 @@
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { ReferencePacks, type PackDraft } from "../../platform/src/packs.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { ReferencePacks, type PackDraft } from "@fumiao/platform/packs.js";
 import { OriginalIdentity } from "./identity.js";
 import { parseBody } from "./validation.js";
 import { identityBodies } from "./contracts.js";

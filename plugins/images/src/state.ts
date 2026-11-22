@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { imagesEstimate } from "./estimate.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 const sizes = JSON.parse(
   readFileSync(new URL("../sizes.json", import.meta.url), "utf8"),
 );

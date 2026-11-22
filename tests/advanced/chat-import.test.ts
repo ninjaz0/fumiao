@@ -5,16 +5,16 @@ import { chatImportDraft, chatImportTables } from "../helpers/chat-import.js";
 import {
   importLegacy,
   legacyId,
-} from "../../packages/platform/src/importer.js";
-import { validateChatImport } from "../../packages/platform/src/import-chats.js";
-import { OriginalChats } from "../../packages/original-api/src/chats.js";
-import { ChatExecution } from "../../packages/original-api/src/chat-execution.js";
+} from "@fumiao/platform/importer.js";
+import { validateChatImport } from "@fumiao/platform/import-chats.js";
+import { OriginalChats } from "@fumiao/original-api/chats.js";
+import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
 import {
   OriginalIdentity,
   type OriginalActor,
-} from "../../packages/original-api/src/identity.js";
-import { one } from "../../packages/platform/src/db.js";
-import { canonical } from "../../packages/platform/src/plugins.js";
+} from "@fumiao/original-api/identity.js";
+import { one } from "@fumiao/platform/db.js";
+import { canonical } from "@fumiao/platform/plugins.js";
 
 test("Native chat import preserves sparse identities, private history, raw text, settled charges and orphaned adoption audits", async () => {
   const f = await databaseFixture(),

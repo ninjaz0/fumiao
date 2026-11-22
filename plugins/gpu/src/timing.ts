@@ -3,7 +3,7 @@ import { gpuStudio } from "./studio.js";
 import type {
   ProviderPlugin,
   TimingFeatures,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const standard = "h3-v3-rocm-qkv-safe-standard20",
   oldFast = "h3-v5-rocm-qkv-safe-turbo4",
   fast = "h3-v6-native-inputs-turbo4";

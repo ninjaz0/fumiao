@@ -1,20 +1,20 @@
 import { randomBytes } from "node:crypto";
-import { one, type Sql } from "../../platform/src/db.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
 import {
   DomainError,
   hash,
   requireValue,
-} from "../../platform/src/security.js";
+} from "@fumiao/platform/security.js";
 import {
   paymentConfig,
   type PaymentConfig,
-} from "../../../plugins/payments/src/index.js";
+} from "@fumiao/plugin-payments/index.js";
 import {
   originalPaymentAdapters,
   paymentMoney,
   type OriginalPaymentAdapter,
-} from "../../../plugins/payments/src/original.js";
-import type { PaymentValues } from "../../../plugins/payments/src/original-values.js";
+} from "@fumiao/plugin-payments/original.js";
+import type { PaymentValues } from "@fumiao/plugin-payments/original-values.js";
 import type { OriginalActor, OriginalIdentity } from "./identity.js";
 
 export const originalOrderId = /^FM[0-9a-f]{26}(?![\s\S])/;

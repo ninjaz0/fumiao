@@ -9,8 +9,8 @@ import { gzipSync } from "node:zlib";
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { OriginalUI } from "../../packages/web-compat/src/ui.js";
-import { forward } from "../../packages/web-compat/src/proxy.js";
+import { OriginalUI } from "@fumiao/web-compat/ui.js";
+import { forward } from "@fumiao/web-compat/proxy.js";
 
 async function server(
   handler: (req: IncomingMessage, res: ServerResponse) => void,

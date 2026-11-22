@@ -3,18 +3,18 @@ import assert from "node:assert/strict";
 import {
   parseCanvasDocument,
   parseCanvasSave,
-} from "../../packages/original-api/src/canvas-draft.js";
+} from "@fumiao/original-api/canvas-draft.js";
 import {
   validateCanvasDocument,
   type CanvasValidationResources,
-} from "../../packages/original-api/src/canvas-validation.js";
-import { CanvasModels } from "../../packages/platform/src/canvas-models.js";
-import { DomainError } from "../../packages/platform/src/security.js";
-import { ValidationError } from "../../packages/original-api/src/validation.js";
-import { museCanvas } from "../../plugins/muse/src/canvas.js";
-import { flowCanvas } from "../../plugins/flow/src/canvas.js";
-import { gpuCanvas } from "../../plugins/gpu/src/canvas.js";
-import { imagesCanvas } from "../../plugins/images/src/canvas.js";
+} from "@fumiao/original-api/canvas-validation.js";
+import { CanvasModels } from "@fumiao/platform/canvas-models.js";
+import { DomainError } from "@fumiao/platform/security.js";
+import { ValidationError } from "@fumiao/original-api/validation.js";
+import { museCanvas } from "@fumiao/plugin-muse/canvas.js";
+import { flowCanvas } from "@fumiao/plugin-flow/canvas.js";
+import { gpuCanvas } from "@fumiao/plugin-gpu/canvas.js";
+import { imagesCanvas } from "@fumiao/plugin-images/canvas.js";
 const rules = [museCanvas, flowCanvas, gpuCanvas, imagesCanvas].flatMap(
     (p) => p.manifest.canvas!.models,
   ),

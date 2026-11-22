@@ -1,0 +1,30 @@
+{
+  "name": "@fumiao/platform",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./*.js": "./src/*.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "catalog:",
+    "@aws-sdk/s3-request-presigner": "catalog:",
+    "@fumiao/original-api": "workspace:*",
+    "@fumiao/plugin-chat": "workspace:*",
+    "@fumiao/plugin-flow": "workspace:*",
+    "@fumiao/plugin-gpu": "workspace:*",
+    "@fumiao/plugin-images": "workspace:*",
+    "@fumiao/plugin-muse": "workspace:*",
+    "@fumiao/plugin-payments": "workspace:*",
+    "@fumiao/plugin-remote": "workspace:*",
+    "@fumiao/plugin-sdk": "workspace:*",
+    "@fumiao/plugin-storyboard": "workspace:*",
+    "ajv": "catalog:",
+    "bullmq": "catalog:",
+    "pg": "catalog:",
+    "quickjs-emscripten": "catalog:",
+    "sharp": "catalog:",
+    "zod": "catalog:"
+  }
+}

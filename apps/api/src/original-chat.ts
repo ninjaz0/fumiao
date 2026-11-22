@@ -16,11 +16,11 @@ import {
   type OnModuleDestroy,
 } from "@nestjs/common";
 import type { Response } from "express";
-import { OriginalIdentity } from "../../../packages/original-api/src/identity.js";
-import { OriginalChats } from "../../../packages/original-api/src/chats.js";
-import { OriginalChatApplications } from "../../../packages/original-api/src/chat-applications.js";
-import { DomainError } from "../../../packages/platform/src/security.js";
-import { chatJson } from "../../../packages/platform/src/chat-values.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalChats } from "@fumiao/original-api/chats.js";
+import { OriginalChatApplications } from "@fumiao/original-api/chat-applications.js";
+import { DomainError } from "@fumiao/platform/security.js";
+import { chatJson } from "@fumiao/platform/chat-values.js";
 import {
   originalSessionToken,
   originalWorkspace,

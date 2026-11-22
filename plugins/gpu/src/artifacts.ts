@@ -7,8 +7,8 @@ import {
   type ArtifactJob,
   type ArtifactReceipt,
   type ArtifactProgress,
-} from "../../../packages/plugin-sdk/src/preparation.js";
-import { roundDecimal } from "../../../packages/plugin-sdk/src/decimal.js";
+} from "@fumiao/plugin-sdk/preparation.js";
+import { roundDecimal } from "@fumiao/plugin-sdk/decimal.js";
 import { mediaCommand } from "./reference-media.js";
 const fail = (message: string): never => {
   throw new ArtifactValidationError(message);

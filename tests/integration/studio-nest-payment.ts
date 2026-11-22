@@ -6,9 +6,9 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { Payments } from "../../packages/platform/src/payments.js";
-import type { Actor, Platform } from "../../packages/platform/src/platform.js";
-import { sign } from "../../plugins/payments/src/index.js";
+import { Payments } from "@fumiao/platform/payments.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { sign } from "@fumiao/plugin-payments/index.js";
 
 export async function studioPayment(directory: string, web: string) {
   const key = join(directory, "payment-key.pem");

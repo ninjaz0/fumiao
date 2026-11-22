@@ -2,25 +2,25 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { databaseFixture } from "../helpers/database.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { QueueForecasts } from "../../packages/platform/src/queue-snapshot.js";
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { Operations } from "../../packages/platform/src/operations.js";
-import { one } from "../../packages/platform/src/db.js";
-import { gpuQueue } from "../../plugins/gpu/src/queue.js";
-import { gpuTiming } from "../../plugins/gpu/src/timing.js";
-import { forecastQueue } from "../../packages/platform/src/queue.js";
-import { Estimator } from "../../packages/platform/src/timing-math.js";
-import { QueueHealthPoller } from "../../packages/platform/src/queue-health.js";
-import { museQueue } from "../../plugins/muse/src/queue.js";
-import { flowQueue } from "../../plugins/flow/src/queue.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { QueueForecasts } from "@fumiao/platform/queue-snapshot.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { Operations } from "@fumiao/platform/operations.js";
+import { one } from "@fumiao/platform/db.js";
+import { gpuQueue } from "@fumiao/plugin-gpu/queue.js";
+import { gpuTiming } from "@fumiao/plugin-gpu/timing.js";
+import { forecastQueue } from "@fumiao/platform/queue.js";
+import { Estimator } from "@fumiao/platform/timing-math.js";
+import { QueueHealthPoller } from "@fumiao/platform/queue-health.js";
+import { museQueue } from "@fumiao/plugin-muse/queue.js";
+import { flowQueue } from "@fumiao/plugin-flow/queue.js";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import type {
   ProviderPlugin,
   QueueContext,
-} from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 
 const plugin: ProviderPlugin = {
   ...gpuQueue,

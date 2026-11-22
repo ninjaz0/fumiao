@@ -4,11 +4,11 @@ import {
   setTimeout as delay,
   setImmediate as tick,
 } from "node:timers/promises";
-import { chatStreaming } from "../../plugins/chat/src/stream.js";
+import { chatStreaming } from "@fumiao/plugin-chat/stream.js";
 import {
   ChatReplyError,
   ChatProbeError,
-} from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 export type ChatWire = {
   raw?: string;
   hex?: string;

@@ -4,7 +4,7 @@ import {
   fetchArtifact,
   splitArtifactUrl,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 
 export function flowArtifactSource(
   url: string,

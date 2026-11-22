@@ -1,13 +1,13 @@
-import { hasStudioPackages } from "../../../packages/platform/src/studio-plugin-profile.js";
+import { hasStudioPackages } from "@fumiao/platform/studio-plugin-profile.js";
 import { timingSafeEqual } from "node:crypto";
-import { one, type Sql } from "../../../packages/platform/src/db.js";
-import { executableJob } from "../../../packages/platform/src/retired-jobs.js";
-import { Executor } from "../../../packages/platform/src/executor.js";
-import { GpuGateway } from "../../../packages/platform/src/gpu.js";
-import type { Platform } from "../../../packages/platform/src/platform.js";
-import { hash, requireValue } from "../../../packages/platform/src/security.js";
-import { JobTiming } from "../../../packages/platform/src/timing.js";
-import type { OriginalActor } from "../../../packages/original-api/src/identity.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { executableJob } from "@fumiao/platform/retired-jobs.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import type { Platform } from "@fumiao/platform/platform.js";
+import { hash, requireValue } from "@fumiao/platform/security.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
+import type { OriginalActor } from "@fumiao/original-api/identity.js";
 
 const numbered = /^弗淼([0-9]{1,9})$(?![\s\S])/u;
 const defaultName = (n: number) => "弗淼" + String(n).padStart(3, "0");

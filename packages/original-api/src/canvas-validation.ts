@@ -1,5 +1,5 @@
-import { requireValue } from "../../platform/src/security.js";
-import type { CanvasModels } from "../../platform/src/canvas-models.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import type { CanvasModels } from "@fumiao/platform/canvas-models.js";
 import type { CanvasDocument } from "./canvas-draft.js";
 import { canvasVoiceIds } from "./canvas-values.js";
 

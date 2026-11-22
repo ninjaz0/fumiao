@@ -8,7 +8,7 @@ import {
   type TimingContext,
   type TimingPolicy,
   type TimingReport,
-} from "../../plugin-sdk/src/timing.js";
+} from "@fumiao/plugin-sdk/timing.js";
 import {
   Estimator,
   remaining,

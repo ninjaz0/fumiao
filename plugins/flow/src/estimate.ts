@@ -3,7 +3,7 @@ import { flowOriginal } from "./original.js";
 import {
   OriginalSubmissionError,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const models: Record<string, any> = JSON.parse(
   readFileSync(new URL("../models.json", import.meta.url), "utf8"),
 );

@@ -5,7 +5,7 @@ import {
   type ProviderPlugin,
   type Execution,
   type Receipt,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 export const images: ProviderPlugin = {
   manifest: {
     id: "compatible-images",

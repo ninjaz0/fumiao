@@ -1,8 +1,8 @@
-import type { Platform, Actor } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
-import { StudioCatalog } from "../../platform/src/catalog.js";
-import { stateProviderFieldsSchema } from "../../plugin-sdk/src/index.js";
+import type { Platform, Actor } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { stateProviderFieldsSchema } from "@fumiao/plugin-sdk/index.js";
 import { parseBody } from "./validation.js";
 export class OriginalImageSettings {
   constructor(readonly p: Platform) {}

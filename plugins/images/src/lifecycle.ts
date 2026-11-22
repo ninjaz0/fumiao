@@ -3,18 +3,18 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { imagesState } from "./state.js";
-import { museJson as pythonJson } from "../../muse/src/json.js";
+import { museJson as pythonJson } from "@fumiao/plugin-muse/json.js";
 import {
   imageImporter,
   ProviderImageError,
-} from "../../../packages/image-import/src/index.js";
+} from "@fumiao/image-import/index.js";
 import {
   RequestLifecycleError,
   ArtifactDownloadError,
   ArtifactValidationError,
   type Execution,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 export const imageProcessingFailure =
   "图片处理失败，结果未保存；请检查平台记录后再重新生成";
 const record = (value: any): Record<string, any> => {

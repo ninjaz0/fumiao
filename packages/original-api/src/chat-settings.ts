@@ -1,12 +1,12 @@
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { ChatProviders } from "../../platform/src/chat-providers.js";
-import { StudioCatalog } from "../../platform/src/catalog.js";
-import { requireValue, DomainError } from "../../platform/src/security.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { ChatProviders } from "@fumiao/platform/chat-providers.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { requireValue, DomainError } from "@fumiao/platform/security.js";
 import {
   ChatProbeError,
   OriginalProviderCheckError,
-} from "../../plugin-sdk/src/index.js";
-import { pythonJson } from "../../plugin-sdk/src/json.js";
+} from "@fumiao/plugin-sdk/index.js";
+import { pythonJson } from "@fumiao/plugin-sdk/json.js";
 import { OriginalIdentity } from "./identity.js";
 import { OriginalCredits } from "./credits.js";
 export class OriginalChatSettings {

@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import CanvasList from "../../canvas/CanvasList";
-import { originalUI } from "../../../../packages/web-compat/src/ui";
+import { originalUI } from "@fumiao/web-compat/ui";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "画布 · 弗淼 AIGC", description: null };

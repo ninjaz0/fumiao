@@ -3,29 +3,29 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
-import { one } from "../../packages/platform/src/db.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
-import { OriginalState } from "../../packages/original-api/src/state.js";
-import { OriginalGeneration } from "../../packages/original-api/src/generation.js";
+import { one } from "@fumiao/platform/db.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { OriginalState } from "@fumiao/original-api/state.js";
+import { OriginalGeneration } from "@fumiao/original-api/generation.js";
 import {
   OriginalIdentity,
   type OriginalActor,
-} from "../../packages/original-api/src/identity.js";
-import { OriginalSettings } from "../../packages/original-api/src/settings.js";
-import { gpuState } from "../../plugins/gpu/src/state.js";
-import { museState } from "../../plugins/muse/src/state.js";
-import { museLifecycle } from "../../plugins/muse/src/lifecycle.js";
-import { flowState } from "../../plugins/flow/src/state.js";
-import { imagesState } from "../../plugins/images/src/state.js";
-import { gpuEstimate } from "../../plugins/gpu/src/estimate.js";
-import { imagesEstimate } from "../../plugins/images/src/estimate.js";
+} from "@fumiao/original-api/identity.js";
+import { OriginalSettings } from "@fumiao/original-api/settings.js";
+import { gpuState } from "@fumiao/plugin-gpu/state.js";
+import { museState } from "@fumiao/plugin-muse/state.js";
+import { museLifecycle } from "@fumiao/plugin-muse/lifecycle.js";
+import { flowState } from "@fumiao/plugin-flow/state.js";
+import { imagesState } from "@fumiao/plugin-images/state.js";
+import { gpuEstimate } from "@fumiao/plugin-gpu/estimate.js";
+import { imagesEstimate } from "@fumiao/plugin-images/estimate.js";
 import {
   RequestLifecycleError,
   type ProviderPlugin,
-} from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 async function fixture(musePlugin: ProviderPlugin = museState) {
   const f = await databaseFixture(),
     identity = new OriginalIdentity(f.p),

@@ -8,9 +8,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Queue, QueueEvents } from "bullmq";
 import sharp from "sharp";
 import type { StudioState } from "../../apps/web/studio/state.js";
-import type { Manifest } from "../../packages/plugin-sdk/src/index.js";
-import type { Platform } from "../../packages/platform/src/platform.js";
-import { redisConnection } from "../../packages/platform/src/redis.js";
+import type { Manifest } from "@fumiao/plugin-sdk/index.js";
+import type { Platform } from "@fumiao/platform/platform.js";
+import { redisConnection } from "@fumiao/platform/redis.js";
 
 type Replica = {
   api: string;

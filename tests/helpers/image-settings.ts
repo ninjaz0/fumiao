@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { databaseFixture } from "./database.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { OriginalImageSettings } from "../../packages/original-api/src/image-settings.js";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
-import { imagesSettings } from "../../plugins/images/src/settings.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalImageSettings } from "@fumiao/original-api/image-settings.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { imagesSettings } from "@fumiao/plugin-images/settings.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 export type ProbeWire = {
   raw?: string;

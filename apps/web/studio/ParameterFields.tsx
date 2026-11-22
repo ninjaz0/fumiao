@@ -4,7 +4,7 @@ import {
   type ModelForm,
   type FormValues,
   type Value,
-} from "../../../packages/plugin-sdk/src/model-form";
+} from "@fumiao/plugin-sdk/model-form";
 
 export function ParameterFields({
   form,

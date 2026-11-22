@@ -4,7 +4,7 @@ import {
   requestJson,
   ProviderError,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 export const chat: ProviderPlugin = {
   manifest: {
     id: "compatible-chat",

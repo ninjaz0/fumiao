@@ -1,5 +1,5 @@
 import { parseBody, type Fields, type Field } from "./validation.js";
-import type { OriginalDraft } from "../../plugin-sdk/src/original.js";
+import type { OriginalDraft } from "@fumiao/plugin-sdk/original.js";
 
 const media: Field = { kind: "string", pattern: "^[a-f0-9]{32}$" };
 const packs: Field = {

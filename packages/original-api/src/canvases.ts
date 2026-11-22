@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
-import { CanvasModels } from "../../platform/src/canvas-models.js";
-import { StudioCatalog } from "../../platform/src/catalog.js";
-import { ReferencePacks } from "../../platform/src/packs.js";
-import { pythonStrip } from "../../plugin-sdk/src/python-values.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { CanvasModels } from "@fumiao/platform/canvas-models.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { ReferencePacks } from "@fumiao/platform/packs.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { OriginalIdentity } from "./identity.js";
 import { archiveEntry, OriginalLibrary } from "./library.js";
 import { parseBody } from "./validation.js";

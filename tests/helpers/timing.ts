@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { databaseFixture } from "./database.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { one } from "../../packages/platform/src/db.js";
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
-import { gpuTiming } from "../../plugins/gpu/src/timing.js";
-import type { ProviderPlugin } from "../../packages/plugin-sdk/src/index.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { one } from "@fumiao/platform/db.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { gpuTiming } from "@fumiao/plugin-gpu/timing.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 
 export const timedGpu: ProviderPlugin = {
   ...gpuTiming,

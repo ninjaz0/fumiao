@@ -1,0 +1,15 @@
+{
+  "name": "@fumiao/plugin-remote",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./*.js": "./src/*.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@fumiao/platform": "workspace:*",
+    "@fumiao/plugin-sdk": "workspace:*",
+    "zod": "catalog:"
+  }
+}

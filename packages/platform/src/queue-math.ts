@@ -4,7 +4,7 @@ import type {
   QueuePlans,
   QueueSlot,
   SlotSchedule,
-} from "../../plugin-sdk/src/queue.js";
+} from "@fumiao/plugin-sdk/queue.js";
 import { estimatorVersion, round, median } from "./timing-math.js";
 
 export function compareQueueIds(a: QueueId, b: QueueId) {

@@ -468,7 +468,7 @@ export function RechargeOrder({
   useEffect(() => {
     const dialog = section.current && openDialogFor(section.current);
     if (!dialog || paid) return;
-    const timer = window.setInterval(poll, 5000);
+    const timer = window.setInterval(() => void poll(), 5000);
     const stop = () => window.clearInterval(timer);
     dialog.addEventListener("close", stop, { once: true });
     return () => {

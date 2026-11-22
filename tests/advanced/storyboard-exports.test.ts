@@ -1,4 +1,4 @@
-import { OriginalState } from "../../packages/original-api/src/state.js";
+import { OriginalState } from "@fumiao/original-api/state.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -8,11 +8,11 @@ import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { canvasesFixture } from "../helpers/canvases.js";
 import { databaseFixture } from "../helpers/database.js";
-import { migrate, one } from "../../packages/platform/src/db.js";
-import { S3Storage } from "../../packages/platform/src/storage.js";
-import { OriginalStoryboardExports } from "../../packages/original-api/src/storyboard-exports.js";
-import { originalStoryboard } from "../../plugins/storyboard/src/original.js";
-import { OriginalMedia } from "../../packages/original-api/src/media.js";
+import { migrate, one } from "@fumiao/platform/db.js";
+import { S3Storage } from "@fumiao/platform/storage.js";
+import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
+import { originalStoryboard } from "@fumiao/plugin-storyboard/original.js";
+import { OriginalMedia } from "@fumiao/original-api/media.js";
 const exec = promisify(execFile);
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -748,7 +748,7 @@ test(
   async () => {
     const f = await fixture();
     const { StoryboardQueue } =
-      await import("../../packages/original-api/src/storyboard-queue.js");
+      await import("@fumiao/original-api/storyboard-queue.js");
     const url = new URL(process.env.TEST_REDIS_URL!);
     const errors: unknown[] = [];
     const queue = new StoryboardQueue(

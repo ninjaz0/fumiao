@@ -11,17 +11,17 @@ import {
   Res,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
-import { DomainError } from "../../../packages/platform/src/security.js";
-import { pythonJsonText } from "../../../packages/plugin-sdk/src/json.js";
-import { readOriginalBody } from "../../../packages/original-api/src/canvas-http.js";
-import type { OriginalIdentity } from "../../../packages/original-api/src/identity.js";
+import { DomainError } from "@fumiao/platform/security.js";
+import { pythonJsonText } from "@fumiao/plugin-sdk/json.js";
+import { readOriginalBody } from "@fumiao/original-api/canvas-http.js";
+import type { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import {
   OriginalRecharge,
   originalOrderId,
   type CreateRecharge,
-} from "../../../packages/original-api/src/recharge.js";
-import { parseBody } from "../../../packages/original-api/src/validation.js";
-import { paymentJson } from "../../../plugins/payments/src/original-values.js";
+} from "@fumiao/original-api/recharge.js";
+import { parseBody } from "@fumiao/original-api/validation.js";
+import { paymentJson } from "@fumiao/plugin-payments/original-values.js";
 import {
   originalSessionToken,
   originalWorkspace,

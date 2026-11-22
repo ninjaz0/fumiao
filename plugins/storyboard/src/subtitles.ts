@@ -1,4 +1,4 @@
-import { pythonStrip } from "../../../packages/plugin-sdk/src/python-values.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 /** Sentence-weighted captions, matching the original compositor (not ASR). */
 export function timestamp(seconds: number): string {
   // Python round uses ties-to-even, unlike Math.round.

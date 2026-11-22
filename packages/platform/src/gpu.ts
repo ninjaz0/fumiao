@@ -11,7 +11,7 @@ import {
   ArtifactValidationError,
   type ArtifactJob,
   type ArtifactReceipt,
-} from "../../plugin-sdk/src/preparation.js";
+} from "@fumiao/plugin-sdk/preparation.js";
 import { inspectMedia } from "./media.js";
 import { artifactCapacity } from "./capacity.js";
 import { JobTiming } from "./timing.js";
@@ -19,11 +19,11 @@ import {
   nodeTimingContextSchema,
   timingReportSchema,
   type TimingReport,
-} from "../../plugin-sdk/src/timing.js";
+} from "@fumiao/plugin-sdk/timing.js";
 import {
   nodeQueueStateSchema,
   type QueueJob,
-} from "../../plugin-sdk/src/queue.js";
+} from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
 class Delivered extends Error {
   constructor(readonly result: any) {

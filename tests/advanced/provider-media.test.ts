@@ -8,21 +8,21 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { OriginalGeneration } from "../../packages/original-api/src/generation.js";
-import { OriginalState } from "../../packages/original-api/src/state.js";
-import { one } from "../../packages/platform/src/db.js";
-import { museArtifacts } from "../../plugins/muse/src/artifacts.js";
-import { flowArtifacts } from "../../plugins/flow/src/artifacts.js";
-import { museDownload } from "../../plugins/muse/src/download.js";
-import { gpuState } from "../../plugins/gpu/src/state.js";
-import { imagesState } from "../../plugins/images/src/state.js";
-import { ArtifactValidationError } from "../../packages/plugin-sdk/src/index.js";
-import { imageImporter } from "../../packages/image-import/src/index.js";
-import { DomainError } from "../../packages/platform/src/security.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalGeneration } from "@fumiao/original-api/generation.js";
+import { OriginalState } from "@fumiao/original-api/state.js";
+import { one } from "@fumiao/platform/db.js";
+import { museArtifacts } from "@fumiao/plugin-muse/artifacts.js";
+import { flowArtifacts } from "@fumiao/plugin-flow/artifacts.js";
+import { museDownload } from "@fumiao/plugin-muse/download.js";
+import { gpuState } from "@fumiao/plugin-gpu/state.js";
+import { imagesState } from "@fumiao/plugin-images/state.js";
+import { ArtifactValidationError } from "@fumiao/plugin-sdk/index.js";
+import { imageImporter } from "@fumiao/image-import/index.js";
+import { DomainError } from "@fumiao/platform/security.js";
 
 async function fixture() {
   const f = await databaseFixture(),

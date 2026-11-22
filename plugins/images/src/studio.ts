@@ -1,10 +1,10 @@
 import {
   choices,
   displayRatios,
-} from "../../../packages/plugin-sdk/src/model-form.js";
+} from "@fumiao/plugin-sdk/model-form.js";
 import { readFileSync } from "node:fs";
 import { images } from "./index.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 const sizes: Record<string, number[]> = JSON.parse(
   readFileSync(new URL("../sizes.json", import.meta.url), "utf8"),
 );

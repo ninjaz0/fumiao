@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { identityBodies } from "../../packages/original-api/src/contracts.js";
-import { parseBody } from "../../packages/original-api/src/validation.js";
+import { identityBodies } from "@fumiao/original-api/contracts.js";
+import { parseBody } from "@fumiao/original-api/validation.js";
 import {
   allAssetsSelected,
   selectAllAssets,

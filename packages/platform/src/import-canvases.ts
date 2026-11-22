@@ -2,11 +2,11 @@ import { z } from "zod";
 import { requireValue } from "./security.js";
 import type { Sql } from "./db.js";
 import { uuid5 } from "./uuid.js";
-import { canvasBytes } from "../../original-api/src/canvas-values.js";
+import { canvasBytes } from "@fumiao/original-api/canvas-values.js";
 import {
   parseCanvasDocument,
   type CanvasDocument,
-} from "../../original-api/src/canvas-draft.js";
+} from "@fumiao/original-api/canvas-draft.js";
 const number = z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   time = z.number().int().safe();
 const hex = z.string().regex(/^[a-f0-9]{32}$/),

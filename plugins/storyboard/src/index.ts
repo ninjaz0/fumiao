@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import {
   ProviderError,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const run = promisify(execFile);
 export const storyboard: ProviderPlugin = {
   manifest: {

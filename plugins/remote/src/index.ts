@@ -4,7 +4,7 @@ import {
   type Manifest,
   type ProviderPlugin,
   type Receipt,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import { originalRemoteSubmission } from "./original.js";
 export function remotePlugin(
   manifest: Manifest,

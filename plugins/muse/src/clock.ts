@@ -1,11 +1,11 @@
 import { museQueue } from "./queue.js";
 import { museReceipt, submitMuse, inspectMuse } from "./index.js";
-import { healthTruthy } from "../../../packages/plugin-sdk/src/health.js";
+import { healthTruthy } from "@fumiao/plugin-sdk/health.js";
 import type {
   ProviderPlugin,
   ProviderClockReport,
   Execution,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 
 /** Keep only finite timing values; upstream bodies, prompts and keys never enter
  * execution records. Invalid timestamps are omitted, not coerced from strings. */

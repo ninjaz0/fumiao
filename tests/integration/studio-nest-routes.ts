@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import type { Express } from "express";
 import { createOriginalApp } from "../../apps/api/src/original.js";
-import type { Platform } from "../../packages/platform/src/platform.js";
-import { originalUI } from "../../packages/web-compat/src/ui.js";
+import type { Platform } from "@fumiao/platform/platform.js";
+import { originalUI } from "@fumiao/web-compat/ui.js";
 
 const nextPaths = new Set([
   "/",

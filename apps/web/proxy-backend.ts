@@ -1,4 +1,4 @@
-import { forward } from "../../packages/web-compat/src/proxy";
+import { forward } from "@fumiao/web-compat/proxy";
 export const backend = () =>
   process.env.API_INTERNAL_URL || "";
 export function proxy(request: Request) {

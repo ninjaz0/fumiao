@@ -1,20 +1,20 @@
 import { statfs } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import type { Platform } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
-import { studioPluginProfile, pairedPluginAvailable, listedStudioCatalog } from "../../platform/src/studio-plugin-profile.js";
-import { PluginPages } from "../../platform/src/plugin-pages.js";
-import { installedSettingsPages } from "../../platform/src/studio-packages.js";
-import { StudioCatalog } from "../../platform/src/catalog.js";
-import { QueueForecasts } from "../../platform/src/queue-snapshot.js";
-import { elapsedDetail, type Run } from "../../platform/src/timing-math.js";
-import { Executor } from "../../platform/src/executor.js";
+import type { Platform } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { studioPluginProfile, pairedPluginAvailable, listedStudioCatalog } from "@fumiao/platform/studio-plugin-profile.js";
+import { PluginPages } from "@fumiao/platform/plugin-pages.js";
+import { installedSettingsPages } from "@fumiao/platform/studio-packages.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { QueueForecasts } from "@fumiao/platform/queue-snapshot.js";
+import { elapsedDetail, type Run } from "@fumiao/platform/timing-math.js";
+import { Executor } from "@fumiao/platform/executor.js";
 import {
   stateProviderFieldsSchema,
   stateJobProjectionSchema,
   type ProviderPlugin,
-} from "../../plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import { OriginalIdentity, avatars, type OriginalActor } from "./identity.js";
 import { OriginalCredits } from "./credits.js";
 import { OriginalLibrary } from "./library.js";

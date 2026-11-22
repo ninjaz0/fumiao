@@ -1,12 +1,12 @@
 import { readFile } from "node:fs/promises";
-import { StudioPackages } from "../../packages/platform/src/studio-packages.js";
+import { StudioPackages } from "@fumiao/platform/studio-packages.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { OriginalState } from "../../packages/original-api/src/state.js";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
-import { migrate } from "../../packages/platform/src/db.js";
-import { studioPluginProfile } from "../../packages/platform/src/studio-plugin-profile.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalState } from "@fumiao/original-api/state.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { migrate } from "@fumiao/platform/db.js";
+import { studioPluginProfile } from "@fumiao/platform/studio-plugin-profile.js";
 import { databaseFixture } from "../helpers/database.js";
 
 for (const id of ["muse", "flow"]) {

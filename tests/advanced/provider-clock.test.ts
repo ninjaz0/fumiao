@@ -4,17 +4,17 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import sharp from "sharp";
 import { timingFixture } from "../helpers/timing.js";
-import { museClock, museClockReport } from "../../plugins/muse/src/clock.js";
-import { muse } from "../../plugins/muse/src/index.js";
-import { museTiming } from "../../plugins/muse/src/timing.js";
-import { museStudio } from "../../plugins/muse/src/studio.js";
-import { museQueue } from "../../plugins/muse/src/queue.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { JobTiming } from "../../packages/platform/src/timing.js";
-import { QueueHealthPoller } from "../../packages/platform/src/queue-health.js";
-import { QueueForecasts } from "../../packages/platform/src/queue-snapshot.js";
-import { one } from "../../packages/platform/src/db.js";
-import type { Execution } from "../../packages/plugin-sdk/src/index.js";
+import { museClock, museClockReport } from "@fumiao/plugin-muse/clock.js";
+import { muse } from "@fumiao/plugin-muse/index.js";
+import { museTiming } from "@fumiao/plugin-muse/timing.js";
+import { museStudio } from "@fumiao/plugin-muse/studio.js";
+import { museQueue } from "@fumiao/plugin-muse/queue.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
+import { QueueHealthPoller } from "@fumiao/platform/queue-health.js";
+import { QueueForecasts } from "@fumiao/platform/queue-snapshot.js";
+import { one } from "@fumiao/platform/db.js";
+import type { Execution } from "@fumiao/plugin-sdk/index.js";
 
 test("Muse provider clock follows actual submit and poll without resubmission or duplicate settlement", async () => {
   let posts = 0;

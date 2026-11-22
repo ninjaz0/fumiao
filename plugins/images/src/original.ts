@@ -7,7 +7,7 @@ import {
   OriginalSubmissionError,
   originalParent,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const sizes: Record<string, number[]> = JSON.parse(
   readFileSync(new URL("../sizes.json", import.meta.url), "utf8"),
 );

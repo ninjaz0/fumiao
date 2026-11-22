@@ -2,13 +2,13 @@ import { randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Response } from "express";
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
 import {
   hash,
   requireValue,
   DomainError,
-} from "../../platform/src/security.js";
+} from "@fumiao/platform/security.js";
 import { OriginalIdentity } from "./identity.js";
 import { OriginalMedia } from "./media.js";
 import { parseBody } from "./validation.js";

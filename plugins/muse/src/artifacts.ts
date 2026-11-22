@@ -6,13 +6,13 @@ import { promisify } from "node:util";
 import {
   imageImporter,
   ProviderImageError,
-} from "../../../packages/image-import/src/index.js";
-import { roundDecimal } from "../../../packages/plugin-sdk/src/decimal.js";
-import { DomainError } from "../../../packages/platform/src/security.js";
+} from "@fumiao/image-import/index.js";
+import { roundDecimal } from "@fumiao/plugin-sdk/decimal.js";
+import { DomainError } from "@fumiao/platform/security.js";
 import {
   ArtifactValidationError,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import { museDownload } from "./download.js";
 const run = promisify(execFile);
 export class ProviderMediaError extends Error {

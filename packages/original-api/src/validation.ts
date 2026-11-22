@@ -1,5 +1,5 @@
 /** Original FastAPI request shapes. Failures keep its status and detail envelope. */
-import { DomainError } from "../../platform/src/security.js";
+import { DomainError } from "@fumiao/platform/security.js";
 type Issue = {
   type: string;
   loc: (string | number)[];

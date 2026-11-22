@@ -1,6 +1,6 @@
 import { imagesCanvasRuns } from "./canvas-runs.js";
 import { imagesOriginalText } from "./original-text.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 /** New immutable version; prior versions retain their original adapter. */
 export const imagesText: ProviderPlugin = {
   ...imagesCanvasRuns,

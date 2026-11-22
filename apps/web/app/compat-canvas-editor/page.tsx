@@ -1,7 +1,7 @@
 import type { Viewport } from "next";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
-import { originalUI } from "../../../../packages/web-compat/src/ui";
+import { originalUI } from "@fumiao/web-compat/ui";
 import CanvasEditor from "../../canvas-editor/CanvasEditor";
 
 export const dynamic = "force-dynamic";

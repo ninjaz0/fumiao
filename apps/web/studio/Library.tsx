@@ -17,7 +17,7 @@ import {
 import { JobCard, kindLabel } from "./History";
 import { Icon } from "./Icon";
 import { mediaURL, type Asset, type Job, type StudioState } from "./state";
-import { MAX_ASSET_SELECTION } from "../../../packages/original-api/src/asset-limits";
+import { MAX_ASSET_SELECTION } from "@fumiao/original-api/asset-limits";
 import { groupHistoryJobs } from "./library-history";
 import { allAssetsSelected, selectAllAssets } from "./library-selection";
 

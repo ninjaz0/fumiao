@@ -1,7 +1,7 @@
-import type { Sql } from "../../platform/src/db.js";
-import { one } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
-import { elapsedDetail, type Run } from "../../platform/src/timing-math.js";
+import type { Sql } from "@fumiao/platform/db.js";
+import { one } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { elapsedDetail, type Run } from "@fumiao/platform/timing-math.js";
 import type { OriginalActor } from "./identity.js";
 
 const epoch = (v: Date | string) => Math.floor(new Date(v).getTime() / 1000);

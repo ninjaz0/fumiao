@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { imageSettingsFixture } from "../helpers/image-settings.js";
-import { one } from "../../packages/platform/src/db.js";
-import { imagesSettings } from "../../plugins/images/src/settings.js";
-import { imagesLifecycle } from "../../plugins/images/src/lifecycle.js";
+import { one } from "@fumiao/platform/db.js";
+import { imagesSettings } from "@fumiao/plugin-images/settings.js";
+import { imagesLifecycle } from "@fumiao/plugin-images/lifecycle.js";
 const body = { enabled: false, default_model: "gpt-image-2.6-sunburst" };
 test("Original image settings preserve model-switch revision semantics, hidden models and simultaneous updates without storing credentials", async () => {
   const f = await imageSettingsFixture();

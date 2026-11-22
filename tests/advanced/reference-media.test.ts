@@ -14,23 +14,23 @@ import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { Readable } from "node:stream";
 import { databaseFixture } from "../helpers/database.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { importLegacy } from "../../packages/platform/src/importer.js";
-import { S3Storage } from "../../packages/platform/src/storage.js";
-import { gpuReferences } from "../../plugins/gpu/src/references.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { importLegacy } from "@fumiao/platform/importer.js";
+import { S3Storage } from "@fumiao/platform/storage.js";
+import { gpuReferences } from "@fumiao/plugin-gpu/references.js";
 import {
   normalizeReference,
   ReferenceImporter,
   mediaCommand,
-} from "../../plugins/gpu/src/reference-media.js";
+} from "@fumiao/plugin-gpu/reference-media.js";
 import {
   ReferenceImportBusyError,
   type ReferenceResult,
   type ProviderPlugin,
-} from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const info: ReferenceResult = {
   seconds: 2,
   fps: 24,

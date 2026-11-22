@@ -1,4 +1,4 @@
-import { matches, normalizeForm } from "../../../packages/plugin-sdk/src/model-form";
+import { matches, normalizeForm } from "@fumiao/plugin-sdk/model-form";
 import React, {
   createContext,
   memo,

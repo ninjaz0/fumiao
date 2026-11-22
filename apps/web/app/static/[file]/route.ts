@@ -2,7 +2,7 @@ import {
   originalHeaders,
   originalUI,
   publicAssets,
-} from "../../../../../packages/web-compat/src/ui";
+} from "@fumiao/web-compat/ui";
 export const dynamic = "force-dynamic";
 export async function GET(
   request: Request,

@@ -4,18 +4,18 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import sharp from "sharp";
 import { timingFixture } from "../helpers/timing.js";
-import { one } from "../../packages/platform/src/db.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { JobTiming } from "../../packages/platform/src/timing.js";
-import { museDownload } from "../../plugins/muse/src/download.js";
-import { museState } from "../../plugins/muse/src/state.js";
-import { flowDownload } from "../../plugins/flow/src/download.js";
-import { flowArtifactSource } from "../../plugins/flow/src/download.js";
+import { one } from "@fumiao/platform/db.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
+import { museDownload } from "@fumiao/plugin-muse/download.js";
+import { museState } from "@fumiao/plugin-muse/state.js";
+import { flowDownload } from "@fumiao/plugin-flow/download.js";
+import { flowArtifactSource } from "@fumiao/plugin-flow/download.js";
 import {
   ArtifactDownloadError,
   fetchArtifact,
   type ProviderPlugin,
-} from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 
 const fixturePlugin = (plugin: ProviderPlugin): ProviderPlugin => ({
   ...plugin,
