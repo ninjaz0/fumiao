@@ -1,3 +1,4 @@
+import { seedLegacyPackage, legacyPackage } from "../helpers/legacy-studio.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -271,7 +272,7 @@ export async function verifyRemoteProvider(
         },
       });
     await fund(workspace);
-    await verifyChatPackage(page);
+    await verifyChatPackage(page, p);
     const other = await call("/api/workspaces", {
       data: { name: "隔离提供方测试空间" },
     });
@@ -688,11 +689,11 @@ export async function verifyRemoteProvider(
     assert.equal((await queue.getJobCounts("completed", "failed")).failed, 0);
     assert.equal(calls.length, 3);
     await setTab(page, "plugins");
-    const gpuFile = JSON.parse(
-      await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
-    );
-    await chooseFile(gpuFile);
-    await page.getByRole("button", { name: "确认导入" }).click();
+    const gpuFile = await legacyPackage("gpu");
+    await seedLegacyPackage(p, gpuFile);
+    await page.reload();
+    await settings(page);
+    await setTab(page, "plugins");
     await expect(
       page.locator('.settings-navigation [data-value="gpu"]'),
     ).toHaveText("GPU 节点");
@@ -778,6 +779,6 @@ export async function verifyRemoteProvider(
     await new Promise<void>((resolve) => provider.close(() => resolve()));
   }
   console.log(
-    "Chromium imported a standalone chat package into an empty Studio, streamed a reply and generated remote image, video and audio through BullMQ; verified isolation, immutable versions/config and ledger.",
+    "Chromium verified refusal of a native chat file, streamed a reply from an existing installation, upgraded it to the sandbox and generated remote image, video and audio through BullMQ; verified isolation, immutable versions/config and ledger.",
   );
 }

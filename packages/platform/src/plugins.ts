@@ -5,10 +5,9 @@ import { nodeStudioPlugin } from "./node-studio-policy.js";
 import { portablePlugin } from "./portable-plugin.js";
 import {
   archivedAdapterVersions,
-  archivedAdapter,
   hasArchivedAdapter,
   archivedPackage,
-} from "./distribution/archived-adapters.js";
+} from "./distribution/legacy-releases.js";
 import { packageContributions } from "@fumiao/plugin-sdk/contributions.js";
 import type { PairedAgentProtocol } from "@fumiao/plugin-sdk/paired-agent.js";
 import { validator } from "./schema.js";
@@ -32,6 +31,34 @@ import {
 
 import { OriginalNodes as NodeManagement } from "./node-management.js";
 import { OriginalPairedAgent as Agent } from "./node-agent.js";
+
+// Explicit imports are host-owned compatibility code. Installed files and database
+// fields cannot select a module path. Current packages use the sandbox or a remote.
+type LegacyStudio = readonly [ProviderPlugin, ProviderPlugin, string];
+type LegacyReleases = {
+  releases: readonly ProviderPlugin[];
+  studio?: LegacyStudio;
+};
+const legacyProviders = new Map<string, () => Promise<LegacyReleases>>([
+  ["muse", () => import("@fumiao/plugin-muse/legacy-releases.js")],
+  ["flow", () => import("@fumiao/plugin-flow/legacy-releases.js")],
+  ["gpu", () => import("@fumiao/plugin-gpu/legacy-releases.js")],
+  [
+    "compatible-images",
+    () => import("@fumiao/plugin-images/legacy-releases.js"),
+  ],
+  ["compatible-chat", () => import("@fumiao/plugin-chat/legacy-releases.js")],
+  [
+    "storyboard-export",
+    async () => {
+      const [{ storyboard }, { storyboardHistory }] = await Promise.all([
+        import("./composition/legacy-provider.js"),
+        import("./composition/history.js"),
+      ]);
+      return { releases: [storyboard, storyboardHistory] };
+    },
+  ],
+]);
 
 export class PluginRegistry {
   private builtins = new Map<string, ProviderPlugin>();
@@ -75,26 +102,26 @@ export class PluginRegistry {
   private remember(p: ProviderPlugin) {
     this.builtins.set(p.manifest.id + "@" + p.manifest.version, p);
   }
-  private async historical() {
-    const history = await import("./historical-adapters.js");
+  private async historical(id?: string) {
+    const loaders = id
+      ? [legacyProviders.get(id)].filter((v) => v !== undefined)
+      : [...legacyProviders.values()];
+    const history = await Promise.all(loaders.map((load) => load()));
     if (!this.custom)
-      for (const p of history.historicalAdapters)
-        if (!this.builtins.has(p.manifest.id + "@" + p.manifest.version))
-          this.remember(p);
-    if (!this.protocols.has("gpu"))
-      this.protocols.set("gpu", history.gpuPairedAgent);
-    return history;
+      for (const { releases } of history)
+        for (const p of releases)
+          if (!this.builtins.has(p.manifest.id + "@" + p.manifest.version))
+            this.remember(p);
+    return history.flatMap((h) => (h.studio ? [h.studio] : []));
   }
   async pairedAgent(sql: Sql, provider: string, version: string) {
     await this.resolve(sql, provider, version);
-    if (!this.protocols.has(provider)) await this.historical();
+    if (provider === "gpu" && !this.protocols.has(provider)) {
+      const { gpuPairedAgent } =
+        await import("@fumiao/plugin-gpu/paired-agent.js");
+      this.protocols.set(provider, gpuPairedAgent);
+    }
     return this.protocols.get(provider);
-  }
-  async registerArchive(id: string, version: string, code: string) {
-    const loaded = await archivedAdapter(id, version, code);
-    if (loaded.protocol) this.protocols.set(id, loaded.protocol);
-    this.remember(loaded.adapter);
-    return loaded.adapter;
   }
   async initializeStudio(db: Database, importing: boolean) {
     await db.transaction(async (sql) => {
@@ -124,9 +151,9 @@ export class PluginRegistry {
     // releases without registering any extra provider, model or connection.
     const rows = (
       await sql.query(
-        `SELECT p.id,p.version,r.package,v.manifest,v.endpoint FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+        `SELECT p.id,p.version,r.package,v.version AS adapter_version,v.manifest,v.endpoint FROM studio_packages p JOIN studio_package_releases r USING(id,version)
       JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
-      WHERE p.installed AND NOT (r.package ?| array['remote','adapterModule','manifest'])
+      WHERE p.installed AND NOT (r.package ?| array['remote','adapterModule','manifest','legacyArchive','extensionOnly'])
       AND (NOT (r.package ? 'restored') OR (v.id || '@' || v.version)=ANY($1::text[]))`,
         [archivedAdapterVersions],
       )
@@ -140,23 +167,15 @@ export class PluginRegistry {
         };
         await this.installOn(sql, row.manifest, row.endpoint, false);
       } else if (hasArchivedAdapter(row.id)) {
-        const packaged = await archivedPackage(row.id, row.version);
+        const packaged = await archivedPackage(row.id, row.adapter_version);
         if (packaged) {
-          const adapter = await this.registerArchive(
-            row.id,
-            row.version,
-            packaged.adapterModule,
-          );
-          await sql.query(
-            "INSERT INTO studio_adapter_modules VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
-            [row.id, row.version, packaged.adapterModule],
-          );
+          const adapter = await this.resolve(sql, row.id, row.adapter_version);
           await this.installOn(sql, adapter.manifest, undefined, false);
           release = packaged;
         }
       }
       if (release.restored) {
-        const old = await this.resolve(sql, row.id, row.version);
+        const old = await this.resolve(sql, row.id, row.adapter_version);
         await this.installOn(sql, old.manifest, undefined, false);
       }
       await sql.query(
@@ -176,7 +195,7 @@ export class PluginRegistry {
     }
   }
   async studioPackages() {
-    const { studioReleases } = await this.historical();
+    const studioReleases = await this.historical();
     return studioReleases.map(([, plugin, label]) => ({
       manifest: plugin.manifest,
       label,
@@ -219,7 +238,7 @@ export class PluginRegistry {
   private async prepareOriginalStudio(sql: Sql) {
     // Move the original seed catalog to the supported adapters without
     // changing any user-visible metadata, amounts, policy or pricing revision.
-    const { studioReleases } = await this.historical();
+    const studioReleases = await this.historical();
     for (const [seed, original] of studioReleases) {
       const from = seed.manifest,
         to = original.manifest;
@@ -268,6 +287,15 @@ export class PluginRegistry {
       "fmWorker 资源能力已退役，无法安装此插件",
     );
     const manifest = manifestSchema.parse(value) as Manifest;
+    const legacy = portable && legacyProviders.get(manifest.id);
+    if (legacy) {
+      const history = await legacy();
+      requireValue(
+        !history.releases.some((p) => p.manifest.version === manifest.version),
+        409,
+        "适配器版本已存在",
+      );
+    }
     const sandbox =
       manifest.chat?.sandbox && portable && !endpoint
         ? await this.chatAdapter(manifest)
@@ -282,11 +310,7 @@ export class PluginRegistry {
       "插件缺少工作台策略",
     );
     requireValue(
-      !sandbox ||
-        (!this.builtins.has(manifest.id + "@" + manifest.version) &&
-          !archivedAdapterVersions.includes(
-            manifest.id + "@" + manifest.version,
-          )),
+      !sandbox || !this.builtins.has(manifest.id + "@" + manifest.version),
       409,
       "适配器版本已存在",
     );
@@ -615,14 +639,6 @@ export class PluginRegistry {
     ) {
       if (row.manifest.chat?.sandbox)
         return this.chatAdapter(manifestSchema.parse(row.manifest));
-      if (await hasStudioPackages(db)) {
-        const native = await one(
-          db,
-          "SELECT code FROM studio_adapter_modules WHERE id=$1 AND version=$2",
-          [id, version],
-        );
-        if (native) return this.registerArchive(id, version, native.code);
-      }
       if ([4, 5].includes(row.manifest.originalSubmission?.version)) {
         const release = await one(
           db,
@@ -636,7 +652,7 @@ export class PluginRegistry {
       }
       if ((row.manifest.originalSubmission?.version ?? 0) >= 2)
         return portablePlugin(row.manifest);
-      await this.historical();
+      await this.historical(id);
       const prior = this.builtins.get(id + "@" + version);
       if (prior) return prior;
     }

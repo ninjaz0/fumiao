@@ -42,7 +42,7 @@ const debt = {
   ],
   imageImport: ["packages/image-import/src/index.ts"],
   platform: [
-    "packages/platform/src/{plugins,historical-adapters,studio-packages,portable-plugin}.ts",
+    "packages/platform/src/{plugins,studio-packages,portable-plugin}.ts",
     "packages/platform/src/{import-canvases,plugin-pages}.ts",
   ],
   originalApi: [],

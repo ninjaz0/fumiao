@@ -1,10 +1,12 @@
+import { seedLegacyPackage, legacyPackage } from "../helpers/legacy-studio.js";
+import type { Platform } from "@fumiao/platform/platform.js";
 import assert from "node:assert/strict";
 import { expect, type Page } from "@playwright/test";
 import { chatProviderFixture } from "../helpers/chat-provider.js";
 import { request, settings, setTab } from "./studio-settings-browser.js";
 
 /** The caller has logged into a fresh, funded Studio and opened Settings → Plugins. */
-export async function verifyChatPackage(page: Page) {
+export async function verifyChatPackage(page: Page, p: Platform) {
   const provider = await chatProviderFixture();
   try {
     await page
@@ -12,13 +14,18 @@ export async function verifyChatPackage(page: Page) {
       .setInputFiles(
         "plugins/compatible-chat/package/legacy-1.2.1.fmplugin.json",
       );
-    const imported = await request(
-      page,
-      "/api/admin/plugins/import",
-      "POST",
-      () => page.getByRole("button", { name: "确认导入" }).click(),
-    );
-    assert.equal(imported.status(), 201, await imported.text());
+    await expect(
+      page.getByText(/旧版原生插件已停止导入/).first(),
+    ).toBeVisible();
+    await seedLegacyPackage(p, await legacyPackage("compatible-chat"));
+    await page.reload();
+    await settings(page);
+    await setTab(page, "plugins");
+    await page
+      .locator("article.plugin-connection")
+      .filter({ has: page.getByText("兼容对话", { exact: true }) })
+      .getByRole("button", { name: "设置", exact: true })
+      .click();
     const toggle = page.getByRole("switch", { name: "兼容对话开关" });
     await expect(toggle).not.toBeChecked();
     const connection = provider.config();

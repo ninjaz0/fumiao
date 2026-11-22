@@ -10,7 +10,6 @@ import { createHash } from "node:crypto";
 import { nodePoolHooks } from "@fumiao/plugin-sdk/node-pools.js";
 import { purgePluginData } from "./plugin-host.js";
 import { portablePlugin } from "./portable-plugin.js";
-import { archivedAdapter } from "./distribution/archived-adapters.js";
 import {
   manifestSchema,
   type ProviderPlugin,
@@ -102,10 +101,6 @@ export const packageFile = z
     adapterVersion: releaseVersion,
     manifest: z.record(z.string(), z.unknown()).optional(),
     equivalentModels: z.array(z.string().min(1).max(180)).max(500).optional(),
-    adapterModule: z
-      .string()
-      .max(1024 * 1024)
-      .optional(),
     updateUrl: sourceURL.optional(),
     nodeClient: z
       .object({
@@ -148,8 +143,7 @@ export const packageFile = z
   .strict()
   .refine(
     (f) =>
-      [f.manifest, f.adapterModule, f.remote, f.extensionOnly].filter(Boolean)
-        .length === 1 &&
+      [f.manifest, f.remote, f.extensionOnly].filter(Boolean).length === 1 &&
       (!f.extensionOnly ||
         (!f.program &&
           !f.nodeClient &&
@@ -175,6 +169,13 @@ export const upgradeFields = z
   .default({});
 export type PackageFile = z.infer<typeof packageFile>;
 export function parsePackageFile(value: unknown): PackageFile {
+  if (
+    value &&
+    typeof value === "object" &&
+    (Object.hasOwn(value, "adapterModule") ||
+      Object.hasOwn(value, "legacyArchive"))
+  )
+    throw new DomainError(400, "旧版原生插件已停止导入，请选择新版沙箱插件包");
   const result = packageFile.safeParse(value);
   if (!result.success) {
     const problem = result.error.issues.find(
@@ -186,9 +187,6 @@ export function parsePackageFile(value: unknown): PackageFile {
 }
 
 async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
-  const binding = file.adapterModule
-    ? await archivedAdapter(file.id, file.adapterVersion, file.adapterModule)
-    : undefined;
   const manifest: Manifest = file.extensionOnly
     ? {
         id: file.id,
@@ -199,8 +197,7 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
         models: [],
         configSchema: {},
       }
-    : (binding?.adapter.manifest ??
-      manifestSchema.parse(file.manifest ?? file.remote?.manifest));
+    : manifestSchema.parse(file.manifest ?? file.remote?.manifest);
   requireValue(
     manifest.id === file.id && manifest.version === file.adapterVersion,
     400,
@@ -352,11 +349,7 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
   } else if (file.manifest && manifest.mode === "pull") {
     throw new DomainError(400, "pull 插件须声明节点池");
   } else if (contributions.hostCapabilities.includes("nodes"))
-    requireValue(
-      binding?.protocol,
-      400,
-      "节点管理需要节点池声明或已安装的节点协议",
-    );
+    throw new DomainError(400, "节点管理需要节点池声明");
   if (file.nodeClient)
     requireValue(
       manifest.mode === "pull" && file.program,
@@ -365,16 +358,15 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
     );
   const adapter = file.extensionOnly
     ? undefined
-    : (binding?.adapter ??
-      (file.remote
-        ? remotePlugin(manifest, file.remote.endpoint)
-        : manifest.chat?.sandbox
-          ? await registry.chatAdapter(manifest)
-          : request && file.studioProgram
-            ? await registry.requestAdapter(manifest, file.studioProgram)
-            : file.studioProgram
-              ? await nodeStudioPlugin(manifest, file.studioProgram)
-              : portablePlugin(manifest)));
+    : file.remote
+      ? remotePlugin(manifest, file.remote.endpoint)
+      : manifest.chat?.sandbox
+        ? await registry.chatAdapter(manifest)
+        : request && file.studioProgram
+          ? await registry.requestAdapter(manifest, file.studioProgram)
+          : file.studioProgram
+            ? await nodeStudioPlugin(manifest, file.studioProgram)
+            : portablePlugin(manifest);
   return { adapter, manifest, contributions };
 }
 
@@ -834,29 +826,7 @@ export class StudioPackages {
       );
       return this.p.registry.installOn(sql, manifest, endpoint, true);
     }
-    // Only reviewed local runtime contracts can implement privileged operations.
-    requireValue(file.adapterModule, 400, "插件文件缺少适配器");
-    const adapter = await this.p.registry.registerArchive(
-      file.id,
-      file.adapterVersion,
-      file.adapterModule,
-    );
-    await sql.query(
-      "INSERT INTO studio_adapter_modules(id,version,code) VALUES($1,$2,$3) ON CONFLICT(id,version) DO NOTHING",
-      [file.id, file.adapterVersion, file.adapterModule],
-    );
-    requireValue(
-      adapter.manifest.models.some((m) => m.studio),
-      400,
-      "插件未提供工作台模型",
-    );
-    const existing = await one(
-      sql,
-      "SELECT endpoint FROM plugin_versions WHERE id=$1 AND version=$2",
-      [file.id, file.adapterVersion],
-    );
-    requireValue(!existing?.endpoint, 400, "远程插件须提供完整清单");
-    return this.p.registry.installOn(sql, adapter.manifest, undefined, true);
+    throw new DomainError(400, "插件文件缺少执行清单");
   }
   async install(
     actor: Actor,
@@ -1179,7 +1149,8 @@ export class StudioPackages {
     this.p.admin(actor);
     const rows = (
       await this.p.db
-        .query(`SELECT p.id,p.version,p.previous_version AS "previousVersion",p.enabled,p.removing,p.revision,
+        .query(`SELECT p.id,p.version,(SELECT prior.version FROM studio_package_releases prior
+            WHERE prior.id=p.id AND prior.version=p.previous_version AND prior.package ?| array['manifest','remote','extensionOnly']) AS "previousVersion",p.enabled,p.removing,p.revision,
       p.update_url AS "updateUrl",p.update_auth IS NOT NULL AS "hasUpdateToken",p.checked_at AS "checkedAt",p.update_info AS "updateInfo",
       r.package->>'label' AS label, r.package->>'adapterVersion' AS "adapterVersion",coalesce(v.manifest->'configSchema','{}'::jsonb) AS "configSchema",
       ARRAY(SELECT jsonb_build_object('id',m->>'id','title',m->>'title') FROM jsonb_array_elements(r.package->'contributes'->'paymentMethods') m) AS "paymentMethods",

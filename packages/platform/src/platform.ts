@@ -521,18 +521,24 @@ export class Platform {
         400,
         "服务地址须为可解析的公网 HTTPS 地址",
       );
-    const managed =
-      studio &&
+    const installation =
       (await hasStudioPackages(sql)) &&
       (await one(
         sql,
-        "SELECT installed,removing FROM studio_packages WHERE id=$1",
+        `SELECT p.installed,p.removing,r.package->>'adapterVersion' AS adapter_version
+         FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE p.id=$1 FOR SHARE OF p`,
         [input.pluginId],
       ));
+    const managed = studio && installation;
     requireValue(
       !managed || (managed.installed && !managed.removing),
       409,
       "请先导入插件",
+    );
+    requireValue(
+      !installation || installation.adapter_version === input.version,
+      409,
+      "连接版本与已安装的插件不符，请刷新后重试",
     );
     if (
       studio &&

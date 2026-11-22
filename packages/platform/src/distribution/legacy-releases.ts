@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import { requireValue } from "../security.js";
 
 // Read-only release identities used to restore old databases and drain accepted
 // jobs. A package can never supply code to the host's module loader.
@@ -19,35 +18,33 @@ export const hasArchivedAdapter = (id: string) =>
 export async function archivedPackage(id: string, version: string) {
   const file = archives.get(id + "@" + version);
   if (!file) return undefined;
-  return JSON.parse(
+  const {
+    format,
+    label,
+    version: packageVersion,
+    adapterVersion,
+    updateUrl,
+    settingsPage,
+    nodeClient,
+    program,
+  } = JSON.parse(
     await readFile(
       new URL("../../../../plugins/" + file, import.meta.url),
       "utf8",
     ),
   );
-}
-
-export async function archivedAdapter(
-  id: string,
-  version: string,
-  encoded: string,
-) {
-  const release = await archivedPackage(id, version);
-  requireValue(
-    release &&
-      Buffer.from(release.adapterModule, "base64").equals(
-        Buffer.from(encoded, "base64"),
-      ),
-    400,
-    "无法验证插件的原生适配器",
-  );
-  const history = await import("../historical-adapters.js");
-  const adapter = history.studioReleases.find(
-    ([, p]) => p.manifest.id === id && p.manifest.version === version,
-  )?.[1];
-  requireValue(adapter, 503, "历史适配器不可用");
+  // Only recover distribution metadata for sites provisioned before migration 034.
+  // Resolution of a frozen job uses its stored adapter version.
   return {
-    adapter,
-    protocol: id === "gpu" ? history.gpuPairedAgent : undefined,
+    format,
+    id,
+    label,
+    version: packageVersion,
+    adapterVersion,
+    updateUrl,
+    settingsPage,
+    nodeClient,
+    program,
+    legacyArchive: true,
   };
 }

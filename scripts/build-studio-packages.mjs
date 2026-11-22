@@ -73,11 +73,8 @@ for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of
     const bytes = Buffer.from(legacy.adapterModule, "base64");
     if (legacy.id !== id || !bytes.length)
       throw Error("Invalid historical package: " + id);
-    if (!sandboxBuild) {
-      if (file.version !== legacy.version || file.adapterVersion !== legacy.adapterVersion)
-        throw Error("New releases require a sandbox or remote service: " + id);
-      Object.assign(file, legacy);
-    }
+    if (!sandboxBuild)
+      throw Error("Published native packages need a sandbox build: " + id);
     if (id === "gpu") {
       const archived = await readFile(
         join(root, "package/provider-" + legacy.adapterVersion + ".js.gz"),

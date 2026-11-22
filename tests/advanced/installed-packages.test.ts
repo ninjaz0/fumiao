@@ -1,3 +1,4 @@
+import { legacyPackage, seedLegacyPackage } from "../helpers/legacy-studio.js";
 import { deliverPluginEvent } from "@fumiao/platform/plugin-extensions.js";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -38,21 +39,6 @@ const load = async (id: string): Promise<PackageFile> =>
   JSON.parse(
     await readFile("plugins/" + id + "/" + id + ".fmplugin.json", "utf8"),
   );
-const legacyRequest = async (id: string): Promise<PackageFile> =>
-  JSON.parse(
-    await readFile(`plugins/${id}/package/legacy-1.0.0.fmplugin.json`, "utf8"),
-  );
-const legacyGpu = async (): Promise<PackageFile> =>
-  JSON.parse(
-    await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
-  );
-const legacyChat = async (): Promise<PackageFile> =>
-  JSON.parse(
-    await readFile(
-      "plugins/compatible-chat/package/legacy-1.2.1.fmplugin.json",
-      "utf8",
-    ),
-  );
 async function setup(through?: string) {
   const f = await databaseFixture(through);
   await f.p.registry.initializeStudio(f.db, false);
@@ -65,12 +51,12 @@ async function setup(through?: string) {
 }
 for (const id of ["flow", "muse"]) {
   test(
-    "import " +
+    "restore " +
       id +
-      " file into an empty Studio, then drain a frozen job across update, restart and disable",
+      " from an old installation and drain a frozen job across upgrade, restart and disable",
     async () => {
       const f = await setup(),
-        file = await legacyRequest(id),
+        file = await legacyPackage(id),
         seen: string[] = [],
         png = await sharp({
           create: { width: 16, height: 16, channels: 3, background: "#345678" },
@@ -101,6 +87,10 @@ for (const id of ["flow", "muse"]) {
         const path = req.url!;
         if (path === "/v1/models")
           return void res.end(JSON.stringify({ data: [{ id: "fixture" }] }));
+        if (path === "/readyz")
+          return void res.end('{"status":"ready","accounts":[1]}');
+        if (path === "/v1/queue")
+          return void res.end('{"capacity":1,"tasks":[]}');
         if (path === "/health")
           return void res.end(
             JSON.stringify({
@@ -143,10 +133,15 @@ for (const id of ["flow", "muse"]) {
       base = "http://127.0.0.1:" + (server.address() as { port: number }).port;
       try {
         assert.deepEqual(await f.packages.list(f.actor), []);
-        await Promise.all([
+        await assert.rejects(
+          f.packages.preview(f.actor, file),
+          /原生插件已停止导入/,
+        );
+        await assert.rejects(
           f.packages.install(f.actor, file),
-          f.packages.install(f.actor, file),
-        ]);
+          /原生插件已停止导入/,
+        );
+        await seedLegacyPackage(f.p, file);
         const pkg = async () => (await f.packages.list(f.actor))[0];
         assert.equal((await pkg()).enabled, false);
         const service = await f.p.createConnection(
@@ -200,11 +195,14 @@ for (const id of ["flow", "muse"]) {
             result.id,
           ]);
         assert.equal(job.package_version, file.version);
-        const next = { ...file, version: "1.1.0" };
+        const next = await load(id);
         await f.packages.install(f.actor, next, (await pkg()).revision);
         await f.packages.change(f.actor, id, (await pkg()).revision, "disable");
         await assert.rejects(submit);
-        await f.packages.install(f.actor, file, (await pkg()).revision, true);
+        await assert.rejects(
+          f.packages.install(f.actor, file, (await pkg()).revision, true),
+          /已停止导入/,
+        );
         await f.packages.change(f.actor, id, (await pkg()).revision, "remove");
         assert.equal((await pkg()).removing, true);
         f.p.registry = new PluginRegistry();
@@ -243,14 +241,15 @@ for (const id of ["flow", "muse"]) {
 for (const release of ["native", "sandbox"])
   test(
     release +
-      " chat package drains accepted replies and can be reinstalled with fresh credentials",
+      " chat package drains accepted replies and enforces its reinstall policy",
     async () => {
       const f = await setup(),
         wire = await chatProviderFixture();
-      const file =
+      const native =
         release === "native"
-          ? await legacyChat()
-          : await load("compatible-chat");
+          ? await legacyPackage("compatible-chat")
+          : undefined;
+      const file = native ?? (await load("compatible-chat"));
       // The transport fixture represents one authorized upstream HTTPS origin.
       const send: typeof chatHttp = (url, init) => {
         assert.equal(url.origin, "https://1.1.1.1");
@@ -294,7 +293,8 @@ for (const release of ["native", "sandbox"])
         );
       try {
         assert.deepEqual(await models(), []);
-        await f.packages.install(f.actor, file);
+        if (native) await seedLegacyPackage(f.p, native);
+        else await f.packages.install(f.actor, file);
         await connect("gpt-4.1");
         await connect("deepseek-flash");
         await assert.rejects(connect("deepseek-flash"), { status: 409 });
@@ -348,6 +348,10 @@ for (const release of ["native", "sandbox"])
         await f.packages.finishRemovals();
         assert.deepEqual(await f.packages.list(f.actor), []);
         assert.deepEqual((await settings.read(f.actor)).providers, {});
+        if (release === "native") {
+          await assert.rejects(f.packages.install(f.actor, file), /已停止导入/);
+          return;
+        }
         await f.packages.install(f.actor, file);
         assert.ok(
           Object.values((await settings.read(f.actor)).providers).every(
@@ -367,7 +371,7 @@ for (const release of ["native", "sandbox"])
 test("upgrading a private connection pauses only new admissions and keeps the accepted turn and wallet snapshot", async () => {
   const f = await setup(),
     wire = await chatProviderFixture(),
-    legacy = await legacyChat(),
+    legacy = await legacyPackage("compatible-chat"),
     next = await load("compatible-chat");
   let publicProbes = 0;
   const send: typeof chatHttp = async (url, init) => {
@@ -387,7 +391,7 @@ test("upgrading a private connection pauses only new admissions and keeps the ac
   const settings = new OriginalChatSettings(f.p),
     chats = new OriginalChats(f.p);
   try {
-    await f.packages.install(f.actor, legacy);
+    await seedLegacyPackage(f.p, legacy);
     const previous = wire.config("deepseek-flash");
     const { id: privateId } = await f.p.createConnection(
       f.actor,
@@ -526,7 +530,7 @@ test("sandbox chat import freezes the program, requires HTTP and secrets, and re
   try {
     const preview = await f.packages.preview(f.actor, file);
     assert.match(JSON.stringify(preview), /注入连接密钥/);
-    assert.equal(file.adapterModule, undefined);
+    assert.equal(Object.hasOwn(file, "adapterModule"), false);
     const denied = structuredClone(file);
     denied.contributes!.hostCapabilities = ["http"];
     await assert.rejects(f.packages.install(f.actor, denied), /密钥注入/);
@@ -565,7 +569,7 @@ test("sandbox chat import freezes the program, requires HTTP and secrets, and re
 
 test("GPU package installs its administrator panel while disabled and removes the pairing capability", async () => {
   const f = await setup("036_plugin_data.sql"),
-    file = await legacyGpu();
+    file = await legacyPackage("gpu");
   const app = await createOriginalApp(f.p);
   try {
     await assert.rejects(
@@ -573,9 +577,9 @@ test("GPU package installs its administrator panel while disabled and removes th
         ...file,
         adapterModule: Buffer.from("modified").toString("base64"),
       }),
-      /验证/,
+      /已停止导入/,
     );
-    await f.packages.install(f.actor, file);
+    await seedLegacyPackage(f.p, file);
     const state = new OriginalState(f.p);
     assert.equal(
       (await state.read(f.actor)).gpu_node_settings.title,
@@ -680,10 +684,7 @@ test("GPU package installs its administrator panel while disabled and removes th
     await f.packages.change(f.actor, file.id, 3, "remove");
     assert.equal((await state.read(f.actor)).gpu_node_settings, null);
     assert.equal((await fetch(url + "/connect/agent.tgz")).status, 404);
-    await f.packages.install(f.actor, file);
-    assert.ok(
-      (await nodes.pair(f.actor, { name: "test2", models: [voice] })).command,
-    );
+    await assert.rejects(f.packages.install(f.actor, file), /已停止导入/);
   } finally {
     await app.close();
     await f.cleanup();
@@ -1218,7 +1219,7 @@ test("an authenticated Git update uses the repository default branch and its com
 
 test("a previously restored chat connection adopts the packaged adapter on restart", async () => {
   const f = await databaseFixture("033_studio_plugin_profile.sql"),
-    file = await legacyChat();
+    file = await legacyPackage("compatible-chat");
   try {
     await f.p.registry.initializeStudio(f.db, false);
     await f.db.transaction((sql) =>
@@ -1269,7 +1270,7 @@ test("a previously restored chat connection adopts the packaged adapter on resta
         "SELECT version,code FROM studio_adapter_modules WHERE id=$1",
         [file.id],
       ),
-      { version: file.adapterVersion, code: file.adapterModule },
+      undefined,
     );
     assert.deepEqual(
       Object.keys((await new OriginalChatSettings(f.p).config(actor)).models),
@@ -1283,7 +1284,7 @@ test("a previously restored chat connection adopts the packaged adapter on resta
 
 test("current installation upgrades its configured GPU service without requiring fresh pairing", async () => {
   const f = await databaseFixture("033_studio_plugin_profile.sql");
-  const file = await legacyGpu();
+  const file = await legacyPackage("gpu");
   try {
     await f.p.registry.initializeStudio(f.db, false);
     await f.db.transaction((sql) =>
@@ -1520,8 +1521,8 @@ test("a portable node pool pairs, claims and settles its pinned release alongsid
   const f = await setup();
   t.after(() => f.cleanup());
   const file = await load("example-node-pool");
-  const gpu = await legacyGpu();
-  await f.packages.install(f.actor, gpu);
+  const gpu = await legacyPackage("gpu");
+  await seedLegacyPackage(f.p, gpu);
   await assert.rejects(
     f.packages.preview(f.actor, {
       ...file,
@@ -1660,9 +1661,9 @@ test("GPU 2.0 dispatches H3 and Breeze through its sandbox, validates media and 
   const f = await setup();
   t.after(() => f.cleanup());
   const file = await load("gpu");
-  assert.equal(file.adapterModule, undefined);
-  const old = await legacyGpu();
-  await f.packages.install(f.actor, old);
+  assert.equal(Object.hasOwn(file, "adapterModule"), false);
+  const old = await legacyPackage("gpu");
+  await seedLegacyPackage(f.p, old);
   await f.packages.change(f.actor, "gpu", 1, "enable");
   const nodes = new OriginalNodes(f.p, "gpu");
   const oldPair = await nodes.pair(f.actor, {
@@ -1787,8 +1788,8 @@ test("GPU 2.0 dispatches H3 and Breeze through its sandbox, validates media and 
   });
   const audio = await submit("audio", "breeze-tts-2");
   await assert.rejects(f.packages.install(f.actor, old, 3, true), {
-    status: 409,
-    message: "请先排空在途任务，再切换节点协议",
+    status: 400,
+    message: "旧版原生插件已停止导入，请选择新版沙箱插件包",
   });
   const settled: string[] = [];
   for (const id of [h3.id, audio.id]) {
@@ -2225,7 +2226,7 @@ for (const id of ["muse", "flow"])
         model = muse ? "muse-image" : "flow:veo-3.1-quality-4s-landscape";
       const upstream = model.replace(/^flow:/, "");
       const f = await setup();
-      const old = await legacyRequest(id),
+      const old = await legacyPackage(id),
         next = await load(id);
       const png = await sharp({
         create: { width: 16, height: 20, channels: 3, background: "#125678" },
@@ -2317,8 +2318,8 @@ for (const id of ["muse", "flow"])
       };
       try {
         restart();
-        assert.equal(next.adapterModule, undefined);
-        await f.packages.install(f.actor, old);
+        assert.equal(Object.hasOwn(next, "adapterModule"), false);
+        await seedLegacyPackage(f.p, old);
         const c = await f.p.createConnection(
           f.actor,
           {
@@ -2409,6 +2410,28 @@ for (const id of ["muse", "flow"])
         assert.equal((await submit(uid)).id, accepted.id);
         await assert.rejects(submit(randomUUID()), /执行连接/);
         assert.equal(seen.length, 0);
+        assert.equal(
+          (await f.packages.list(f.actor)).find((pkg) => pkg.id === id)
+            ?.previousVersion,
+          null,
+        );
+        await assert.rejects(
+          f.p.createConnection(
+            f.actor,
+            {
+              name: "过期版本",
+              pluginId: id,
+              version: old.adapterVersion,
+              config: { baseUrl: base, apiKey: "previous" },
+            },
+            true,
+          ),
+          /版本与已安装的插件不符/,
+        );
+        // Resolution of accepted work does not consult archived executable bytes.
+        await f.db.query("DELETE FROM studio_adapter_modules WHERE id=$1", [
+          id,
+        ]);
         const oldWorker = restart();
         await oldWorker.execute(before.id);
         await oldWorker.execute(before.id);

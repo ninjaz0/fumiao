@@ -27,7 +27,8 @@ export async function acceptTask(
     (await hasStudioPackages(sql)) &&
     (await one(
       sql,
-      "SELECT installed,enabled,version FROM studio_packages WHERE id=$1 FOR SHARE",
+      `SELECT p.installed,p.enabled,p.version,r.package->>'adapterVersion' AS adapter_version
+        FROM studio_packages p JOIN studio_package_releases r USING(id,version) WHERE p.id=$1 FOR SHARE OF p`,
       [model.plugin_id],
     ));
   requireValue(
@@ -51,7 +52,8 @@ export async function acceptTask(
   requireValue(
     service?.enabled &&
       service.plugin_version === model.plugin_version &&
-      service.config === model.config,
+      service.config === model.config &&
+      (!installation || installation.adapter_version === model.plugin_version),
     409,
     "服务配置已更新，请重试",
   );
