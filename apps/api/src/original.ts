@@ -1,3 +1,4 @@
+import { runCanvasPlugin } from "@fumiao/original-api/canvas-plugin-runs.js";
 import { additionalBrowserOrigins } from "./browser-origins.js";
 /** Original HTTP contracts backed solely by PostgreSQL. Opt-in until all domains migrate. */
 import "reflect-metadata";
@@ -234,6 +235,16 @@ class OriginalApi {
     @Body() body: unknown,
   ) {
     return this.canvases.downloadShots(req.actor, key, body);
+  }
+  @Post("api/canvases/:key/nodes/:node/execute")
+  @HttpCode(200)
+  executeCanvasPlugin(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("node") node: string,
+    @Body() body: unknown,
+  ) {
+    return runCanvasPlugin(this.canvases, req.actor, key, node, body);
   }
   @Post("api/canvases/:key/nodes/:node/runs")
   @HttpCode(200)

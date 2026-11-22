@@ -1,3 +1,4 @@
+import { canvasNodeEntries } from "@fumiao/platform/canvas-node-plugins.js";
 import { statfs } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { Platform } from "@fumiao/platform/platform.js";
@@ -111,6 +112,7 @@ export class OriginalState {
             ),
             assets: await records.assets(sql, workspace.id),
             nodes: actor.role === "admin" && await pairedPluginAvailable(sql) ? await records.nodes(sql, actor, stamp) : [],
+            canvas_nodes: await canvasNodeEntries(sql),
             plugin_actions: await resourceMenus(sql, actor),
             plugin_pages: pages.filter(page => !page.placement),
             studio_pages: pages.filter(page => page.placement === "studio"),

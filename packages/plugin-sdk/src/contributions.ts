@@ -1,3 +1,4 @@
+import { canvasNodeSchema } from "./canvas-nodes.js";
 import { viewLeaves } from "./view-blocks.js";
 import { nodePoolSchema } from "./node-pools.js";
 import { z } from "zod";
@@ -304,6 +305,7 @@ export const contributesSchema = z
   .object({
     version: z.literal(CONTRIBUTIONS_VERSION),
     nodePools: nodePoolSchema.optional(),
+    canvasNodes: z.array(canvasNodeSchema).max(16).optional(),
     paymentMethods: z
       .array(
         z
@@ -435,6 +437,7 @@ export function contributionProblems(
   }
   for (const names of [
     c.paymentMethods?.map((m) => m.id),
+    c.canvasNodes?.map(n => n.id),
     c.exporters?.map((e) => e.id),
     c.events?.map((e) => e.type),
     c.actions?.map((a) => a.id),
@@ -443,6 +446,8 @@ export function contributionProblems(
     if (names && new Set(names).size !== names.length)
       problems.push("事件、操作或表单字段标识重复");
   }
+  if (!caps.has("media") && c.canvasNodes?.some(node => [...node.inputs,...node.outputs].some(port => port.kind !== "text")))
+    problems.push("画布媒体端口需要 media 能力");
   const pageIds = new Set<string>();
   for (const page of contributedPages(c)) {
     if (pageIds.has(page.id)) problems.push("设置页标识重复：" + page.id);

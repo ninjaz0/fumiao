@@ -1,3 +1,9 @@
+import {
+  canvasExtensionSchema,
+  validCanvasResult,
+  type CanvasExtension,
+} from "@fumiao/plugin-sdk/canvas-nodes.js";
+import { requireValue } from "@fumiao/platform/security.js";
 import { parseBody, type Field, type Fields } from "./validation.js";
 const integer = (defaultValue?: unknown): Field => ({
   kind: "integer",
@@ -71,7 +77,8 @@ export const canvasNodeFields: Fields = {
     9,
   ),
   id: identifier,
-  type: literal(["text", "image", "video", "sticky"]),
+  type: literal(["text", "image", "video", "sticky", "plugin"]),
+  extension: { kind: "dictionary", optional: true },
   title: text(80, ""),
   x: { kind: "float", min: -100000, max: 100000 },
   y: { kind: "float", min: -100000, max: 100000 },
@@ -95,7 +102,13 @@ export const canvasDocumentFields: Fields = {
   schemaVersion: literal([1], 1),
   nodes: list(object(canvasNodeFields), 200),
   edges: list(
-    object({ id: identifier, source: text(80), target: text(80) }),
+    object({
+      id: identifier,
+      source: text(80),
+      target: text(80),
+      sourcePort: { ...text(32), optional: true },
+      targetPort: { ...text(32), optional: true },
+    }),
     600,
   ),
   shots: { ...list({ kind: "string" }, 200), nullable: true, default: null },
@@ -121,6 +134,10 @@ export const canvasExactRevisionFields: Fields = {
     ...canvasRevisionFields.expected_revision,
     exactInteger: true,
   },
+};
+export const canvasPluginRunFields: Fields = {
+  ...canvasExactRevisionFields,
+  uid: { kind: "uuid" },
 };
 export const storyboardExportFields: Fields = {
   exporter: text(120, "storyboard/mp4"),
@@ -167,7 +184,8 @@ export type CanvasNode = {
   narration_pending: number | null;
   asset_packs: { id: string; revision: number }[];
   id: string;
-  type: "text" | "image" | "video" | "sticky";
+  type: "text" | "image" | "video" | "sticky" | "plugin";
+  extension?: CanvasExtension;
   title: string;
   x: number;
   y: number;
@@ -184,7 +202,13 @@ export type CanvasNode = {
 export type CanvasDocument = {
   schemaVersion: 1;
   nodes: CanvasNode[];
-  edges: { id: string; source: string; target: string }[];
+  edges: {
+    id: string;
+    source: string;
+    target: string;
+    sourcePort?: string;
+    targetPort?: string;
+  }[];
   shots?: string[];
 };
 /** Pydantic excludes shots only when None; an explicit empty list stays visible. */
@@ -192,6 +216,24 @@ export function canvasDocumentValue(
   value: Record<string, any>,
 ): CanvasDocument {
   const result = { ...value };
+  for (const node of result.nodes) {
+    requireValue(
+      (node.type === "plugin") === (node.extension !== undefined),
+      422,
+      "插件节点声明无效",
+    );
+    if (node.extension) {
+      const parsed = canvasExtensionSchema.safeParse(node.extension);
+      requireValue(parsed.success, 422, "插件节点参数无效");
+      const { definition, result: outputs } = parsed.data;
+      requireValue(
+        !outputs || validCanvasResult(definition.outputs, outputs),
+        422,
+        "插件节点输出无效",
+      );
+      node.extension = parsed.data;
+    }
+  }
   if (result.shots === null) delete result.shots;
   return result as CanvasDocument;
 }

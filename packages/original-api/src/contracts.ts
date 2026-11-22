@@ -15,6 +15,7 @@ import { estimateFields } from "./estimate-draft.js";
 import {
   canvasCandidatesFields,
   canvasExactRevisionFields,
+  canvasPluginRunFields,
   canvasNewFields,
   canvasRunFields,
   canvasSaveFields,
@@ -24,6 +25,7 @@ export const identityBodies: Record<string, Fields> = {
   canvasNew: canvasNewFields,
   canvasSave: canvasSaveFields,
   canvasRun: canvasRunFields,
+  canvasPluginRun: canvasPluginRunFields,
   canvasCandidates: canvasCandidatesFields,
   canvasShotsDownload: canvasExactRevisionFields,
   storyboardExport: storyboardExportFields,
@@ -112,6 +114,7 @@ type Contract = {
   imageSettings?: string;
 };
 export const canvasContracts: Contract[] = [
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/execute$/, body:"canvasPluginRun", exactIntegers:true },
   { method: "GET", path: /^\/api\/canvases$/ },
   { method: "POST", path: /^\/api\/canvases$/, body: "canvasNew" },
   { method: "GET", path: /^\/api\/canvases\/[^/]+$/ },

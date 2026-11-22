@@ -1,3 +1,4 @@
+import { verifyCanvasPluginNode } from "./studio-canvas-plugin-node.js";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -1047,6 +1048,9 @@ export async function studioBrowser(
     await expect(page.getByRole("tab", { name: "已审" })).toBeFocused();
     await expect(page.getByText("暂无已审任务")).toBeVisible();
     await nav("home");
+    await settings(page);
+    await verifyCanvasPluginNode(page, workspace);
+    await page.goto(studio);
     const savedCanvas = await document();
     const before = await state();
     await checkImageToVideoFrames(await context.newPage(), studio, before);

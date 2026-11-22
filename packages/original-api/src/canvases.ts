@@ -1,3 +1,4 @@
+import { validateCanvasDefinitions } from "@fumiao/platform/canvas-node-plugins.js";
 import { randomUUID } from "node:crypto";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
@@ -423,6 +424,11 @@ export class OriginalCanvases {
         document.nodes
           .flatMap((n) => [
             n.media_id,
+            ...(n.extension?.definition.outputs.flatMap((p) =>
+              p.kind !== "text" && n.extension?.result
+                ? [n.extension.result[p.id]]
+                : [],
+            ) ?? []),
             ...n.params.h3_refs,
             n.params.h3?.first_frame,
             n.params.h3?.last_frame,
@@ -462,7 +468,11 @@ export class OriginalCanvases {
           [key],
         );
         return r
-          ? { kind: r.original_kind, authorize: () => authorize(r) }
+          ? {
+              kind: r.original_kind,
+              mime: r.mime,
+              authorize: () => authorize(r),
+            }
           : undefined;
       },
       pack: async (key) => {
@@ -493,6 +503,12 @@ export class OriginalCanvases {
     };
   }
   async references(sql: Sql, user: Actor, row: any, document: CanvasDocument) {
+    await validateCanvasDefinitions(
+      sql,
+      document.nodes.flatMap((n) =>
+        n.extension ? [n.extension.definition] : [],
+      ),
+    );
     await this.lockResources(sql, document);
     const refs = await validateCanvasDocument(
       document,
@@ -535,30 +551,39 @@ export class OriginalCanvases {
         409,
         canvasConflict,
       );
-      await this.references(sql, user, row, body.document);
-      const stamp = Math.floor(this.clock());
-      await sql.query(
-        "UPDATE canvas_documents SET title=$2,document=$3,updated=$4,last_editor=$5 WHERE project_id=$1",
-        [
-          row.id,
-          canvasBytes(title),
-          canvasDocumentBytes(body.document),
-          stamp,
-          user.id,
-        ],
-      );
-      await sql.query(
-        "UPDATE documents SET revision=revision+1,updated_at=to_timestamp($2) WHERE id=$1",
-        [row.id, stamp],
-      );
-      await this.nodes(sql, row.id, body.document);
-      return {
-        revision: row.revision + 1,
-        updated: Math.floor(this.clock()),
-        title,
-        document: body.document,
-      };
+      return this.saveLocked(sql, user, row, title, body.document);
     });
+  }
+  async saveLocked(
+    sql: Sql,
+    user: Actor,
+    row: Record<string, any>,
+    title: string,
+    document: CanvasDocument,
+  ) {
+    await this.references(sql, user, row, document);
+    const stamp = Math.floor(this.clock());
+    await sql.query(
+      "UPDATE canvas_documents SET title=$2,document=$3,updated=$4,last_editor=$5 WHERE project_id=$1",
+      [
+        row.id,
+        canvasBytes(title),
+        canvasDocumentBytes(document),
+        stamp,
+        user.id,
+      ],
+    );
+    await sql.query(
+      "UPDATE documents SET revision=revision+1,updated_at=to_timestamp($2) WHERE id=$1",
+      [row.id, stamp],
+    );
+    await this.nodes(sql, row.id, document);
+    return {
+      revision: row.revision + 1,
+      updated: Math.floor(this.clock()),
+      title,
+      document,
+    };
   }
   async duplicate(user: Actor, key: string) {
     return this.p.db.transaction(async (sql) => {
