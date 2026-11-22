@@ -1,5 +1,5 @@
-import type { Platform } from "../../platform/src/platform.js";
-import { one } from "../../platform/src/db.js";
+import type { Platform } from "@fumiao/platform/platform.js";
+import { one } from "@fumiao/platform/db.js";
 /** Imported profiles may share an avatar; only the last reference may remove it. */
 export async function discardAvatar(p: Platform, value: string) {
   if (!/^upload:[0-9a-f]{32}$/.test(value)) return;

@@ -4,16 +4,16 @@ import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
-import { one, migrate, type Sql } from "../../packages/platform/src/db.js";
+import { one, migrate, type Sql } from "@fumiao/platform/db.js";
 import {
   packPurposes,
   ReferencePacks,
-} from "../../packages/platform/src/packs.js";
-import { legacyId } from "../../packages/platform/src/importer.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { OriginalPacks } from "../../packages/original-api/src/packs.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import type { ProviderPlugin } from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/platform/packs.js";
+import { legacyId } from "@fumiao/platform/importer.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalPacks } from "@fumiao/original-api/packs.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 
 const provider: ProviderPlugin = {
   manifest: {

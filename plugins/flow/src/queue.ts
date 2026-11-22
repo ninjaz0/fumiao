@@ -1,9 +1,9 @@
 import { flowTiming } from "./timing.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 import {
   healthJson,
   healthTruthy,
-} from "../../../packages/plugin-sdk/src/health.js";
+} from "@fumiao/plugin-sdk/health.js";
 export const flowQueue: ProviderPlugin = {
   ...flowTiming,
   manifest: {

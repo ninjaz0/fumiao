@@ -1,5 +1,5 @@
-import type { PluginPageEntry } from "../../../packages/plugin-sdk/src/contributions";
-import type { InstalledSettingsPage } from "../../../packages/plugin-sdk/src/settings-pages";
+import type { PluginPageEntry } from "@fumiao/plugin-sdk/contributions";
+import type { InstalledSettingsPage } from "@fumiao/plugin-sdk/settings-pages";
 import { resolve as resolveFlow } from "../canvas-editor/flowPicker";
 import {
   formError,
@@ -7,7 +7,7 @@ import {
   normalizeForm,
   type FormValues,
   type ModelForm,
-} from "../../../packages/plugin-sdk/src/model-form";
+} from "@fumiao/plugin-sdk/model-form";
 
 export type Member = {
   id: number;

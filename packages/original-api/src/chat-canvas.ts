@@ -1,6 +1,6 @@
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
 import { OriginalLibrary } from "./library.js";
 import type { ChatContextInput } from "./chat-draft.js";
 import { canvasDocumentJson } from "./canvas-values.js";

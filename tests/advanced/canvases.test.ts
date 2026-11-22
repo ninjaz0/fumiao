@@ -1,22 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { canvasesFixture } from "../helpers/canvases.js";
-import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
-import { one } from "../../packages/platform/src/db.js";
-import { OriginalMedia } from "../../packages/original-api/src/media.js";
-import { ReferencePacks } from "../../packages/platform/src/packs.js";
-import { chatCanvasContext } from "../../packages/original-api/src/chat-canvas.js";
+import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { one } from "@fumiao/platform/db.js";
+import { OriginalMedia } from "@fumiao/original-api/media.js";
+import { ReferencePacks } from "@fumiao/platform/packs.js";
+import { chatCanvasContext } from "@fumiao/original-api/chat-canvas.js";
 import {
   canvasDocumentBytes,
   canvasVoiceIds,
-} from "../../packages/original-api/src/canvas-values.js";
-import { parseCanvasDocument } from "../../packages/original-api/src/canvas-draft.js";
-import { museLifecycle } from "../../plugins/muse/src/lifecycle.js";
+} from "@fumiao/original-api/canvas-values.js";
+import { parseCanvasDocument } from "@fumiao/original-api/canvas-draft.js";
+import { museLifecycle } from "@fumiao/plugin-muse/lifecycle.js";
 import { databaseFixture } from "../helpers/database.js";
 import {
   OriginalIdentity,
   type OriginalActor,
-} from "../../packages/original-api/src/identity.js";
+} from "@fumiao/original-api/identity.js";
 const node = (id: string, type = "text", other: any = {}) => ({
   id,
   type,

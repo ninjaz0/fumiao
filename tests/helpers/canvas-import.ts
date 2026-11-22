@@ -1,7 +1,7 @@
-import type { Sql } from "../../packages/platform/src/db.js";
-import type { LegacyExport } from "../../packages/platform/src/importer.js";
-import { canvasText } from "../../packages/original-api/src/canvas-values.js";
-import { uuid5 } from "../../packages/platform/src/uuid.js";
+import type { Sql } from "@fumiao/platform/db.js";
+import type { LegacyExport } from "@fumiao/platform/importer.js";
+import { canvasText } from "@fumiao/original-api/canvas-values.js";
+import { uuid5 } from "@fumiao/platform/uuid.js";
 import { chatImportDraft } from "./chat-import.js";
 
 /** Reconstruct original rows solely from native tables, never the audit archive. */

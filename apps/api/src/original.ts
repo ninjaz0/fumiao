@@ -20,47 +20,47 @@ import {
   Res,
 } from "@nestjs/common";
 import express, { type Request, type Response } from "express";
-import { Platform } from "../../../packages/platform/src/platform.js";
-import { DomainError } from "../../../packages/platform/src/security.js";
-import { OriginalIdentity } from "../../../packages/original-api/src/identity.js";
+import { Platform } from "@fumiao/platform/platform.js";
+import { DomainError } from "@fumiao/platform/security.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import {
   pathId,
   queryId,
   queryBoolean,
   ValidationError,
-} from "../../../packages/original-api/src/validation.js";
+} from "@fumiao/original-api/validation.js";
 import {
   canvasContracts,
   identityContracts,
   validateIdentityRequest,
-} from "../../../packages/original-api/src/contracts.js";
-import { OriginalCredits } from "../../../packages/original-api/src/credits.js";
-import { OriginalSettings } from "../../../packages/original-api/src/settings.js";
-import { OriginalImageSettings } from "../../../packages/original-api/src/image-settings.js";
-import { OriginalChatSettings } from "../../../packages/original-api/src/chat-settings.js";
-import { OriginalProviderCheckError } from "../../../packages/plugin-sdk/src/index.js";
-import { OriginalMedia } from "../../../packages/original-api/src/media.js";
-import { OriginalLibrary } from "../../../packages/original-api/src/library.js";
-import { OriginalUploads } from "../../../packages/original-api/src/uploads.js";
-import { OriginalPacks } from "../../../packages/original-api/src/packs.js";
-import { OriginalReferences } from "../../../packages/original-api/src/references.js";
-import { OriginalJobs } from "../../../packages/original-api/src/jobs.js";
-import { OriginalGeneration } from "../../../packages/original-api/src/generation.js";
-import { OriginalEstimates } from "../../../packages/original-api/src/estimate.js";
-import { OriginalState } from "../../../packages/original-api/src/state.js";
-import { OriginalCanvases } from "../../../packages/original-api/src/canvases.js";
-import { OriginalCanvasRuns } from "../../../packages/original-api/src/canvas-runs.js";
-import { OriginalStoryboardExports } from "../../../packages/original-api/src/storyboard-exports.js";
-import { readCanvasBody } from "../../../packages/original-api/src/canvas-http.js";
-import type { OriginalDraft } from "../../../packages/plugin-sdk/src/original.js";
-import type { ReferenceKind } from "../../../packages/plugin-sdk/src/references.js";
-import { capacityMessage } from "../../../packages/platform/src/capacity.js";
-import { packInUse } from "../../../packages/platform/src/packs.js";
+} from "@fumiao/original-api/contracts.js";
+import { OriginalCredits } from "@fumiao/original-api/credits.js";
+import { OriginalSettings } from "@fumiao/original-api/settings.js";
+import { OriginalImageSettings } from "@fumiao/original-api/image-settings.js";
+import { OriginalChatSettings } from "@fumiao/original-api/chat-settings.js";
+import { OriginalProviderCheckError } from "@fumiao/plugin-sdk/index.js";
+import { OriginalMedia } from "@fumiao/original-api/media.js";
+import { OriginalLibrary } from "@fumiao/original-api/library.js";
+import { OriginalUploads } from "@fumiao/original-api/uploads.js";
+import { OriginalPacks } from "@fumiao/original-api/packs.js";
+import { OriginalReferences } from "@fumiao/original-api/references.js";
+import { OriginalJobs } from "@fumiao/original-api/jobs.js";
+import { OriginalGeneration } from "@fumiao/original-api/generation.js";
+import { OriginalEstimates } from "@fumiao/original-api/estimate.js";
+import { OriginalState } from "@fumiao/original-api/state.js";
+import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
+import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
+import { readCanvasBody } from "@fumiao/original-api/canvas-http.js";
+import type { OriginalDraft } from "@fumiao/plugin-sdk/original.js";
+import type { ReferenceKind } from "@fumiao/plugin-sdk/references.js";
+import { capacityMessage } from "@fumiao/platform/capacity.js";
+import { packInUse } from "@fumiao/platform/packs.js";
 import {
   OriginalHttpAdapter,
   originalJson,
-} from "../../../packages/original-api/src/http.js";
-import { OriginalRecharge } from "../../../packages/original-api/src/recharge.js";
+} from "@fumiao/original-api/http.js";
+import { OriginalRecharge } from "@fumiao/original-api/recharge.js";
 import {
   OriginalRechargeController,
   isOriginalRechargeRequest,
@@ -78,7 +78,7 @@ import {
   isOriginalChatRequest,
   originalChatRequest,
 } from "./original-chat-request.js";
-import { ChatAdoptionDocumentError } from "../../../packages/original-api/src/chat-applications.js";
+import { ChatAdoptionDocumentError } from "@fumiao/original-api/chat-applications.js";
 import {
   originalSessionToken as token,
   originalWorkspace,

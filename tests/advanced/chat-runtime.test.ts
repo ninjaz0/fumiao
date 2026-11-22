@@ -2,17 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { chatsFixture } from "../helpers/chats.js";
-import { one } from "../../packages/platform/src/db.js";
-import { ChatExecution } from "../../packages/original-api/src/chat-execution.js";
-import { ChatRuntime } from "../../packages/original-api/src/chat-runtime.js";
+import { one } from "@fumiao/platform/db.js";
+import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
+import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
 import {
   ChatReplyError,
   type ProviderPlugin,
-} from "../../packages/plugin-sdk/src/index.js";
-import { chatStreaming } from "../../plugins/chat/src/stream.js";
+} from "@fumiao/plugin-sdk/index.js";
+import { chatStreaming } from "@fumiao/plugin-chat/stream.js";
 import { randomUUID } from "node:crypto";
 import { Queue } from "bullmq";
-import { ChatQueue } from "../../packages/original-api/src/chat-queue.js";
+import { ChatQueue } from "@fumiao/original-api/chat-queue.js";
 
 type Fixture = Awaited<ReturnType<typeof chatsFixture>>;
 async function send(f: Fixture, text = "第一轮问题") {

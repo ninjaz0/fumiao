@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Actor } from "./platform.js";
 import { one, type Database, type Sql } from "./db.js";
 import { requireValue } from "./security.js";
-import { pythonStrip } from "../../plugin-sdk/src/python-text.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
 
 export const packPurposes = {
   subject: "人物外观",

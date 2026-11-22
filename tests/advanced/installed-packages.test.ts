@@ -6,30 +6,30 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { OriginalGeneration } from "../../packages/original-api/src/generation.js";
-import { OriginalState } from "../../packages/original-api/src/state.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalGeneration } from "@fumiao/original-api/generation.js";
+import { OriginalState } from "@fumiao/original-api/state.js";
 import {
   StudioPackages,
   type PackageFile,
-} from "../../packages/platform/src/studio-packages.js";
-import { StudioUpdates } from "../../packages/platform/src/studio-updates.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { one } from "../../packages/platform/src/db.js";
+} from "@fumiao/platform/studio-packages.js";
+import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { one } from "@fumiao/platform/db.js";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { wavFixture } from "../helpers/timing.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
-import { secret } from "../../packages/platform/src/security.js";
-import { OriginalNodes } from "../../packages/original-api/src/nodes.js";
-import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
-import { OriginalCanvasRuns } from "../../packages/original-api/src/canvas-runs.js";
-import { OriginalChatSettings } from "../../packages/original-api/src/chat-settings.js";
-import { OriginalChats } from "../../packages/original-api/src/chats.js";
-import { ChatExecution } from "../../packages/original-api/src/chat-execution.js";
-import { ChatRuntime } from "../../packages/original-api/src/chat-runtime.js";
+import { secret } from "@fumiao/platform/security.js";
+import { OriginalNodes } from "@fumiao/original-api/nodes.js";
+import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
+import { OriginalChatSettings } from "@fumiao/original-api/chat-settings.js";
+import { OriginalChats } from "@fumiao/original-api/chats.js";
+import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
+import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
 import { chatProviderFixture } from "../helpers/chat-provider.js";
 const load = async (id: string): Promise<PackageFile> =>
   JSON.parse(

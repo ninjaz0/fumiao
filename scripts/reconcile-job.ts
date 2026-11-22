@@ -1,7 +1,7 @@
-import { runtime } from "../packages/platform/src/runtime.js";
-import { Operations } from "../packages/platform/src/operations.js";
-import type { Actor } from "../packages/platform/src/platform.js";
-import { one } from "../packages/platform/src/db.js";
+import { runtime } from "@fumiao/platform/runtime.js";
+import { Operations } from "@fumiao/platform/operations.js";
+import type { Actor } from "@fumiao/platform/platform.js";
+import { one } from "@fumiao/platform/db.js";
 const p = runtime();
 try {
   if (!process.env.JOB_ID) {

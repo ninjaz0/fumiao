@@ -3,15 +3,15 @@ import { mkdtemp, rm, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Request, Response } from "express";
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { DomainError, requireValue } from "../../platform/src/security.js";
-import { capacity } from "../../platform/src/capacity.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { DomainError, requireValue } from "@fumiao/platform/security.js";
+import { capacity } from "@fumiao/platform/capacity.js";
 import {
   ReferenceImportError,
   ReferenceImportBusyError,
   referenceResultSchema,
   type ReferenceKind,
-} from "../../plugin-sdk/src/references.js";
+} from "@fumiao/plugin-sdk/references.js";
 import { OriginalIdentity } from "./identity.js";
 import { receive } from "./uploads.js";
 

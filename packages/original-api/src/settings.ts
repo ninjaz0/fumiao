@@ -1,5 +1,5 @@
-import { StudioCatalog } from "../../platform/src/catalog.js";
-import type { Platform, Actor } from "../../platform/src/platform.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import type { Platform, Actor } from "@fumiao/platform/platform.js";
 import { identityBodies } from "./contracts.js";
 import { parseBody } from "./validation.js";
 export class OriginalSettings {

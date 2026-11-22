@@ -12,26 +12,26 @@ import {
   type Database,
   type Sql,
   one,
-} from "../../packages/platform/src/db.js";
-import { Vault } from "../../packages/platform/src/security.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { DiskStorage } from "../../packages/platform/src/storage.js";
-import { Platform } from "../../packages/platform/src/platform.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
+} from "@fumiao/platform/db.js";
+import { Vault } from "@fumiao/platform/security.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { DiskStorage } from "@fumiao/platform/storage.js";
+import { Platform } from "@fumiao/platform/platform.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
 import {
   ProviderError,
   type ProviderPlugin,
-} from "../../packages/plugin-sdk/src/index.js";
-import { Operations } from "../../packages/platform/src/operations.js";
-import { Payments } from "../../packages/platform/src/payments.js";
+} from "@fumiao/plugin-sdk/index.js";
+import { Operations } from "@fumiao/platform/operations.js";
+import { Payments } from "@fumiao/platform/payments.js";
 import {
   importLegacy,
   legacyId,
-} from "../../packages/platform/src/importer.js";
-import { sign, fen, zpay } from "../../plugins/payments/src/index.js";
-import { OriginalCredits } from "../../packages/original-api/src/credits.js";
-import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
+} from "@fumiao/platform/importer.js";
+import { sign, fen, zpay } from "@fumiao/plugin-payments/index.js";
+import { OriginalCredits } from "@fumiao/original-api/credits.js";
+import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
 
 async function fixture(plugin?: ProviderPlugin) {
   const pg = process.env.TEST_DATABASE_URL ? null : new PGlite();

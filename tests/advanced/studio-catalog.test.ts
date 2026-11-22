@@ -2,16 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { databaseFixture } from "../helpers/database.js";
-import { one } from "../../packages/platform/src/db.js";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
-import { Operations } from "../../packages/platform/src/operations.js";
+import { one } from "@fumiao/platform/db.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { Operations } from "@fumiao/platform/operations.js";
 import type {
   ProviderPlugin,
   Execution,
-} from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const mock: ProviderPlugin = {
   manifest: {
     id: "catalog-test",

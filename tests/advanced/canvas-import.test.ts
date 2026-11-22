@@ -11,13 +11,13 @@ import {
 import {
   importLegacy,
   legacyId,
-} from "../../packages/platform/src/importer.js";
-import { validateCanvasImport } from "../../packages/platform/src/import-canvases.js";
-import { canonical } from "../../packages/platform/src/plugins.js";
-import { one } from "../../packages/platform/src/db.js";
-import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
-import { OriginalMedia } from "../../packages/original-api/src/media.js";
-import type { OriginalActor } from "../../packages/original-api/src/identity.js";
+} from "@fumiao/platform/importer.js";
+import { validateCanvasImport } from "@fumiao/platform/import-canvases.js";
+import { canonical } from "@fumiao/platform/plugins.js";
+import { one } from "@fumiao/platform/db.js";
+import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { OriginalMedia } from "@fumiao/original-api/media.js";
+import type { OriginalActor } from "@fumiao/original-api/identity.js";
 const sorted = (rows: unknown[]) => rows.map(canonical).sort();
 async function objects(
   f: Awaited<ReturnType<typeof databaseFixture>>,

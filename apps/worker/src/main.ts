@@ -1,16 +1,16 @@
-import {StudioPackages} from "../../../packages/platform/src/studio-packages.js";
-import { StudioUpdates } from "../../../packages/platform/src/studio-updates.js";
-import { StoryboardQueue } from "../../../packages/original-api/src/storyboard-queue.js";
-import { OriginalStoryboardExports } from "../../../packages/original-api/src/storyboard-exports.js";
+import {StudioPackages} from "@fumiao/platform/studio-packages.js";
+import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
+import { StoryboardQueue } from "@fumiao/original-api/storyboard-queue.js";
+import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
 import { Queue, Worker } from "bullmq";
-import { runtime } from "../../../packages/platform/src/runtime.js";
-import { Executor } from "../../../packages/platform/src/executor.js";
-import { QueueHealthPoller } from "../../../packages/platform/src/queue-health.js";
-import { OriginalChats } from "../../../packages/original-api/src/chats.js";
-import { ChatExecution } from "../../../packages/original-api/src/chat-execution.js";
-import { ChatRuntime } from "../../../packages/original-api/src/chat-runtime.js";
-import { ChatQueue } from "../../../packages/original-api/src/chat-queue.js";
-import { redisConnection } from "../../../packages/platform/src/redis.js";
+import { runtime } from "@fumiao/platform/runtime.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { QueueHealthPoller } from "@fumiao/platform/queue-health.js";
+import { OriginalChats } from "@fumiao/original-api/chats.js";
+import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
+import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
+import { ChatQueue } from "@fumiao/original-api/chat-queue.js";
+import { redisConnection } from "@fumiao/platform/redis.js";
 const p = runtime();
 const executor = new Executor(p);
 const connection = redisConnection(

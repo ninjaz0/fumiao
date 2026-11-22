@@ -6,18 +6,18 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
 import { Ajv } from "ajv";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { one } from "../../packages/platform/src/db.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { one } from "@fumiao/platform/db.js";
 import {
   PluginSettingsStore,
   type SettingsTarget,
-} from "../../packages/platform/src/plugin-settings.js";
+} from "@fumiao/platform/plugin-settings.js";
 import {
   packageFile,
   StudioPackages,
   type PackageFile,
-} from "../../packages/platform/src/studio-packages.js";
-import { StudioUpdates } from "../../packages/platform/src/studio-updates.js";
+} from "@fumiao/platform/studio-packages.js";
+import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
 import { databaseFixture } from "../helpers/database.js";
 
 async function setup(t: TestContext) {

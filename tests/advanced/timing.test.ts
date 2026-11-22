@@ -2,23 +2,23 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { timingFixture, timedRequest, wavFixture } from "../helpers/timing.js";
-import { one } from "../../packages/platform/src/db.js";
-import { JobTiming } from "../../packages/platform/src/timing.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { Operations } from "../../packages/platform/src/operations.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import type { Execution } from "../../packages/plugin-sdk/src/index.js";
+import { one } from "@fumiao/platform/db.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { Operations } from "@fumiao/platform/operations.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import type { Execution } from "@fumiao/plugin-sdk/index.js";
 import { databaseFixture } from "../helpers/database.js";
 import {
   importLegacy,
   legacyId,
-} from "../../packages/platform/src/importer.js";
-import { gpuTiming } from "../../plugins/gpu/src/timing.js";
-import { museTiming } from "../../plugins/muse/src/timing.js";
+} from "@fumiao/platform/importer.js";
+import { gpuTiming } from "@fumiao/plugin-gpu/timing.js";
+import { museTiming } from "@fumiao/plugin-muse/timing.js";
 import {
   elapsedDetail,
   type Run,
-} from "../../packages/platform/src/timing-math.js";
+} from "@fumiao/platform/timing-math.js";
 
 test("older versions can still cancel and refund without a timing capability or installed adapter", async () => {
   const f = await timingFixture({

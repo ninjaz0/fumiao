@@ -1,7 +1,7 @@
 import {
   decodePythonJson,
   pythonJsonText,
-} from "../../../packages/plugin-sdk/src/json.js";
+} from "@fumiao/plugin-sdk/json.js";
 
 export type PaymentValues = Record<string, unknown>;
 

@@ -17,7 +17,7 @@ import type {
   ViewBlock,
   ViewButton,
   ViewField,
-} from "../../../packages/plugin-sdk/src/contributions";
+} from "@fumiao/plugin-sdk/contributions";
 import { ApiError } from "../canvas/api";
 import { api } from "./api";
 import { openDialogFor } from "./AssetDialog";

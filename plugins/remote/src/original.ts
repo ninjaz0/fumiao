@@ -6,9 +6,9 @@ import {
   type Manifest,
   type OriginalDraft,
   type OriginalSubmission,
-} from "../../../packages/plugin-sdk/src/index.js";
-import { pythonStrip } from "../../../packages/plugin-sdk/src/python-text.js";
-import { validator } from "../../../packages/platform/src/schema.js";
+} from "@fumiao/plugin-sdk/index.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
+import { validator } from "@fumiao/platform/schema.js";
 
 const ratios = z.enum(["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]);
 const image = z.object({

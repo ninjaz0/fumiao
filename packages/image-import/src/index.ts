@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads";
-import { DomainError } from "../../platform/src/security.js";
+import { DomainError } from "@fumiao/platform/security.js";
 import type { ImportResult } from "./convert.js";
 import {
   ProviderImageError,

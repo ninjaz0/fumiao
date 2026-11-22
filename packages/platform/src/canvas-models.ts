@@ -1,4 +1,4 @@
-import type { CanvasModelRule } from "../../plugin-sdk/src/index.js";
+import type { CanvasModelRule } from "@fumiao/plugin-sdk/index.js";
 import {
   listedStudioCatalog,
   studioPluginProfile,

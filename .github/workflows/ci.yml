@@ -56,6 +56,7 @@ jobs:
           echo "REDIS_SERVER=$RUNNER_TEMP/redis-server" >> "$GITHUB_ENV"
           echo "PG_BINDIR=/usr/lib/postgresql/18/bin" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
       - run: pnpm images:prepare
       - run: pnpm test
       - run: pnpm build

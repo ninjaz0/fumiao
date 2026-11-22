@@ -1,0 +1,11 @@
+{
+  "name": "@fumiao/worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@fumiao/original-api": "workspace:*",
+    "@fumiao/platform": "workspace:*",
+    "bullmq": "catalog:"
+  }
+}

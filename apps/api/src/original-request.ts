@@ -1,5 +1,5 @@
 import type { Request } from "express";
-import type { OriginalActor } from "../../../packages/original-api/src/identity.js";
+import type { OriginalActor } from "@fumiao/original-api/identity.js";
 
 export type OriginalAuthRequest = Request & { actor: OriginalActor };
 

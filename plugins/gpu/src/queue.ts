@@ -5,7 +5,7 @@ import type {
   QueueNode,
   QueueSlot,
   TimingFeatures,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const standard = "MiniMax H3",
   native = "h3-v6-native-inputs-turbo4",
   fast = ["h3-v5-rocm-qkv-safe-turbo4", native];

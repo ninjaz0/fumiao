@@ -1,6 +1,6 @@
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { one } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { one } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
 import { OriginalIdentity } from "./identity.js";
 import { OriginalLibrary } from "./library.js";
 import { OriginalMedia } from "./media.js";

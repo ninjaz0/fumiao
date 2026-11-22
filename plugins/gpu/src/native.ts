@@ -1,7 +1,7 @@
 import { gpuReferences } from "./references.js";
 import { referenceIds, prepareInput } from "./inputs.js";
 import { validateArtifact } from "./artifacts.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 const uuid = {
   type: "string",
   pattern:

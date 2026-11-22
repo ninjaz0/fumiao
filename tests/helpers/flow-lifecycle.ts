@@ -2,11 +2,11 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { timingFixture } from "./timing.js";
-import { flowLifecycle } from "../../plugins/flow/src/lifecycle.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { JobTiming } from "../../packages/platform/src/timing.js";
-import { one } from "../../packages/platform/src/db.js";
-import type { ProviderPlugin } from "../../packages/plugin-sdk/src/index.js";
+import { flowLifecycle } from "@fumiao/plugin-flow/lifecycle.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
+import { one } from "@fumiao/platform/db.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 export const flowImage = "flow:gemini-3.1-flash-image-landscape",
   flowVideo = "flow:veo-3.1-quality-4s-landscape";
 export const flowSuccess =

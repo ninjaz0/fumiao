@@ -1,19 +1,19 @@
-import { listedStudioCatalog } from "../../platform/src/studio-plugin-profile.js";
+import { listedStudioCatalog } from "@fumiao/platform/studio-plugin-profile.js";
 import { randomUUID } from "node:crypto";
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
-import { StudioCatalog } from "../../platform/src/catalog.js";
-import { ChatProviders } from "../../platform/src/chat-providers.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { ChatProviders } from "@fumiao/platform/chat-providers.js";
 import {
   chatBytes,
   chatText,
   chatJson,
-} from "../../platform/src/chat-values.js";
+} from "@fumiao/platform/chat-values.js";
 import {
   pythonStrip,
   pythonWhitespace,
-} from "../../plugin-sdk/src/python-values.js";
+} from "@fumiao/plugin-sdk/python-values.js";
 import { OriginalIdentity } from "./identity.js";
 import { OriginalLibrary } from "./library.js";
 import { parseBody } from "./validation.js";

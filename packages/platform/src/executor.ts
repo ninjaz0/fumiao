@@ -14,12 +14,12 @@ import {
   receiptSchema,
   type Execution,
   type Receipt,
-} from "../../plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import { requireValue } from "./security.js";
 import { inspectMedia } from "./media.js";
 import { artifactCapacity } from "./capacity.js";
 import { JobTiming } from "./timing.js";
-import type { QueueJob } from "../../plugin-sdk/src/queue.js";
+import type { QueueJob } from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
 class ReferenceUnavailable extends Error {}
 

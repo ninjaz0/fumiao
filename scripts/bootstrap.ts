@@ -1,5 +1,5 @@
-import { runtime } from "../packages/platform/src/runtime.js";
-import { OriginalIdentity } from "../packages/original-api/src/identity.js";
+import { runtime } from "@fumiao/platform/runtime.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 if (process.env.STUDIO_LEGACY_SOURCE)
   throw new Error(
     "STUDIO_LEGACY_SOURCE selects an existing workspace. Run pnpm import:legacy to initialize this database",

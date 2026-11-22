@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import {
   identityContracts,
   validateIdentityRequest,
-} from "../../packages/original-api/src/contracts.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { one } from "../../packages/platform/src/db.js";
-import { hash } from "../../packages/platform/src/security.js";
+} from "@fumiao/original-api/contracts.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { one } from "@fumiao/platform/db.js";
+import { hash } from "@fumiao/platform/security.js";
 import { databaseFixture } from "../helpers/database.js";
 const password = "safe-test-password";
 async function fixture() {
@@ -221,7 +221,7 @@ test("import preserves sparse public IDs, avatars, defaults and revisions; newly
   try {
     const { randomBytes, scryptSync } = await import("node:crypto");
     const { importLegacy, legacyId } =
-      await import("../../packages/platform/src/importer.js");
+      await import("@fumiao/platform/importer.js");
     const salt = randomBytes(16).toString("hex"),
       pw = scryptSync(password, Buffer.from(salt, "hex"), 64, {
         N: 32768,

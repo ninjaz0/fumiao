@@ -1,21 +1,21 @@
-import type { Platform } from "../../platform/src/platform.js";
-import { one } from "../../platform/src/db.js";
-import { requireValue, DomainError } from "../../platform/src/security.js";
+import type { Platform } from "@fumiao/platform/platform.js";
+import { one } from "@fumiao/platform/db.js";
+import { requireValue, DomainError } from "@fumiao/platform/security.js";
 import {
   QueueForecasts,
   type ForecastCandidate,
-} from "../../platform/src/queue-snapshot.js";
+} from "@fumiao/platform/queue-snapshot.js";
 import {
   submissionDuration,
   unobservedDuration,
-} from "../../platform/src/submission-forecast.js";
+} from "@fumiao/platform/submission-forecast.js";
 import {
   estimateInputSchema,
   OriginalSubmissionError,
   InputPreparationError,
   type EstimateDraft,
   type OriginalReference,
-} from "../../plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
 import { OriginalLibrary } from "./library.js";
 import { parseBody } from "./validation.js";

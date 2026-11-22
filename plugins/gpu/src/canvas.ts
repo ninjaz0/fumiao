@@ -1,6 +1,6 @@
 import { videoSeconds } from "./index.js";
 import { gpuState } from "./state.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 export const gpuCanvas: ProviderPlugin = {
   ...gpuState,
   manifest: {

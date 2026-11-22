@@ -5,18 +5,18 @@ import { databaseFixture } from "../helpers/database.js";
 import {
   OriginalIdentity,
   type OriginalActor,
-} from "../../packages/original-api/src/identity.js";
-import { OriginalEstimates } from "../../packages/original-api/src/estimate.js";
-import { OriginalGeneration } from "../../packages/original-api/src/generation.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
-import { one } from "../../packages/platform/src/db.js";
-import { gpuEstimate } from "../../plugins/gpu/src/estimate.js";
-import { imagesEstimate } from "../../plugins/images/src/estimate.js";
-import { museEstimate } from "../../plugins/muse/src/estimate.js";
-import { flowEstimate } from "../../plugins/flow/src/estimate.js";
-import { timingFeaturesSchema } from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/original-api/identity.js";
+import { OriginalEstimates } from "@fumiao/original-api/estimate.js";
+import { OriginalGeneration } from "@fumiao/original-api/generation.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { one } from "@fumiao/platform/db.js";
+import { gpuEstimate } from "@fumiao/plugin-gpu/estimate.js";
+import { imagesEstimate } from "@fumiao/plugin-images/estimate.js";
+import { museEstimate } from "@fumiao/plugin-muse/estimate.js";
+import { flowEstimate } from "@fumiao/plugin-flow/estimate.js";
+import { timingFeaturesSchema } from "@fumiao/plugin-sdk/index.js";
 
 async function fixture() {
   const f = await databaseFixture();

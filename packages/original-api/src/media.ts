@@ -2,12 +2,12 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Request, Response } from "express";
-import type { Platform, Actor } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
-import { originalUI } from "../../web-compat/src/ui.js";
+import type { Platform, Actor } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { originalUI } from "@fumiao/web-compat/ui.js";
 import { OriginalIdentity, avatars } from "./identity.js";
-import { modifiedSeconds } from "../../platform/src/storage.js";
+import { modifiedSeconds } from "@fumiao/platform/storage.js";
 import { sendFile } from "./files.js";
 const extension: Record<string, string> = {
   "audio/wav": ".wav",

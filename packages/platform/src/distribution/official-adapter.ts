@@ -1,10 +1,10 @@
-import type { OriginalNodes } from "../../../original-api/src/nodes.js";
-import type { OriginalPairedAgent } from "../../../original-api/src/paired-agent.js";
+import type { OriginalNodes } from "@fumiao/original-api/nodes.js";
+import type { OriginalPairedAgent } from "@fumiao/original-api/paired-agent.js";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { readFileSync } from "node:fs";
-import type { ProviderPlugin } from "../../../plugin-sdk/src/index.js";
-import type { PairedAgentProtocol } from "../../../plugin-sdk/src/paired-agent.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
+import type { PairedAgentProtocol } from "@fumiao/plugin-sdk/paired-agent.js";
 import { requireValue } from "../security.js";
 
 // The release build pins the exact reviewed native SDK bindings. Imported third-party

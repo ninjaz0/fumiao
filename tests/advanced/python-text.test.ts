@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { pythonStrip } from "../../packages/plugin-sdk/src/python-text.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
 import { databaseFixture } from "../helpers/database.js";
-import { migrate } from "../../packages/platform/src/db.js";
+import { migrate } from "@fumiao/platform/db.js";
 
 test("strip whitespace matches the isolated Python interpreter over every Unicode scalar", () => {
   const expected: number[] = JSON.parse(

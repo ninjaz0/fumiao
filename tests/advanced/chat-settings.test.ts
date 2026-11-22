@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chatSettingsFixture } from "../helpers/chat-settings.js";
-import { ChatProviders } from "../../packages/platform/src/chat-providers.js";
-import { one } from "../../packages/platform/src/db.js";
-import { chatStreaming } from "../../plugins/chat/src/stream.js";
+import { ChatProviders } from "@fumiao/platform/chat-providers.js";
+import { one } from "@fumiao/platform/db.js";
+import { chatStreaming } from "@fumiao/plugin-chat/stream.js";
 const key = "sk-abcdefghijklmnop",
   encoded = Buffer.from(JSON.stringify({ key }));
 test("Original chat settings preserve admin ordering, encrypt credentials and delegate provider probes without creating jobs or charges", async () => {
@@ -178,8 +178,8 @@ test("Concurrent first chat saves create one connection, preserve provider ident
 
 test("Chat upgrades retire models from the other provider and cannot change an existing provider identity", async () => {
   const { Operations } =
-    await import("../../packages/platform/src/operations.js");
-  const { chatStudio } = await import("../../plugins/chat/src/studio.js");
+    await import("@fumiao/platform/operations.js");
+  const { chatStudio } = await import("@fumiao/plugin-chat/studio.js");
   const f = await chatSettingsFixture();
   try {
     await f.db.transaction((sql) =>

@@ -7,7 +7,7 @@ import {
   type ModelSpec,
   type Execution,
   type Receipt,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const catalog = JSON.parse(
   readFileSync(new URL("../models.json", import.meta.url), "utf8"),
 ) as Record<string, any>;

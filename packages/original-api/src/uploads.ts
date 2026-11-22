@@ -3,17 +3,17 @@ import { mkdtemp, open, readFile, rm, statfs } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Request, Response } from "express";
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
-import { DomainError, requireValue } from "../../platform/src/security.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { DomainError, requireValue } from "@fumiao/platform/security.js";
 import {
   imageImporter,
   type ImageImporter,
-} from "../../image-import/src/index.js";
+} from "@fumiao/image-import/index.js";
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
 import { OriginalMedia } from "./media.js";
 import { discardAvatar } from "./avatar-storage.js";
-import { capacity } from "../../platform/src/capacity.js";
+import { capacity } from "@fumiao/platform/capacity.js";
 
 export async function receive(req: Request, directory: string, limit: number) {
   const length = req.headers["content-length"] || "";

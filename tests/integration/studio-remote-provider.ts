@@ -8,10 +8,10 @@ import { join } from "node:path";
 import { chromium, expect } from "@playwright/test";
 import { Queue } from "bullmq";
 import type { StudioState } from "../../apps/web/studio/state.js";
-import { one } from "../../packages/platform/src/db.js";
-import type { Platform } from "../../packages/platform/src/platform.js";
-import { redisConnection } from "../../packages/platform/src/redis.js";
-import type { Manifest, ModelSpec } from "../../packages/plugin-sdk/src/index.js";
+import { one } from "@fumiao/platform/db.js";
+import type { Platform } from "@fumiao/platform/platform.js";
+import { redisConnection } from "@fumiao/platform/redis.js";
+import type { Manifest, ModelSpec } from "@fumiao/plugin-sdk/index.js";
 import {
   assertStudio,
   request,

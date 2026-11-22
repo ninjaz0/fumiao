@@ -8,7 +8,7 @@ import {
   paymentConfig,
   type PaymentAdapter,
   type PaymentOrder,
-} from "../../../plugins/payments/src/index.js";
+} from "@fumiao/plugin-payments/index.js";
 const paymentOrder = (r: Record<string, any>): PaymentOrder => ({
   id: r.id,
   method: r.method,

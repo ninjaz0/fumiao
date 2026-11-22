@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { OriginalStateRecords } from "../../packages/original-api/src/state-records.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalStateRecords } from "@fumiao/original-api/state-records.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 import { selectAllAssets } from "../../apps/web/studio/library-selection.js";
 

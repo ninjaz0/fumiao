@@ -5,8 +5,8 @@ import {
   ReferenceImportBusyError,
   type ReferenceKind,
   type ReferenceResult,
-} from "../../../packages/plugin-sdk/src/references.js";
-import { roundDecimal } from "../../../packages/plugin-sdk/src/decimal.js";
+} from "@fumiao/plugin-sdk/references.js";
+import { roundDecimal } from "@fumiao/plugin-sdk/decimal.js";
 
 const formats = "mov,matroska,webm,wav,mp3,flac,ogg,aac";
 type Command = (

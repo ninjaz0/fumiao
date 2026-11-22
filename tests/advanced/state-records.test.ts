@@ -5,23 +5,23 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
-import { migrate, one } from "../../packages/platform/src/db.js";
+import { migrate, one } from "@fumiao/platform/db.js";
 import {
   importLegacy,
   legacyId,
   type LegacyExport,
-} from "../../packages/platform/src/importer.js";
-import { OriginalStateRecords } from "../../packages/original-api/src/state-records.js";
+} from "@fumiao/platform/importer.js";
+import { OriginalStateRecords } from "@fumiao/original-api/state-records.js";
 import {
   OriginalIdentity,
   type OriginalActor,
-} from "../../packages/original-api/src/identity.js";
-import { validateStateImport } from "../../packages/platform/src/import-state.js";
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { hash } from "../../packages/platform/src/security.js";
-import type { ProviderPlugin } from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/original-api/identity.js";
+import { validateStateImport } from "@fumiao/platform/import-state.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { hash } from "@fumiao/platform/security.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 
 function archive(): LegacyExport {
   return {

@@ -9,11 +9,11 @@ import {
   migrate,
   type Database,
   type Sql,
-} from "../../packages/platform/src/db.js";
-import { Platform } from "../../packages/platform/src/platform.js";
-import { Vault } from "../../packages/platform/src/security.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { DiskStorage } from "../../packages/platform/src/storage.js";
+} from "@fumiao/platform/db.js";
+import { Platform } from "@fumiao/platform/platform.js";
+import { Vault } from "@fumiao/platform/security.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { DiskStorage } from "@fumiao/platform/storage.js";
 export async function databaseFixture(throughMigration?: string) {
   const directory = await mkdtemp(join(tmpdir(), "fumiao-identity-"));
   let db: Database;

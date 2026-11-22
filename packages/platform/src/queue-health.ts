@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Platform } from "./platform.js";
 import { executableJob } from "./retired-jobs.js";
 import { one } from "./db.js";
-import { queueHealthSchema } from "../../plugin-sdk/src/queue.js";
+import { queueHealthSchema } from "@fumiao/plugin-sdk/queue.js";
 
 export class QueueHealthPoller {
   constructor(readonly p: Platform) {}

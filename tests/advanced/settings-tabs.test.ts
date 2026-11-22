@@ -4,7 +4,7 @@ import {
   pluginTab,
   resolvePluginTab,
 } from "../../apps/web/studio/settings-tabs.js";
-import type { PluginPageEntry } from "../../packages/plugin-sdk/src/contributions.js";
+import type { PluginPageEntry } from "@fumiao/plugin-sdk/contributions.js";
 
 function page(plugin: string, legacy: boolean): PluginPageEntry {
   const page = legacy ? "nodes" : "summary";

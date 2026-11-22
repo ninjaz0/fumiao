@@ -1,5 +1,5 @@
 import Home from "../home/Home";
-import { originalUI } from "../../../packages/web-compat/src/ui";
+import { originalUI } from "@fumiao/web-compat/ui";
 export const dynamic = "force-dynamic";
 export default async function Page() {
   return (

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { originalHeaders } from "../../packages/web-compat/src/ui";
+import { originalHeaders } from "@fumiao/web-compat/ui";
 import { backend } from "./proxy-backend";
 
 // The pages below need the API; reload until it answers again.

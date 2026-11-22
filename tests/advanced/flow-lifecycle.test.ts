@@ -8,13 +8,13 @@ import {
   flowVideo,
   flowSuccess,
 } from "../helpers/flow-lifecycle.js";
-import { one } from "../../packages/platform/src/db.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { JobTiming } from "../../packages/platform/src/timing.js";
-import { QueueHealthPoller } from "../../packages/platform/src/queue-health.js";
-import { flowLifecycle, flowStream } from "../../plugins/flow/src/lifecycle.js";
-import { flowArtifacts } from "../../plugins/flow/src/artifacts.js";
-import { ArtifactValidationError } from "../../packages/plugin-sdk/src/index.js";
+import { one } from "@fumiao/platform/db.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
+import { QueueHealthPoller } from "@fumiao/platform/queue-health.js";
+import { flowLifecycle, flowStream } from "@fumiao/plugin-flow/lifecycle.js";
+import { flowArtifacts } from "@fumiao/plugin-flow/artifacts.js";
+import { ArtifactValidationError } from "@fumiao/plugin-sdk/index.js";
 const row = (f: Awaited<ReturnType<typeof flowLifecycleFixture>>, id: string) =>
   one(f.db, "SELECT * FROM jobs WHERE id=$1", [id]);
 

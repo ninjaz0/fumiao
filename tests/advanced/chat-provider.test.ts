@@ -7,17 +7,17 @@ import { gzipSync, deflateSync, deflateRawSync } from "node:zlib";
 import {
   chatStreaming,
   parseChatStream,
-} from "../../plugins/chat/src/stream.js";
-import { chatStudio } from "../../plugins/chat/src/studio.js";
+} from "@fumiao/plugin-chat/stream.js";
+import { chatStudio } from "@fumiao/plugin-chat/studio.js";
 import {
   chatHttp,
   chatLines,
   ChatTransportError,
-} from "../../plugins/chat/src/transport.js";
-import { ChatReplyError } from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-chat/transport.js";
+import { ChatReplyError } from "@fumiao/plugin-sdk/index.js";
 import { chatProviderFixture } from "../helpers/chat-provider.js";
 import { databaseFixture } from "../helpers/database.js";
-import { one } from "../../packages/platform/src/db.js";
+import { one } from "@fumiao/platform/db.js";
 async function* sequence<T>(values: T[]) {
   yield* values;
 }

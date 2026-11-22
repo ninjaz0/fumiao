@@ -1,5 +1,5 @@
-import { one } from "../../../packages/platform/src/db.js";
-import { hasStudioPackages } from "../../../packages/platform/src/studio-plugin-profile.js";
+import { one } from "@fumiao/platform/db.js";
+import { hasStudioPackages } from "@fumiao/platform/studio-plugin-profile.js";
 import {
   Controller,
   Get,
@@ -10,22 +10,22 @@ import {
   Req,
   Res,
 } from "@nestjs/common";
-import { pairedPluginAvailable } from "../../../packages/platform/src/studio-plugin-profile.js";
+import { pairedPluginAvailable } from "@fumiao/platform/studio-plugin-profile.js";
 import type { Request, Response } from "express";
 import { resolve } from "node:path";
-import { OriginalIdentity } from "../../../packages/original-api/src/identity.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 
-import { readCanvasBody } from "../../../packages/original-api/src/canvas-http.js";
+import { readCanvasBody } from "@fumiao/original-api/canvas-http.js";
 import {
   parseBody,
   pathId,
   ValidationError,
   type Fields,
-} from "../../../packages/original-api/src/validation.js";
+} from "@fumiao/original-api/validation.js";
 import {
   DomainError,
   requireValue,
-} from "../../../packages/platform/src/security.js";
+} from "@fumiao/platform/security.js";
 import {
   originalSessionToken,
   type OriginalAuthRequest,

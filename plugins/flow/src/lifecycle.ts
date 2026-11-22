@@ -1,13 +1,13 @@
 import { flowArtifacts } from "./artifacts.js";
 import { flowUnescape } from "./html.js";
-import { museJson as pythonJson } from "../../muse/src/json.js";
+import { museJson as pythonJson } from "@fumiao/plugin-muse/json.js";
 import {
   splitArtifactUrl,
   RequestLifecycleError,
   type Execution,
   type ProviderPlugin,
   type Receipt,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const truthy = (v: any): boolean =>
   v !== null &&
   v !== undefined &&

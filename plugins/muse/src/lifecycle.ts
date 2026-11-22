@@ -6,7 +6,7 @@ import {
   type Execution,
   type ProviderPlugin,
   type Receipt,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 class TransportFailure extends Error {
   constructor(readonly status = 0) {
     super("Muse transport");

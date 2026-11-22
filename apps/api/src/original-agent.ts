@@ -10,14 +10,14 @@ import {
   Res,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
-import { sendFile } from "../../../packages/original-api/src/files.js";
-import { OriginalIdentity } from "../../../packages/original-api/src/identity.js";
+import { sendFile } from "@fumiao/original-api/files.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import {
   type Field,
   type Fields,
   pathId,
-} from "../../../packages/original-api/src/validation.js";
-import { DomainError } from "../../../packages/platform/src/security.js";
+} from "@fumiao/original-api/validation.js";
+import { DomainError } from "@fumiao/platform/security.js";
 
 const optional = { optional: true, nullable: true };
 const text = (max: number, defaultValue = ""): Field => ({

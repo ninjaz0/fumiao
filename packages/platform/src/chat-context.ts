@@ -1,6 +1,6 @@
-import { pythonJsonText } from "../../plugin-sdk/src/json.js";
-import type { ChatMessage } from "../../plugin-sdk/src/index.js";
-import { pythonTruthy } from "../../plugin-sdk/src/python-values.js";
+import { pythonJsonText } from "@fumiao/plugin-sdk/json.js";
+import type { ChatMessage } from "@fumiao/plugin-sdk/index.js";
+import { pythonTruthy } from "@fumiao/plugin-sdk/python-values.js";
 export const CHAT_SYSTEM =
   "你是弗淼 AIGC 的创作助手。使用用户的语言回答，清楚、具体地协助构思、写作与修改。不要声称已生成图片、视频或修改画布；只有用户选择采用回答后才会写入画布。";
 export const CANVAS_EDIT_SYSTEM =

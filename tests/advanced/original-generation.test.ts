@@ -1,33 +1,33 @@
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { pythonStrip } from "../../packages/plugin-sdk/src/python-text.js";
-import { gpuText } from "../../plugins/gpu/src/text.js";
-import { museText } from "../../plugins/muse/src/text.js";
-import { imagesText } from "../../plugins/images/src/text.js";
-import { flowText } from "../../plugins/flow/src/text.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
+import { gpuText } from "@fumiao/plugin-gpu/text.js";
+import { museText } from "@fumiao/plugin-muse/text.js";
+import { imagesText } from "@fumiao/plugin-images/text.js";
+import { flowText } from "@fumiao/plugin-flow/text.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
 import sharp from "sharp";
 import { createServer } from "node:http";
 import { databaseFixture } from "../helpers/database.js";
-import { one, migrate } from "../../packages/platform/src/db.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { OriginalGeneration } from "../../packages/original-api/src/generation.js";
-import { OriginalJobs } from "../../packages/original-api/src/jobs.js";
-import { OriginalPacks } from "../../packages/original-api/src/packs.js";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { gpuOriginal } from "../../plugins/gpu/src/original.js";
-import { museOriginal } from "../../plugins/muse/src/original.js";
-import { imagesOriginal } from "../../plugins/images/src/original.js";
-import { images } from "../../plugins/images/src/index.js";
-import { flowOriginal } from "../../plugins/flow/src/original.js";
-import { flow } from "../../plugins/flow/src/index.js";
+import { one, migrate } from "@fumiao/platform/db.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalGeneration } from "@fumiao/original-api/generation.js";
+import { OriginalJobs } from "@fumiao/original-api/jobs.js";
+import { OriginalPacks } from "@fumiao/original-api/packs.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { gpuOriginal } from "@fumiao/plugin-gpu/original.js";
+import { museOriginal } from "@fumiao/plugin-muse/original.js";
+import { imagesOriginal } from "@fumiao/plugin-images/original.js";
+import { images } from "@fumiao/plugin-images/index.js";
+import { flowOriginal } from "@fumiao/plugin-flow/original.js";
+import { flow } from "@fumiao/plugin-flow/index.js";
 import type {
   OriginalDraft,
   ProviderPlugin,
-} from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 
 async function fixture(through?: string, lossless = false) {
   const f = await databaseFixture(through),

@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { chatSettingsFixture } from "./chat-settings.js";
-import { OriginalChats } from "../../packages/original-api/src/chats.js";
+import { OriginalChats } from "@fumiao/original-api/chats.js";
 import {
   OriginalIdentity,
   type OriginalActor,
-} from "../../packages/original-api/src/identity.js";
-import { one } from "../../packages/platform/src/db.js";
+} from "@fumiao/original-api/identity.js";
+import { one } from "@fumiao/platform/db.js";
 export async function chatsFixture() {
   const f = await chatSettingsFixture();
   try {

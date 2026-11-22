@@ -4,23 +4,23 @@ import express, {
   type RequestHandler,
   type Response,
 } from "express";
-import type { OriginalIdentity } from "../../../packages/original-api/src/identity.js";
-import { DomainError } from "../../../packages/platform/src/security.js";
+import type { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { DomainError } from "@fumiao/platform/security.js";
 import {
   decodePythonJson,
   pythonJsonText,
-} from "../../../packages/plugin-sdk/src/json.js";
+} from "@fumiao/plugin-sdk/json.js";
 import {
   parseBody,
   ValidationError,
   type Fields,
-} from "../../../packages/original-api/src/validation.js";
+} from "@fumiao/original-api/validation.js";
 import {
   chatApplyFields,
   chatCreateFields,
   chatRenameFields,
   chatSendFields,
-} from "../../../packages/original-api/src/chat-draft.js";
+} from "@fumiao/original-api/chat-draft.js";
 import {
   originalSessionToken,
   type OriginalAuthRequest,

@@ -2,9 +2,9 @@ import {
   choices,
   type Condition,
   type FormField,
-} from "../../../packages/plugin-sdk/src/model-form.js";
+} from "@fumiao/plugin-sdk/model-form.js";
 import { muse } from "./index.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 export const studioRatios = {
   image: ["1:1", "16:9", "9:16", "4:3", "3:4"],
   video: ["16:9", "9:16"],

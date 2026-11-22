@@ -3,16 +3,16 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { canvasesFixture } from "../helpers/canvases.js";
 import { chatsFixture } from "../helpers/chats.js";
-import { ChatExecution } from "../../packages/original-api/src/chat-execution.js";
-import { ChatRuntime } from "../../packages/original-api/src/chat-runtime.js";
-import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
-import { chatStreaming } from "../../plugins/chat/src/stream.js";
-import { museCanvas } from "../../plugins/muse/src/canvas.js";
-import { flowCanvas } from "../../plugins/flow/src/canvas.js";
-import { gpuCanvas } from "../../plugins/gpu/src/canvas.js";
-import { imagesCanvas } from "../../plugins/images/src/canvas.js";
-import { one } from "../../packages/platform/src/db.js";
-import { OriginalChatApplications } from "../../packages/original-api/src/chat-applications.js";
+import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
+import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
+import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { chatStreaming } from "@fumiao/plugin-chat/stream.js";
+import { museCanvas } from "@fumiao/plugin-muse/canvas.js";
+import { flowCanvas } from "@fumiao/plugin-flow/canvas.js";
+import { gpuCanvas } from "@fumiao/plugin-gpu/canvas.js";
+import { imagesCanvas } from "@fumiao/plugin-images/canvas.js";
+import { one } from "@fumiao/platform/db.js";
+import { OriginalChatApplications } from "@fumiao/original-api/chat-applications.js";
 test("adoption persists permanent canvas identity, raw text, indexes and idempotent history", async () => {
   const f = await canvasesFixture();
   try {

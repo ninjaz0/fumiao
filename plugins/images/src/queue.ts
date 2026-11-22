@@ -2,7 +2,7 @@ import { imagesTiming } from "./timing.js";
 import type {
   ProviderPlugin,
   QueueSlot,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 export const imagesQueue: ProviderPlugin = {
   ...imagesTiming,
   manifest: {

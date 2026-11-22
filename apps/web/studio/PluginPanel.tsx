@@ -9,7 +9,7 @@ import { api } from "./api";
 import { Icon } from "./Icon";
 import { openDialogFor } from "./AssetDialog";
 import type { AdminConfirm, AdminOpen, AdminRequest } from "./settings-admin";
-import type { ActionResult } from "../../../packages/plugin-sdk/src/contributions";
+import type { ActionResult } from "@fumiao/plugin-sdk/contributions";
 import type { PluginPageClient } from "./PluginPage";
 import type { StudioState } from "./state";
 

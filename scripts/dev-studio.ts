@@ -5,8 +5,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:net";
-import { originalUI } from "../packages/web-compat/src/ui.js";
-import { studioConfiguration } from "../packages/platform/src/studio-runtime.js";
+import { originalUI } from "@fumiao/web-compat/ui.js";
+import { studioConfiguration } from "@fumiao/platform/studio-runtime.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 process.chdir(root);

@@ -4,7 +4,7 @@ import { ratios } from "./inputs.js";
 import {
   publicKeys,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const models = JSON.parse(
   readFileSync(new URL("../models.json", import.meta.url), "utf8"),
 );

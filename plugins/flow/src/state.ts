@@ -1,9 +1,9 @@
 import { flowEstimate } from "./estimate.js";
-import { roundDecimal } from "../../../packages/plugin-sdk/src/decimal.js";
+import { roundDecimal } from "@fumiao/plugin-sdk/decimal.js";
 import {
   publicKeys,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 export const flowState: ProviderPlugin = {
   ...flowEstimate,
   manifest: {

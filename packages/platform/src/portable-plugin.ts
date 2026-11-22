@@ -6,9 +6,9 @@ import {
   type Manifest,
   type Execution,
   type ProviderPlugin,
-} from "../../plugin-sdk/src/index.js";
-import { remoteForm } from "../../../plugins/remote/src/form.js";
-import { originalRemoteSubmission } from "../../../plugins/remote/src/original.js";
+} from "@fumiao/plugin-sdk/index.js";
+import { remoteForm } from "@fumiao/plugin-remote/form.js";
+import { originalRemoteSubmission } from "@fumiao/plugin-remote/original.js";
 
 // The host owns HTTP, authentication and the immutable task identity. The
 // package maps JSON inputs and receipts without receiving the service key.

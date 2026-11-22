@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { canvasesFixture } from "./canvases.js";
-import { OriginalCanvasRuns } from "../../packages/original-api/src/canvas-runs.js";
-import { gpuCanvasRuns } from "../../plugins/gpu/src/canvas-runs.js";
-import { museCanvasRuns } from "../../plugins/muse/src/canvas-runs.js";
-import { flowCanvasRuns } from "../../plugins/flow/src/canvas-runs.js";
-import { imagesCanvasRuns } from "../../plugins/images/src/canvas-runs.js";
+import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
+import { gpuCanvasRuns } from "@fumiao/plugin-gpu/canvas-runs.js";
+import { museCanvasRuns } from "@fumiao/plugin-muse/canvas-runs.js";
+import { flowCanvasRuns } from "@fumiao/plugin-flow/canvas-runs.js";
+import { imagesCanvasRuns } from "@fumiao/plugin-images/canvas-runs.js";
 export const canvasRunPlugins = [
   gpuCanvasRuns,
   museCanvasRuns,

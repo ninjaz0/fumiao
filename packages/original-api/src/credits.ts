@@ -1,6 +1,6 @@
-import { Platform, type Actor } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
+import { Platform, type Actor } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
 import { OriginalIdentity } from "./identity.js";
 import { identityBodies } from "./contracts.js";
 import { parseBody } from "./validation.js";

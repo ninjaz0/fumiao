@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ModelSpec } from "../../../packages/plugin-sdk/src/index.js";
+import type { ModelSpec } from "@fumiao/plugin-sdk/index.js";
 import {
   choices,
   displayRatios,
@@ -7,7 +7,7 @@ import {
   type Condition,
   type FormField,
   type ModelForm,
-} from "../../../packages/plugin-sdk/src/model-form.js";
+} from "@fumiao/plugin-sdk/model-form.js";
 
 const scalar = z.union([z.string(), z.number(), z.boolean()]);
 const name = z

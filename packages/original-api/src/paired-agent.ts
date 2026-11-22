@@ -1,1 +1,1 @@
-export * from "../../../plugins/gpu/src/agent-dispatch.js";
+export * from "@fumiao/plugin-gpu/agent-dispatch.js";

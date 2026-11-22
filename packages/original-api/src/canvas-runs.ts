@@ -1,10 +1,10 @@
-import type { Platform } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
-import { CanvasSubmissionModels } from "../../platform/src/canvas-submission.js";
-import { StudioCatalog } from "../../platform/src/catalog.js";
-import { uuid5 } from "../../platform/src/uuid.js";
-import { pythonStrip } from "../../plugin-sdk/src/python-values.js";
+import type { Platform } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { uuid5 } from "@fumiao/platform/uuid.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import type { OriginalActor } from "./identity.js";
 import { parseBody } from "./validation.js";
 import { parseDraft } from "./drafts.js";

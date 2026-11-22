@@ -1,5 +1,5 @@
-import type { Sql } from "../../packages/platform/src/db.js";
-import { chatText } from "../../packages/platform/src/chat-values.js";
+import type { Sql } from "@fumiao/platform/db.js";
+import { chatText } from "@fumiao/platform/chat-values.js";
 /** Reconstruct every persisted original chat field from native relational data. */
 export async function chatImportTables(sql: Sql) {
   const conversations = (
@@ -98,7 +98,7 @@ export async function chatImportTables(sql: Sql) {
 }
 
 /** Synthetic but fully related sparse history for offline validation/rollback tests. */
-export function chatImportDraft(): import("../../packages/platform/src/importer.js").LegacyExport {
+export function chatImportDraft(): import("@fumiao/platform/importer.js").LegacyExport {
   const c1 = "a".repeat(32),
     c2 = "b".repeat(32),
     project = "c".repeat(32),

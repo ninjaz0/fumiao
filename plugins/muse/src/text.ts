@@ -1,7 +1,7 @@
-import { inspectModelList } from "../../../packages/plugin-sdk/src/index.js";
+import { inspectModelList } from "@fumiao/plugin-sdk/index.js";
 import { museCanvasRuns } from "./canvas-runs.js";
 import { museOriginalText } from "./original-text.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 /** New immutable version; prior versions retain their original adapter. */
 export const museText: ProviderPlugin = {
   ...museCanvasRuns,

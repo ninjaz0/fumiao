@@ -5,12 +5,22 @@ COPY packages/image-import/native packages/image-import/native
 COPY scripts/build-image-codecs.mjs scripts/build-image-codecs.mjs
 RUN node scripts/build-image-codecs.mjs
 
+# Workspace manifests only, so source edits keep the install layer cached.
+FROM node:24-bookworm-slim AS manifests
+WORKDIR /app
+COPY apps apps
+COPY packages packages
+COPY plugins plugins
+RUN find apps packages plugins -type f ! -name package.json -delete && find apps packages plugins -type d -empty -delete
+
 FROM node:24-bookworm-slim AS dependencies
 WORKDIR /app
 ENV COREPACK_HOME=/opt/corepack
 RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends ffmpeg git ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY apps/web/package.json apps/web/package.json
+COPY --from=manifests /app/apps apps
+COPY --from=manifests /app/packages packages
+COPY --from=manifests /app/plugins plugins
 RUN pnpm install --frozen-lockfile
 
 FROM dependencies AS development

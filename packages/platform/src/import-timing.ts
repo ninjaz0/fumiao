@@ -4,7 +4,7 @@ import { requireValue, hash } from "./security.js";
 import {
   timingFeaturesSchema,
   timingPolicySchema,
-} from "../../plugin-sdk/src/timing.js";
+} from "@fumiao/plugin-sdk/timing.js";
 
 const finite = z.number().finite(),
   nonnegative = finite.nonnegative();

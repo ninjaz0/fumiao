@@ -1,4 +1,4 @@
-import type { PageGroup } from "../../../packages/plugin-sdk/src/contributions";
+import type { PageGroup } from "@fumiao/plugin-sdk/contributions";
 import {
   ChevronDown,
   Search,

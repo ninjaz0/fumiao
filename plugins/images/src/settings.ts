@@ -6,11 +6,11 @@ import {
   imageSafeError,
   ConnectionFailure,
 } from "./lifecycle.js";
-import { museJson } from "../../muse/src/json.js";
+import { museJson } from "@fumiao/plugin-muse/json.js";
 import {
   OriginalProviderCheckError,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 export const imagesSettings: ProviderPlugin = {
   ...imagesLifecycle,
   manifest: {

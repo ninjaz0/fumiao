@@ -1,6 +1,6 @@
-import { runtime } from "../packages/platform/src/runtime.js";
-import { migrate } from "../packages/platform/src/db.js";
-import { configureCapacity } from "../packages/platform/src/capacity.js";
+import { runtime } from "@fumiao/platform/runtime.js";
+import { migrate } from "@fumiao/platform/db.js";
+import { configureCapacity } from "@fumiao/platform/capacity.js";
 const p = runtime();
 try {
   await migrate(p.db);

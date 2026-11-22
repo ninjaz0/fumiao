@@ -13,7 +13,7 @@ import type {
   QueueJob,
   QueueNode,
   QueueRun,
-} from "../../plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 
 export type ForecastCandidate = {
   job: {

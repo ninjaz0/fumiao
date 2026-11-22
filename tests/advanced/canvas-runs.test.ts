@@ -3,16 +3,16 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { canvasRunsFixture, canvasRunPlugins } from "../helpers/canvas-runs.js";
-import { one } from "../../packages/platform/src/db.js";
-import { canvasText } from "../../packages/original-api/src/canvas-values.js";
-import { uuid5 } from "../../packages/platform/src/uuid.js";
-import { CanvasSubmissionModels } from "../../packages/platform/src/canvas-submission.js";
-import { StudioPackages } from "../../packages/platform/src/studio-packages.js";
-import { OriginalCanvasRuns } from "../../packages/original-api/src/canvas-runs.js";
-import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
-import { OriginalIdentity } from "../../packages/original-api/src/identity.js";
-import { gpuCanvas } from "../../plugins/gpu/src/canvas.js";
-import { OriginalJobs } from "../../packages/original-api/src/jobs.js";
+import { one } from "@fumiao/platform/db.js";
+import { canvasText } from "@fumiao/original-api/canvas-values.js";
+import { uuid5 } from "@fumiao/platform/uuid.js";
+import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
+import { StudioPackages } from "@fumiao/platform/studio-packages.js";
+import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
+import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { gpuCanvas } from "@fumiao/plugin-gpu/canvas.js";
+import { OriginalJobs } from "@fumiao/original-api/jobs.js";
 import { databaseFixture } from "../helpers/database.js";
 
 test("Canvas candidates freeze two plugin tasks, holds and links atomically; retries preserve their original identity and inputs", async () => {

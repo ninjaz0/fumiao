@@ -1,0 +1,19 @@
+{
+  "name": "@fumiao/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@fumiao/original-api": "workspace:*",
+    "@fumiao/platform": "workspace:*",
+    "@fumiao/plugin-payments": "workspace:*",
+    "@fumiao/plugin-sdk": "workspace:*",
+    "@nestjs/common": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/platform-express": "catalog:",
+    "express": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "zod": "catalog:"
+  }
+}

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
-import { runtime } from "../packages/platform/src/runtime.js";
-import { importLegacy } from "../packages/platform/src/importer.js";
-import { checkStudioStorage } from "../packages/platform/src/studio-runtime.js";
+import { runtime } from "@fumiao/platform/runtime.js";
+import { importLegacy } from "@fumiao/platform/importer.js";
+import { checkStudioStorage } from "@fumiao/platform/studio-runtime.js";
 if (!process.env.LEGACY_EXPORT || !process.env.LEGACY_OBJECTS)
   throw new Error("需要 LEGACY_EXPORT 与 LEGACY_OBJECTS（本地导出的媒体目录）");
 await checkStudioStorage(process.env);

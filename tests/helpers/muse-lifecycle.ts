@@ -1,14 +1,14 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { timingFixture } from "./timing.js";
-import { museLifecycle } from "../../plugins/muse/src/lifecycle.js";
+import { museLifecycle } from "@fumiao/plugin-muse/lifecycle.js";
 import {
   ArtifactDownloadError,
   type ProviderPlugin,
-} from "../../packages/plugin-sdk/src/index.js";
-import { Executor } from "../../packages/platform/src/executor.js";
-import { JobTiming } from "../../packages/platform/src/timing.js";
-import { one } from "../../packages/platform/src/db.js";
+} from "@fumiao/plugin-sdk/index.js";
+import { Executor } from "@fumiao/platform/executor.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
+import { one } from "@fumiao/platform/db.js";
 export const museTaskId = "task_" + "a".repeat(32);
 export const museAck = { id: museTaskId, status: "queued", phase: "queued" };
 export type Wire = {

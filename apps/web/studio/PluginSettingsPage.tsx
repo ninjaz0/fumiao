@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import type { InstalledSettingsPage } from "../../../packages/plugin-sdk/src/settings-pages";
+import type { InstalledSettingsPage } from "@fumiao/plugin-sdk/settings-pages";
 import type { AdminSave } from "./settings-admin";
 
 export function PluginSettingsPage({

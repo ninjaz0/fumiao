@@ -6,14 +6,14 @@ import {
   imagesLifecycleFixture,
   imagesModel,
 } from "../helpers/images-lifecycle.js";
-import { one } from "../../packages/platform/src/db.js";
-import { JobTiming } from "../../packages/platform/src/timing.js";
+import { one } from "@fumiao/platform/db.js";
+import { JobTiming } from "@fumiao/platform/timing.js";
 import {
   imagesLifecycle,
   imageProcessingFailure,
-} from "../../plugins/images/src/lifecycle.js";
-import { imagesState } from "../../plugins/images/src/state.js";
-import { museJson } from "../../plugins/muse/src/json.js";
+} from "@fumiao/plugin-images/lifecycle.js";
+import { imagesState } from "@fumiao/plugin-images/state.js";
+import { museJson } from "@fumiao/plugin-muse/json.js";
 const row = (
   f: Awaited<ReturnType<typeof imagesLifecycleFixture>>,
   id: string,

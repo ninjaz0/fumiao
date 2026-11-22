@@ -43,7 +43,7 @@ pnpm dev:web
 | 目录 | 用途 |
 | --- | --- |
 | `apps/web`、`apps/api`、`apps/worker` | 网页、HTTP 服务和后台任务 |
-| `packages/` | 权限、账本、存储、工作台协议与插件 SDK |
+| `packages/` | 权限、账本、存储、工作台协议与插件 SDK。各自是 workspace 包，按 `@fumiao/<名字>` 引用，[依赖方向](AGENTS.md#包和依赖方向)由 `pnpm lint` 检查 |
 | `plugins/` | 模型、GPU 执行端和支付适配器。[插件开发](docs/PLUGINS.md) |
 | `migrations/`、`scripts/` | 数据库迁移、初始化、数据导入和构建 |
 | `baseline/` | 随工作台发布的界面资源、文件指纹和 HTTP 路由清单 |

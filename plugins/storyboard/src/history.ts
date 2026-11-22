@@ -1,4 +1,4 @@
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 /** Completed local composition history only; never admitted as a generation model. */
 export const storyboardHistory: ProviderPlugin = {
   manifest: {

@@ -1,14 +1,14 @@
-import { chatContext } from "../../platform/src/chat-context.js";
-import { chatText } from "../../platform/src/chat-values.js";
+import { chatContext } from "@fumiao/platform/chat-context.js";
+import { chatText } from "@fumiao/platform/chat-values.js";
 import {
   pythonStrip,
   pythonTruthy,
-} from "../../plugin-sdk/src/python-values.js";
+} from "@fumiao/plugin-sdk/python-values.js";
 import {
   ChatReplyError,
   type ProviderPlugin,
   type ChatChunk,
-} from "../../plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import type { ChatExecution } from "./chat-execution.js";
 
 function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {

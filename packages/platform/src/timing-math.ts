@@ -1,7 +1,7 @@
 import type {
   TimingFeatures,
   TimingPolicy,
-} from "../../plugin-sdk/src/timing.js";
+} from "@fumiao/plugin-sdk/timing.js";
 export const estimatorVersion = 4;
 export const phases = [
   "preparing",

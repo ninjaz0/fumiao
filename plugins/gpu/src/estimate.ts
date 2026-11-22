@@ -4,7 +4,7 @@ import { canRunQueueJob } from "./queue.js";
 import {
   OriginalSubmissionError,
   type ProviderPlugin,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const fail = (message: string): never => {
   throw new OriginalSubmissionError(message);
 };

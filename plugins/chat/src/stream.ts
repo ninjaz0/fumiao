@@ -3,12 +3,12 @@ import { chatHttp, chatLines, ChatTransportError } from "./transport.js";
 import {
   pythonJson,
   pythonJsonText,
-} from "../../../packages/plugin-sdk/src/json.js";
+} from "@fumiao/plugin-sdk/json.js";
 import {
   pythonWhitespace as whitespace,
   pythonStrip as strip,
   pythonTruthy as truthy,
-} from "../../../packages/plugin-sdk/src/python-values.js";
+} from "@fumiao/plugin-sdk/python-values.js";
 import {
   ChatReplyError,
   ChatProbeError,
@@ -16,7 +16,7 @@ import {
   type ChatRequest,
   type ChatChunk,
   type ChatTitleRequest,
-} from "../../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 const providers = {
   deepseek: {
     label: "DeepSeek",

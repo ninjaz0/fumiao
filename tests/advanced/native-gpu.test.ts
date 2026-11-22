@@ -7,18 +7,18 @@ import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import sharp from "sharp";
 import { databaseFixture } from "../helpers/database.js";
-import { one } from "../../packages/platform/src/db.js";
-import { PluginRegistry } from "../../packages/platform/src/plugins.js";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
-import { GpuGateway } from "../../packages/platform/src/gpu.js";
-import { gpuNative } from "../../plugins/gpu/src/native.js";
-import { gpuReferences } from "../../plugins/gpu/src/references.js";
+import { one } from "@fumiao/platform/db.js";
+import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { gpuNative } from "@fumiao/plugin-gpu/native.js";
+import { gpuReferences } from "@fumiao/plugin-gpu/references.js";
 import {
   inputFingerprint,
   validateAudio,
   validateArtifact,
-} from "../../plugins/gpu/src/artifacts.js";
-import type { ProviderPlugin } from "../../packages/plugin-sdk/src/index.js";
+} from "@fumiao/plugin-gpu/artifacts.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 const digest = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
 function deferred() {

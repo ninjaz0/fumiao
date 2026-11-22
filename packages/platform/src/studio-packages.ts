@@ -3,7 +3,7 @@ import { officialAdapter } from "./distribution/official-adapter.js";
 import {
   manifestSchema,
   type ProviderPlugin,
-} from "../../plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import {
   contributesSchema,
   contributionProblems,
@@ -12,9 +12,9 @@ import {
   type PageAction,
   type PageScope,
   type ResolvedContributions,
-} from "../../plugin-sdk/src/contributions.js";
+} from "@fumiao/plugin-sdk/contributions.js";
 import { PluginSettingsStore } from "./plugin-settings.js";
-import { remotePlugin } from "../../../plugins/remote/src/index.js";
+import { remotePlugin } from "@fumiao/plugin-remote/index.js";
 import { loadProgram } from "./plugin-program.js";
 import { z } from "zod";
 import { Ajv } from "ajv";
@@ -27,7 +27,7 @@ import {
   settingsPagesSchema,
   type InstalledSettingsPage,
   type PluginSettingsPage,
-} from "../../plugin-sdk/src/settings-pages.js";
+} from "@fumiao/plugin-sdk/settings-pages.js";
 
 export async function installedSettingsPages(
   sql: Sql,

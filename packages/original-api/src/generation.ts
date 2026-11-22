@@ -1,23 +1,23 @@
-import { hasStudioPackages } from "../../platform/src/studio-plugin-profile.js";
-import { pythonStrip } from "../../plugin-sdk/src/python-text.js";
+import { hasStudioPackages } from "@fumiao/platform/studio-plugin-profile.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
 import { randomUUID } from "node:crypto";
-import type { Platform } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
+import type { Platform } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
 import {
   requireValue,
   DomainError,
   hash,
-} from "../../platform/src/security.js";
-import { canonical, validator } from "../../platform/src/plugins.js";
-import { StudioCatalog } from "../../platform/src/catalog.js";
-import { ReferencePacks, packPurposes } from "../../platform/src/packs.js";
-import { capacity, JOB_RESERVE } from "../../platform/src/capacity.js";
+} from "@fumiao/platform/security.js";
+import { canonical, validator } from "@fumiao/platform/plugins.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { ReferencePacks, packPurposes } from "@fumiao/platform/packs.js";
+import { capacity, JOB_RESERVE } from "@fumiao/platform/capacity.js";
 import {
   executableJob,
   ordinaryFlowSource,
-} from "../../platform/src/retired-jobs.js";
-import { acceptTask } from "../../platform/src/accept.js";
-import { saveSubmissionForecast } from "../../platform/src/submission-forecast.js";
+} from "@fumiao/platform/retired-jobs.js";
+import { acceptTask } from "@fumiao/platform/accept.js";
+import { saveSubmissionForecast } from "@fumiao/platform/submission-forecast.js";
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
 import { OriginalLibrary } from "./library.js";
 import { parseDraft } from "./drafts.js";
@@ -28,7 +28,7 @@ import {
   type OriginalDraft,
   type OriginalReference,
   type OriginalTask,
-} from "../../plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 
 export class OriginalGeneration {
   constructor(readonly p: Platform) {}

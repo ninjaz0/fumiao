@@ -5,7 +5,7 @@ import {
 import type { Database, Sql } from "./db.js";
 import { one } from "./db.js";
 import { requireValue } from "./security.js";
-import type { Manifest, StudioModel } from "../../plugin-sdk/src/index.js";
+import type { Manifest, StudioModel } from "@fumiao/plugin-sdk/index.js";
 import { matcher } from "./schema.js";
 
 /** Registers public UI and billing data only from immutable, versioned plugin manifests. */

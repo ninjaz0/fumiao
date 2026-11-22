@@ -7,7 +7,7 @@ import { one, type Sql } from "./db.js";
 import { requireValue } from "./security.js";
 import { validator } from "./plugins.js";
 import { hasStudioPackages } from "./studio-plugin-profile.js";
-import type { ProviderPlugin, ChatPolicy } from "../../plugin-sdk/src/index.js";
+import type { ProviderPlugin, ChatPolicy } from "@fumiao/plugin-sdk/index.js";
 export type ChatConnection = {
   plugin: ProviderPlugin;
   provider: ChatPolicy["providers"][number];

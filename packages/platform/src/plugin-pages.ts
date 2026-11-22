@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   OriginalIdentity,
   type OriginalActor,
-} from "../../original-api/src/identity.js";
+} from "@fumiao/original-api/identity.js";
 import {
   actionRequestSchema,
   hostOperations,
@@ -22,7 +22,7 @@ import {
   type SettingsScope,
   type SettingsValue,
   type ViewButton,
-} from "../../plugin-sdk/src/contributions.js";
+} from "@fumiao/plugin-sdk/contributions.js";
 import { one, type Sql } from "./db.js";
 import { officialAdapter } from "./distribution/official-adapter.js";
 import { Platform } from "./platform.js";

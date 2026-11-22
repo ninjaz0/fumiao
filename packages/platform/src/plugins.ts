@@ -9,19 +9,19 @@ import {
 import {
   packageContributions,
   type LegacySettingsPage,
-} from "../../plugin-sdk/src/contributions.js";
-import type { PairedAgentProtocol } from "../../plugin-sdk/src/paired-agent.js";
+} from "@fumiao/plugin-sdk/contributions.js";
+import type { PairedAgentProtocol } from "@fumiao/plugin-sdk/paired-agent.js";
 import { validator } from "./schema.js";
 export { validator } from "./schema.js";
 import { registerStudioModels } from "./catalog.js";
-import { remotePlugin } from "../../../plugins/remote/src/index.js";
-import { validOriginalRemoteModels } from "../../../plugins/remote/src/original.js";
+import { remotePlugin } from "@fumiao/plugin-remote/index.js";
+import { validOriginalRemoteModels } from "@fumiao/plugin-remote/original.js";
 import {
   manifestSchema,
   ProviderError,
   type ProviderPlugin,
   type Manifest,
-} from "../../plugin-sdk/src/index.js";
+} from "@fumiao/plugin-sdk/index.js";
 import type { Database, Sql } from "./db.js";
 import { one } from "./db.js";
 import { DomainError, requireValue } from "./security.js";
@@ -79,8 +79,8 @@ export class PluginRegistry {
     requireValue(pluginId === undefined, 404, "尚未安装节点插件");
     const [{ OriginalNodes: NodeManagement }, { OriginalPairedAgent: Agent }] =
       await Promise.all([
-        import("../../original-api/src/nodes.js"),
-        import("../../original-api/src/paired-agent.js"),
+        import("@fumiao/original-api/nodes.js"),
+        import("@fumiao/original-api/paired-agent.js"),
       ]);
     return { NodeManagement, Agent };
   }

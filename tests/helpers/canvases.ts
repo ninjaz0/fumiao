@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { databaseFixture } from "./database.js";
-import { one } from "../../packages/platform/src/db.js";
+import { one } from "@fumiao/platform/db.js";
 import {
   OriginalIdentity,
   type OriginalActor,
-} from "../../packages/original-api/src/identity.js";
-import { OriginalCanvases } from "../../packages/original-api/src/canvases.js";
-import { StudioCatalog } from "../../packages/platform/src/catalog.js";
-import { museCanvas } from "../../plugins/muse/src/canvas.js";
-import { flowCanvas } from "../../plugins/flow/src/canvas.js";
-import { gpuCanvas } from "../../plugins/gpu/src/canvas.js";
-import { imagesCanvas } from "../../plugins/images/src/canvas.js";
+} from "@fumiao/original-api/identity.js";
+import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { museCanvas } from "@fumiao/plugin-muse/canvas.js";
+import { flowCanvas } from "@fumiao/plugin-flow/canvas.js";
+import { gpuCanvas } from "@fumiao/plugin-gpu/canvas.js";
+import { imagesCanvas } from "@fumiao/plugin-images/canvas.js";
 export async function canvasesFixture() {
   const f = await databaseFixture(),
     identity = new OriginalIdentity(f.p);

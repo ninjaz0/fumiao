@@ -24,7 +24,7 @@ import { ReferencePacks } from "./packs.js";
 import { JobTiming } from "./timing.js";
 import { acceptTask } from "./accept.js";
 import { prepareSubmission } from "./prepare-input.js";
-import type { TimingReport } from "../../plugin-sdk/src/timing.js";
+import type { TimingReport } from "@fumiao/plugin-sdk/timing.js";
 export type Actor = {
   id: string;
   name: string;

@@ -1,21 +1,21 @@
-import { storyboardHistory } from "../../../plugins/storyboard/src/history.js";
+import { storyboardHistory } from "@fumiao/plugin-storyboard/history.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, statfs } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Actor, Platform } from "../../platform/src/platform.js";
-import { one, type Sql } from "../../platform/src/db.js";
-import { requireValue } from "../../platform/src/security.js";
-import { capacity, EXPORT_RESERVE } from "../../platform/src/capacity.js";
-import { pythonStrip } from "../../plugin-sdk/src/python-values.js";
+import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { capacity, EXPORT_RESERVE } from "@fumiao/platform/capacity.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import {
   originalStoryboard,
   type CompositionPlugin,
   type Shot,
-} from "../../../plugins/storyboard/src/original.js";
-import { webVtt } from "../../../plugins/storyboard/src/subtitles.js";
+} from "@fumiao/plugin-storyboard/original.js";
+import { webVtt } from "@fumiao/plugin-storyboard/subtitles.js";
 import { OriginalCanvases, canvasConflict } from "./canvases.js";
 import { parseBody } from "./validation.js";
 import { parseCanvasDocument, storyboardExportFields } from "./canvas-draft.js";

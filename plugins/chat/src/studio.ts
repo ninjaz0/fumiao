@@ -1,5 +1,5 @@
 import { chat } from "./index.js";
-import type { ProviderPlugin } from "../../../packages/plugin-sdk/src/index.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 export const chatStudio: ProviderPlugin = {
   ...chat,
   modelForm: (model) => ({
