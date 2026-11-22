@@ -190,7 +190,9 @@ const program = `({
     }
     if (id === "remove") return { notice: String(await host.data.delete(payload.key)) };
     if (id === "fill") {
-      for (let i = 0; i < payload.count; i++) await host.data.put("big/" + i, payload.value);
+      const write = i => host.data.put("big/" + i, payload.value);
+      if (payload.parallel) await Promise.all(Array.from({length: payload.count}, (_,i) => write(i)));
+      else for (let i = 0; i < payload.count; i++) await write(i);
       return {};
     }
     if (id === "fail") {
@@ -387,10 +389,13 @@ test("plugin data is scoped, bounded, rolled back with a failed action and remov
   const limit = hostLimits.dataPluginBytes;
   hostLimits.dataPluginBytes = 1000;
   try {
-    await assert.rejects(
-      f.act("fill", { count: 10, value: "x".repeat(200) }),
-      failure(422, "插件数据超过容量上限"),
-    );
+    for (const parallel of [false, true]) {
+      await assert.rejects(
+        f.act("fill", { count: 10, value: "x".repeat(200), parallel }),
+        failure(422, "插件数据超过容量上限"),
+      );
+      assert.equal(await one(f.db, "SELECT 1 FROM studio_plugin_data WHERE key LIKE 'big/%'"), undefined);
+    }
   } finally {
     hostLimits.dataPluginBytes = limit;
   }

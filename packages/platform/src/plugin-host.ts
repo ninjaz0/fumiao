@@ -371,28 +371,27 @@ export class PluginHost {
       413,
       "保存的值超过 256 KB",
     );
-    // The caller holds this plugin's installation row, so the total is stable.
-    const total = await one(
+    // The installation lock serializes independent transactions. Within the
+    // same invocation, parallel puts must check and change quota in one statement.
+    const conflict = target === "global"
+      ? "(plugin_id,key) WHERE scope='global'"
+      : "(plugin_id,workspace_id,key) WHERE scope='workspace'";
+    const stored = await one(
       this.sql,
-      `SELECT coalesce(sum(bytes),0)::float8 AS bytes,count(*)::int AS keys,
-        coalesce(max(bytes) FILTER (WHERE ${where.clause.replace("plugin_id=$1 AND ", "")} AND key=$${n + 1}),-1)::int AS previous
-       FROM studio_plugin_data WHERE plugin_id=$1`,
-      [...where.params, name.data],
+      `WITH usage AS (
+         SELECT coalesce(sum(bytes),0) AS bytes,count(*) AS keys,
+           max(bytes) FILTER (WHERE ${where.clause} AND key=$${n+1}) AS previous
+         FROM studio_plugin_data WHERE plugin_id=$1
+       )
+       INSERT INTO studio_plugin_data(plugin_id,scope,workspace_id,key,value,bytes)
+       SELECT $1,'${target}',${target === "global" ? "NULL" : "$2::uuid"},$${n+1},$${n+2}::jsonb,$${n+3}::int FROM usage
+       WHERE bytes-coalesce(previous,0)+$${n+3}::int <= $${n+4}
+         AND keys+(previous IS NULL)::int <= $${n+5}
+       ON CONFLICT ${conflict} DO UPDATE SET value=excluded.value,bytes=excluded.bytes,updated_at=now()
+       RETURNING 1`,
+      [...where.params, name.data, value, bytes, hostLimits.dataPluginBytes, hostLimits.dataPluginKeys],
     );
-    const replacing = total.previous >= 0;
-    requireValue(
-      total.bytes - Math.max(total.previous, 0) + bytes <=
-        hostLimits.dataPluginBytes &&
-        total.keys + (replacing ? 0 : 1) <= hostLimits.dataPluginKeys,
-      413,
-      "插件数据超过容量上限",
-    );
-    await this.sql.query(
-      replacing
-        ? `UPDATE studio_plugin_data SET value=$${n + 2}::jsonb,bytes=$${n + 3},updated_at=now() WHERE ${where.clause} AND key=$${n + 1}`
-        : `INSERT INTO studio_plugin_data(plugin_id,scope,workspace_id,key,value,bytes) VALUES($1,'${target}',${target === "global" ? "NULL" : "$2"},$${n + 1},$${n + 2}::jsonb,$${n + 3})`,
-      [...where.params, name.data, value, bytes],
-    );
+    requireValue(stored, 413, "插件数据超过容量上限");
     return true;
   }
 
