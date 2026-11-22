@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { expect, type Page } from "@playwright/test";
-import { setTab } from "./studio-settings-browser.js";
+import { settings, setTab } from "./studio-settings-browser.js";
+import { verifyChatHistory } from "./studio-chat-history.js";
 
 /** The caller has opened Studio settings as an administrator. */
 export async function verifyChatSettingsRetry(page: Page) {
@@ -72,4 +73,6 @@ export async function verifyChatSettingsRetry(page: Page) {
   console.log(
     "Verified chat settings HTTP/network failures, retry recovery and empty providers",
   );
+  await verifyChatHistory(page);
+  await settings(page);
 }
