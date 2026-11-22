@@ -269,7 +269,7 @@ test("update-source review compares each page, action, audience, visibility and 
 test("node binding follows normalized capabilities across legacy and page-less GPU releases", async (t) => {
   const { p, db, actor, packages } = await setup(t);
   const legacy: PackageFile = JSON.parse(
-    await readFile("plugins/gpu/gpu.fmplugin.json", "utf8"),
+    await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
   );
   const preview = await packages.preview(actor, legacy);
   assert.equal(preview.nodes, true);

@@ -1,7 +1,7 @@
 import { referenceLimits } from "./reference-limits.js";
-import { randomBytes } from "node:crypto";
+import { newSeed } from "./policy-crypto.js";
+import { InputPreparationError } from "@fumiao/plugin-sdk/submission-errors.js";
 import {
-  InputPreparationError,
   type PreparationAsset,
   type PreparationRequest,
   type PreparedInput,
@@ -176,7 +176,7 @@ export function prepareInput(
           (/[\u4e00-\u9fff]/.test(input.prompt)
             ? "声音清晰自然、语速适中，使用普通话朗读。"
             : "A clear, natural narrator speaking at a moderate pace."),
-        seed: input.params.seed ?? randomBytes(4).readUInt32BE() & 0x7fffffff,
+        seed: input.params.seed ?? newSeed(true),
       },
     };
   }
@@ -213,9 +213,7 @@ export function prepareInput(
       ratio,
       width,
       height,
-      seed:
-        params.seed ??
-        Number(randomBytes(8).readBigUInt64BE() & ((1n << 53n) - 1n)),
+      seed: params.seed ?? newSeed(false),
       ...(native ? { h3_inputs: native } : {}),
     },
   };

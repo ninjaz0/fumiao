@@ -10,6 +10,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "catalog:",
     "@aws-sdk/s3-request-presigner": "catalog:",
+    "@fumiao/media-runtime": "workspace:*",
     "@fumiao/original-api": "workspace:*",
     "@fumiao/plugin-chat": "workspace:*",
     "@fumiao/plugin-flow": "workspace:*",

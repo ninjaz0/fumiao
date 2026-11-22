@@ -34,6 +34,7 @@ export type QueueNode = Omit<NonNullable<TimingContext["node"]>, "id"> & {
   lastseen: number;
   ready_models?: string[];
   video_steps?: number[];
+  features?: Record<string, unknown>;
   execution_plan?: { mode?: string };
   lanes?: {
     model: string;

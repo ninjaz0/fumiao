@@ -34,7 +34,7 @@ export const preparedInputSchema = z
   })
   .strict();
 export type PreparedInput = z.infer<typeof preparedInputSchema>;
-export class InputPreparationError extends Error {}
+export { InputPreparationError } from "./submission-errors.js";
 export const artifactValidationPolicySchema = z
   .object({ version: z.union([z.literal(1), z.literal(2)]) })
   .strict();

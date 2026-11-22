@@ -1,3 +1,4 @@
+import { roundDecimal } from "@fumiao/plugin-sdk/decimal.js";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -81,6 +82,56 @@ export async function verifyNodeArtifact(
         (s: { codec_type: string }) => s.codec_type === "audio",
       );
       const seconds = Number(format.duration);
+      if (rules.unrotated) {
+        const rotations = [
+          video?.tags?.rotate,
+          ...(video?.side_data_list ?? []).map(
+            (s: { rotation?: number }) => s.rotation,
+          ),
+        ].filter((v) => v !== undefined);
+        requireValue(
+          rotations.every((r) => Number(r) % 360 === 0),
+          422,
+          "视频旋转与成片规则不符",
+        );
+      }
+      if (rules.minPeak) {
+        requireValue(
+          kind === "audio" && rules.audioCodec === "pcm_s16le",
+          422,
+          "音频峰值规则无效",
+        );
+        const pcm = await run(
+          "ffmpeg",
+          [
+            "-nostdin",
+            "-xerror",
+            ...input,
+            "-i",
+            file,
+            "-map",
+            "0:a:0",
+            "-f",
+            "s16le",
+            "pipe:1",
+          ],
+          {
+            ...options,
+            encoding: "buffer",
+            maxBuffer: Math.min(bytes.length, 64 << 20),
+          },
+        );
+        let peak = 0;
+        for (let i = 0; i + 1 < pcm.stdout.length; i += 2)
+          peak = Math.max(peak, Math.abs(pcm.stdout.readInt16LE(i)));
+        requireValue(
+          peak >= rules.minPeak &&
+            pcm.stdout.length ===
+              Number(audio?.channels) * Number(audio?.duration_ts) * 2,
+          422,
+          "音频静音或内容不完整",
+        );
+      }
       const [num, den] = String(video?.avg_frame_rate).split("/").map(Number);
       requireValue(
         (kind === "video" ? video : audio) &&
@@ -140,7 +191,14 @@ export async function verifyNodeArtifact(
       }
       return {
         mime: rules.mime,
-        duration: seconds,
+        duration: kind === "audio" ? roundDecimal(seconds, 3) : seconds,
+        ...(kind === "audio"
+          ? {
+              sample_rate: Number(audio.sample_rate),
+              channels: audio.channels,
+              format: "wav",
+            }
+          : {}),
         width: video?.width ?? 0,
         height: video?.height ?? 0,
       };

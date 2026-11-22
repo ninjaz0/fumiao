@@ -37,7 +37,7 @@ export class GpuGateway {
     const input = z.object({ connectionId: uuid }).parse(value);
     const c = await one(
       this.p.db,
-      "SELECT c.id FROM connections c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE c.id=$1 AND NOT c.fmworker_resource_driver AND v.manifest->>'mode'='pull'",
+      "SELECT c.id FROM connections c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE c.id=$1 AND NOT c.fmworker_resource_driver AND v.manifest->>'mode'='pull' AND coalesce(v.manifest->'originalSubmission'->>'version','') NOT IN ('3','4')",
       [input.connectionId],
     );
     requireValue(c, 404, "GPU 连接不存在");
@@ -110,7 +110,9 @@ export class GpuGateway {
         connection.plugin_version,
       );
       requireValue(
-        !plugin.retired && plugin.manifest.mode === "pull",
+        !plugin.retired &&
+          plugin.manifest.mode === "pull" &&
+          ![3, 4].includes(plugin.manifest.originalSubmission?.version ?? 0),
         409,
         "连接已不再支持节点领取",
       );
@@ -236,7 +238,7 @@ export class GpuGateway {
       if (held) return { job: null };
       const candidates = `SELECT j.* FROM jobs j JOIN connections c ON c.id=j.connection_id JOIN models m ON m.id=j.model_id JOIN users u ON u.id=j.owner_id
         LEFT JOIN model_permissions mp ON mp.model_id=m.id AND mp.workspace_id=j.workspace_id WHERE j.connection_id=$1 AND j.state='queued' AND c.enabled=true AND ${await queuedModelPolicy(sql)} AND COALESCE(mp.enabled,true) AND u.active=true
-        AND j.provider_model=ANY($2::text[]) AND ${executableJob}`;
+        AND NOT EXISTS (SELECT 1 FROM plugin_versions v WHERE (v.id,v.version)=(j.plugin_id,j.plugin_version) AND v.manifest->'originalSubmission'->>'version' IN ('3','4')) AND j.provider_model=ANY($2::text[]) AND ${executableJob}`;
       // Scan FIFO without locking ineligible jobs. A plugin may reject the first
       // hundred jobs while accepting a later model; never starve that model.
       let job: any,
@@ -435,7 +437,10 @@ export class GpuGateway {
       verify?: (
         job: Record<string, any>,
         bytes: Buffer,
-      ) => Promise<Record<string, any> & { mime: string }>;
+      ) => Promise<{
+        metadata: Record<string, any> & { mime: string };
+        timing?: TimingReport["timing"];
+      }>;
       params?: (job: Record<string, any>) => Record<string, any>;
       preflight?: (
         id: string,
@@ -489,8 +494,11 @@ export class GpuGateway {
     const data = await load();
     let metadata: Record<string, any> & { mime: string },
       completionTiming: TimingReport["timing"];
-    if (options.verify) metadata = await options.verify(initial, data);
-    else if (initial.validateArtifact) {
+    if (options.verify) {
+      const verified = await options.verify(initial, data);
+      metadata = verified.metadata;
+      completionTiming = verified.timing;
+    } else if (initial.validateArtifact) {
       const plugin = await this.p.registry.resolve(
         this.p.db,
         initial.plugin_id,

@@ -1,3 +1,4 @@
+import { PluginMedia } from "./plugin-media.js";
 import { z } from "zod";
 import {
   OriginalIdentity,
@@ -152,7 +153,12 @@ export class PluginPages {
     private readonly http?: HttpTransport,
   ) {}
 
-  private pluginHost(sql: Sql, ctx: Context, mode: "read" | "write") {
+  private pluginHost(
+    sql: Sql,
+    ctx: Context,
+    mode: "read" | "write",
+    session = new PluginMedia(this.p.storage),
+  ) {
     return new PluginHost(
       sql,
       {
@@ -163,6 +169,7 @@ export class PluginPages {
         scopes: ctx.page.audience === "member" ? ["workspace"] : settingsScopes,
       },
       this.http,
+      { session, actor: ctx.actor.id },
     );
   }
 
@@ -272,7 +279,10 @@ export class PluginPages {
         stamp: Date.now() / 1000,
         catalog: {},
         imageEnabled: true,
-      }).gpu_models ?? Object.fromEntries(plugin.manifest.models.map(m => [m.id, { label: m.label }]));
+      }).gpu_models ??
+      Object.fromEntries(
+        plugin.manifest.models.map((m) => [m.id, { label: m.label }]),
+      );
     const { rows } = await sql.query(
       `SELECT n.public_id::float8 AS id,n.name,n.control,n.detail,n.models,
       CASE WHEN n.last_seen < now()-interval '75 seconds' THEN 'offline' ELSE coalesce(n.queue_state->>'stage','preparing') END AS stage,
@@ -374,30 +384,53 @@ export class PluginPages {
     plugin: string,
     page: string,
   ) {
-    return this.p.db.transaction(async (sql) => {
-      await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-      const ctx = await this.context(sql, actor, selected, plugin, page);
-      const input = await this.input(sql, ctx);
-      if (ctx.page.legacy)
-        return invoke("({view:" + ctx.page.program + "\n})", "view", [
-          {
-            enabled: ctx.release.enabled,
-            pending: input.plugin!.pending,
-            nodes: input.nodes!.nodes,
-            models: input.nodes!.nodeModels,
-            jobs: input.jobs,
-          },
-        ]);
-      return validateView(
-        await invoke(
-          ctx.page.program,
-          "view",
-          [input],
-          this.pluginHost(sql, ctx, "read"),
-        ),
-        ctx.page,
-      );
-    });
+    let mediaAudit: Audit | undefined;
+    let result;
+    try {
+      result = await this.p.db.transaction(async (sql) => {
+        await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+        const ctx = await this.context(sql, actor, selected, plugin, page);
+        const input = await this.input(sql, ctx);
+        if (ctx.page.legacy)
+          return invoke("({view:" + ctx.page.program + "\n})", "view", [
+            {
+              enabled: ctx.release.enabled,
+              pending: input.plugin!.pending,
+              nodes: input.nodes!.nodes,
+              models: input.nodes!.nodeModels,
+              jobs: input.jobs,
+            },
+          ]);
+        const host = this.pluginHost(sql, ctx, "read");
+        try {
+          return validateView(
+            await invoke(ctx.page.program, "view", [input], host),
+            ctx.page,
+          );
+        } finally {
+          if (host.used["media.probe"]) {
+            mediaAudit = {
+              plugin,
+              page,
+              action: "view",
+              kind: "program",
+              actor: ctx.actor.id,
+              workspace: ctx.workspace,
+              version: ctx.release.version,
+              target: null,
+              calls: host.summary(),
+            };
+          }
+        }
+      });
+    } catch (error) {
+      if (mediaAudit)
+        await this.audit(this.p.db, mediaAudit, "failed", mediaAudit.calls!);
+      throw error;
+    }
+    if (mediaAudit)
+      await this.audit(this.p.db, mediaAudit, "succeeded", mediaAudit.calls!);
+    return result;
   }
 
   private async host(
@@ -469,6 +502,7 @@ export class PluginPages {
     action: PageAction,
     request: ActionRequest,
     audit: Audit,
+    media: PluginMedia,
   ): Promise<ActionResult> {
     const write = async (
       scope: SettingsScope,
@@ -500,7 +534,7 @@ export class PluginPages {
         return { refresh: true };
       case "program": {
         const input = await this.input(sql, ctx);
-        const host = this.pluginHost(sql, ctx, "write");
+        const host = this.pluginHost(sql, ctx, "write", media);
         let result;
         try {
           result = await invoke(
@@ -551,6 +585,7 @@ export class PluginPages {
           ? String(parsed.data.target)
           : null,
     };
+    const media = new PluginMedia(this.p.storage);
     try {
       return await this.p.db.transaction(async (sql) => {
         const ctx = await this.context(
@@ -577,11 +612,13 @@ export class PluginPages {
           declaration,
           parsed.data,
           audit,
+          media,
         );
         await this.audit(sql, audit, "succeeded", audit.calls ?? null);
         return result;
       });
     } catch (error) {
+      await media.rollback();
       const failure =
         error instanceof DomainError
           ? error

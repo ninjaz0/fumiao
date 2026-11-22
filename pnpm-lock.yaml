@@ -330,6 +330,12 @@ importers:
         specifier: 'catalog:'
         version: 4.23.15
 
+  packages/media-runtime:
+    dependencies:
+      '@fumiao/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
+
   packages/original-api:
     dependencies:
       '@fumiao/image-import':
@@ -377,6 +383,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: 'catalog:'
         version: 3.1170.0
+      '@fumiao/media-runtime':
+        specifier: workspace:*
+        version: link:../media-runtime
       '@fumiao/original-api':
         specifier: workspace:*
         version: link:../original-api
@@ -451,9 +460,15 @@ importers:
 
   plugins/gpu:
     dependencies:
+      '@fumiao/media-runtime':
+        specifier: workspace:*
+        version: link:../../packages/media-runtime
       '@fumiao/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@noble/hashes':
+        specifier: 1.8.0
+        version: 1.8.0
 
   plugins/images:
     dependencies:
@@ -1123,6 +1138,10 @@ packages:
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
+
+  '@noble/hashes@1.8.0':
+    resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
+    engines: {node: ^14.21.3 || >=16}
 
   '@phenomen/libavif-wasm@1.4.203':
     resolution: {integrity: sha512-gGYPkUddbjsnyRRWV75oXeq0Wog5SSAR7d9QHo5c68cWwvN64s+ikfFGYgQ1SeKuDqGWhE33qtv/xibTIBfW7Q==}
@@ -2976,6 +2995,8 @@ snapshots:
 
   '@next/swc-win32-x64-msvc@16.4.6':
     optional: true
+
+  '@noble/hashes@1.8.0': {}
 
   '@phenomen/libavif-wasm@1.4.203': {}
 

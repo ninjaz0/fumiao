@@ -213,7 +213,9 @@ async function setup(t: TestContext, contributes: object, fake = true) {
   const packages = new StudioPackages(f.p);
   await packages.install(
     admin,
-    JSON.parse(await readFile("plugins/gpu/gpu.fmplugin.json", "utf8")),
+    JSON.parse(
+      await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
+    ),
   );
   await f.db.query(
     `UPDATE studio_package_releases SET package=(package-'settingsPage') || jsonb_build_object('contributes',$1::jsonb) WHERE id='gpu'`,

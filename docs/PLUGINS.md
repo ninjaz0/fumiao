@@ -87,10 +87,11 @@
 
 | 能力 | 声明 | 函数 |
 |---|---|---|
+| `media` | `"hostCapabilities": ["media"]` | `probe(id)`、`transcode(id, {format})`、`concat(ids, {format})`、`extractFrame(id, {seconds})`，均位于 `host.media` |
 | `data` | `"hostCapabilities": ["data"]` | `host.data.get(key, {scope?})`、`list(prefix?, {scope?})`、`put(key, value, {scope?})`、`delete(key, {scope?})` |
 | `http` | `"hostCapabilities": ["http"]` 加 `"http": {"origins": ["https://api.example.com"]}` | `host.http.fetch(url, {method?, headers?, json? 或 body?})`，返回 `{status, ok, contentType, text, json}` |
 
-- **读和写分开**。`view` 只拿到读函数（`data.get`、`data.list`）。`http.fetch` 和写入只在 `action` 里可用，并和这次操作的审计记录一起提交；操作失败时已写入的数据一并撤销。
+- **读和写分开**。`view` 只拿到读函数（`data.get`、`data.list`、`media.probe`）。`http.fetch` 和写入只在 `action` 里可用，并和这次操作的审计记录一起提交；操作失败时已写入的数据一并撤销。
 - **`data`** 是属于这个插件的键值存储，`scope` 为 `workspace`（默认）或 `global`。键最长 200 个字符，单个值上限 256 KB，每个插件合计 16 MB、2000 个键。插件不建表，移除插件时数据一并清除。
 - **`http`** 只能访问声明过的 HTTPS 源。宿主拒绝指向回环、内网、链路本地和云元数据地址的请求，不跟随重定向（3xx 原样返回），请求正文上限 256 KB，响应上限 1 MB，单次 10 秒超时。不能设置 `Cookie`、`Host` 等由宿主负责的请求头。
 - **限额**。一次调用最多 32 次宿主调用，插件自身的执行时间上限 250 毫秒（等待宿主的时间不计），总时长上限 15 秒。
@@ -274,16 +275,16 @@ POST /api/admin/connections/:id/upgrade
 
 管理员可以从 Studio 的插件设置导入 `plugins/example-node-pool/example-node-pool.fmplugin.json`，启用后在「ComfyUI 节点」生成接入命令。准备一台运行 ComfyUI 的 Linux 机器，导出 API 格式的工作流，设置 `COMFY_WORKFLOW` 为文件路径，`COMFY_PROMPT_NODE` 为文本节点 ID。工作流需要一个保存 PNG 的输出节点。节点端默认连接本机 8188 端口，通过 `COMFY_URL` 可以指定自己的 ComfyUI 服务。在该机器运行接入命令，保持进程在线，然后在 Studio 选择「ComfyUI 图像」提交任务。
 
-清单使用 `mode: "pull"`、Studio 提交契约 v3、`contributes.nodePools: { "version": 1 }` 和 `hostCapabilities: ["nodes"]`。模型参数、表单和价格沿用 Studio 模型清单。节点安装器、压缩包和 SHA-256 摘要放在 `nodeClient` 中。管理员页面使用设置页的 `nodes` 读取范围和 `nodes.pair` 等宿主操作。示例的全部策略在 `plugins/example-node-pool/package/program.js`。
+清单使用 `mode: "pull"`、Studio 提交契约 v3、`contributes.nodePools: { "version": 1 }` 和 `hostCapabilities: ["nodes", "media"]`。模型参数、表单和价格沿用 Studio 模型清单。节点安装器、压缩包和 SHA-256 摘要放在 `nodeClient` 中。管理员页面使用设置页的 `nodes` 读取范围和 `nodes.pair` 等宿主操作。示例的全部策略在 `plugins/example-node-pool/package/program.js`。
 
 节点池的五个策略是同步 QuickJS 扩展点。宿主根据节点当前安装版本处理能力上报，用接单时冻结的包版本执行四项任务策略。
 
 | 函数 | 输入与返回值 |
 | --- | --- |
-| `capabilities(report)` | 归一化节点心跳的 `capabilities` 对象，返回 `{ ready_models, features? }`。模型必须在配对授权内，输出上限 16 KiB。 |
+| `capabilities(report)` | 归一化节点心跳的 `capabilities` 对象，返回就绪模型、可选特性及并发通道计划。第二个参数为节点获准运行的模型列表。模型必须在配对授权内，输出上限 16 KiB。 |
 | `eligible(node, job)` | 从队列模型、输入和节点能力判断是否接单，返回布尔值。宿主另行检查节点控制状态、心跳和领取权限。 |
 | `dispatch(job, node)` | 返回 JSON 指令对象。任务含 `model`、`kind`、`input.prompt`、`input.params`、`input.references`。素材路径由宿主按工作区生成。 |
-| `receipt(job, report)` | 读取与派发相同的任务输入，验证回传的 JSON 报告。返回 `true` 才进入媒体验收。 |
+| `receipt(job, report)` | 读取与派发相同的任务输入，验证回传的 JSON 报告。返回 `true` 或含补充元数据与计时的对象后进入媒体验收。 |
 | `artifactRules(job)` | 声明 MIME、字节上限和可选的尺寸、时长、音视频编码、帧数、帧率、声道及采样率。字段定义见 `packages/plugin-sdk/src/node-pools.ts`。 |
 
 节点访问 `/agent/<插件 ID>/client/{install.sh,agent.tgz,agent.tgz.sha256}`。安装器收到 `FUMIAO_SITE`、`--models=<模型列表>` 和配对码。协议沿用以下 HTTP 方法，所有路径都位于 `/agent/<插件 ID>` 下。
@@ -298,4 +299,16 @@ POST /api/admin/connections/:id/upgrade
 | `PUT /jobs/:id/result` | 原始成品字节，`X-Sha256` 为 hex 摘要，`X-Job-Timing` 为 JSON 回执。宿主校验后保存私有素材并结算。 |
 | `POST /jobs/:id/error`、`GET /jobs/:id/receipt` | 上报 `{stage:"error",detail}` 或查询是否已收到成片。重复成功回传返回同一素材。 |
 
-`037_node_pools.sql` 原地重命名节点和配对表，保留旧表名的可更新视图。`node_pools` 从已有 pull 连接读取插件归属。原有节点、任务票据、序列、账本和已冻结的包版本继续沿用。当前 GPU 发行包仍走原协议与原生模型策略；此版本可用于独立验收新增节点池。在后续 GPU 协议切换窗口，先停止接单、排空任务，核对冻结余额并备份数据库和私有媒体，再升级宿主并重新安装节点。回退到缺少节点池能力的宿主前，应先排空并停用新增的池。整库恢复须使用同一时间点的媒体备份，具体步骤见运维手册。
+`037_node_pools.sql` 原地重命名节点和配对表，保留旧表名的可更新视图。`node_pools` 从已有 pull 连接读取插件归属。原有节点、任务票据、序列、账本和已冻结的包版本继续沿用。GPU 2.0 的新任务使用包内工作台策略和节点池程序。1.x 已受理任务继续按冻结版本结算。
+
+### 工作区媒体处理
+
+调用传入当前工作区素材的 32 位公开 ID。探测返回 MIME、秒数、尺寸、编码、声道和采样率。转码、拼接与抽帧在管理员操作中可用，返回相同类型的信息以及新素材 ID。原素材继续可读。输出计入存储配额，操作失败或事务回滚会清理新文件。审计记录调用名称、次数、工作区和操作结果。
+
+`format` 接受 `mp4`（H.264 视频，有音轨时为 AAC）或 `wav`（PCM 音频）。抽帧输出 PNG。拼接接受 2–8 个按播放顺序排列的 ID，视频需全部带音轨或全部无音轨。单次输入合计上限为 64 MiB、120 秒，输入画面上限为 16777216 像素。单个 API 进程最多并行处理两项操作。FFmpeg 和临时目录由宿主管理。ComfyUI 节点池示例包在设置的「素材处理示例」页提供这四项操作。
+
+### GPU 2.0 切换和回退
+
+在设置中停用 GPU 插件，保留工作机在线，等已受理的排队和运行中任务完成。升级前按运维手册备份数据库和对应的私有媒体。导入 2.0 后在「GPU 节点」生成新命令并到机器上运行，模型就绪后启用。跨协议升级与回退会检查待结算任务，撤销旧节点凭据并使未用配对码过期。切回 1.x 也需排空并重新配对。包更新沿用原模型、服务连接、价格与历史作品。恢复整库时，使用同一时间点的数据库和媒体备份。
+
+GPU 2.0 声明 `originalSubmission.version = 4`。清单内的 SHA-256 固定 `studioProgram`，该程序在 QuickJS 中提供输入准备、模型表单、计时、队列和状态投影。宿主校验素材权限、预估与计费输入，执行参考素材转换。节点回执可返回 `true` 或含 `metadata`、`timing` 的对象。宿主独立测量的媒体字段优先。单声道 PCM 的最小峰值和视频旋转要求可通过 `artifactRules` 声明。

@@ -30,11 +30,7 @@ const releases = [
   },
   {
     id: "gpu",
-    // The published adapter is immutable. Its node controllers are now owned
-    // by the host; retain these exact bytes for existing provider snapshots.
-    pinnedAdapter:
-      "b418dad85380eed9df512cac18d952dc550e616ebd32ff38aa17b09f840b2df6",
-    program: true,
+    sandboxBuild: "package/build.mjs",
   },
   {
     id: "compatible-chat",
@@ -103,17 +99,34 @@ async function packContributions(root, contributes) {
     delete contributes.settings.migrateFile;
   }
 }
-for (const { id, entry, program, pinnedAdapter, clientBuild } of releases) {
+for (const { id, entry, program, sandboxBuild, clientBuild } of releases) {
   const root = "plugins/" + id,
     file = JSON.parse(await readFile(root + "/package/release.json", "utf8"));
-  if (pinnedAdapter) {
-    const bytes = await readFile(
-      root + "/package/provider-" + file.adapterVersion + ".js.gz",
+  if (sandboxBuild) {
+    const legacy = JSON.parse(
+      await readFile(join(root, "package/legacy-1.0.0.fmplugin.json"), "utf8"),
     );
-    if (hash(bytes) !== pinnedAdapter)
-      throw Error("Published adapter digest mismatch: " + id);
-    file.adapterModule = bytes.toString("base64");
-    trusted[id + "@" + file.adapterVersion] = pinnedAdapter;
+    const pinned =
+      "b418dad85380eed9df512cac18d952dc550e616ebd32ff38aa17b09f840b2df6";
+    const legacyBytes = await readFile(
+      join(root, "package/provider-" + legacy.adapterVersion + ".js.gz"),
+    );
+    if (
+      hash(legacyBytes) !== pinned ||
+      !legacyBytes.equals(Buffer.from(legacy.adapterModule, "base64"))
+    )
+      throw Error("Published GPU adapter digest mismatch");
+    trusted[id + "@" + legacy.adapterVersion] = pinned;
+    Object.assign(
+      file,
+      JSON.parse(
+        execFileSync(
+          process.execPath,
+          ["--import", "tsx", join(root, sandboxBuild), file.adapterVersion],
+          { encoding: "utf8" },
+        ),
+      ),
+    );
   }
   if (entry) {
     const packed = await buildAdapter(root, entry);
@@ -123,13 +136,13 @@ for (const { id, entry, program, pinnedAdapter, clientBuild } of releases) {
   if (file.contributes)
     await packContributions(root + "/package", file.contributes);
   if (program) file.program = await expression(root + "/package/program.js");
-  if (id === "gpu") {
-    file.settingsPage = {
-      title: "GPU 节点",
-      render: await expression(root + "/package/panel.js"),
-    };
-  }
-  if (id === "gpu" || file.contributes?.nodePools) {
+  if (sandboxBuild)
+    file.nodeClient = JSON.parse(
+      execFileSync("python3", [join(root, "package/build-client.py")], {
+        encoding: "utf8",
+      }),
+    );
+  else if (file.contributes?.nodePools) {
     if (clientBuild) execFileSync("python3", [join(root, clientBuild)]);
     file.nodeClient = {};
     for (const name of ["agent.tgz", "install.sh", "agent.tgz.sha256"])
@@ -145,7 +158,9 @@ for (const { id, entry, program, pinnedAdapter, clientBuild } of releases) {
     json({
       id,
       version: file.version,
-      notes: "首次发布",
+      notes: sandboxBuild
+        ? "节点池协议升级，排空任务后重新接入实例"
+        : "首次发布",
       package: path,
       sha256: hash(data),
     }),

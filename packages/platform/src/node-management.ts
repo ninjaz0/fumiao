@@ -86,7 +86,9 @@ export class OriginalNodes {
         version.id,
         version.version,
       );
-      const portable = plugin.manifest.originalSubmission?.version === 3;
+      const portable = [3, 4].includes(
+        plugin.manifest.originalSubmission?.version ?? 0,
+      );
       requireValue(portable || plugin.originalState, 503, "节点池暂不可用");
       const advertised = plugin.originalState?.configuration({
         stamp: Date.now() / 1000,
@@ -100,7 +102,7 @@ export class OriginalNodes {
           400,
           "请选择至少一个支持的模型",
         );
-        const slug = portable ? id : advertised?.[id]?.slug;
+        const slug = advertised?.[id]?.slug ?? (portable ? id : undefined);
         requireValue(
           typeof slug === "string" && /^[a-z0-9._-]+$(?![\s\S])/.test(slug),
           503,

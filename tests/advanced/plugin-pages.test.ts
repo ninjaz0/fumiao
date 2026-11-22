@@ -39,7 +39,7 @@ async function setup(t: TestContext) {
     "fixture",
   );
   const file = JSON.parse(
-    await readFile("plugins/gpu/gpu.fmplugin.json", "utf8"),
+    await readFile("plugins/gpu/package/legacy-1.0.0.fmplugin.json", "utf8"),
   );
   await new StudioPackages(f.p).install(admin, file);
   const app = await createOriginalApp(f.p);

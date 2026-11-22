@@ -1,7 +1,7 @@
 {
   "id": "gpu",
-  "version": "1.0.0",
-  "notes": "首次发布",
+  "version": "2.0.0",
+  "notes": "节点池协议升级，排空任务后重新接入实例",
   "package": "gpu.fmplugin.json",
-  "sha256": "89613b0db235ea2cd77aa8fe6b21e5d06f56a9c07b3b87c144aa157c6c5d0121"
+  "sha256": "ac5edd3d63f7289c5614960278cbdc4b165abcae3f5605b04a124512e43f0674"
 }

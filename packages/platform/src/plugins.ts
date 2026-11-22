@@ -1,3 +1,4 @@
+import { nodeStudioPlugin } from "./node-studio-policy.js";
 import { readFile } from "node:fs/promises";
 import { portablePlugin } from "./portable-plugin.js";
 import {
@@ -133,7 +134,7 @@ export class PluginRegistry {
         };
         await this.installOn(sql, row.manifest, row.endpoint, false);
       } else if (reservedAdapterId(row.id)) {
-        const packaged = JSON.parse(
+        let packaged = JSON.parse(
           await readFile(
             new URL(
               "../../../plugins/" + row.id + "/" + row.id + ".fmplugin.json",
@@ -142,7 +143,17 @@ export class PluginRegistry {
             "utf8",
           ),
         );
-        if (packaged.adapterVersion === row.version) {
+        if (row.id === "gpu" && row.version === "1.11.0")
+          packaged = JSON.parse(
+            await readFile(
+              new URL(
+                "../../../plugins/gpu/package/legacy-1.0.0.fmplugin.json",
+                import.meta.url,
+              ),
+              "utf8",
+            ),
+          );
+        if (packaged.adapterModule && packaged.adapterVersion === row.version) {
           const adapter = await this.registerModule(
             row.id,
             row.version,
@@ -257,6 +268,7 @@ export class PluginRegistry {
     bump: boolean,
     formsReady = true,
     portable = false,
+    studioProgram?: string,
   ) {
     requireValue(
       !(
@@ -268,7 +280,29 @@ export class PluginRegistry {
       "fmWorker 资源能力已退役，无法安装此插件",
     );
     const manifest = manifestSchema.parse(value) as Manifest;
-    const local = this.builtins.get(`${manifest.id}@${manifest.version}`);
+    const sandbox =
+      studioProgram &&
+      portable &&
+      manifest.mode === "pull" &&
+      manifest.originalSubmission?.version === 4
+        ? await nodeStudioPlugin(manifest, studioProgram)
+        : undefined;
+    requireValue(
+      manifest.originalSubmission?.version !== 4 || sandbox,
+      400,
+      "节点池缺少工作台策略",
+    );
+    requireValue(
+      !sandbox ||
+        (!this.builtins.has(manifest.id + "@" + manifest.version) &&
+          !approvedAdapterVersions.includes(
+            manifest.id + "@" + manifest.version,
+          )),
+      409,
+      "适配器版本已存在",
+    );
+    const local =
+      sandbox ?? this.builtins.get(`${manifest.id}@${manifest.version}`);
     if (manifest.canvas) {
       const rules = manifest.canvas.models;
       requireValue(
@@ -400,7 +434,7 @@ export class PluginRegistry {
         400,
         "原提交契约需要已安装的本地适配器",
       );
-    if ((manifest.originalSubmission?.version ?? 0) >= 2) {
+    if (!sandbox && (manifest.originalSubmission?.version ?? 0) >= 2) {
       requireValue(
         (portable || (endpoint && validRemoteEndpoint(endpoint))) &&
           (manifest.mode === "request" ||
@@ -438,9 +472,7 @@ export class PluginRegistry {
       );
     if (manifest.referenceImports) {
       requireValue(
-        !endpoint &&
-          this.builtins.get(`${manifest.id}@${manifest.version}`)
-            ?.importReference,
+        !endpoint && local?.importReference,
         400,
         "参考素材转换需要已安装的本地适配器",
       );
@@ -452,7 +484,7 @@ export class PluginRegistry {
       );
     }
     if (manifest.queue) {
-      const adapter = this.builtins.get(`${manifest.id}@${manifest.version}`);
+      const adapter = local;
       requireValue(
         !endpoint &&
           manifest.timing &&
@@ -584,6 +616,15 @@ export class PluginRegistry {
           [id, version],
         );
         if (native) return this.registerModule(id, version, native.code);
+      }
+      if (row.manifest.originalSubmission?.version === 4) {
+        const release = await one(
+          db,
+          "SELECT package->>'studioProgram' AS source FROM studio_package_releases WHERE id=$1 AND package->>'adapterVersion'=$2 AND package ? 'studioProgram' LIMIT 1",
+          [id, version],
+        );
+        requireValue(release, 503, "缺少冻结的工作台程序");
+        return nodeStudioPlugin(row.manifest, release.source);
       }
       if ((row.manifest.originalSubmission?.version ?? 0) >= 2)
         return portablePlugin(row.manifest);

@@ -1,0 +1,12 @@
+{
+  "name": "@fumiao/media-runtime",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./references.js": "./src/references.ts"
+  },
+  "dependencies": {
+    "@fumiao/plugin-sdk": "workspace:*"
+  }
+}

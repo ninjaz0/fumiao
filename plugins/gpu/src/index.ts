@@ -2,8 +2,8 @@ import {
   ProviderError,
   type ProviderPlugin,
 } from "@fumiao/plugin-sdk/index.js";
-export const videoQualities = [480, 768];
-export const videoSeconds = [5, 10, 15];
+export { videoQualities, videoSeconds } from "./parameters.js";
+import { videoQualities, videoSeconds } from "./parameters.js";
 export const gpu: ProviderPlugin = {
   manifest: {
     id: "gpu",

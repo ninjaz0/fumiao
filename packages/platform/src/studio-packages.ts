@@ -1,3 +1,4 @@
+import { nodeStudioPlugin } from "./node-studio-policy.js";
 import { createHash } from "node:crypto";
 import { nodePoolHooks } from "@fumiao/plugin-sdk/node-pools.js";
 import { purgePluginData } from "./plugin-host.js";
@@ -105,6 +106,11 @@ export const packageFile = z
       .min(1)
       .max(256 * 1024)
       .optional(),
+    studioProgram: z
+      .string()
+      .min(1)
+      .max(256 * 1024)
+      .optional(),
     contributes: contributesSchema.optional(),
     settingsPages: settingsPagesSchema.optional(),
     settingsPage: z
@@ -200,12 +206,22 @@ async function inspectPackage(file: PackageFile) {
       );
     }
   }
+  const studio = manifest.originalSubmission?.version === 4;
+  requireValue(
+    studio === !!file.studioProgram &&
+      (!studio ||
+        (contributions.nodePools &&
+          (!manifest.referenceImports ||
+            contributions.hostCapabilities.includes("media")))),
+    400,
+    "节点工作台策略需要节点池声明和所用宿主能力",
+  );
   if (contributions.nodePools) {
     requireValue(
       file.manifest &&
         file.nodeClient &&
         file.program &&
-        manifest.originalSubmission?.version === 3,
+        (manifest.originalSubmission?.version === 3 || studio),
       400,
       "节点池需要独立清单、节点程序和客户端",
     );
@@ -250,7 +266,9 @@ async function inspectPackage(file: PackageFile) {
     binding?.adapter ??
     (file.remote
       ? remotePlugin(manifest, file.remote.endpoint)
-      : portablePlugin(manifest));
+      : file.studioProgram
+        ? await nodeStudioPlugin(manifest, file.studioProgram)
+        : portablePlugin(manifest));
   return { adapter, contributions };
 }
 
@@ -324,6 +342,14 @@ function permissionSummary(
     lines.push(
       "宿主能力：" +
         added("节点管理", !prior?.hostCapabilities.includes("nodes")),
+    );
+  if (next.hostCapabilities.includes("media"))
+    lines.push(
+      "宿主能力：" +
+        added(
+          "读取工作区私有素材、转码、拼接和抽帧",
+          !prior?.hostCapabilities.includes("media"),
+        ),
     );
   if (next.http)
     lines.push(
@@ -446,7 +472,12 @@ export class StudioPackages {
       f.nodeClient &&
       canonical(f.nodeClient) !== canonical(prior?.package.nodeClient)
     )
-      changes.push("包含新的节点安装文件，已有机器保持原版本");
+      changes.push(
+        prior &&
+          !!prior.package.contributes?.nodePools !== !!contributions.nodePools
+          ? "节点协议变更，须先排空任务并使用新接入命令重新安装实例"
+          : "包含新的节点安装文件，已有机器保持原版本",
+      );
     const required = (m.configSchema.required ?? []) as string[];
     const services = prior
       ? (
@@ -593,7 +624,8 @@ export class StudioPackages {
       requireValue(
         m.id === file.id &&
           m.version === file.adapterVersion &&
-          m.originalSubmission?.version === 3 &&
+          (m.originalSubmission?.version === 3 ||
+            m.originalSubmission?.version === 4) &&
           (m.mode === "request" || !!file.contributes?.nodePools),
         400,
         "独立服务插件清单无效",
@@ -605,6 +637,7 @@ export class StudioPackages {
         true,
         true,
         true,
+        file.studioProgram,
       );
     }
     if (file.remote) {
@@ -699,6 +732,32 @@ export class StudioPackages {
           409,
           "插件版本不符合更新条件",
         );
+      if (current?.installed && file.nodeClient) {
+        const prior = await one(
+          sql,
+          "SELECT package FROM studio_package_releases WHERE id=$1 AND version=$2",
+          [file.id, current.version],
+        );
+        if (
+          !!prior?.package.contributes?.nodePools !== !!contributions.nodePools
+        ) {
+          const pending = await one(
+            sql,
+            "SELECT 1 FROM jobs WHERE plugin_id=$1 AND state NOT IN ('completed','cancelled','failed') LIMIT 1",
+            [file.id],
+          );
+          requireValue(!pending, 409, "请先排空在途任务，再切换节点协议");
+          // Fence concurrent enrollments before taking the snapshot of nodes to revoke.
+          await sql.query(
+            "UPDATE node_pairings p SET expires_at=least(expires_at,clock_timestamp()) FROM connections c WHERE c.id=p.connection_id AND c.plugin_id=$1 AND NOT c.fmworker_resource_driver",
+            [file.id],
+          );
+          await sql.query(
+            "UPDATE nodes n SET archived=true,enabled=false,control='removed' FROM connections c WHERE c.id=n.connection_id AND c.plugin_id=$1 AND NOT c.fmworker_resource_driver",
+            [file.id],
+          );
+        }
+      }
       if (file.program && !contributions.nodePools) {
         const invoke = await loadProgram(file.program);
         const hooks = invoke("describe") as string[];

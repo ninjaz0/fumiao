@@ -1,6 +1,7 @@
 import {
   capabilitiesSchema,
   artifactRulesSchema,
+  receiptVerdictSchema,
 } from "@fumiao/plugin-sdk/node-pools.js";
 import { nodePoolProgram } from "./node-pool-policy.js";
 import { verifyNodeArtifact } from "./node-pool-media.js";
@@ -60,6 +61,8 @@ type NodeRow = {
   timing_context: Omit<NonNullable<TimingContext["node"]>, "id">;
   queue_state: Pick<QueueNode, "ready_models" | "video_steps"> & {
     stage?: string;
+    can_accept?: boolean;
+    features?: Record<string, unknown>;
     execution_plan?: ExecutionPlan;
     lanes?: Lane[];
   };
@@ -121,10 +124,11 @@ export class OriginalPairedAgent {
     const node = await one(
       sql,
       `SELECT n.*,c.plugin_id,c.plugin_version FROM gpu_nodes n JOIN connections c ON c.id=n.connection_id
-       WHERE n.token_hash=$1 AND c.plugin_id=$2 AND n.enabled AND NOT n.archived AND n.control!='removed' AND NOT c.fmworker_resource_driver
+       JOIN plugin_versions v ON (v.id,v.version)=(c.plugin_id,c.plugin_version)
+       WHERE coalesce(v.manifest->'originalSubmission'->>'version' IN ('3','4'),false)=$3 AND n.token_hash=$1 AND c.plugin_id=$2 AND n.enabled AND NOT n.archived AND n.control!='removed' AND NOT c.fmworker_resource_driver
        AND EXISTS (SELECT 1 FROM gpu_pairings p WHERE p.claimed_node_id=n.id)
        AND NOT EXISTS (SELECT 1 FROM fmworker_resources r WHERE r.node_id=n.id)${lock ? " FOR UPDATE OF n" : ""}`,
-      [hash(auth.slice(7)), this.pluginId],
+      [hash(auth.slice(7)), this.pluginId, this.portable],
     );
     requireValue(node, 403, "实例凭据已撤销");
     return node as NodeRow;
@@ -152,7 +156,7 @@ export class OriginalPairedAgent {
 
   private summarize(
     node: NodeRow,
-    protocol: PairedAgentProtocol,
+    labels: Record<string, { label: string }>,
     running: Job[],
     now: number,
   ) {
@@ -179,18 +183,23 @@ export class OriginalPairedAgent {
       ? [
           ...notices
             .map(
-              (lane) => protocol.models[lane.model].label + "：" + lane.detail,
+              (lane) =>
+                (labels[lane.model]?.label ?? lane.model) + "：" + lane.detail,
             )
             .join("；"),
         ]
           .slice(0, 300)
           .join("")
       : running.length > 1
-        ? "视频与语音生成中"
+        ? this.portable
+          ? running.length + " 个任务生成中"
+          : "视频与语音生成中"
         : running.length
-          ? running[0].kind === "audio"
-            ? "正在生成语音"
-            : "正在生成视频"
+          ? this.portable
+            ? "正在生成"
+            : running[0].kind === "audio"
+              ? "正在生成语音"
+              : "正在生成视频"
           : ready.length
             ? "就绪"
             : "正在准备模型";
@@ -204,10 +213,23 @@ export class OriginalPairedAgent {
     );
     return this.p.db.transaction(async (sql) => {
       const node = await this.node(sql, credential, true);
+      let scheduling:
+        | NonNullable<ReturnType<typeof capabilitiesSchema.parse>["scheduling"]>
+        | undefined;
       if (this.portable) {
         const run = await nodePoolProgram(sql, node.plugin_id);
         const caps = capabilitiesSchema.safeParse(
-          run("capabilities", beat.capabilities ?? {}),
+          run(
+            "capabilities",
+            beat.capabilities ?? {
+              ready_models: beat.ready_models,
+              profile: beat.profile,
+              video_steps: beat.video_steps,
+              lane_model: beat.lane_model,
+              execution_plan: beat.execution_plan,
+            },
+            node.models,
+          ),
         );
         requireValue(
           caps.success &&
@@ -220,38 +242,66 @@ export class OriginalPairedAgent {
           422,
           "节点能力超过 16 KB",
         );
-        const state = {
-          ...caps.data,
-          stage: beat.can_accept ? beat.stage : "preparing",
-        };
-        await sql.query(
-          "UPDATE nodes SET last_seen=now(),queue_state=$2,detail=$3 WHERE id=$1",
-          [node.id, JSON.stringify(state), beat.detail],
+        scheduling = caps.data.scheduling;
+        if (!scheduling) {
+          const state = {
+            ...caps.data,
+            stage: beat.can_accept ? beat.stage : "preparing",
+          };
+          await sql.query(
+            "UPDATE nodes SET last_seen=now(),queue_state=$2,detail=$3 WHERE id=$1",
+            [node.id, JSON.stringify(state), beat.detail],
+          );
+          const held = beat.ticket
+            ? await this.renew(sql, node, beat, stamp())
+            : false;
+          return { control: node.control, held, protocol: 1 };
+        }
+        requireValue(
+          !scheduling.plan ||
+            scheduling.plan.mode === "serial" ||
+            (Object.keys(scheduling.plan.lanes ?? {}).length > 0 &&
+              Object.keys(scheduling.plan.lanes ?? {}).every((id) =>
+                node.models.includes(id),
+              )),
+          400,
+          "执行通道未授权",
         );
-        const held = beat.ticket
-          ? await this.renew(sql, node, beat, stamp())
-          : false;
-        return { control: node.control, held, protocol: 1 };
+        if (caps.data.features) node.queue_state.features = caps.data.features;
+        if (!beat.lane_model) node.queue_state.can_accept = beat.can_accept;
+        beat = { ...beat, ready_models: caps.data.ready_models };
       }
-      const protocol = await this.protocol(sql, node),
-        state = node.queue_state,
+      const protocol = this.portable
+        ? undefined
+        : await this.protocol(sql, node);
+      const state = node.queue_state,
         context = node.timing_context;
       const lane = beat.lane_model,
-        model = protocol.legacyModel,
+        model = protocol?.legacyModel,
         now = stamp();
-      if (beat.video_steps) {
-        requireValue(node.models.includes(model), 400, "实例没有接入视频模型");
-        requireValue(!lane || lane === model, 400, "通道不能修改视频能力");
-        state.video_steps = [...new Set(beat.video_steps)].sort(
-          (a, b) => a - b,
-        );
-      } else if (!lane && node.models.includes(model)) state.video_steps = [20];
+      if (model) {
+        if (beat.video_steps) {
+          requireValue(
+            node.models.includes(model),
+            400,
+            "实例没有接入视频模型",
+          );
+          requireValue(!lane || lane === model, 400, "通道不能修改视频能力");
+          state.video_steps = [...new Set(beat.video_steps)].sort(
+            (a, b) => a - b,
+          );
+        } else if (!lane && node.models.includes(model))
+          state.video_steps = [20];
+      }
       if (!lane && beat.runtime_id && beat.runtime_id !== context.runtime_id)
         state.lanes = [];
-      if (beat.execution_plan) {
+      if (scheduling?.plan || beat.execution_plan) {
         let plan;
         try {
-          plan = protocol.plan(beat.execution_plan, node.models);
+          plan = scheduling
+            ? scheduling.plan
+            : protocol!.plan(beat.execution_plan!, node.models);
+          requireValue(plan, 400, "执行计划无效");
         } catch (error) {
           if (error instanceof PairedAgentPlanError)
             throw new DomainError(400, error.message);
@@ -315,7 +365,8 @@ export class OriginalPairedAgent {
         if (beat.runtime_id) context.runtime_id = beat.runtime_id;
         if (beat.profile) {
           context.profile = beat.profile;
-          context.hardware = protocol.hardware(beat.profile);
+          context.hardware =
+            scheduling?.hardware ?? protocol!.hardware(beat.profile);
         }
       }
       const held = beat.ticket ? await this.renew(sql, node, beat, now) : false;
@@ -339,7 +390,12 @@ export class OriginalPairedAgent {
         state.lanes = [...lanes.values()];
       }
       if (plan?.mode === "parallel")
-        this.summarize(node, protocol, await this.running(sql, node), now);
+        this.summarize(
+          node,
+          protocol?.models ?? {},
+          await this.running(sql, node),
+          now,
+        );
       await sql.query(
         "UPDATE gpu_nodes SET last_seen=to_timestamp($2),timing_context=$3,queue_state=$4,detail=$5 WHERE id=$1",
         [
@@ -353,7 +409,7 @@ export class OriginalPairedAgent {
       return {
         control: node.control,
         held,
-        protocol: protocol.version,
+        protocol: protocol?.version ?? 2,
         execution_mode: plan?.mode ?? "serial",
       };
     });
@@ -463,7 +519,9 @@ export class OriginalPairedAgent {
         ? slot?.stage === "ready" &&
           slot.lastseen >= now - 75 &&
           slot.can_accept
-        : view.stage === "ready" && view.lastseen >= now - 75;
+        : view.stage === "ready" &&
+          view.can_accept !== false &&
+          view.lastseen >= now - 75;
       const installed = (view.ready_models ?? []).filter(
         (id) => node.models.includes(id) && (!lane || id === lane),
       );
@@ -492,9 +550,14 @@ export class OriginalPairedAgent {
         id: node.id,
         ...(lane ? { lane_model: lane } : {}),
       });
-      if (slot && protocol) {
+      if (slot) {
         slot.stage = "busy";
-        this.summarize(node, protocol, await this.running(sql, node), now);
+        this.summarize(
+          node,
+          protocol?.models ?? {},
+          await this.running(sql, node),
+          now,
+        );
         await sql.query(
           "UPDATE gpu_nodes SET queue_state=$2,detail=$3 WHERE id=$1",
           [node.id, JSON.stringify(state), node.detail],
@@ -515,8 +578,8 @@ export class OriginalPairedAgent {
       JOIN models m ON m.id=j.model_id
       JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
       LEFT JOIN model_permissions mp ON mp.model_id=m.id AND mp.workspace_id=j.workspace_id
-      WHERE j.connection_id=$1 AND c.enabled AND j.state='queued' AND j.original_uid IS NOT NULL AND j.deleted_at IS NULL
-      AND v.manifest->>'mode'='pull' AND NOT (v.manifest ? 'fmworkerResources') AND ${this.portable ? "j.package_version IS NOT NULL AND v.manifest->'originalSubmission'->>'version'='3'" : "v.manifest->'artifactValidation' IS NOT NULL AND v.manifest->'originalState'->'recovery' IS NOT NULL"}
+      WHERE j.connection_id=$1 AND c.enabled AND j.state='queued' AND ${this.portable ? "TRUE" : "j.original_uid IS NOT NULL"} AND j.deleted_at IS NULL
+      AND v.manifest->>'mode'='pull' AND NOT (v.manifest ? 'fmworkerResources') AND ${this.portable ? "j.package_version IS NOT NULL AND v.manifest->'originalSubmission'->>'version' IN ('3','4')" : "v.manifest->'artifactValidation' IS NOT NULL AND v.manifest->'originalState'->'recovery' IS NOT NULL"}
       AND j.provider_model=ANY($2::text[]) AND ${await queuedModelPolicy(sql)} AND COALESCE(mp.enabled,true) AND ${executableJob}`;
     let cursor = 0;
     // Jobs are dispatched across workspaces. Access to private inputs comes
@@ -561,6 +624,11 @@ export class OriginalPairedAgent {
     return {
       model: job.provider_model,
       kind: job.kind,
+      view: job.original_view ?? {},
+      assets: Object.fromEntries(
+        job.input.references.map((id: string, i: number) => [id, refs[i]]),
+      ),
+      attempts: job.attempts,
       input: {
         prompt: job.input.prompt,
         params: job.input.params,
@@ -713,21 +781,25 @@ export class OriginalPairedAgent {
               } catch {
                 throw new DomainError(422, "节点回执无效");
               }
-              requireValue(
-                run("receipt", prepared, report) === true,
-                422,
-                "节点回执与任务不符",
+              const verdict = receiptVerdictSchema.safeParse(
+                run("receipt", prepared, report),
               );
+              requireValue(verdict.success, 422, "节点回执与任务不符");
               const rules = artifactRulesSchema.safeParse(
                 run("artifactRules", prepared),
               );
               requireValue(rules.success, 422, "成片规则无效");
-              return verifyNodeArtifact(
+              const actual = await verifyNodeArtifact(
                 bytes,
                 job.kind,
                 receipt.sha256,
                 rules.data,
               );
+              const extra = verdict.data === true ? undefined : verdict.data;
+              return {
+                metadata: { ...extra?.metadata, ...actual },
+                timing: extra?.timing,
+              };
             }
           : undefined,
         preflight: this.portable
