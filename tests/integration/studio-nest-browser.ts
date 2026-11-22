@@ -338,6 +338,21 @@ export async function studioBrowser(
     await expect(composerPopover.getByRole("option", { name: "图片生成" })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(composerPopover.getByRole("option", { name: "语音生成" })).toBeFocused();
+    await composerCreation.evaluate((trigger) => {
+      window.document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      (trigger as HTMLButtonElement).click();
+    });
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    await composerCreation.evaluate((trigger) => {
+      window.document.querySelector<HTMLElement>(
+        '#popover [aria-selected="true"]',
+      )!.click();
+      (trigger as HTMLButtonElement).click();
+    });
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    console.log("Verified immediate same-menu reopen focuses the selected option after Escape and selection");
     await page.keyboard.press("Escape");
     await expect(composerPopover).toBeHidden();
     await expect(composerCreation).toBeFocused();

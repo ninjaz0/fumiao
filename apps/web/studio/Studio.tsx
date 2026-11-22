@@ -140,6 +140,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const [menu, setMenu] = useState<StudioMenu | null>(null);
   const [menuShown, setMenuShown] = useState(false);
   const [menuHidden, setMenuHidden] = useState(true);
+  const [menuOpenVersion, setMenuOpenVersion] = useState(0);
   const [sidebarChanged, setSidebarChanged] = useState(false);
   const [accountOpened, setAccountOpened] = useState(false);
   const [toast, setToast] = useState("");
@@ -517,7 +518,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("scroll", positionMenu, true);
     };
-  }, [menu, menuHidden, closeMenu, positionMenu]);
+  }, [menu, menuHidden, menuOpenVersion, closeMenu, positionMenu]);
 
   function openMenu(kind: StudioMenu, button: HTMLButtonElement, focus = true) {
     if (anchor.current === button) {
@@ -540,17 +541,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (kind === "account") setAccountOpened(true);
     if (kind === "detail-more") setDetailMenuUsed(true);
     setMenuHidden(false);
-    if (kind === menu && !menuHidden) {
-      positionMenu();
-      setMenuShown(true);
-      if (kind === "workspaces")
-        popover.current
-          ?.querySelector<HTMLElement>('[aria-selected="true"]')
-          ?.focus({ preventScroll: true });
-    } else {
-      setMenuShown(false);
-      setMenu(kind);
-    }
+    setMenuShown(false);
+    setMenu(kind);
+    setMenuOpenVersion((version) => version + 1);
   }
 
   const leaveStudio = useCallback(
