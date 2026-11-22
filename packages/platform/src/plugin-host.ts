@@ -36,28 +36,50 @@ for (const [net, prefix] of [
   ["169.254.0.0", 16],
   ["172.16.0.0", 12],
   ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
+  ["192.88.99.0", 24],
   ["192.168.0.0", 16],
   ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
   ["224.0.0.0", 3],
 ] as const)
   internal.addSubnet(net, prefix, "ipv4");
+// Use global unicast for IPv6. The IANA special-purpose registry lists
+// exceptions within 2000::/3, including documentation and transition ranges.
+const globalUnicast = new BlockList();
+globalUnicast.addSubnet("2000::", 3, "ipv6");
 for (const [net, prefix] of [
-  ["::", 127],
-  ["64:ff9b::", 96],
-  ["fc00::", 7],
-  ["fe80::", 10],
-  ["ff00::", 8],
+  ["2001::", 23],
+  ["2001:db8::", 32],
+  ["2002::", 16],
+  ["3fff::", 20],
 ] as const)
   internal.addSubnet(net, prefix, "ipv6");
-export function publicAddress(address: string) {
+const reachableAssignments = new BlockList();
+for (const [net, prefix] of [
+  ["2001:1::1", 128],
+  ["2001:1::2", 128],
+  ["2001:1::3", 128],
+  ["2001:3::", 32],
+  ["2001:4:112::", 48],
+  ["2001:20::", 28],
+  ["2001:30::", 28],
+] as const)
+  reachableAssignments.addSubnet(net, prefix, "ipv6");
+
+export function publicAddress(address: string): boolean {
   const family = isIP(address);
-  if (!family) return false;
-  // IPv4-mapped: the dotted form is judged as IPv4, any other spelling of
-  // it is refused.
+  if (family === 4) return !internal.check(address, "ipv4");
+  if (family !== 6 || address.includes("%")) return false;
+  // Retain the existing dotted IPv4-mapped spelling for ordinary public IPv4.
   const mapped = /^::ffff:(.*)$/i.exec(address);
-  if (mapped)
-    return isIP(mapped[1]) === 4 && !internal.check(mapped[1], "ipv4");
-  return !internal.check(address, family === 4 ? "ipv4" : "ipv6");
+  if (mapped) return isIP(mapped[1]) === 4 && publicAddress(mapped[1]);
+  return (
+    globalUnicast.check(address, "ipv6") &&
+    (!internal.check(address, "ipv6") ||
+      reachableAssignments.check(address, "ipv6"))
+  );
 }
 // Checked on the address the socket connects to, so a name cannot resolve
 // to a public address for the check and a private one for the request.
