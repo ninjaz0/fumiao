@@ -29,7 +29,15 @@
     "images:prepare": "node scripts/build-image-codecs.mjs",
     "test:studio": "tsx tests/integration/smoke-studio-nest.ts --routes && tsx --test tests/integration/studio-bootstrap-retry.test.ts && tsx --test tests/integration/canvas-replace-cancel-browser.ts && tsx tests/integration/composition-poll-browser.ts",
     "test:studio:bootstrap": "pnpm build && tsx --test tests/integration/studio-bootstrap-retry.test.ts",
-    "plugins:pack": "node scripts/build-studio-packages.mjs"
+    "plugins:pack": "node scripts/build-studio-packages.mjs",
+    "plugin:dev": "pnpm --silent build:sdk && node packages/plugin-sdk/dist/lib/cli.js dev",
+    "plugin:test": "pnpm --silent build:sdk && node packages/plugin-sdk/dist/lib/cli.js test",
+    "create:plugin": "pnpm --silent build:sdk && node packages/plugin-sdk/dist/lib/cli.js create",
+    "test:plugin-authors": "pnpm build:sdk && node --import tsx --test tests/integration/plugin-authors.test.ts",
+    "build:sdk": "node scripts/build-author-sdk.mjs",
+    "plugin:keygen": "tsx packages/plugin-sdk/src/cli.ts keygen",
+    "plugin:sign": "tsx packages/plugin-sdk/src/cli.ts sign",
+    "plugin:verify": "tsx packages/plugin-sdk/src/cli.ts verify"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "catalog:",
@@ -51,7 +59,8 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "sharp": "catalog:",
-    "tsx": "catalog:"
+    "tsx": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@electric-sql/pglite": "catalog:",

@@ -122,16 +122,16 @@ export class Operations {
       "插件配置无效",
     );
     return this.p.db.transaction(async (sql) => {
+      // Installation holds the catalog and policy before creating chat connections.
+      await sql.query(
+        "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",
+      );
+      await sql.query("SELECT * FROM studio_policy FOR UPDATE");
       if (previous.manifest.chat || plugin.manifest.chat)
         await sql.query(
           "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
           ["original-chat-settings"],
         );
-      // Global catalog locks precede connection locks throughout submission and upgrades.
-      await sql.query(
-        "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",
-      );
-      await sql.query("SELECT * FROM studio_policy FOR UPDATE");
       if (input.activateCatalog)
         await new StudioCatalog(this.p.db).activate(sql, plugin.manifest);
       for (const model of plugin.manifest.models.filter((m) => m.studio)) {

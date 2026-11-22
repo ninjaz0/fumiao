@@ -1,3 +1,4 @@
+import { verifyPublisherRotation } from "./studio-publisher.js";
 import { verifyCanvasPluginNode } from "./studio-canvas-plugin-node.js";
 import assert from "node:assert/strict";
 import { once } from "node:events";
@@ -1049,6 +1050,7 @@ export async function studioBrowser(
     await expect(page.getByText("暂无已审任务")).toBeVisible();
     await nav("home");
     await settings(page);
+    await verifyPublisherRotation(page);
     await verifyCanvasPluginNode(page, workspace);
     await page.goto(studio);
     const savedCanvas = await document();
