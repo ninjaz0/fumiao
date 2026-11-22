@@ -1,23 +1,90 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { after, before, test } from "node:test";
 import { join } from "node:path";
 import { chromium, expect, type Browser, type Page } from "@playwright/test";
 
-// Run against smoke-studio-nest.ts --serve with its synthetic login.
-const baseURL = process.env.STUDIO_URL;
-const username = process.env.STUDIO_USER;
-const password = process.env.STUDIO_PASSWORD;
-assert.ok(
-  baseURL && username && password,
-  "Set STUDIO_URL, STUDIO_USER and STUDIO_PASSWORD",
-);
+let baseURL: string;
+let username: string;
+let password: string;
+let harness: ChildProcess;
 let browser: Browser;
-before(async () => {
-  browser = await chromium.launch({ headless: true });
-});
-after(async () => {
-  await browser?.close();
-});
+before(
+  async () => {
+    harness = spawn(
+      process.execPath,
+      ["--import", "tsx", "tests/integration/smoke-studio-nest.ts", "--serve"],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    await new Promise<void>((resolve, reject) => {
+      let output = "";
+      const timer = setTimeout(
+        () => failed(new Error("Studio harness startup timed out")),
+        180_000,
+      );
+      const cleanup = () => {
+        clearTimeout(timer);
+        harness.stdout!.off("data", read);
+        harness.stderr!.off("data", read);
+        harness.off("error", failed);
+        harness.off("exit", exited);
+      };
+      const failed = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const exited = (code: number | null) =>
+        failed(
+          new Error(
+            `Studio harness exited with ${code}: ${output.replace(/^Synthetic login .*$/gm, "Synthetic login [redacted]")}`,
+          ),
+        );
+      const read = (chunk: Buffer) => {
+        output = (output + chunk.toString()).slice(-16000);
+        const origin = output.match(
+          /Isolated Studio (http:\/\/[^\s]+)\/studio/,
+        );
+        const login = output.match(/Synthetic login (\S+) \/ (\S+)\r?\n/);
+        if (!origin || !login) return;
+        [baseURL, username, password] = [origin[1], login[1], login[2]];
+        cleanup();
+        resolve();
+      };
+      harness.stdout!.on("data", read);
+      harness.stderr!.on("data", read);
+      harness.once("error", failed);
+      harness.once("exit", exited);
+    });
+    console.log("Started isolated Studio harness");
+    browser = await chromium.launch({ headless: true });
+  },
+  { timeout: 190_000 },
+);
+after(
+  async () => {
+    try {
+      await browser?.close();
+    } finally {
+      if (
+        harness?.pid &&
+        harness.exitCode === null &&
+        harness.signalCode === null
+      ) {
+        const closed = once(harness, "exit");
+        const timer = setTimeout(() => harness.kill("SIGKILL"), 30_000);
+        harness.kill("SIGTERM");
+        try {
+          await closed;
+        } finally {
+          clearTimeout(timer);
+        }
+        console.log("Stopped isolated Studio harness");
+      }
+    }
+  },
+  { timeout: 40_000 },
+);
 
 async function authenticated(run: (page: Page) => Promise<void>) {
   const context = await browser.newContext({
