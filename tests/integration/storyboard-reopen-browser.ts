@@ -71,6 +71,14 @@ try {
   await open.click();
   await expect(title).toHaveValue("全新助手分镜");
   console.log("Storyboard new assistant message replaces proposal: passed");
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.evaluate(({ key, shot }) => {
+    localStorage.setItem(key + "-proposal", JSON.stringify({ message: 101, shots: [{ ...shot, title: "旧标签页的编辑" }] }));
+    localStorage.setItem(key + "-message", "102");
+  }, { key, shot });
+  await open.click();
+  await expect(title).toHaveValue("全新助手分镜");
+  console.log("Storyboard stale draft message id allows latest reply: passed");
   await title.fill("");
   await dialog.getByRole("textbox", { name: "画面", exact: true }).fill("");
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
