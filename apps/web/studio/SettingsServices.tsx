@@ -80,26 +80,40 @@ export function ChatSettings({
   notify: (message: string) => void;
 }) {
   const [config, setConfig] = useState<ChatConfig>();
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let active = true;
+    setError("");
     void request("/api/admin/chat").then(
       (value) => {
         if (active) setConfig(value as ChatConfig);
       },
       (error: Error) => {
-        if (active) notify(error.message);
+        if (active) {
+          setError(error.message);
+          notify(error.message);
+        }
       },
     );
     return () => {
       active = false;
     };
-  }, [request, notify]);
+  }, [request, notify, attempt]);
 
   return (
     <section className="settings-section fm-chat-service">
       <h2>对话服务</h2>
-      {!config && <p role="status">正在读取对话服务…</p>}
+      {error && (
+        <div className="ledger-card plugin-alert" role="alert">
+          <span>对话服务读取失败：{error}</span>
+          <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+            重试
+          </button>
+        </div>
+      )}
+      {!config && !error && <p role="status">正在读取对话服务…</p>}
       {config && !Object.keys(config.providers).length && (
         <p>暂无已接入的对话服务</p>
       )}
