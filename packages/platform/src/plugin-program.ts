@@ -84,6 +84,7 @@ export async function runProgram(
   );
   const ctx = rt.newContext();
   const abort = new AbortController();
+  const callsInFlight = new Set<Promise<void>>();
   const pending = new Set<{ dispose(): void }>();
   let alive = true;
   let calls = 0;
@@ -113,7 +114,7 @@ export async function runProgram(
       guest(() => rt.executePendingJobs());
       idle();
     };
-    (async () => {
+    const operation = (async () => {
       if (!call || !granted.includes(name))
         throw new DomainError(403, "插件未声明此宿主能力");
       if (++calls > programLimits.hostCalls)
@@ -138,6 +139,11 @@ export async function runProgram(
           false,
           error instanceof DomainError ? error.message : "宿主调用失败",
         ),
+    );
+    callsInFlight.add(operation);
+    void operation.then(
+      () => callsInFlight.delete(operation),
+      () => callsInFlight.delete(operation),
     );
     return deferred.handle;
   });
@@ -205,6 +211,7 @@ export async function runProgram(
     clearTimeout(timer);
     alive = false;
     abort.abort();
+    await Promise.allSettled(callsInFlight);
     for (const deferred of pending) deferred.dispose();
     // Let a result that lost the race to a limit surface, then release it.
     await new Promise((next) => setImmediate(next));
