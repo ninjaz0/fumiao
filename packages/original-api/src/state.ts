@@ -347,9 +347,8 @@ export class OriginalState {
       await sql.query(`SELECT j.id,j.provider_model,j.connection_id,j.kind,
       studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id) AS allowed,
       v.manifest->'originalSubmission'->>'version' IN ('2','3') AS remote_studio
-      FROM jobs j JOIN users u ON u.id=j.owner_id JOIN workspaces w ON w.id=j.workspace_id JOIN models m ON m.id=j.model_id
+      FROM jobs j JOIN models m ON m.id=j.model_id
       JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
-      LEFT JOIN gpu_nodes n ON n.id::text=j.remote_id
       WHERE j.state='queued' AND j.plugin_id!='legacy-archive' AND j.deleted_at IS NULL
         AND j.kind IN ('image','video','audio')
         AND (v.endpoint IS NULL OR j.original_uid IS NOT NULL)
