@@ -296,7 +296,12 @@ test("Original conversation ownership, team collaboration and private-space isol
       { status: 409, message: "请先停止回复，再删除对话" },
     );
     await f.chats.stop(f.admin, created.conversation.id, selected);
-    await f.chats.remove(f.admin, created.conversation.id, selected);
+    const beforeDelete = await f.chats.get(f.admin, created.conversation.id, selected);
+    const deleted = await f.chats.remove(f.admin, created.conversation.id, selected);
+    assert.deepEqual(deleted, {
+      ok: true,
+      conversation: { id: created.conversation.id, revision: beforeDelete.conversation.revision + 1 },
+    });
     await assert.rejects(
       f.chats.get(f.member, created.conversation.id, selected),
       { status: 404, message: "对话已删除" },
