@@ -71,6 +71,14 @@ try {
   await open.click();
   await expect(title).toHaveValue("全新助手分镜");
   console.log("Storyboard new assistant message replaces proposal: passed");
+  await title.fill("");
+  await dialog.getByRole("textbox", { name: "画面", exact: true }).fill("");
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await open.click();
+  await expect(title).toHaveValue("");
+  await expect(dialog.getByRole("textbox", { name: "画面", exact: true })).toHaveValue("");
+  await expect(dialog.getByRole("button", { name: "采用分镜，不生成视频", exact: true })).toBeDisabled();
+  console.log("Storyboard reopening preserves blank draft fields: passed");
 } finally {
   await browser?.close();
   harness.kill("SIGTERM");

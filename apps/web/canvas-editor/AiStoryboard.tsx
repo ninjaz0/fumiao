@@ -2,6 +2,10 @@ import {useEffect,useRef,useState} from 'react';
 import {ModelSelect} from './chat/ModelSelect';
 import {chatRequest} from './chat/ChatWorkspace';
 export type SuggestedShot={title:string;prompt:string;narration:string;seconds:5|10|15};
+function restoreStoryboard(text:string):SuggestedShot[]{
+ try{const rows=JSON.parse(text);if(Array.isArray(rows)&&rows.length<=12&&rows.every(r=>r&&typeof r.title==='string'&&typeof r.prompt==='string'&&typeof r.narration==='string'&&[5,10,15].includes(r.seconds)))return rows}catch{}
+ return [];
+}
 export function parseStoryboard(text:string):SuggestedShot[]{
  const raw=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
  const data=JSON.parse(raw);const rows=Array.isArray(data)?data:data.shots;
@@ -13,7 +17,7 @@ export function parseStoryboard(text:string):SuggestedShot[]{
 }
 export function AiStoryboard({workspace,userId,project,onApply}:{workspace:number;userId:number;project:string;onApply:(shots:SuggestedShot[])=>Promise<void>}){
  const key=`fm-storyboard-${userId}-${workspace}-${project}`;
- const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(()=>{try{return parseStoryboard(localStorage.getItem(key+'-proposal')||'[]')}catch{return []}}),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
+ const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]')),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
  const lastMessage=useRef(Number(localStorage.getItem(key+'-message'))||0);const pending=useRef<any>(null);
  const req=(path:string,body?:unknown)=>chatRequest(workspace,path,body);
  const updateConfig=(c:any)=>{setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')};
