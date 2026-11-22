@@ -21,6 +21,20 @@ export type PackDraft = {
 };
 export type PackSelection = { id: string; revision: number };
 
+const packWorkspaceAccess = `((w.kind='personal' AND w.owner_id=$2) OR
+  (w.kind='team' AND ($3='admin' OR EXISTS(SELECT 1 FROM members m WHERE m.workspace_id=w.id AND m.user_id=$2))))`;
+
+type PackViewRow = {
+  public_id: string;
+  workspace_public: string;
+  owner_public: string;
+  title: string;
+  body: { assets?: string[]; description?: string; purpose?: string };
+  pack_text?: { name: string; description: string } | null;
+  revision: number;
+  updated_at: Date | string;
+};
+
 export function packStorage(name: string, description: string) {
   const titleHasNul = name.includes("\0");
   const descriptionHasNul = description.includes("\0");
@@ -34,17 +48,39 @@ export function packStorage(name: string, description: string) {
   };
 }
 
-function packText(row: {
-  title: string;
-  body: { description?: string };
-  pack_text?: { name: string; description: string } | null;
-}) {
-  return (
-    row.pack_text ?? {
-      name: row.title,
-      description: row.body.description ?? "",
-    }
-  );
+async function packAssetKeys(sql: Sql, ids: string[]) {
+  const keys = new Map<string, string>();
+  if (ids.length) {
+    const { rows } = await sql.query<{ id: string; public_id: string }>(
+      "SELECT id,public_id FROM assets WHERE id=ANY($1::uuid[])",
+      [ids],
+    );
+    for (const asset of rows) keys.set(asset.id, asset.public_id);
+  }
+  return keys;
+}
+
+function packView(row: PackViewRow, keys: ReadonlyMap<string, string>) {
+  const media = (row.body.assets || []).map((id) => {
+    const key = keys.get(id);
+    requireValue(key !== undefined, 409, "素材包引用已失效");
+    return key;
+  });
+  const { name, description } = row.pack_text ?? {
+    name: row.title,
+    description: row.body.description ?? "",
+  };
+  return {
+    id: row.public_id,
+    workspace: Number(row.workspace_public),
+    owner: Number(row.owner_public),
+    name,
+    purpose: row.body.purpose || "subject",
+    description,
+    revision: row.revision,
+    updated: Math.floor(new Date(row.updated_at).getTime() / 1000),
+    media,
+  };
 }
 
 /** Packs share document UUIDs and asset relations with the platform. Only the
@@ -64,8 +100,7 @@ export class ReferencePacks {
       `SELECT d.*,w.public_id AS workspace_public,u.public_id AS owner_public
       FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
       WHERE ${publicKey ? "d.public_id" : "d.id::text"}=$1 AND d.kind='pack' AND NOT d.deleted
-      AND ($4::uuid IS NULL OR w.id=$4) AND
-      ((w.kind='personal' AND w.owner_id=$2) OR (w.kind='team' AND ($3='admin' OR EXISTS(SELECT 1 FROM members m WHERE m.workspace_id=w.id AND m.user_id=$2))))
+      AND ($4::uuid IS NULL OR w.id=$4) AND ${packWorkspaceAccess}
       ${lock ? `FOR ${lock === "share" ? "SHARE" : "UPDATE"} OF d` : ""}`,
       [key, user.id, user.role, wid || null],
     );
@@ -73,47 +108,29 @@ export class ReferencePacks {
     return row;
   }
   async view(sql: Sql, row: any) {
-    const ids: string[] = row.body.assets || [],
-      assets = (
-        await sql.query(
-          "SELECT id,public_id FROM assets WHERE id=ANY($1::uuid[])",
-          [ids],
-        )
-      ).rows;
-    const keys = new Map(assets.map((a) => [a.id, a.public_id]));
-    requireValue(
-      ids.every((id) => keys.has(id)),
-      409,
-      "素材包引用已失效",
-    );
-    const { name, description } = packText(row);
-    return {
-      id: row.public_id,
-      workspace: Number(row.workspace_public),
-      owner: Number(row.owner_public),
-      name,
-      purpose: row.body.purpose || "subject",
-      description,
-      revision: row.revision,
-      updated: Math.floor(new Date(row.updated_at).getTime() / 1000),
-      media: ids.map((id) => keys.get(id)),
-    };
+    return packView(row, await packAssetKeys(sql, row.body.assets || []));
   }
   async list(user: Actor, wid: string) {
     return this.db.transaction(async (sql) => {
       await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-      const rows = (
-        await sql.query(
-          "SELECT public_id FROM documents WHERE workspace_id=$1 AND kind='pack' AND NOT deleted ORDER BY updated_at DESC,public_id",
-          [wid],
-        )
-      ).rows;
-      const packs = [];
-      for (const row of rows)
-        packs.push(
-          await this.view(sql, await this.get(sql, user, row.public_id, wid)),
-        );
-      return { packs, purposes: packPurposes };
+      const { rows } = await sql.query<PackViewRow & { can_access: boolean }>(
+        `SELECT d.public_id,d.title,d.body,d.pack_text,d.revision,d.updated_at,
+                w.public_id AS workspace_public,u.public_id AS owner_public,
+                ${packWorkspaceAccess} AS can_access
+        FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
+        WHERE d.workspace_id=$1 AND d.kind='pack' AND NOT d.deleted
+        ORDER BY d.updated_at DESC,d.public_id`,
+        [wid, user.id, user.role],
+      );
+      // Preserve the 404 for a nonempty workspace whose access was revoked.
+      if (rows.length)
+        requireValue(rows[0].can_access, 404, "内容不存在或无权访问");
+      const ids = [...new Set(rows.flatMap((row) => row.body.assets || []))];
+      const keys = await packAssetKeys(sql, ids);
+      return {
+        packs: rows.map((row) => packView(row, keys)),
+        purposes: packPurposes,
+      };
     });
   }
   async validate(sql: Sql, draft: PackDraft, wid: string, publicMedia = true) {
