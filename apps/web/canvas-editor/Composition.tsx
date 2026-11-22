@@ -3,12 +3,12 @@ import {Download,Film} from 'lucide-react';
 import {api,ApiError} from './api';
 type Result={id:string;state:string;result:string|null;error:string;revision:number;created:number};
 export function Composition({project,getRevision,ready,waitingReason}:{project:string;getRevision:()=>Promise<number>;ready:boolean;waitingReason:string}){
- const [results,setResults]=useState<Result[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[preview,setPreview]=useState<string|null>(null);
+ const [results,setResults]=useState<Result[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[pollError,setPollError]=useState(''),[preview,setPreview]=useState<string|null>(null);
  const load=async()=>{const data=await api<{exports:Result[]}>(`/api/canvases/${project}/exports`);setResults(data.exports)};
- useEffect(()=>{let active=true;const poll=async()=>{try{const data=await api<{exports:Result[]}>(`/api/canvases/${project}/exports`);if(active)setResults(data.exports)}catch(e){if(active)setError((e as Error).message)}};void poll();const timer=setInterval(poll,5000);return()=>{active=false;clearInterval(timer)}},[project]);
+ useEffect(()=>{let active=true;const poll=async()=>{try{const data=await api<{exports:Result[]}>(`/api/canvases/${project}/exports`);if(active){setResults(data.exports);setPollError('')}}catch(e){if(active)setPollError((e as Error).message)}};void poll();const timer=setInterval(poll,5000);return()=>{active=false;clearInterval(timer)}},[project]);
  const pending=results.some(r=>['queued','running'].includes(r.state));
  const submit=async()=>{
-  setBusy(true);setError('');const key='fm-compose-'+project;
+  setBusy(true);setError('');setPollError('');const key='fm-compose-'+project;
   try{
    const revision=await getRevision();let body;
    try{body=JSON.parse(localStorage.getItem(key)||'null')}catch{}
@@ -21,7 +21,7 @@ export function Composition({project,getRevision,ready,waitingReason}:{project:s
   <div className="composition-heading"><h3>成片</h3><button className="primary" disabled={busy||pending||!ready} onClick={()=>void submit()}><Film size={16}/>{pending?'合成中…':busy?'提交中…':'合成预览'}</button></div>
   <p>旁白替换对应镜头的原音轨，较长的旁白会延长尾帧停留。字幕按句分配时间，可下载调整。</p>
   {!ready&&waitingReason&&<p role="status">{waitingReason}</p>}
-  {error&&<p className="error" role="alert">{error}</p>}
+  {(error||pollError)&&<p className="error" role="alert">{error||pollError}</p>}
   <div className="composition-results">{results.slice(0,5).map(r=><div key={r.id}>
    <div className="composition-result"><span>{new Date(r.created*1000).toLocaleString()}<small>版本 {r.revision}</small></span>
     {r.state==='done'&&r.result?<><button className="secondary" onClick={()=>setPreview(preview===r.id?null:r.id)}>{preview===r.id?'收起预览':'预览'}</button><a className="secondary" href={'/media/'+r.result+'?download=true'}><Download size={15}/>MP4</a><a className="secondary" href={'/api/storyboard-exports/'+r.id+'/subtitles'}>字幕 SRT</a></>:<span>{r.state==='queued'?'等待合成':r.state==='running'?'正在合成':r.state==='failed'?r.error:'成片已删除'}</span>}
