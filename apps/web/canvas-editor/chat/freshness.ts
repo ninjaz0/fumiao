@@ -14,7 +14,7 @@ export function chatFreshness() {
   return Object.assign(accept, {
     remove: (conversation: Version) => record(conversation, true),
     startList: () => epoch,
-    reconcile<T extends Version>(incoming: T[], current: T[], started: number): T[] {
+    reconcile<T extends Version & { updated: number }>(incoming: T[], current: T[], started: number): T[] {
       const existing = new Map(current.map(item => [item.id, item]));
       const result: T[] = [];
       for (const item of incoming) {
@@ -29,7 +29,7 @@ export function chatFreshness() {
         const known = revisions.get(item.id);
         if (known && !known.deleted && known.epoch > started) result.push(item);
       }
-      return result;
+      return result.sort((a, b) => b.updated - a.updated);
     },
   });
 }
