@@ -18,6 +18,7 @@ import {
   H3,
   hasDraftPacks,
   imageToVideoDraft,
+  isH3,
   loadJob,
   mergeAssetPackAssets,
   modelForm,
@@ -29,6 +30,7 @@ import {
   removeDraftPack,
   referenceIssue,
   seedError,
+  submittedDraft,
   syncDraftReferences,
   writeDraft,
   type DraftSession,
@@ -1245,4 +1247,55 @@ test("#94 checkImages and addImages return clear guidance in audio mode and zero
       ]),
     { message: "最多选择 4 张参考图片，请先移除部分图片" },
   );
+});
+
+test("submittedDraft keeps an image-only video model out of H3 reference mode", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const base = makeState();
+  const state = makeState({
+    model_forms: {
+      ...base.model_forms,
+      "muse-video": {
+        fields: { ratio: { type: "string", enum: ["16:9", "9:16"], default: "16:9" } },
+        tiers: [],
+        references: { min: 0, max: 9 },
+      },
+    },
+    video_models: { ...base.video_models, "muse-video": "Muse" },
+    model_policy: {
+      revision: 1,
+      enabled: { ...base.model_policy.enabled, "muse-video": true },
+    },
+    model_catalog: {
+      ...base.model_catalog,
+      "muse-video": { provider: "muse", label: "Muse" },
+    },
+  });
+  const session = readDraft(state);
+
+  const muse = {
+    ...session,
+    refs: ["img1"],
+    draft: {
+      ...normalizeParams(state, chooseModel(session.draft, "muse-video")),
+      prompt: "Muse 视频",
+    },
+  };
+  assert.equal(isH3(muse.draft), false);
+  const museReset = submittedDraft(muse);
+  assert.deepEqual(museReset.refs, []);
+  assert.equal(museReset.draft.prompt, "");
+  assert.equal(museReset.draft.videoModel, "muse-video");
+  assert.equal(museReset.draft.h3, undefined);
+  assert.equal(isH3(museReset.draft), false);
+
+  const h3 = {
+    ...session,
+    draft: changeH3Mode(state, session, "frames").draft,
+  };
+  const h3Reset = submittedDraft(h3);
+  assert.equal(isH3(h3Reset.draft), true);
+  assert.equal(h3Reset.draft.h3?.mode, "frames");
+  assert.equal(h3Reset.draft.h3?.first_frame, null);
 });

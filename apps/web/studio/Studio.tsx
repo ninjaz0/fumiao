@@ -54,7 +54,6 @@ import {
   addImages,
   assignFrame,
   checkImages,
-  emptyH3,
   ensureModel,
   flowIssue,
   frames,
@@ -76,6 +75,7 @@ import {
   removeDraftPack,
   resultTab,
   selectedModel,
+  submittedDraft,
   syncDraftReferences,
   quote,
   readDraft,
@@ -138,6 +138,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const [dialog, setDialog] = useState<AssetDialogState | null>(null);
   const [chatVisit, setChatVisit] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
+  const [narrowScreen, setNarrowScreen] = useState(false);
   const [menu, setMenu] = useState<StudioMenu | null>(null);
   const [menuShown, setMenuShown] = useState(false);
   const [menuHidden, setMenuHidden] = useState(true);
@@ -194,6 +195,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       : undefined;
 
   const ready = !!state && !!session;
+  const mobileDrawerOpen = narrowScreen && !collapsed;
+  const sidebarPopoverOpen =
+    !menuHidden &&
+    !!anchor.current &&
+    (menu === "account" || menu === "workspaces");
   useLayoutEffect(() => {
     // Let the shell measure the initial composer before moving to the receipt.
     if (!ready) return;
@@ -412,10 +418,12 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   useEffect(() => {
     const narrow = matchMedia("(max-width:760px)");
+    setNarrowScreen(narrow.matches);
     setCollapsed(
       narrow.matches || localStorage.getItem("fm-sidebar") === "collapsed",
     );
     const onNarrow = (event: MediaQueryListEvent) => {
+      setNarrowScreen(event.matches);
       if (event.matches) {
         setCollapsed(true);
         setSidebarChanged(true);
@@ -716,20 +724,26 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     };
   }
 
-  function collapse(event: MouseEvent<HTMLButtonElement>) {
-    const keyboard = event.currentTarget.matches(":focus-visible");
-    setCollapsed(!collapsed);
+  function changeSidebar(nextCollapsed: boolean, moveFocus: boolean) {
+    setCollapsed(nextCollapsed);
     setSidebarChanged(true);
-    localStorage.setItem("fm-sidebar", collapsed ? "expanded" : "collapsed");
+    localStorage.setItem("fm-sidebar", nextCollapsed ? "collapsed" : "expanded");
     closeMenu();
-    if (keyboard)
+    if (moveFocus)
       requestAnimationFrame(() =>
         shell.current
           ?.querySelector<HTMLButtonElement>(
-            collapsed ? ".collapse-button" : ".expand-button",
+            nextCollapsed ? ".expand-button" : ".collapse-button",
           )
-          ?.focus(),
+          ?.focus({ preventScroll: true }),
       );
+  }
+
+  function collapse(event: MouseEvent<HTMLButtonElement>) {
+    changeSidebar(
+      !collapsed,
+      narrowScreen || event.currentTarget.matches(":focus-visible"),
+    );
   }
 
   async function mutate(key: string, action: () => Promise<void>) {
@@ -1155,19 +1169,41 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }
 
   useEffect(() => {
-    function escape(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" && event.key !== "Tab") return;
       const modalOpen = !!document.querySelector("#modal[open]");
+      if (event.key === "Tab") {
+        if (!mobileDrawerOpen || modalOpen || event.defaultPrevented) return;
+        const buttons = [
+          ...(shell.current?.querySelectorAll<HTMLButtonElement>(
+            ".side button:enabled",
+          ) ?? []),
+          ...(sidebarPopoverOpen
+            ? popover.current?.querySelectorAll<HTMLButtonElement>("button:enabled") ?? []
+            : []),
+        ].filter((button) => button.tabIndex >= 0 && button.getClientRects().length);
+        const index = buttons.findIndex((button) => button === document.activeElement);
+        const boundary = event.shiftKey ? 0 : buttons.length - 1;
+        const next = event.shiftKey ? buttons.at(-1) : buttons[0];
+        if (next && (index === -1 || index === boundary)) {
+          event.preventDefault();
+          next.focus();
+        }
+        return;
+      }
       if (anchor.current) {
         if (popover.current?.contains(event.target as Node))
           event.preventDefault();
         closeMenu(true);
+      } else if (mobileDrawerOpen && !modalOpen) {
+        event.preventDefault();
+        changeSidebar(true, true);
       } else if (detail && !modalOpen) closeDetail();
       else if (referencePicking && !modalOpen) finishPicking();
       else if (library.selecting && !modalOpen) library.reset();
     }
-    document.addEventListener("keydown", escape);
-    return () => document.removeEventListener("keydown", escape);
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
   });
 
   function updateDraft(next: DraftSession) {
@@ -1233,19 +1269,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         if (!sameSpace(space, active.current) || leaving.current) return;
         const latest = currentDraft.current!;
         if (!job && latest.submitId === session.submitId) {
-          const { h3ReferenceDraft, ...values } = latest.draft;
-          updateDraft({
-            ...latest,
-            refs: [],
-            parent: null,
-            retainedSeed: null,
-            draft: {
-              ...values,
-              prompt: "",
-              packs: [],
-              h3: { ...emptyH3, mode: h3Options(values.h3).mode },
-            },
-          });
+          updateDraft(submittedDraft(latest));
         }
         notify("已加入生成队列");
         await refresh();
@@ -1461,7 +1485,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
               collapse={collapse}
               open={openMenu}
             />
-            <div className="workspace">
+            <div className="workspace" inert={mobileDrawerOpen}>
               <header className="topbar" aria-hidden="true"></header>
               <main id="view" ref={view}>
                 {job ? (
@@ -1632,6 +1656,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         id="popover"
         ref={popover}
         hidden={menuHidden}
+        inert={mobileDrawerOpen && !sidebarPopoverOpen}
         className={
           menu
             ? `popover ${menu === "account" ? "account-menu" : menu}${menuShown ? " open" : ""}`
