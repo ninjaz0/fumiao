@@ -19,6 +19,7 @@ const compiled = await build({
   legalComments: "none",
 });
 manifest.chat.sandbox = {
+  tools: true,
   program:
     "(()=>{" + compiled.outputFiles[0].text + ";return policy.default})()",
   origins,

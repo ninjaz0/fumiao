@@ -1,3 +1,4 @@
+import { chatToolSchema } from "./chat-tools.js";
 import { canvasNodeSchema } from "./canvas-nodes.js";
 import { viewLeaves } from "./view-blocks.js";
 import { nodePoolSchema } from "./node-pools.js";
@@ -305,6 +306,7 @@ export const contributesSchema = z
   .object({
     version: z.literal(CONTRIBUTIONS_VERSION),
     nodePools: nodePoolSchema.optional(),
+    chatTools: z.array(chatToolSchema).max(16).optional(),
     canvasNodes: z.array(canvasNodeSchema).max(16).optional(),
     paymentMethods: z
       .array(
@@ -437,6 +439,7 @@ export function contributionProblems(
   }
   for (const names of [
     c.paymentMethods?.map((m) => m.id),
+    c.chatTools?.map(t => t.id),
     c.canvasNodes?.map(n => n.id),
     c.exporters?.map((e) => e.id),
     c.events?.map((e) => e.type),

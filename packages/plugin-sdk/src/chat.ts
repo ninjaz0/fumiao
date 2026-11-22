@@ -1,3 +1,4 @@
+import type { ModelTool, ToolFragment, ToolCall } from "./chat-tools.js";
 import { z } from "zod";
 export const chatPolicySchema = z
   .object({
@@ -8,6 +9,7 @@ export const chatPolicySchema = z
           .string()
           .min(1)
           .max(256 * 1024),
+        tools: z.literal(true).optional(),
         origins: z.array(z.string().min(1).max(200)).min(1).max(16),
       })
       .strict()
@@ -35,13 +37,17 @@ export const chatPolicySchema = z
   })
   .strict();
 export type ChatPolicy = z.infer<typeof chatPolicySchema>;
-export type ChatMessage = {
-  role: "system" | "user" | "assistant";
-  content: string;
-};
+export type ChatMessage =
+  | {
+      role: "system" | "user" | "assistant";
+      content: string;
+      tool_calls?: ToolCall[];
+    }
+  | { role: "tool"; tool_call_id: string; content: string };
 export type ChatRequest = {
   model: string;
   messages: ChatMessage[];
+  tools?: ModelTool[];
   config: Record<string, unknown>;
   signal: AbortSignal;
 };
@@ -49,6 +55,7 @@ export type ChatRequest = {
  * executor applies the original failure/refund rules. Never expose these raw events. */
 export type ChatChunk = {
   request_id?: string;
+  toolCalls?: ToolFragment[];
   text?: unknown;
   reason?: unknown;
   usage?: Record<string, number | bigint>;

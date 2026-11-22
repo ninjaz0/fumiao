@@ -154,6 +154,7 @@ export const packageFile = z
             f.contributes?.exporters?.length ||
             f.contributes?.events?.length ||
             f.contributes?.canvasNodes?.length ||
+            f.contributes?.chatTools?.length ||
             f.contributes?.pages?.length ||
             f.contributes?.actions?.length))) &&
       (!f.manifest || !!f.program || !!f.manifest.chat || !!f.studioProgram),
@@ -219,6 +220,7 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
     ["plan", contributions.exporters],
     ["view", contributions.pages],
     ["run", contributions.canvasNodes],
+    ["run", contributions.chatTools],
     ["handle", contributions.events],
     ["run", contributions.actions],
   ] as const) {
@@ -412,6 +414,8 @@ function permissionSummary(
     lines.push(added("充值渠道 · " + m.title + " · 收款网关 " + paths + " · " + m.signature,
       !priorMethod || canonical(priorMethod) !== canonical(m)));
   }
+  for (const t of next.chatTools ?? [])
+    lines.push(added("对话工具 · " + t.title + (t.audience === "admin" ? "（管理员）" : "（工作区成员）"), !prior?.chatTools?.some(old => old.id === t.id && old.audience === t.audience)));
   for (const n of next.canvasNodes ?? [])
     lines.push(added("工作区画布节点 · " + n.title, !prior?.canvasNodes?.some(old => old.id === n.id)));
   for (const e of next.exporters ?? [])

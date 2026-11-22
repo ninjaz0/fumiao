@@ -12,6 +12,14 @@
 
 兼容对话 2.0.0 的 `manifest.chat.sandbox` 包含请求映射、逐行回复解析、标题和连接探测程序。管理员导入时可以看到默认服务域名和密钥注入权限。宿主向管理员配置的公网 HTTPS 服务发送请求，并在发送时加入 Bearer 密钥。沙箱只接收提供方标识、模型和本次请求数据。升级时遇到 HTTP、内网地址或无法解析的地址，系统保留该连接的配置，只暂停它接收新任务。管理员在「设置 → 插件」编辑服务地址；更换服务源时重新填写密钥。保存有效的公网 HTTPS 地址后，该连接按原启用状态接单。已受理的对话按接单时冻结的适配器版本和服务配置完成。旧版 1.2.1 的发行文件保存在 `plugins/compatible-chat/package/legacy-1.2.1.fmplugin.json`，供旧库恢复及在途任务使用。
 
+### 对话工具
+
+在「设置 → 插件」导入兼容对话 2.1.0，再导入并启用 `plugins/example-reading-time/example-reading-time.fmplugin.json`。用已配置且支持工具调用的对话模型询问“按自然语速，‘海面日出，海风徐来’这段旁白需要多少秒？”示例工具按每分钟 240 字估算，8 字约为 2 秒。模型自行决定何时调用工具，工具结果会随下一次请求发回当前对话服务。
+
+作者在 `contributes.chatTools` 声明工具的 `id`、`title`、`description`、`parameters` 和 `program`。参数是 JSON Schema 对象，须声明 `additionalProperties: false`，支持字符串、数字、整数、布尔值、字符串枚举和这些类型的数组。设置 `audience: "admin"` 可限定管理员使用。沙箱入口 `run(args, {callId, turn}, host)` 返回最多 16 KiB 的字符串。需要访问外部服务时，声明 `http` 能力和 HTTPS 源，通过 `host.http.fetch` 调用。执行时按发送者身份检查工作区，插件数据范围为当前工作区。
+
+接单时冻结工具清单和发行版本。停用、更新或移除工具会影响后续新消息。每条回复最多执行 4 轮、8 次工具调用，按完整回复结算一次。调用失败会按原流程退回本轮预留积分。带副作用的外部服务应使用 `turn` 与 `callId` 作为幂等键。审计仅记录插件版本、工作区、操作结果及宿主调用次数。数据库迁移 `042_chat_tools.sql` 为每个新回合记录工具版本，已有回合沿用原来的对话协议。兼容对话 2.0.0 的发行文件保存在 `plugins/compatible-chat/package/legacy-2.0.0.fmplugin.json`。
+
 ### 发布与更新
 
 文件顶层包含 `format: 1`、`id`、`label`、`version` 和 `adapterVersion`。版本采用三个非负整数，以点分隔。直接接入服务的通用包包含 `manifest` 和 `program`。清单按下文 v3 契约声明模型、参数和价格。程序是一个 JavaScript 对象表达式，提供 `request({model,kind,input,remoteId})` 和 `result({raw,model,kind,remoteId})`。前者返回同源的 `{path,body}`，省略 body 为 GET；后者把服务响应映射成下文的任务回执。程序在受时间和内存限制的 QuickJS 中处理 JSON，平台负责携带密钥发请求。已有独立协议服务可在同一个包中用 `remote: {endpoint,manifest}` 作为接入方式。

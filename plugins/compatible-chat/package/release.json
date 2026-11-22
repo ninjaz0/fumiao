@@ -2,7 +2,7 @@
   "format": 1,
   "id": "compatible-chat",
   "label": "兼容对话",
-  "version": "2.0.0",
-  "adapterVersion": "2.0.0",
+  "version": "2.1.0",
+  "adapterVersion": "2.1.0",
   "updateUrl": "https://raw.githubusercontent.com/ninjaz0/fumiao/main/plugins/compatible-chat/update.json"
 }

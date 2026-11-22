@@ -1,7 +1,7 @@
 {
   "id": "compatible-chat",
-  "version": "2.0.0",
-  "notes": "对话请求和流式回复由沙箱处理",
+  "version": "2.1.0",
+  "notes": "创作对话支持调用已启用的插件工具",
   "package": "compatible-chat.fmplugin.json",
-  "sha256": "2472ea9dae334bf15e9fee4c105bb2f2cbab8ed22913abad7ccf1b633932bd4d"
+  "sha256": "cae5f4d784006df49b0472a660b27c77e82ee5fe407d676f025c4c5980962e4c"
 }

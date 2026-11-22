@@ -21,6 +21,7 @@ import {
 } from "./studio-settings-browser.js";
 import { execFileSync } from "node:child_process";
 import sharp from "sharp";
+import { verifyToolConversation } from "./studio-chat-tools.js";
 import { verifyChatPackage } from "./studio-chat-package.js";
 
 async function composerMedia(directory: string) {
@@ -273,6 +274,7 @@ export async function verifyRemoteProvider(
       });
     await fund(workspace);
     await verifyChatPackage(page, p);
+    await verifyToolConversation(page,p,redisUrl);
     const other = await call("/api/workspaces", {
       data: { name: "隔离提供方测试空间" },
     });

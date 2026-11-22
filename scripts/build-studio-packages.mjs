@@ -47,11 +47,12 @@ const releases = [
   { id: "example-asset-tags" },
   { id: "example-review-board" },
   { id: "example-shot-prompt" },
+  { id: "example-reading-time" },
   { id: "example-review-notes" },
   { id: "example-node-pool", program: true, clientBuild: "client/pack.py" },
 ];
 async function packContributions(root, contributes) {
-  for (const page of [...(contributes.settingsPages ?? []), ...(contributes.pages ?? []), ...(contributes.canvasNodes ?? []), ...(contributes.events ?? []), ...(contributes.actions ?? []), ...(contributes.exporters ?? []), ...(contributes.paymentMethods ?? [])]) {
+  for (const page of [...(contributes.settingsPages ?? []), ...(contributes.pages ?? []), ...(contributes.canvasNodes ?? []), ...(contributes.chatTools ?? []), ...(contributes.events ?? []), ...(contributes.actions ?? []), ...(contributes.exporters ?? []), ...(contributes.paymentMethods ?? [])]) {
     if (page.programFile) {
       page.program = await expression(join(root, page.programFile));
       delete page.programFile;
@@ -84,6 +85,11 @@ for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of
       if (!archived.equals(bytes))
         throw Error("Published GPU adapter digest mismatch");
     }
+  }
+  if (id === "compatible-chat") {
+    const bytes = await readFile(join(root, "package/legacy-2.0.0.fmplugin.json"));
+    if (hash(bytes) !== "2472ea9dae334bf15e9fee4c105bb2f2cbab8ed22913abad7ccf1b633932bd4d")
+      throw Error("Published sandbox package digest mismatch: " + id);
   }
   if (sandboxBuild) {
     Object.assign(
@@ -124,7 +130,7 @@ for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of
       version: file.version,
       notes:
         id === "compatible-chat"
-          ? "对话请求和流式回复由沙箱处理"
+          ? "创作对话支持调用已启用的插件工具"
           : id === "gpu"
             ? "节点池协议升级，排空任务后重新接入实例"
             : id === "muse" || id === "flow"
