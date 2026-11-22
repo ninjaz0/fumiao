@@ -9,8 +9,12 @@ import {
 import {
   activeReferences,
   addImages,
+  assignFrame,
   changeCreation,
+  changeH3Mode,
   checkImages,
+  chooseModel,
+  generationRequest,
   H3,
   hasDraftPacks,
   loadJob,
@@ -503,6 +507,49 @@ test("#88 plain mode prevents rendering/reading media chips in audio mode", (t) 
     readPrompt(stale as unknown as HTMLElement, state, refs, true),
     " 朗读文本",
   );
+});
+
+test("switching away from H3 keeps both frame slots for the return to H3", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState();
+  const muse = "muse-video";
+  state.model_forms[muse] = {
+    fields: {},
+    tiers: [],
+    references: { min: 0, max: 3, counts: { image: 3, video: 0, audio: 0 } },
+  };
+  const select = (session: DraftSession, model: string) => ({
+    ...session,
+    draft: normalizeParams(state, chooseModel(session.draft, model)),
+  });
+  let session = readDraft(state);
+  session.draft.prompt = "科幻街景";
+  session = changeH3Mode(state, session, "frames");
+  session = assignFrame(state, session, "img1", "first_frame");
+  session = assignFrame(state, session, "img2", "last_frame");
+  const expected = session.draft.h3;
+
+  assert.deepEqual(select(session, H3).draft.h3, expected);
+
+  const other = select(session, muse);
+  assert.equal(other.draft.h3, undefined);
+  assert.deepEqual(activeReferences(other), []);
+  const request = generationRequest(state, other);
+  assert.equal("h3" in request.body, false);
+  assert.doesNotMatch(JSON.stringify(request.body), /img[12]/);
+
+  writeDraft(state, other);
+  const restored = select(readDraft(state), H3);
+  assert.deepEqual(restored.draft.h3, expected);
+  assert.deepEqual(activeReferences(restored), ["img1", "img2"]);
+  assert.equal(restored.draft.prompt, "科幻街景");
+
+  // Removing the last frame while Muse is active must not restore its stale ID.
+  state.assets = state.assets.filter(({ id }) => id !== "img2");
+  const afterDeletion = select(readDraft(state), H3);
+  assert.deepEqual(afterDeletion.draft.h3, { ...expected, last_frame: null });
+  assert.deepEqual(activeReferences(afterDeletion), ["img1"]);
 });
 
 test("#88 changeCreation isolates audio draft from video/image drafts and restores seamlessly", (t) => {
