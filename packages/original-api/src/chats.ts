@@ -295,11 +295,12 @@ export class OriginalChats {
         409,
         "请先停止回复，再删除对话",
       );
-      await sql.query(
-        "UPDATE chat_conversations SET deleted_at=$2,revision=revision+1 WHERE id=$1",
+      const deleted = await one(
+        sql,
+        "UPDATE chat_conversations SET deleted_at=$2,revision=revision+1 WHERE id=$1 RETURNING revision",
         [row.id, this.clock()],
       );
-      return { ok: true };
+      return { ok: true, conversation: { id: row.public_id, revision: deleted.revision } };
     });
   }
   async restore(actor: Actor, key: string, selected?: string) {

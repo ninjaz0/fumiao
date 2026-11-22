@@ -542,6 +542,12 @@ export function CanvasWorkspace({
     fileTarget = useRef<string | null>(null),
     clipboard = useRef<CanvasClipboard | null>(null),
     dragging = useRef(false);
+  useEffect(() => {
+    const input = fileRef.current;
+    const cancel = () => { fileTarget.current = null; };
+    input?.addEventListener("cancel", cancel);
+    return () => input?.removeEventListener("cancel", cancel);
+  }, []);
   const selectedNodes = useMemo(
     () => doc.value.document.nodes.filter((n) => selected.includes(n.id)),
     [doc.value.document.nodes, selected],
@@ -1426,7 +1432,7 @@ export function CanvasWorkspace({
     setPickerTarget(null);
     setAssetSelection(new Set());
   };
-  const uploadFiles = async (files: File[]) => {
+  const uploadFiles = async (files: File[], target: string | null = null) => {
     if (progress !== null) return;
     setProgress(0);
     try {
@@ -1448,7 +1454,6 @@ export function CanvasWorkspace({
           ...s,
           assets: [{ ...asset, owner: s.me.id }, ...s.assets],
         }));
-        const target = fileTarget.current;
         if (target)
           edit(target, {
             media_id: asset.id,
@@ -1467,7 +1472,7 @@ export function CanvasWorkspace({
               height: Math.max(160, Math.min(480, (360 * asset.h) / asset.w)),
             });
         }
-        fileTarget.current = null;
+        target = null;
       }
     } catch (e) {
       notify((e as Error).message);
@@ -2046,7 +2051,11 @@ export function CanvasWorkspace({
         accept={IMAGE_ACCEPT}
         multiple
         hidden
-        onChange={(e) => void uploadFiles([...(e.target.files || [])])}
+        onChange={(e) => {
+          const target = fileTarget.current;
+          fileTarget.current = null;
+          void uploadFiles([...(e.target.files || [])], target);
+        }}
       />
       {!nodes.length && (
         <div className="canvas-empty">

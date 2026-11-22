@@ -375,3 +375,66 @@ body:has(.ledger-settings) #modal {
 .ledger-settings .model-switch input:checked + span::before {
   background: white;
 }
+.price-settings {
+  --price-warn: #b45309;
+  --price-warn-soft: #fef3c7;
+}
+[data-theme="dark"] .price-settings {
+  --price-warn: #fbbf24;
+  --price-warn-soft: rgba(245, 158, 11, 0.16);
+}
+.price-settings .console-description code {
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: 550 12px/1.5 var(--ledger-mono);
+}
+.price-stats dd.is-unpriced {
+  color: var(--price-warn);
+}
+.price-stats dd small {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--secondary);
+}
+.price-stats dd.price-rate {
+  font-size: 18px;
+  line-height: 1.833;
+  white-space: nowrap;
+}
+.price-section-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font: 500 11.5px/1.45 var(--ledger-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.price-section-badge.is-unpriced {
+  color: var(--price-warn);
+  background: var(--price-warn-soft);
+}
+.price-section-badge.is-complete {
+  color: var(--blue);
+  background: var(--accent-soft);
+}
+@container settings-content (max-width: 480px) {
+  .price-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .price-stats .price-rate-stat {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .price-stats .price-rate-stat dd {
+    margin-top: 0;
+    font-size: 16px;
+    line-height: 1.4;
+  }
+}
