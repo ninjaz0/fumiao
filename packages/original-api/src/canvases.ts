@@ -35,6 +35,10 @@ const selectProject = `SELECT d.*,c.title AS original_title,c.document,c.created
   w.public_id AS workspace_number,u.public_id AS owner_number,e.public_id AS editor_number
   FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
   LEFT JOIN canvas_documents c ON c.project_id=d.id LEFT JOIN users e ON e.id=c.last_editor`;
+const selectNodeJob = `SELECT j.state,a.public_id AS result FROM canvas_job_links l
+  JOIN jobs j ON j.id=l.job_id AND j.deleted_at IS NULL
+  LEFT JOIN LATERAL (SELECT a.public_id FROM job_assets r JOIN assets a ON a.id=r.asset_id
+    WHERE r.job_id=j.id AND r.role='output' ORDER BY a.created_at,a.public_id LIMIT 1) a ON true`;
 
 /** Original canvas authority. All mutations share document locks and PostgreSQL relations. */
 export class OriginalCanvases {
@@ -245,10 +249,7 @@ export class OriginalCanvases {
     if (node.use_media) return node.media_id;
     const row = await one(
       sql,
-      `SELECT j.state,a.public_id AS result FROM canvas_job_links l
-      JOIN jobs j ON j.id=l.job_id AND j.deleted_at IS NULL
-      LEFT JOIN LATERAL (SELECT a.public_id FROM job_assets r JOIN assets a ON a.id=r.asset_id
-        WHERE r.job_id=j.id AND r.role='output' ORDER BY a.created_at,a.public_id LIMIT 1) a ON true
+      `${selectNodeJob}
       WHERE l.project_id=$1 AND l.node=$2 ${node.active_job ? "AND j.public_id=$3" : "ORDER BY l.id DESC LIMIT 1"}`,
       [project, node.id, ...(node.active_job ? [node.active_job] : [])],
     );
@@ -257,6 +258,39 @@ export class OriginalCanvases {
         ? row.result
         : null
       : node.media_id;
+  }
+  private async listCoverJobs(
+    sql: Sql,
+    pending: { project: string; node: CanvasNode }[],
+  ) {
+    const media = new Map<CanvasNode, string | null>();
+    if (!pending.length) return media;
+    const { rows } = await sql.query<{
+      position: string;
+      state: string;
+      result: string | null;
+    }>(
+      `SELECT n.position,j.state,j.result
+      FROM unnest($1::uuid[], $2::text[], $3::bigint[]) WITH ORDINALITY
+        AS n(project_id,node,active_job,position)
+      CROSS JOIN LATERAL (
+        ${selectNodeJob}
+        WHERE l.project_id=n.project_id AND l.node=n.node
+          AND (n.active_job IS NULL OR j.public_id=n.active_job)
+        ORDER BY l.id DESC LIMIT 1
+      ) j`,
+      [
+        pending.map(({ project }) => project),
+        pending.map(({ node }) => node.id),
+        pending.map(({ node }) => node.active_job),
+      ],
+    );
+    for (const { position, state, result } of rows)
+      media.set(
+        pending[Number(position) - 1].node,
+        state === "completed" ? result : null,
+      );
+    return media;
   }
   async videoForShot(sql: Sql, project: string, node: CanvasNode) {
     const key = await this.mediaForNode(sql, project, node);
@@ -317,19 +351,44 @@ export class OriginalCanvases {
           [workspace.id],
         )
       ).rows;
-      const projects = [];
-      for (const row of rows) {
-        const doc = parseCanvasDocument(canvasDocumentJson(row.document)),
-          covers = [];
+      const pending: { project: string; node: CanvasNode }[] = [];
+      const canvases = rows.map((row) => {
+        const doc = parseCanvasDocument(canvasDocumentJson(row.document));
+        const nodes = [];
+        let pinned = 0;
         for (const node of doc.nodes) {
-          if (node.type === "image" || node.type === "video") {
-            const key = await this.mediaForNode(sql, row.id, node);
-            if (key) covers.push({ id: key, type: node.type });
-          }
+          if (node.type !== "image" && node.type !== "video") continue;
+          nodes.push(node);
+          if (node.use_media) {
+            if (node.media_id && ++pinned === 4) break;
+          } else if (
+            node.active_job === null ||
+            Number.isSafeInteger(node.active_job)
+          )
+            pending.push({ project: row.id, node });
+        }
+        return { row, count: doc.nodes.length, nodes };
+      });
+      const media = await this.listCoverJobs(sql, pending);
+      const projects = [];
+      for (const { row, count, nodes } of canvases) {
+        const covers = [];
+        for (const node of nodes) {
+          const matched = media.get(node);
+          // Legacy imports may store job numbers outside the native ID range.
+          const key =
+            !node.use_media &&
+            node.active_job !== null &&
+            !Number.isSafeInteger(node.active_job)
+              ? await this.mediaForNode(sql, row.id, node)
+              : matched === undefined
+                ? node.media_id
+                : matched;
+          if (key) covers.push({ id: key, type: node.type });
           if (covers.length === 4) break;
         }
         const { document: _, ...project } = this.publicProject(row, user);
-        projects.push({ ...project, count: doc.nodes.length, covers });
+        projects.push({ ...project, count, covers });
       }
       return {
         projects,
