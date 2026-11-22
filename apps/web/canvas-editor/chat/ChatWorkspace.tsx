@@ -39,7 +39,7 @@ export function ChatWorkspace(props:Props){
  const initialHistory=useRef(true), cfgRef=useRef<Config|null>(null);
  const scroll=useRef<HTMLDivElement>(null),input=useRef<HTMLTextAreaElement>(null),follow=useRef(true),alive=useRef(true),current=useRef(cid),pending=useRef<{signature:string;uid:string}|null>(null);
  const req=<T=any,>(path:string,body?:unknown,method?:string)=>chatRequest<T>(workspace,path,body,method);
- const loadList=async()=>{const r=await req<{conversations:Conversation[]}>('/api/chats'+(project?'?project='+encodeURIComponent(project)+'&node='+encodeURIComponent(node||''):''));if(alive.current){setList(r.conversations);if(initialHistory.current&&compact&&!current.current&&r.conversations.length){const id=r.conversations[0].id;current.current=id;setCid(id);sessionStorage.setItem(scope+'-active',id)}initialHistory.current=false}};
+ const loadList=async()=>{const started=acceptConversation.startList();const r=await req<{conversations:Conversation[]}>('/api/chats'+(project?'?project='+encodeURIComponent(project)+'&node='+encodeURIComponent(node||''):''));if(alive.current){setList(items=>acceptConversation.reconcile(r.conversations,items,started));if(initialHistory.current&&compact&&!current.current&&r.conversations.length){const id=r.conversations[0].id;current.current=id;setCid(id);sessionStorage.setItem(scope+'-active',id)}initialHistory.current=false}};
  const loadConfig=async()=>{const c=await req<Config>('/api/chat/config');if(alive.current){cfgRef.current=c;setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')}};
  const update=(s:Snapshot)=>{if(!alive.current||!acceptConversation(s.conversation))return;if(s.conversation.id===current.current)setData(s);setList(items=>[s.conversation,...items.filter(c=>c.id!==s.conversation.id)].sort((a,b)=>b.updated-a.updated));};
  const updateDraft=(value:string)=>{setDraft(value);setPendingDraft(null);const key=scope+'-draft-'+current.current;if(value)sessionStorage.setItem(key,value);else sessionStorage.removeItem(key)};
@@ -95,9 +95,9 @@ export function ChatWorkspace(props:Props){
   }catch(e){if(e instanceof ApiError&&e.status===409){update(await req('/api/chats/'+active.conversation.id));await loadConfig()}throw e}
  });
  const stop=()=>safely(async()=>{update(await req('/api/chats/'+cid+'/stop',{}));await loadConfig()});
- const removeConversation=async(item:Conversation)=>{await req('/api/chats/'+item.id,undefined,'DELETE');deletedWasCurrent.current=item.id===current.current;setDeleted(item.id);setList(items=>items.filter(c=>c.id!==item.id));if(deletedWasCurrent.current)choose('');setHistory(false)};
+ const removeConversation=async(item:Conversation)=>{const r=await req<{conversation:Pick<Conversation,'id'|'revision'>}>('/api/chats/'+item.id,undefined,'DELETE');acceptConversation.remove(r.conversation);deletedWasCurrent.current=item.id===current.current;setDeleted(item.id);setList(items=>items.filter(c=>c.id!==item.id));if(deletedWasCurrent.current)choose('');setHistory(false)};
  const remove=()=>safely(async()=>{if(data)await removeConversation(data.conversation)});
- const restore=()=>safely(async()=>{const r=await req<Snapshot>('/api/chats/'+deleted+'/restore',{});if(deletedWasCurrent.current&&!current.current){choose(deleted);setData(r)}else update(r);setDeleted('');await loadList()});
+ const restore=()=>safely(async()=>{const r=await req<Snapshot>('/api/chats/'+deleted+'/restore',{});if(deletedWasCurrent.current&&!current.current)choose(deleted);update(r);setDeleted('');await loadList()});
  const copy=async(m:Message)=>{try{await navigator.clipboard.writeText(m.content);setCopied(m.id);setTimeout(()=>setCopied(null),2000)}catch{setError('复制失败，请选择文字手动复制')}};
  const adopt=(m:Message,mode:'new'|'replace')=>safely(async()=>{if(props.onApply){const source=data?.messages.find(item=>item.id===m.reply_to);let context:any={};try{context=JSON.parse(source?.context||'{}')}catch{}await props.onApply(cid,m,mode,{expectedText:context.text});setNotice(mode==='new'?'已新建文本节点':'已替换节点文字')}else{setPicker(m);setTarget('');const r=await req('/api/canvases');setProjects(r.projects)}});
  const confirmCanvas=()=>safely(async()=>{
