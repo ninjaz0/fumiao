@@ -44,7 +44,7 @@ export function ChatWorkspace(props:Props){
  const applyPresetDraft=(value:string)=>{if(!draft.trim()||draft===value){updateDraft(value);input.current?.focus();return}setPendingDraft(value)};
  const confirmPendingDraft=()=>{if(pendingDraft===null)return;updateDraft(pendingDraft);input.current?.focus()};
  const cancelPendingDraft=()=>{setPendingDraft(null);input.current?.focus()};
- const choose=(id:string)=>{setDraft(sessionStorage.getItem(scope+'-draft-'+id)||'');setPendingDraft(null);const found=list.find(c=>c.id===id);if(found&&config?.models[found.model])setModel(found.model);current.current=id;setCid(id);setData(null);setError('');setRename(null);setHistory(false);pending.current=null;setLoading(!!id);follow.current=true;setNewBelow(false);sessionStorage.setItem(scope+'-active',id)};
+ const choose=(id:string)=>{setDraft(sessionStorage.getItem(scope+'-draft-'+id)||'');setPendingDraft(null);const found=list.find(c=>c.id===id);if(found&&config?.models[found.model])setModel(found.model);current.current=id;setCid(id);setData(null);setError('');setRename(null);setPicker(null);setHistory(false);pending.current=null;setLoading(!!id);follow.current=true;setNewBelow(false);sessionStorage.setItem(scope+'-active',id)};
  useEffect(()=>{alive.current=true;void Promise.all([loadConfig(),loadList()]).catch(e=>setError(e.message)).finally(()=>setLoading(false));const timer=setInterval(()=>{void loadConfig().catch(()=>{});void loadList().catch(()=>{})},10000);return()=>{alive.current=false;clearInterval(timer)}},[workspace,project,node]);
  useEffect(()=>{if(input.current&&!inline){input.current.style.height='0px';input.current.style.height=Math.min(input.current.scrollHeight,180)+'px'}},[draft,cid,inline]);
  useEffect(()=>{
@@ -89,7 +89,7 @@ export function ChatWorkspace(props:Props){
   try{
    const result=await req<Snapshot>('/api/chats/'+active.conversation.id+'/messages',{uid:pending.current.uid,model,text:retry?'':draft,expected_revision:active.conversation.revision,price_revision:config!.pricing.revision,retry:retry||null,context});
    if(context?.writeback&&props.onApply){const reply=[...result.messages].reverse().find(m=>m.role==='assistant');if(reply)saveWrites(current=>({...current,[reply.id]:{cid:result.conversation.id,uid:current[reply.id]?.uid||crypto.randomUUID()}}))}
-   update(result);const sentId=active.conversation.id;setDraft(latest=>{if(latest===draft){sessionStorage.removeItem(scope+'-draft-');sessionStorage.removeItem(scope+'-draft-'+sentId);return ''}sessionStorage.setItem(scope+'-draft-'+sentId,latest);return latest});pending.current=null;follow.current=true;await loadConfig();
+   update(result);const sentId=active.conversation.id;setDraft(latest=>{if(current.current!==sentId){if(sessionStorage.getItem(scope+'-draft-'+sentId)===draft)sessionStorage.removeItem(scope+'-draft-'+sentId);return latest}if(latest===draft){sessionStorage.removeItem(scope+'-draft-');sessionStorage.removeItem(scope+'-draft-'+sentId);return ''}sessionStorage.setItem(scope+'-draft-'+sentId,latest);return latest});pending.current=null;follow.current=true;await loadConfig();
   }catch(e){if(e instanceof ApiError&&e.status===409){update(await req('/api/chats/'+active.conversation.id));await loadConfig()}throw e}
  });
  const stop=()=>safely(async()=>{update(await req('/api/chats/'+cid+'/stop',{}));await loadConfig()});

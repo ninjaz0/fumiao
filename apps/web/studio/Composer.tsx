@@ -158,7 +158,7 @@ export function Composer({
   submit: () => void;
   upload: (files: FileList, frame?: FrameSlot) => void;
   menu: ComposerMenu | null;
-  open: (kind: ComposerMenu, button: HTMLButtonElement) => void;
+  open: (kind: ComposerMenu, button: HTMLButtonElement, focus?: boolean) => void;
   close: () => void;
   preview: (id: string, button: HTMLButtonElement) => void;
   editor: Ref<ComposerEditor>;
@@ -576,6 +576,7 @@ export function Composer({
               open(
                 "mention",
                 box.current!.querySelector('[data-menu="mention"]')!,
+                false,
               );
             }
           }}

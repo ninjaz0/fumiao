@@ -11,6 +11,7 @@ import type { Actor, Platform } from "../../packages/platform/src/platform.js";
 import { originalUI } from "../../packages/web-compat/src/ui.js";
 import { imagesText } from "../../plugins/images/src/text.js";
 import type { studioPayment } from "./studio-nest-payment.js";
+import { verifyChatSettingsRetry } from "./studio-chat-settings.js";
 import {
   assertStudio,
   open,
@@ -221,6 +222,42 @@ async function checkPackRefreshRace(page: Page, studio: string, state: StudioSta
   }
 }
 
+async function checkDeletedH3Frame(page: Page, studio: string, state: StudioState) {
+  const model = Object.keys(state.model_forms).find((id) =>
+    state.model_forms[id].referenceModes?.includes("frames"),
+  );
+  assert.ok(model, "Studio fixture must include H3 frame mode");
+  const image = state.assets.find((asset) => asset.kind === "ref");
+  assert.ok(image);
+  const key = `fm-draft-${state.me.id}-workspace-${state.workspace_id}`;
+  await page.addInitScript(({ key, model, image }) => {
+    sessionStorage.setItem(key, JSON.stringify({
+      draft: { kind: "video", videoModel: model, prompt: "删除首帧回归", h3: { mode: "frames", first_frame: image } },
+      refs: [],
+    }));
+  }, { key, model, image: image.id });
+  let deleted = false;
+  await page.route("**/api/state", (route) => route.fulfill({ json: {
+    ...state,
+    assets: deleted ? state.assets.filter((asset) => asset.id !== image.id) : state.assets,
+  } }));
+  try {
+    await page.goto(studio);
+    const frame = page.locator('.h3-frame-preview[data-slot="first_frame"]');
+    await expect(frame).toHaveAttribute("data-key", image.id);
+    deleted = true;
+    await expect(frame).toHaveAttribute("data-act", "h3-upload", { timeout: apiTimeout });
+    await expect(frame).toHaveAttribute("data-key", "");
+    await expect(frame.locator("img")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(({ key, id }) => {
+      const draft = sessionStorage.getItem(key);
+      return draft !== null && !draft.includes(JSON.stringify(id));
+    }, { key, id: image.id })).toBe(true);
+  } finally {
+    await page.close();
+  }
+}
+
 async function checkH3ImageUploadLimit(
   page: Page,
   studio: string,
@@ -390,6 +427,7 @@ export async function studioBrowser(
     await expect(currentSettings).toHaveCount(0);
     await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
     await settings(page);
+    await verifyChatSettingsRetry(page);
     await expect(currentSettings).toHaveAttribute("aria-current", "page");
     await expect(sidebar.locator(".workspace-switch")).toBeVisible();
     await expect.poll(() => sidebar.evaluate((rail) => {
@@ -480,10 +518,94 @@ export async function studioBrowser(
     assert.ok(Number.isSafeInteger(priceRevision));
     await expect(page.locator("#toast")).toHaveText("价格已保存");
     await nav("home");
+    const composerCreation = page.locator('.composer [data-menu="creation"]');
+    await composerCreation.focus();
+    await page.keyboard.press("Enter");
+    const composerPopover = page.locator("#popover");
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(composerPopover.getByRole("option", { name: "图片生成" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(composerPopover.getByRole("option", { name: "语音生成" })).toBeFocused();
+    await composerCreation.evaluate((trigger) => {
+      window.document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      (trigger as HTMLButtonElement).click();
+    });
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    await composerCreation.evaluate((trigger) => {
+      window.document.querySelector<HTMLElement>(
+        '#popover [aria-selected="true"]',
+      )!.click();
+      (trigger as HTMLButtonElement).click();
+    });
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    console.log("Verified immediate same-menu reopen focuses the selected option after Escape and selection");
+    await page.keyboard.press("Escape");
+    await expect(composerPopover).toBeHidden();
+    await expect(composerCreation).toBeFocused();
+    for (const selector of [
+      '[data-menu="h3-mode"]',
+      '[data-menu="format"]',
+      '[data-menu="advanced"]',
+      '[data-act="reference"]',
+      '[data-menu="mention"]',
+      '[data-menu="image-model"]',
+      '[data-menu="duration"]',
+    ]) {
+      const trigger = page.locator(`.composer ${selector}`);
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => composerPopover.evaluate(
+        (element) => element.contains(window.document.activeElement),
+      )).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect(composerPopover).toBeHidden();
+      await expect(trigger).toBeFocused();
+    }
+    console.log("Verified composer popover focus, arrow/Tab navigation and Escape restoration");
+    await page.locator('#files').setInputFiles({
+      name: "mention-focus.png", mimeType: "image/png", buffer: bytes,
+    });
+    await expect(page.locator('.composer [data-act="reference"]')).toHaveAttribute(
+      "aria-label", "管理参考内容，已添加 1 个素材",
+    );
+    const mentionPrompt = page.locator("#prompt");
+    await mentionPrompt.fill("");
+    await mentionPrompt.press("@");
+    await expect(composerPopover).toBeVisible();
+    await expect(mentionPrompt).toBeFocused();
+    await page.keyboard.type("continued");
+    await expect(mentionPrompt).toHaveText("@continued");
+    await page.keyboard.press("Escape");
+    await expect(composerPopover).toBeHidden();
+    await expect(mentionPrompt).toBeFocused();
+    await mentionPrompt.fill("");
+    await mentionPrompt.press("@");
+    await expect(mentionPrompt).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(composerPopover.locator(".ref-entry").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(composerPopover).toBeHidden();
+    await expect(mentionPrompt).toBeFocused();
+    const mentionTrigger = page.locator('.composer [data-menu="mention"]');
+    await mentionTrigger.click();
+    await expect(composerPopover.locator(".ref-entry").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(mentionTrigger).toBeFocused();
+    await page.locator('.composer [data-act="reference"]').click();
+    await composerPopover.locator('[data-act="unref"]').click();
+    await page.keyboard.press("Escape");
+    console.log("Verified typed mention keeps prompt focus, continued typing and Escape restoration");
     await page.locator('.composer [data-menu="creation"]').click();
+    await page.evaluate(() => window.document.dispatchEvent(new Event("scroll")));
+    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
     await page
       .locator('#popover [data-act="creation"][data-value="image"]')
       .click();
+    await expect(composerCreation).toBeFocused();
+    console.log("Verified creation menu survives queued scroll and restores live trigger focus after selection");
     await page.locator("#prompt").fill(imagePrompt);
     await expect(page.locator(".composer-credit")).toHaveAttribute(
       "aria-label",
@@ -528,6 +650,9 @@ export async function studioBrowser(
     assert.deepEqual(await media.body(), bytes);
     assert.deepEqual(providerErrors, []);
     assert.deepEqual(providerPrompts, [imagePrompt]);
+    await expect(page.locator(`#job-${jobId} .asset-preview img`)).toHaveAttribute(
+      "src", "/media/" + result, { timeout: apiTimeout },
+    );
     await page
       .locator(`#job-${jobId} .asset-preview`)
       .click({ timeout: apiTimeout });
@@ -585,6 +710,66 @@ export async function studioBrowser(
     await expect(assistant.locator(".fm-chat-prose")).toHaveText(chatReply, {
       timeout: apiTimeout,
     });
+    const sentId = await page
+      .locator(".fm-chat-conversation-row.selected")
+      .getAttribute("data-conversation");
+    const other = await context.request.post("/api/chats", {
+      headers: { Origin: web, "X-Workspace-Id": String(workspace) },
+      data: { model: "deepseek-flash" },
+    });
+    assert.equal(other.status(), 200, await other.text());
+    const { conversation: otherConversation } = await other.json();
+    await nav("home");
+    await nav("chat");
+    const selectConversation = async (id: string) => {
+      const row = page.locator(
+        `[data-conversation="${id}"] .fm-chat-conversation-open`,
+      );
+      if ((await row.getAttribute("aria-current")) !== "page")
+        await row.click();
+      await expect(
+        page.getByText("正在载入对话…", { exact: true }),
+      ).not.toBeVisible();
+    };
+    await selectConversation(sentId!);
+    let release!: () => void;
+    let received!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const intercepted = new Promise<void>((resolve) => {
+      received = resolve;
+    });
+    const messagePath = `**/api/chats/${sentId}/messages`;
+    await page.route(messagePath, async (route) => {
+      const response = await route.fetch();
+      received();
+      await held;
+      await route.fulfill({ response });
+    });
+    try {
+      await edit.fill("延迟发送的 A 消息");
+      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await intercepted;
+      await selectConversation(otherConversation.id);
+      await edit.fill("B 的未发送草稿");
+      release();
+      await expect(
+        page.getByRole("button", { name: "发送", exact: true }),
+      ).toBeEnabled();
+      await expect(edit).toHaveValue("B 的未发送草稿");
+      await selectConversation(sentId!);
+      await expect(edit).not.toHaveValue("B 的未发送草稿");
+      await selectConversation(otherConversation.id);
+      await expect(edit).toHaveValue("B 的未发送草稿");
+      await selectConversation(sentId!);
+      console.log(
+        "Verified delayed chat send keeps conversation drafts isolated",
+      );
+    } finally {
+      release();
+      await page.unroute(messagePath);
+    }
     await edit.fill(chatDraft);
     await assistant.getByRole("button", { name: "放入画布" }).click();
     const picker = page.getByRole("region", { name: "放入画布" });
@@ -595,6 +780,21 @@ export async function studioBrowser(
         (await document()).document.nodes.map((item) => item.text),
       )
       .toEqual([chatReply]);
+    const conversationId = await page
+      .locator(".fm-chat-conversation-row.selected")
+      .getAttribute("data-conversation");
+    await assistant.getByRole("button", { name: "放入画布" }).click();
+    await expect(picker).toBeVisible();
+    await page.locator("button.fm-chat-new").click();
+    await expect(picker).toBeHidden();
+    await page
+      .locator(
+        `[data-conversation="${conversationId}"] .fm-chat-conversation-open`,
+      )
+      .click();
+    await expect(assistant.locator(".fm-chat-prose")).toHaveText(chatReply);
+    await expect(edit).toHaveValue(chatDraft);
+    await expect(picker).toBeHidden();
     const headers = { Origin: web, "X-Workspace-Id": String(workspace) };
     const project = await document();
     for (const [i, title] of ["固定参考图", "拖动参考图"].entries()) {
@@ -650,6 +850,7 @@ export async function studioBrowser(
     const before = await state();
     await checkImageToVideoFrames(await context.newPage(), studio, before);
     await checkPackRefreshRace(await context.newPage(), studio, before);
+    await checkDeletedH3Frame(await context.newPage(), studio, before);
     await checkH3ImageUploadLimit(await context.newPage(), studio, bytes);
     const jobEntries = before.credit_history.filter(
       (entry) => entry.job === jobId,

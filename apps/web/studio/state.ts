@@ -391,7 +391,7 @@ export function readDraft(state: StudioState): DraftSession {
     !modelAvailable(state, selectedModel(draft))
       ? draft
       : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft));
-  return {
+  return pruneDraftAssets(state, {
     parent: typeof saved?.parent === "number" ? saved.parent : null,
     retainedSeed:
       typeof saved?.retainedSeed === "number" ? saved.retainedSeed : null,
@@ -412,7 +412,7 @@ export function readDraft(state: StudioState): DraftSession {
     ),
     ...restoreDraftReferences(state, normalizedDraft, saved?.refs, storedTypes),
     submitId: saved?.submitId || crypto.randomUUID(),
-  };
+  });
 }
 export function writeDraft(state: StudioState, session: DraftSession) {
   const key = keyFor(state);
@@ -431,6 +431,81 @@ export function writeDraft(state: StudioState, session: DraftSession) {
     }),
   );
   sessionStorage.setItem(key, JSON.stringify({ ...session, referenceTypes }));
+}
+
+function pruneH3Assets(state: StudioState, h3?: H3Options) {
+  if (!h3) return h3;
+  const exists = (id: string) => !!referenceAsset(state, id);
+  const first = h3.first_frame;
+  const last = h3.last_frame;
+  const videoAudio = h3.video_audio?.filter(exists);
+  if (
+    !(first && !exists(first)) &&
+    !(last && !exists(last)) &&
+    videoAudio?.length === h3.video_audio?.length
+  )
+    return h3;
+  return {
+    ...h3,
+    first_frame: first && exists(first) ? first : null,
+    last_frame: last && exists(last) ? last : null,
+    video_audio: videoAudio,
+  };
+}
+
+export function pruneDraftAssets(
+  state: StudioState,
+  session: DraftSession,
+): DraftSession {
+  const exists = (id: string) => !!referenceAsset(state, id);
+  function prune(snapshot: DraftSnapshot): DraftSnapshot {
+    const { draft } = snapshot;
+    const h3 = pruneH3Assets(state, draft.h3);
+    const suspendedH3Frames = pruneH3Assets(state, draft.suspendedH3Frames);
+    const saved = draft.h3ReferenceDraft;
+    let nextSaved = saved;
+    if (saved) {
+      const refs = saved.refs.filter(exists);
+      const savedAudio = saved.video_audio.filter(exists);
+      if (
+        refs.length !== saved.refs.length ||
+        savedAudio.length !== saved.video_audio.length
+      )
+        nextSaved = { ...saved, refs, video_audio: savedAudio };
+    }
+    const changedH3 = h3 !== draft.h3;
+    const changedSuspendedH3 = suspendedH3Frames !== draft.suspendedH3Frames;
+    const changedSaved = nextSaved !== saved;
+    if (!changedH3 && !changedSuspendedH3 && !changedSaved) return snapshot;
+    return {
+      ...snapshot,
+      draft: {
+        ...draft,
+        ...(changedH3 ? { h3 } : {}),
+        ...(changedSuspendedH3 ? { suspendedH3Frames } : {}),
+        ...(changedSaved ? { h3ReferenceDraft: nextSaved } : {}),
+      },
+    };
+  }
+  const active = prune(session);
+  const image =
+    session.suspendedImageDraft && prune(session.suspendedImageDraft);
+  const audio =
+    session.suspendedAudioDraft && prune(session.suspendedAudioDraft);
+  const media =
+    session.suspendedMediaDraft && prune(session.suspendedMediaDraft);
+  return active === session &&
+    image === session.suspendedImageDraft &&
+    audio === session.suspendedAudioDraft &&
+    media === session.suspendedMediaDraft
+    ? session
+    : {
+        ...session,
+        ...active,
+        suspendedImageDraft: image,
+        suspendedAudioDraft: audio,
+        suspendedMediaDraft: media,
+      };
 }
 
 export const selectedModel = (draft: Draft) =>
@@ -551,12 +626,12 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
     : {};
   const seed = typeof draft.seed === "string" ? draft.seed.trim() : "";
   const h3 = supportsH3
-    ? h3Options(draft.suspendedH3Frames ?? draft.h3)
+    ? h3Options(
+        draft.suspendedH3Frames
+          ? pruneH3Assets(state, draft.suspendedH3Frames)
+          : draft.h3,
+      )
     : undefined;
-  if (h3 && draft.suspendedH3Frames) {
-    if (!referenceAsset(state, h3.first_frame)) h3.first_frame = null;
-    if (!referenceAsset(state, h3.last_frame)) h3.last_frame = null;
-  }
   return {
     ...draft,
     h3,

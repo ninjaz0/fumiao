@@ -67,6 +67,7 @@ import {
   normalizeParams,
   packReferences,
   promptLimit,
+  pruneDraftAssets,
   pruneDraftPacks,
   referenceAsset,
   referenceIssue,
@@ -141,6 +142,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const [menu, setMenu] = useState<StudioMenu | null>(null);
   const [menuShown, setMenuShown] = useState(false);
   const [menuHidden, setMenuHidden] = useState(true);
+  const [menuOpenVersion, setMenuOpenVersion] = useState(0);
   const [sidebarChanged, setSidebarChanged] = useState(false);
   const [accountOpened, setAccountOpened] = useState(false);
   const [toast, setToast] = useState("");
@@ -153,6 +155,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const view = useRef<HTMLElement>(null);
   const popover = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLButtonElement | null>(null);
+  const menuFocusTarget = useRef<HTMLElement | null>(null);
   const menuTimer = useRef(0);
   const toastTimer = useRef(0);
   const busy = useRef(new Set<string>());
@@ -236,8 +239,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }, []);
 
   const closeMenu = useCallback((focus = false) => {
-    if (focus) anchor.current?.focus();
+    if (focus || popover.current?.contains(document.activeElement))
+      menuFocusTarget.current?.focus({ preventScroll: true });
     anchor.current = null;
+    menuFocusTarget.current = null;
     setMenuShown(false);
     clearTimeout(menuTimer.current);
     menuTimer.current = window.setTimeout(() => setMenuHidden(true), 100);
@@ -326,18 +331,20 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
               h3ReferenceDraft: afterPacks.draft.h3ReferenceDraft,
             }
           : priorDraft.draft;
-        const nextBase: DraftSession =
+        const nextBase: DraftSession = pruneDraftAssets(
+          next,
           mergedDraft !== priorDraft.draft ||
-          afterPacks !== priorDraft ||
-          lostRef ||
-          lostParent
+            afterPacks !== priorDraft ||
+            lostRef ||
+            lostParent
             ? {
                 ...afterPacks,
                 draft: mergedDraft,
                 refs,
                 ...(lostParent ? { parent: null, retainedSeed: null } : {}),
               }
-            : priorDraft;
+            : priorDraft,
+        );
         const nextSession =
           nextBase === priorDraft
             ? priorDraft
@@ -486,14 +493,21 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (!menu || menuHidden || !anchor.current) return;
     positionMenu();
     const element = popover.current;
-    if (["workspaces", "duration", "image-model"].includes(menu)) {
-      const option =
-        element?.querySelector<HTMLElement>(
-          '[aria-selected="true"]:not(:disabled)',
-        ) ??
-        element?.querySelector<HTMLElement>(
-          '[role="option"]:not(:disabled):not([hidden])',
+    if (
+      (isComposerMenu(menu) || menu === "workspaces") &&
+      menuFocusTarget.current === anchor.current
+    ) {
+      const visible = (selector: string) =>
+        Array.from(element?.querySelectorAll<HTMLElement>(selector) ?? []).find(
+          (control) => control.getClientRects().length > 0,
         );
+      const option =
+        visible(
+          '[aria-selected="true"]:not(:disabled), [role="radio"][aria-checked="true"]:not(:disabled)',
+        ) ??
+        visible(
+          'button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex="0"], a[href]',
+        ) ?? element;
       option?.focus({ preventScroll: true });
     }
     const frame = requestAnimationFrame(() => setMenuShown(true));
@@ -502,28 +516,31 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       if (event.type === "pointerdown") editor.current?.remember();
       if (
         !element?.contains(target) &&
-        (event.type === "scroll" || !anchor.current?.contains(target))
+        !anchor.current?.contains(target)
       )
         closeMenu();
     };
     window.addEventListener("resize", positionMenu);
     document.addEventListener("pointerdown", outside);
-    document.addEventListener("scroll", outside, true);
+    document.addEventListener("scroll", positionMenu, true);
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", positionMenu);
       document.removeEventListener("pointerdown", outside);
-      document.removeEventListener("scroll", outside, true);
+      document.removeEventListener("scroll", positionMenu, true);
     };
-  }, [menu, menuHidden, closeMenu, positionMenu]);
+  }, [menu, menuHidden, menuOpenVersion, closeMenu, positionMenu]);
 
-  function openMenu(kind: StudioMenu, button: HTMLButtonElement) {
+  function openMenu(kind: StudioMenu, button: HTMLButtonElement, focus = true) {
     if (anchor.current === button) {
       closeMenu();
       return;
     }
     clearTimeout(menuTimer.current);
     anchor.current = button;
+    menuFocusTarget.current = focus
+      ? button
+      : document.activeElement as HTMLElement;
     if (isComposerMenu(kind) && active.current && currentDraft.current) {
       seenComposerMenus.current.add(kind);
       composerMenuAria.current = composerMenuLabel(
@@ -535,17 +552,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (kind === "account") setAccountOpened(true);
     if (kind === "detail-more") setDetailMenuUsed(true);
     setMenuHidden(false);
-    if (kind === menu && !menuHidden) {
-      positionMenu();
-      setMenuShown(true);
-      if (kind === "workspaces")
-        popover.current
-          ?.querySelector<HTMLElement>('[aria-selected="true"]')
-          ?.focus({ preventScroll: true });
-    } else {
-      setMenuShown(false);
-      setMenu(kind);
-    }
+    setMenuShown(false);
+    setMenu(kind);
+    setMenuOpenVersion((version) => version + 1);
   }
 
   const leaveStudio = useCallback(
@@ -1652,6 +1661,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       <div
         id="popover"
         ref={popover}
+        tabIndex={-1}
         hidden={menuHidden}
         inert={mobileDrawerOpen && !sidebarPopoverOpen}
         className={
