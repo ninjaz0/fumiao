@@ -137,6 +137,7 @@ export type Job = {
 export type StudioState = {
   settings_pages?: InstalledSettingsPage[];
   studio_plugins?: boolean;
+  plugin_importers?: import("@fumiao/plugin-sdk/importers.js").ImporterEntry[];
   plugin_actions?: MenuEntry[];
   plugin_pages?: PluginPageEntry[];
   studio_pages?: PluginPageEntry[];

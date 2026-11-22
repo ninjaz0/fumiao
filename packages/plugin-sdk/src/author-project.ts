@@ -126,6 +126,7 @@ export async function buildProject(directory: string) {
     for (const type of [
       "settingsPages",
       "pages",
+      "importers",
       "canvasNodes",
       "actions",
       "events",

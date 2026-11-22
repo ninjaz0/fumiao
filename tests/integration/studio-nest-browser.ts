@@ -1,3 +1,4 @@
+import { verifyImporters } from "./studio-importers.js";
 import { verifyPublisherRotation } from "./studio-publisher.js";
 import { verifyCanvasPluginNode } from "./studio-canvas-plugin-node.js";
 import assert from "node:assert/strict";
@@ -1051,6 +1052,7 @@ export async function studioBrowser(
     await nav("home");
     await settings(page);
     await verifyPublisherRotation(page);
+    await verifyImporters(page, workspace);
     await verifyCanvasPluginNode(page, workspace);
     await page.goto(studio);
     const savedCanvas = await document();
