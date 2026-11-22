@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import importX from "eslint-plugin-import-x";
+import importX, { createNodeResolver } from "eslint-plugin-import-x";
 import tseslint from "typescript-eslint";
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -98,8 +98,15 @@ export default tseslint.config(
   // Every workspace declares what it imports.
   ...workspaces.map((path) => ({
     files: [`${path}/**/*.{ts,tsx,mjs}`],
+    settings: {
+      "import-x/resolver-next": [createNodeResolver({
+        extensions: [".ts", ".tsx", ".js", ".mjs", ".json"],
+        extensionAlias: { ".js": [".js", ".ts", ".tsx"] },
+      })],
+    },
     rules: {
       "import-x/no-extraneous-dependencies": ["error", { packageDir: [join(root, path)] }],
+      "import-x/no-relative-packages": "error",
     },
   })),
   // Tests reach into applications, which export nothing. Their mock HTTP
