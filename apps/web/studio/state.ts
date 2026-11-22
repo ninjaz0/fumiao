@@ -242,6 +242,7 @@ const initialDraft = {
 export type Draft = typeof initialDraft & {
   params?: FormValues;
   h3?: H3Options;
+  suspendedH3Frames?: H3Options;
   packs?: Pack[];
   flowSourceJob?: number | null;
   h3ReferenceDraft?: {
@@ -377,6 +378,26 @@ export function writeDraft(state: StudioState, session: DraftSession) {
   sessionStorage.setItem(keyFor(state), JSON.stringify(session));
 }
 
+function pruneH3Assets(state: StudioState, h3?: H3Options) {
+  if (!h3) return h3;
+  const exists = (id: string) => !!referenceAsset(state, id);
+  const first = h3.first_frame;
+  const last = h3.last_frame;
+  const videoAudio = h3.video_audio?.filter(exists);
+  if (
+    !(first && !exists(first)) &&
+    !(last && !exists(last)) &&
+    videoAudio?.length === h3.video_audio?.length
+  )
+    return h3;
+  return {
+    ...h3,
+    first_frame: first && exists(first) ? first : null,
+    last_frame: last && exists(last) ? last : null,
+    video_audio: videoAudio,
+  };
+}
+
 export function pruneDraftAssets(
   state: StudioState,
   session: DraftSession,
@@ -384,11 +405,9 @@ export function pruneDraftAssets(
   const exists = (id: string) => !!referenceAsset(state, id);
   function prune(snapshot: DraftSnapshot): DraftSnapshot {
     const { draft } = snapshot;
-    const h3 = draft.h3;
+    const h3 = pruneH3Assets(state, draft.h3);
+    const suspendedH3Frames = pruneH3Assets(state, draft.suspendedH3Frames);
     const saved = draft.h3ReferenceDraft;
-    const first = h3?.first_frame;
-    const last = h3?.last_frame;
-    const videoAudio = h3?.video_audio?.filter(exists);
     let nextSaved = saved;
     if (saved) {
       const refs = saved.refs.filter(exists);
@@ -399,27 +418,16 @@ export function pruneDraftAssets(
       )
         nextSaved = { ...saved, refs, video_audio: savedAudio };
     }
-    const changedH3 =
-      h3 &&
-      ((first && !exists(first)) ||
-        (last && !exists(last)) ||
-        videoAudio?.length !== h3.video_audio?.length);
+    const changedH3 = h3 !== draft.h3;
+    const changedSuspendedH3 = suspendedH3Frames !== draft.suspendedH3Frames;
     const changedSaved = nextSaved !== saved;
-    if (!changedH3 && !changedSaved) return snapshot;
+    if (!changedH3 && !changedSuspendedH3 && !changedSaved) return snapshot;
     return {
       ...snapshot,
       draft: {
         ...draft,
-        ...(changedH3
-          ? {
-              h3: {
-                ...h3,
-                first_frame: first && exists(first) ? first : null,
-                last_frame: last && exists(last) ? last : null,
-                video_audio: videoAudio,
-              },
-            }
-          : {}),
+        ...(changedH3 ? { h3 } : {}),
+        ...(changedSuspendedH3 ? { suspendedH3Frames } : {}),
         ...(changedSaved ? { h3ReferenceDraft: nextSaved } : {}),
       },
     };
@@ -536,10 +544,17 @@ export function seedError(form: ModelForm | undefined, raw: string): string {
 export function normalizeParams(state: StudioState, draft: Draft): Draft {
   const form = modelForm(state, draft);
   const flow = flowSpec(state, selectedModel(draft));
+  const supportsH3 = draft.kind === "video" && form?.referenceModes && !flow;
+  const suspendedH3Frames = supportsH3
+    ? undefined
+    : frames(draft)
+      ? draft.h3
+      : draft.suspendedH3Frames;
   if (flow) {
     return {
       ...draft,
       h3: undefined,
+      suspendedH3Frames,
       params: undefined,
       ratio: flow.ratio || draft.ratio,
       seconds: String(flow.seconds ?? draft.seconds),
@@ -555,9 +570,17 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
     ? normalizeForm(form, { ...draftValues(draft), ...draft.params })
     : {};
   const seed = typeof draft.seed === "string" ? draft.seed.trim() : "";
+  const h3 = supportsH3
+    ? h3Options(
+        draft.suspendedH3Frames
+          ? pruneH3Assets(state, draft.suspendedH3Frames)
+          : draft.h3,
+      )
+    : undefined;
   return {
     ...draft,
-    h3: form?.referenceModes ? h3Options(draft.h3) : undefined,
+    h3,
+    suspendedH3Frames,
     flowSourceJob: null,
     params: form?.parameterObject ? values : undefined,
     ratio: String(values.ratio ?? draft.ratio),
@@ -1171,6 +1194,32 @@ export function changeH3Mode(
     },
   };
 }
+export function imageToVideoDraft(
+  state: StudioState,
+  previous: DraftSession,
+  result: string,
+): DraftSession {
+  const draft = {
+    ...previous.draft,
+    kind: "video" as const,
+    prompt: "",
+    quality: "480",
+    seconds: "5",
+    seed: "",
+  };
+  const session: DraftSession = {
+    ...previous,
+    draft: normalizeParams(state, ensureModel(state, draft)),
+    refs: [],
+    parent: null,
+    retainedSeed: null,
+    suspendedAudioDraft: suspendAudioDraft(previous),
+    suspendedMediaDraft: null,
+  };
+  return frames(session.draft)
+    ? assignFrame(state, session, result, "first_frame")
+    : { ...session, refs: [result] };
+}
 export function assignFrame(
   state: StudioState,
   session: DraftSession,
@@ -1501,7 +1550,7 @@ export function generationRequest(
           : draft.imageQuality,
       },
     };
-  const { h3, ...values } = draft;
+  const { h3, suspendedH3Frames, ...values } = draft;
   return {
     kind,
     path: "/api/jobs",

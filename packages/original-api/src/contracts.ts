@@ -1,3 +1,4 @@
+import { MAX_ASSET_SELECTION } from "./asset-limits.js";
 import {
   inviteFields,
   loginFields,
@@ -42,9 +43,9 @@ export const identityBodies: Record<string, Fields> = {
       min: 1,
     },
   },
-  assetKeys: { keys: { kind: "strings", min: 1, max: 200 } },
+  assetKeys: { keys: { kind: "strings", min: 1, max: MAX_ASSET_SELECTION } },
   favorites: {
-    keys: { kind: "strings", min: 1, max: 200 },
+    keys: { kind: "strings", min: 1, max: MAX_ASSET_SELECTION },
     favorite: { kind: "boolean", strict: false },
   },
   login: loginFields,
