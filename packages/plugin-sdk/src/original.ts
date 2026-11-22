@@ -8,8 +8,16 @@ export const originalPolicySchema = z.discriminatedUnion("version", [
   z.object({ version: z.literal(3) }).strict(),
   z
     .object({
-      version: z.union([z.literal(4), z.literal(5)]),
+      version: z.literal(4),
       studioDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .strict(),
+  z
+    .object({
+      version: z.literal(5),
+      studioDigest: z.string().regex(/^[a-f0-9]{64}$/),
+      stream: z.literal("sse").optional(),
+      artifactOrigins: z.array(z.string().max(200)).max(16).optional(),
     })
     .strict(),
 ]);

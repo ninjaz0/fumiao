@@ -1,7 +1,7 @@
 {
   "id": "flow",
-  "version": "1.0.0",
-  "notes": "首次发布",
+  "version": "2.0.0",
+  "notes": "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS",
   "package": "flow.fmplugin.json",
-  "sha256": "5aef66b00034c8dd5ad8c7ff8be8f51966f5dfb2bf770b8e63832175686faeb5"
+  "sha256": "b98612ed76953130c26512cffdde2bb048f8c2b2a8f64208efdd616409770e57"
 }

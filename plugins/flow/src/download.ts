@@ -1,3 +1,4 @@
+import { flowDownloadPlan } from "./artifact-plan.js";
 import { flowState } from "./state.js";
 import {
   ArtifactDownloadError,
@@ -13,54 +14,18 @@ export function flowArtifactSource(
   const base = String(config.baseUrl).replace(/\/+$/, ""),
     publicUrl = String(
       config.publicUrl || "https://backend.nvmes.com/flow",
-    ).replace(/\/+$/, ""),
-    parsed = splitArtifactUrl(url);
-  for (const origin of [
-    base,
-    publicUrl,
-    splitArtifactUrl(base).path
-      ? base
-      : base + splitArtifactUrl(publicUrl).path,
-  ]) {
-    const allowed = splitArtifactUrl(origin),
-      prefix = allowed.path.replace(/\/+$/, "") + "/tmp/";
-    if (parsed.netloc !== allowed.netloc || !parsed.path.startsWith(prefix))
-      continue;
-    const name = parsed.path.slice(prefix.length);
-    if (
-      !/^[A-Za-z0-9_.-]{1,200}$/.test(name) ||
-      name.includes("..") ||
-      parsed.query ||
-      parsed.fragment
-    )
-      throw new ArtifactDownloadError("Flow 返回的缓存地址无效", "failed");
+    ).replace(/\/+$/, "");
+  const plan = flowDownloadPlan(
+    url,
+    splitArtifactUrl(base),
+    splitArtifactUrl(publicUrl),
+  );
+  if (plan.error) throw new ArtifactDownloadError(plan.error, "failed");
+  if (plan.path)
     return {
-      url: base + "/tmp/" + name,
+      url: base + plan.path,
       headers: { Authorization: "Bearer " + config.apiKey },
     };
-  }
-  // Check the literal hostname before WHATWG URL decoding or slash normalization.
-  const at = parsed.netloc.lastIndexOf("@"),
-    credentials = at < 0 ? "" : parsed.netloc.slice(0, at),
-    authority = parsed.netloc.slice(at + 1),
-    colon = authority.lastIndexOf(":"),
-    hostname = (
-      colon < 0 ? authority : authority.slice(0, colon)
-    ).toLowerCase(),
-    port = colon < 0 ? "" : authority.slice(colon + 1);
-  if (parsed.scheme !== "https" || credentials.replace(":", ""))
-    throw new ArtifactDownloadError("Flow 返回的媒体地址不受支持", "failed");
-  if (port && (!/^\d+$/.test(port) || Number(port) > 65535))
-    throw new Error("Invalid port");
-  if (
-    (port && Number(port) !== 443) ||
-    !(
-      hostname === "storage.googleapis.com" ||
-      hostname === "flow-content.google" ||
-      hostname.endsWith(".googleusercontent.com")
-    )
-  )
-    throw new ArtifactDownloadError("Flow 返回的媒体地址不受支持", "failed");
   return { url, headers: {} as Record<string, string> };
 }
 export const flowDownload: ProviderPlugin = {

@@ -38,9 +38,9 @@ const load = async (id: string): Promise<PackageFile> =>
   JSON.parse(
     await readFile("plugins/" + id + "/" + id + ".fmplugin.json", "utf8"),
   );
-const legacyMuse = async (): Promise<PackageFile> =>
+const legacyRequest = async (id: string): Promise<PackageFile> =>
   JSON.parse(
-    await readFile("plugins/muse/package/legacy-1.0.0.fmplugin.json", "utf8"),
+    await readFile(`plugins/${id}/package/legacy-1.0.0.fmplugin.json`, "utf8"),
   );
 const legacyGpu = async (): Promise<PackageFile> =>
   JSON.parse(
@@ -70,7 +70,7 @@ for (const id of ["flow", "muse"]) {
       " file into an empty Studio, then drain a frozen job across update, restart and disable",
     async () => {
       const f = await setup(),
-        file = id === "muse" ? await legacyMuse() : await load(id),
+        file = await legacyRequest(id),
         seen: string[] = [],
         png = await sharp({
           create: { width: 16, height: 16, channels: 3, background: "#345678" },
@@ -2216,189 +2216,265 @@ test("subscribers receive committed job transitions and actual team membership c
   }
 });
 
-test("Muse sandbox upgrade pauses an old private service, drains its snapshot and delivers a new image through the repaired connection", async () => {
-  const f = await setup();
-  const old = await legacyMuse(),
-    next = await load("muse");
-  const png = await sharp({
-    create: { width: 16, height: 20, channels: 3, background: "#125678" },
-  })
-    .png()
-    .toBuffer();
-  const seen: { key: string; token: string; body: Record<string, unknown> }[] =
-    [];
-  const fixture = createServer(async (req, res) => {
-    const token = String(req.headers.authorization);
-    if (!["Bearer previous", "Bearer repaired"].includes(token))
-      return void res.writeHead(401).end();
-    if (req.url === "/readyz")
-      return void res.end('{"status":"ready","accounts":[1]}');
-    if (req.url === "/v1/models")
-      return void res.end('{"data":[{"id":"muse-image"}]}');
-    if (req.url === "/v1/queue")
-      return void res.end('{"capacity":2,"tasks":[]}');
-    if (req.url === "/v1/media/result.png") return void res.end(png);
-    if (req.method === "POST" && req.url === "/v1/images/tasks") {
-      const parts = [];
-      for await (const chunk of req) parts.push(chunk);
-      seen.push({
-        key: String(req.headers["idempotency-key"]),
-        token,
-        body: JSON.parse(Buffer.concat(parts).toString()),
+for (const id of ["muse", "flow"])
+  test(
+    id +
+      " sandbox upgrade pauses an old private service, drains its snapshot and delivers new media through the repaired connection",
+    async () => {
+      const muse = id === "muse",
+        model = muse ? "muse-image" : "flow:veo-3.1-quality-4s-landscape";
+      const upstream = model.replace(/^flow:/, "");
+      const f = await setup();
+      const old = await legacyRequest(id),
+        next = await load(id);
+      const png = await sharp({
+        create: { width: 16, height: 20, channels: 3, background: "#125678" },
+      })
+        .png()
+        .toBuffer();
+      let media = png;
+      if (!muse) {
+        const path = join(f.directory, "result.mp4");
+        execFileSync("ffmpeg", [
+          "-loglevel",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "color=s=32x24:r=8",
+          "-t",
+          "1",
+          "-pix_fmt",
+          "yuv420p",
+          path,
+        ]);
+        media = await readFile(path);
+      }
+      const seen: {
+        key: string;
+        token: string;
+        body: Record<string, unknown>;
+      }[] = [];
+      const fixture = createServer(async (req, res) => {
+        const token = String(req.headers.authorization);
+        if (!["Bearer previous", "Bearer repaired"].includes(token))
+          return void res.writeHead(401).end();
+        if (req.url === "/readyz")
+          return void res.end('{"status":"ready","accounts":[1]}');
+        if (req.url === "/v1/models")
+          return void res.end(JSON.stringify({ data: [{ id: upstream }] }));
+        if (req.url === "/health")
+          return void res.end(
+            '{"backend_running":true,"has_active_tokens":true}',
+          );
+        if (req.url === "/v1/queue")
+          return void res.end('{"capacity":2,"tasks":[]}');
+        if (req.url === "/v1/media/result.png" || req.url === "/tmp/result.mp4")
+          return void res.end(media);
+        if (
+          req.method === "POST" &&
+          req.url === (muse ? "/v1/images/tasks" : "/v1/chat/completions")
+        ) {
+          const parts = [];
+          for await (const chunk of req) parts.push(chunk);
+          seen.push({
+            key: String(req.headers["idempotency-key"]),
+            token,
+            body: JSON.parse(Buffer.concat(parts).toString()),
+          });
+          if (!muse)
+            return void res.end(
+              `data: {"choices":[{"delta":{"content":"<video src='https://backend.nvmes.com/flow/tmp/result.mp4'>"}}]}\ndata: [DONE]\n`,
+            );
+          return void res.end(
+            JSON.stringify({
+              task_id: "task_" + "a".repeat(32),
+              status: "queued",
+            }),
+          );
+        }
+        if (req.url === "/v1/images/tasks/task_" + "a".repeat(32))
+          return void res.end(
+            '{"status":"completed","url":"/v1/media/result.png"}',
+          );
+        res.writeHead(404).end();
       });
-      return void res.end(
-        JSON.stringify({ task_id: "task_" + "a".repeat(32), status: "queued" }),
-      );
-    }
-    if (req.url === "/v1/images/tasks/task_" + "a".repeat(32))
-      return void res.end(
-        '{"status":"completed","url":"/v1/media/result.png"}',
-      );
-    res.writeHead(404).end();
-  });
-  fixture.listen(0, "127.0.0.1");
-  await once(fixture, "listening");
-  const base =
-    "http://127.0.0.1:" + (fixture.address() as { port: number }).port;
-  const sandboxSend: typeof chatHttp = (url, options) => {
-    assert.equal(url.origin, "https://1.1.1.1");
-    assert.ok(options.lookup);
-    return chatHttp(new URL(url.pathname, base), {
-      ...options,
-      lookup: undefined,
-    });
-  };
-  const restart = () => {
-    f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
-    return new Executor(f.p);
-  };
-  try {
-    restart();
-    assert.equal(next.adapterModule, undefined);
-    await f.packages.install(f.actor, old);
-    const c = await f.p.createConnection(
-      f.actor,
-      {
-        pluginId: old.id,
-        version: old.adapterVersion,
-        name: "Muse",
-        config: { baseUrl: base, apiKey: "previous" },
-      },
-      true,
-    );
-    const catalog = new StudioCatalog(f.db),
-      prices = await catalog.prices();
-    await f.db.transaction((sql) =>
-      catalog.savePrices(
-        sql,
-        Object.fromEntries(prices.items.map((i) => [i.key, 3])),
-        prices.revision,
-      ),
-    );
-    await f.packages.change(f.actor, "muse", 1, "enable");
-    const team = await one(f.db, "SELECT * FROM workspaces WHERE kind='team'");
-    await f.db.transaction((sql) =>
-      f.p.credit(sql, team.id, 100, randomUUID(), "adjust"),
-    );
-    const submit = async (uid: string) => {
-      const g = new OriginalGeneration(f.p);
-      return g.submit(
-        f.actor,
-        await g.parse("image", {
-          uid,
-          model: "muse-image",
-          prompt: "<Picture １> 示例",
-        }),
-        String(team.public_id),
-      );
-    };
-    const uid = randomUUID(),
-      accepted = await submit(uid);
-    const job = (id: number) =>
-      one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [id]);
-    const before = await job(accepted.id);
-    await assert.rejects(
-      f.packages.install(
-        f.actor,
-        { ...next, studioProgram: next.studioProgram + " " },
-        2,
-      ),
-      /摘要/,
-    );
-    await assert.rejects(
-      f.packages.install(
-        f.actor,
-        {
-          ...next,
-          contributes: {
-            version: 1,
-            hostCapabilities: ["http", "media"],
-            http: { origins: [], connection: true },
+      fixture.listen(0, "127.0.0.1");
+      await once(fixture, "listening");
+      const base =
+        "http://127.0.0.1:" + (fixture.address() as { port: number }).port;
+      const sandboxSend: typeof chatHttp = (url, options) => {
+        assert.equal(url.origin, "https://1.1.1.1");
+        assert.ok(options.lookup);
+        return chatHttp(new URL(url.pathname, base), {
+          ...options,
+          lookup: undefined,
+        });
+      };
+      const restart = () => {
+        f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+        return new Executor(f.p);
+      };
+      try {
+        restart();
+        assert.equal(next.adapterModule, undefined);
+        await f.packages.install(f.actor, old);
+        const c = await f.p.createConnection(
+          f.actor,
+          {
+            pluginId: old.id,
+            version: old.adapterVersion,
+            name: id,
+            config: { baseUrl: base, apiKey: "previous" },
           },
-        },
-        2,
-      ),
-      /密钥注入/,
-    );
-    await f.packages.install(f.actor, next, 2);
-    const paused = (await f.p.studioConnections(f.actor))[0];
-    assert.equal(paused.addressPause, "non-public");
-    assert.equal(paused.enabled, true);
-    assert.equal(paused.values.baseUrl, base);
-    assert.equal((await submit(uid)).id, accepted.id);
-    await assert.rejects(submit(randomUUID()), /执行连接/);
-    assert.equal(seen.length, 0);
-    const oldWorker = restart();
-    await oldWorker.execute(before.id);
-    await oldWorker.execute(before.id);
-    const completed = await job(accepted.id);
-    assert.equal(completed.state, "completed", completed.error);
-    assert.equal(completed.config_snapshot, before.config_snapshot);
-    assert.equal(completed.plugin_version, old.adapterVersion);
-    await f.p.updateConnection(f.actor, c.id, {
-      revision: paused.revision,
-      enabled: true,
-      concurrency: 2,
-      config: { baseUrl: "https://1.1.1.1", apiKey: "repaired" },
-    });
-    assert.equal(
-      (await f.p.studioConnections(f.actor))[0].addressPause,
-      undefined,
-    );
-    assert.deepEqual(await f.p.connectionHealth(f.actor, c.id), {
-      ready: true,
-      models: ["muse-image"],
-      available: ["muse-image"],
-    });
-    await new QueueHealthPoller(f.p).refresh(c.id);
-    const newer = await job((await submit(randomUUID())).id);
-    assert.equal(newer.package_version, next.version);
-    assert.equal(newer.plugin_version, next.adapterVersion);
-    const worker = restart();
-    await Promise.all([worker.execute(newer.id), worker.execute(newer.id)]);
-    await restart().execute(newer.id);
-    const done = await job(newer.public_id);
-    assert.equal(done.state, "completed", done.error);
-    assert.equal(done.attempts, 1);
-    assert.deepEqual(
-      seen.map((v) => [v.key, v.token, v.body.prompt]),
-      [
-        [before.id.replaceAll("-", ""), "Bearer previous", "[图１] 示例"],
-        [newer.id.replaceAll("-", ""), "Bearer repaired", "[图１] 示例"],
-      ],
-    );
-    assert.equal(Number((await f.p.wallet(f.actor, team.id)).balance), 94);
-    assert.equal(Number((await f.p.wallet(f.actor, team.id)).held), 0);
-    const asset = await one(f.db, "SELECT metadata FROM assets WHERE id=$1", [
-      done.result.assets[0],
-    ]);
-    assert.deepEqual(
-      [asset.metadata.mime, asset.metadata.width, asset.metadata.height],
-      ["image/png", 16, 20],
-    );
-  } finally {
-    fixture.closeAllConnections();
-    await new Promise<void>((done) => fixture.close(() => done()));
-    await f.cleanup();
-  }
-});
+          true,
+        );
+        const catalog = new StudioCatalog(f.db),
+          prices = await catalog.prices();
+        await f.db.transaction((sql) =>
+          catalog.savePrices(
+            sql,
+            Object.fromEntries(prices.items.map((i) => [i.key, 3])),
+            prices.revision,
+          ),
+        );
+        await f.packages.change(f.actor, id, 1, "enable");
+        const team = await one(
+          f.db,
+          "SELECT * FROM workspaces WHERE kind='team'",
+        );
+        await f.db.transaction((sql) =>
+          f.p.credit(sql, team.id, 100, randomUUID(), "adjust"),
+        );
+        const submit = async (uid: string) => {
+          const g = new OriginalGeneration(f.p);
+          return g.submit(
+            f.actor,
+            await g.parse(muse ? "image" : "video", {
+              uid,
+              model,
+              prompt: "<Picture １> 示例",
+            }),
+            String(team.public_id),
+          );
+        };
+        const uid = randomUUID(),
+          accepted = await submit(uid);
+        const job = (id: number) =>
+          one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [id]);
+        const before = await job(accepted.id);
+        await assert.rejects(
+          f.packages.install(
+            f.actor,
+            { ...next, studioProgram: next.studioProgram + " " },
+            2,
+          ),
+          /摘要/,
+        );
+        await assert.rejects(
+          f.packages.install(
+            f.actor,
+            {
+              ...next,
+              contributes: {
+                version: 1,
+                hostCapabilities: ["http", "media"],
+                http: next.contributes!.http,
+              },
+            },
+            2,
+          ),
+          /密钥注入/,
+        );
+        if (!muse)
+          await assert.rejects(
+            f.packages.install(
+              f.actor,
+              {
+                ...next,
+                contributes: {
+                  ...next.contributes!,
+                  http: { connection: true, origins: [] },
+                },
+              },
+              2,
+            ),
+            /成品域名/,
+          );
+        await f.packages.install(f.actor, next, 2);
+        const paused = (await f.p.studioConnections(f.actor))[0];
+        assert.equal(paused.addressPause, "non-public");
+        assert.equal(paused.enabled, true);
+        assert.equal(paused.values.baseUrl, base);
+        assert.equal((await submit(uid)).id, accepted.id);
+        await assert.rejects(submit(randomUUID()), /执行连接/);
+        assert.equal(seen.length, 0);
+        const oldWorker = restart();
+        await oldWorker.execute(before.id);
+        await oldWorker.execute(before.id);
+        const completed = await job(accepted.id);
+        assert.equal(completed.state, "completed", completed.error);
+        assert.equal(completed.config_snapshot, before.config_snapshot);
+        assert.equal(completed.plugin_version, old.adapterVersion);
+        await f.p.updateConnection(f.actor, c.id, {
+          revision: paused.revision,
+          enabled: true,
+          concurrency: 2,
+          config: { baseUrl: "https://1.1.1.1", apiKey: "repaired" },
+        });
+        assert.equal(
+          (await f.p.studioConnections(f.actor))[0].addressPause,
+          undefined,
+        );
+        assert.deepEqual(await f.p.connectionHealth(f.actor, c.id), {
+          ready: true,
+          models: [upstream],
+          available: [model],
+        });
+        await new QueueHealthPoller(f.p).refresh(c.id);
+        const newer = await job((await submit(randomUUID())).id);
+        assert.equal(newer.package_version, next.version);
+        assert.equal(newer.plugin_version, next.adapterVersion);
+        const worker = restart();
+        await Promise.all([worker.execute(newer.id), worker.execute(newer.id)]);
+        await restart().execute(newer.id);
+        const done = await job(newer.public_id);
+        assert.equal(done.state, "completed", done.error);
+        assert.equal(done.attempts, 1);
+        assert.deepEqual(
+          seen.map((v) => [
+            v.key,
+            v.token,
+            muse ? v.body.prompt : (v.body.messages as any)[0].content[0].text,
+          ]),
+          [
+            [
+              muse ? before.id.replaceAll("-", "") : "undefined",
+              "Bearer previous",
+              muse ? "[图１] 示例" : "<Picture １> 示例",
+            ],
+            [
+              muse ? newer.id.replaceAll("-", "") : "undefined",
+              "Bearer repaired",
+              muse ? "[图１] 示例" : "<Picture １> 示例",
+            ],
+          ],
+        );
+        assert.equal(Number((await f.p.wallet(f.actor, team.id)).balance), 94);
+        assert.equal(Number((await f.p.wallet(f.actor, team.id)).held), 0);
+        const asset = await one(
+          f.db,
+          "SELECT metadata FROM assets WHERE id=$1",
+          [done.result.assets[0]],
+        );
+        assert.deepEqual(
+          [asset.metadata.mime, asset.metadata.width, asset.metadata.height],
+          muse ? ["image/png", 16, 20] : ["video/mp4", 32, 24],
+        );
+      } finally {
+        fixture.closeAllConnections();
+        await new Promise<void>((done) => fixture.close(() => done()));
+        await f.cleanup();
+      }
+    },
+  );

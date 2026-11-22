@@ -19,6 +19,7 @@ async function expression(path) {
 const releases = [
   {
     id: "flow",
+    sandboxBuild: "package/build.mjs",
     archive: "legacy-1.0.0.fmplugin.json",
     archiveDigest: "5aef66b00034c8dd5ad8c7ff8be8f51966f5dfb2bf770b8e63832175686faeb5",
   },
@@ -127,7 +128,7 @@ for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of
           ? "对话请求和流式回复由沙箱处理"
           : id === "gpu"
             ? "节点池协议升级，排空任务后重新接入实例"
-            : id === "muse"
+            : id === "muse" || id === "flow"
               ? "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS"
               : "首次发布",
       package: path,

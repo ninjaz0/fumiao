@@ -80,7 +80,8 @@ export async function chatHttp(
   url: URL,
   options: {
     method: "GET" | "POST";
-    key: string;
+    key?: string;
+    forwarded?: { host: string; scheme: string };
     body?: unknown;
     signal: AbortSignal;
     connectMs: number;
@@ -100,7 +101,15 @@ export async function chatHttp(
   if (body && body.length > (options.maxRequestBytes ?? Infinity))
     throw new ChatTransportError("Provider request exceeds byte limit");
   const headers: Record<string, string | number> = {
-    Authorization: "Bearer " + options.key,
+    ...(options.key === undefined
+      ? {}
+      : { Authorization: "Bearer " + options.key }),
+    ...(options.forwarded
+      ? {
+          "X-Forwarded-Host": options.forwarded.host,
+          "X-Forwarded-Proto": options.forwarded.scheme,
+        }
+      : {}),
     Accept: "*/*",
     ...(options.idempotencyKey
       ? { "Idempotency-Key": options.idempotencyKey }

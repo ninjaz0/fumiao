@@ -1,3 +1,7 @@
+import {
+  readProviderStream,
+  ProviderStreamInterpreterError,
+} from "./provider-stream.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -38,6 +42,7 @@ const instruction = z
     path: pathSchema,
     body: z.record(z.string(), z.unknown()).optional(),
     idempotency: z.enum(["compact", "standard"]).optional(),
+    publicAlias: z.string().max(2048).optional(),
     timeoutMs: z.number().int().min(100).max(600000),
   })
   .strict();
@@ -52,7 +57,18 @@ const outcome = z
   .strict()
   .refine((v) => !!v.receipt !== !!v.disposition);
 const artifactPlan = z.union([
-  z.object({ path: pathSchema }).strict(),
+  z
+    .object({
+      path: pathSchema,
+      timeoutMs: z.number().int().min(100).max(90000).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      external: z.string().max(65536),
+      timeoutMs: z.number().int().min(100).max(90000),
+    })
+    .strict(),
   z.object({ error: z.string().min(1).max(500) }).strict(),
 ]);
 type Config = Record<string, unknown>;
@@ -101,6 +117,7 @@ export async function sandboxRequest(
   );
   const hooks = await loadStudioPolicy(source, [
     ...workbenchHooks,
+    ...(policy.stream ? ["stream"] : []),
     "request",
     "result",
     "serviceProbe",
@@ -124,9 +141,10 @@ export async function sandboxRequest(
     path: string,
     signal: AbortSignal,
     timeout: number,
-    maxResponseBytes: number,
+    maxResponseBytes: number | undefined,
     body?: unknown,
     idempotencyKey?: string,
+    forwarded?: { host: string; scheme: string },
   ) {
     const url = service(config);
     url.pathname = url.pathname.replace(/\/+$/, "") + pathSchema.parse(path);
@@ -135,6 +153,7 @@ export async function sandboxRequest(
       key: String(config.apiKey),
       body,
       idempotencyKey,
+      forwarded,
       signal,
       lookup: guardedLookup,
       connectMs: timeout,
@@ -189,8 +208,14 @@ export async function sandboxRequest(
       "serviceProbe",
       [],
       ["service.read"],
-      async (_method, args) =>
-        read(config, pathSchema.parse(args[0]), signal, 8000, 256 * 1024),
+      async (_method, args, hostSignal) =>
+        read(
+          config,
+          pathSchema.parse(args[0]),
+          AbortSignal.any([signal, hostSignal]),
+          8000,
+          256 * 1024,
+        ),
     );
     return z
       .object({
@@ -198,6 +223,73 @@ export async function sandboxRequest(
         models: z.array(z.string().max(500)).max(10000).optional(),
       })
       .parse(result);
+  }
+  async function stream(
+    e: Execution,
+    plan: z.infer<typeof instruction>,
+    body: unknown,
+  ) {
+    let response;
+    let failure: "connection" | "invalid" | "oversized" = "connection";
+    let status = 0,
+      text = "";
+    try {
+      const alias = plan.publicAlias
+        ? new URL(String(e.config.publicUrl || plan.publicAlias))
+        : null;
+      requireValue(
+        !alias ||
+          (["http:", "https:"].includes(alias.protocol) &&
+            !alias.username &&
+            !alias.password),
+        400,
+        "服务公开地址无效",
+      );
+      // Framing accounts for the decoded bytes through the terminal event.
+      response = await open(
+        e.config,
+        plan.path,
+        e.signal,
+        plan.timeoutMs,
+        undefined,
+        body,
+        undefined,
+        alias
+          ? { host: alias.host, scheme: alias.protocol.slice(0, -1) }
+          : undefined,
+      );
+      status = response.status;
+      if (status >= 200 && status < 300) {
+        const reply = await readProviderStream(
+          source,
+          e.kind,
+          response.body,
+          e.signal,
+          e.reportProviderNote,
+        );
+        failure = "invalid";
+        if (reply.outcome !== undefined) return outcome.parse(reply.outcome);
+        failure = reply.failure ?? "invalid";
+      } else {
+        failure = "invalid";
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of response.body) {
+          const part = chunk.subarray(0, 65536 - size);
+          chunks.push(part);
+          size += part.length;
+          if (size === 65536) break;
+        }
+        text = Buffer.concat(chunks).toString("utf8");
+        return outcome.parse(sync("result", { status, text }));
+      }
+    } catch (error) {
+      if (error instanceof ProviderStreamInterpreterError && !e.signal.aborted)
+        failure = "invalid";
+    } finally {
+      response?.close();
+    }
+    return outcome.parse(sync("result", { failure }));
   }
   async function execute(e: Execution, remoteId?: string) {
     const plan = instruction.parse(
@@ -218,20 +310,29 @@ export async function sandboxRequest(
       400,
       "插件请求与执行阶段不匹配",
     );
-    const reply = await read(
-      e.config,
-      plan.path,
-      e.signal,
-      plan.timeoutMs,
-      2 * 1024 ** 2,
-      expandReferences(plan.body, e),
-      plan.idempotency === "compact"
-        ? e.idempotencyKey.replaceAll("-", "")
-        : plan.idempotency === "standard"
-          ? e.idempotencyKey
-          : undefined,
-    );
-    const result = outcome.parse(sync("result", reply, remoteId ?? null));
+    const body = expandReferences(plan.body, e);
+    const result =
+      policy?.version === 5 && policy.stream && !remoteId
+        ? await stream(e, plan, body)
+        : outcome.parse(
+            sync(
+              "result",
+              await read(
+                e.config,
+                plan.path,
+                e.signal,
+                plan.timeoutMs,
+                2 * 1024 ** 2,
+                body,
+                plan.idempotency === "compact"
+                  ? e.idempotencyKey.replaceAll("-", "")
+                  : plan.idempotency === "standard"
+                    ? e.idempotencyKey
+                    : undefined,
+              ),
+              remoteId ?? null,
+            ),
+          );
     if (result.note && !remoteId) await e.reportProviderNote?.(result.note);
     if (result.clock) await e.reportProviderClock?.(result.clock);
     if (result.timing) await e.reportTiming?.(result.timing);
@@ -246,8 +347,25 @@ export async function sandboxRequest(
     health: async (c, s) => (await inspectService(c, s)).ready,
     queueHealth: async (c, s) =>
       queueHealthSchema.parse(
-        await resource("queueHealth", [], ["service.read"], (_method, args) =>
-          read(c, pathSchema.parse(args[0]), s),
+        await resource(
+          "queueHealth",
+          [],
+          ["service.read"],
+          (_method, args, hostSignal) =>
+            read(
+              c,
+              pathSchema.parse(args[0]),
+              AbortSignal.any([s, hostSignal]),
+              8000,
+              args.length > 1
+                ? z
+                    .number()
+                    .int()
+                    .min(1)
+                    .max(2 * 1024 ** 2)
+                    .parse(args[1])
+                : undefined,
+            ),
         ),
       ),
     submit: (e) => execute(e),
@@ -267,13 +385,47 @@ export async function sandboxRequest(
           url,
           publicPart(base),
           alias ? publicPart(alias) : null,
+          recovering,
         ),
       );
       if ("error" in plan)
         throw new ArtifactDownloadError(plan.error, "failed");
       let response;
       try {
-        response = await open(config, plan.path, signal, 45000, 64 * 1024 ** 2);
+        if ("external" in plan) {
+          const destination = new URL(plan.external);
+          requirePublicHttps(destination);
+          const granted =
+            policy?.version === 5 &&
+            policy.artifactOrigins?.some((origin) => {
+              if (!origin.startsWith("https://*."))
+                return destination.origin === origin;
+              return (
+                !destination.port &&
+                destination.hostname.endsWith(origin.slice("https://*".length))
+              );
+            });
+          requireValue(
+            plan.external === url && granted,
+            403,
+            "成品域名未获授权",
+          );
+          response = await send(destination, {
+            method: "GET",
+            signal,
+            lookup: guardedLookup,
+            connectMs: plan.timeoutMs,
+            readMs: plan.timeoutMs,
+            maxResponseBytes: 64 * 1024 ** 2,
+          });
+        } else
+          response = await open(
+            config,
+            plan.path,
+            signal,
+            plan.timeoutMs ?? 45000,
+            64 * 1024 ** 2,
+          );
         requireValue(
           response.status >= 200 && response.status < 300,
           502,

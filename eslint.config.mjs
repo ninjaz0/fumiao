@@ -35,7 +35,7 @@ const boundary = (files, patterns, ignores = []) => ({
 // `debt` lists the files that still cross a layer; do not add to it.
 const debt = {
   plugins: [
-    "plugins/flow/src/{lifecycle,artifacts}.ts",
+    "plugins/flow/src/artifacts.ts",
     "plugins/images/src/{settings,lifecycle}.ts",
     "plugins/remote/src/original.ts",
     "plugins/muse/src/artifacts.ts",

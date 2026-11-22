@@ -285,6 +285,13 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
   }
   const studio = manifest.originalSubmission?.version === 4;
   const request = manifest.originalSubmission?.version === 5;
+  if (manifest.originalSubmission?.version === 5)
+    requireValue(
+      (manifest.originalSubmission.artifactOrigins ?? []).every(origin =>
+        contributions.http?.origins.includes(origin) &&
+        /^https:\/\/(?:\*\.)?(?:[a-z0-9-]+\.)+[a-z0-9-]+$/.test(origin)),
+      400, "成品域名必须声明为获准的 HTTPS 源",
+    );
   if (request || contributions.http?.connection)
     requireValue(
       request &&
