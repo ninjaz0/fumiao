@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import type { PluginMedia } from "./plugin-media.js";
 import { lookup as resolve } from "node:dns";
 import { request as httpsRequest } from "node:https";
@@ -79,7 +80,11 @@ export type HttpTransport = (
   url: URL,
   init: { method: string; headers: Record<string, string>; body?: string },
   signal: AbortSignal,
-) => Promise<{ status: number; contentType: string; body: Buffer }>;
+) => Promise<{
+  status: number;
+  contentType: string;
+  body: Buffer | ReadableStream<Uint8Array>;
+}>;
 const transport: HttpTransport = (url, init, signal) =>
   new Promise((done, fail) => {
     const req = httpsRequest(
@@ -93,28 +98,61 @@ const transport: HttpTransport = (url, init, signal) =>
           AbortSignal.timeout(hostLimits.httpTimeoutMs),
         ]),
       },
-      (res) => {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        res.on("data", (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > hostLimits.httpResponseBytes)
-            req.destroy(new DomainError(413, "上游响应过大"));
-          else chunks.push(chunk);
-        });
-        res.on("end", () =>
-          done({
-            status: res.statusCode ?? 0,
-            contentType: String(res.headers["content-type"] ?? ""),
-            body: Buffer.concat(chunks),
-          }),
-        );
-        res.on("error", fail);
-      },
+      (res) =>
+        done({
+          status: res.statusCode ?? 0,
+          contentType: String(res.headers["content-type"] ?? ""),
+          body: Readable.toWeb(res, {
+            strategy: {
+              highWaterMark: 64 * 1024,
+              size: (chunk: Uint8Array) => chunk.byteLength,
+            },
+          }) as ReadableStream<Uint8Array>,
+        }),
     );
     req.on("error", fail);
     req.end(init.body);
   });
+
+/** Read the entity body once. Count raw bytes before any text conversion. */
+async function* httpChunks(
+  body: Buffer | ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+) {
+  if (Buffer.isBuffer(body)) {
+    requireValue(
+      body.length <= hostLimits.httpResponseBytes,
+      413,
+      "上游响应过大",
+    );
+    yield body;
+    return;
+  }
+  const reader = body.getReader();
+  const cancel = () => {
+    void reader.cancel().catch(() => {});
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  let bytes = 0;
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const chunk = await reader.read();
+      signal.throwIfAborted();
+      if (chunk.done) return;
+      bytes += chunk.value.byteLength;
+      requireValue(bytes <= hostLimits.httpResponseBytes, 413, "上游响应过大");
+      yield Buffer.from(chunk.value);
+    }
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    throw new DomainError(502, "上游响应中断");
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
 
 const fetchInput = z.tuple([
   z.string().max(2048),
@@ -211,6 +249,12 @@ export class PluginHost {
           args,
           signal,
         );
+      case "http.openStream":
+        requireValue(!this.streamOpened, 400, "本次调用已打开响应流");
+        this.streamOpened = true;
+        return this.fetch(args, signal, true);
+      case "http.readStream":
+        return this.readStream(args, signal);
       case "http.fetch":
         return this.fetch(args, signal);
       case "data.get":
@@ -221,7 +265,34 @@ export class PluginHost {
     }
   };
 
-  private async fetch(args: unknown[], signal: AbortSignal) {
+  private streamOpened = false;
+  private streamReading = false;
+  private stream?: AsyncGenerator<Buffer>;
+  private decoder = new TextDecoder();
+  private async readStream(args: unknown[], signal: AbortSignal) {
+    requireValue(
+      args.length === 0 && this.stream && !this.streamReading,
+      400,
+      "流式读取状态无效",
+    );
+    const stream = this.stream;
+    this.streamReading = true;
+    try {
+      signal.throwIfAborted();
+      const { done, value } = await stream.next();
+      if (done) this.stream = undefined;
+      return {
+        done: !!done,
+        text: this.decoder.decode(value, { stream: !done }),
+      };
+    } catch (error) {
+      this.stream = undefined;
+      throw error;
+    } finally {
+      this.streamReading = false;
+    }
+  }
+  private async fetch(args: unknown[], signal: AbortSignal, streaming = false) {
     const parsed = fetchInput.safeParse(
       args.length === 1 ? [args[0], {}] : args,
     );
@@ -277,7 +348,7 @@ export class PluginHost {
       413,
       "请求正文过大",
     );
-    let response;
+    let response: Awaited<ReturnType<HttpTransport>>;
     try {
       response = await this.http(
         url,
@@ -294,7 +365,29 @@ export class PluginHost {
       );
     }
     // A redirect would leave the declared origins; hand it back unfollowed.
-    const text = response.body.toString("utf8");
+    const chunks = httpChunks(response.body, signal);
+    if (streaming) {
+      this.stream = chunks;
+      // The invocation can return before reading the first chunk.
+      const close = () => {
+        if (response.body instanceof ReadableStream && !response.body.locked)
+          void response.body.cancel().catch(() => {});
+        void chunks.return(undefined).catch(() => {});
+      };
+      if (signal.aborted) {
+        close();
+        signal.throwIfAborted();
+      }
+      signal.addEventListener("abort", close, { once: true });
+      return {
+        status: response.status,
+        ok: response.status >= 200 && response.status < 300,
+        contentType: response.contentType,
+      };
+    }
+    const parts: Buffer[] = [];
+    for await (const chunk of chunks) parts.push(chunk);
+    const text = Buffer.concat(parts).toString("utf8");
     let json: unknown;
     if (/\bjson\b/i.test(response.contentType))
       try {
@@ -373,23 +466,31 @@ export class PluginHost {
     );
     // The installation lock serializes independent transactions. Within the
     // same invocation, parallel puts must check and change quota in one statement.
-    const conflict = target === "global"
-      ? "(plugin_id,key) WHERE scope='global'"
-      : "(plugin_id,workspace_id,key) WHERE scope='workspace'";
+    const conflict =
+      target === "global"
+        ? "(plugin_id,key) WHERE scope='global'"
+        : "(plugin_id,workspace_id,key) WHERE scope='workspace'";
     const stored = await one(
       this.sql,
       `WITH usage AS (
          SELECT coalesce(sum(bytes),0) AS bytes,count(*) AS keys,
-           max(bytes) FILTER (WHERE ${where.clause} AND key=$${n+1}) AS previous
+           max(bytes) FILTER (WHERE ${where.clause} AND key=$${n + 1}) AS previous
          FROM studio_plugin_data WHERE plugin_id=$1
        )
        INSERT INTO studio_plugin_data(plugin_id,scope,workspace_id,key,value,bytes)
-       SELECT $1,'${target}',${target === "global" ? "NULL" : "$2::uuid"},$${n+1},$${n+2}::jsonb,$${n+3}::int FROM usage
-       WHERE bytes-coalesce(previous,0)+$${n+3}::int <= $${n+4}
-         AND keys+(previous IS NULL)::int <= $${n+5}
+       SELECT $1,'${target}',${target === "global" ? "NULL" : "$2::uuid"},$${n + 1},$${n + 2}::jsonb,$${n + 3}::int FROM usage
+       WHERE bytes-coalesce(previous,0)+$${n + 3}::int <= $${n + 4}
+         AND keys+(previous IS NULL)::int <= $${n + 5}
        ON CONFLICT ${conflict} DO UPDATE SET value=excluded.value,bytes=excluded.bytes,updated_at=now()
        RETURNING 1`,
-      [...where.params, name.data, value, bytes, hostLimits.dataPluginBytes, hostLimits.dataPluginKeys],
+      [
+        ...where.params,
+        name.data,
+        value,
+        bytes,
+        hostLimits.dataPluginBytes,
+        hostLimits.dataPluginKeys,
+      ],
     );
     requireValue(stored, 413, "插件数据超过容量上限");
     return true;

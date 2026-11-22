@@ -97,6 +97,8 @@ export type HostCapability = (typeof hostCapabilities)[number];
  * | media.transcode / media.concat | asset ID or ordered IDs, { format: "mp4" or "wav" } | new asset ID and metadata |
  * | media.extractFrame | asset ID, { seconds } | new PNG asset ID and metadata |
  * | http.fetch  | url, { method?, headers?, json? \| body? }   | { status, ok, contentType, text, json }        |
+ * | http.openStream | url, same options as fetch | { status, ok, contentType }; one response per invocation |
+ * | http.readStream | none | { done, text }; incremental UTF-8, including split code points |
  * | data.get    | key, { scope? }                             | stored value or null                           |
  * | data.list   | prefix?, { scope? }                         | { keys, more }                                 |
  * | data.put    | key, value, { scope? }                      | true                                           |
@@ -110,6 +112,8 @@ export const hostFunctions = {
   "media.transcode": { capability: "media", access: "write" },
   "media.concat": { capability: "media", access: "write" },
   "media.extractFrame": { capability: "media", access: "write" },
+  "http.openStream": { capability: "http", access: "write" },
+  "http.readStream": { capability: "http", access: "write" },
   "http.fetch": { capability: "http", access: "write" },
   "data.get": { capability: "data", access: "read" },
   "data.list": { capability: "data", access: "read" },
