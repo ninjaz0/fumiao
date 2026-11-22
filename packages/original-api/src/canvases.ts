@@ -446,18 +446,21 @@ export class OriginalCanvases {
     await sql.query("DELETE FROM document_assets WHERE document_id=$1", [
       row.id,
     ]);
-    for (const ref of refs) {
-      const asset = await one(sql, "SELECT id FROM assets WHERE public_id=$1", [
-        ref.media,
-      ]);
+    if (refs.length) {
       // Keep the original uniqueness failure for duplicate cross-role references.
       await sql.query(
-        "INSERT INTO canvas_media_refs(project_id,node,asset_id) VALUES($1,$2,$3)",
-        [row.id, ref.node, asset.id],
-      );
-      await sql.query(
-        "INSERT INTO document_assets(document_id,asset_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
-        [row.id, asset.id],
+        `WITH inserted_refs AS (
+           INSERT INTO canvas_media_refs(project_id,node,asset_id)
+           SELECT $1,r.node,a.id
+           FROM unnest($2::text[],$3::text[]) WITH ORDINALITY AS r(node,media,ordinal)
+           LEFT JOIN assets a ON a.public_id=r.media
+           ORDER BY r.ordinal
+           RETURNING asset_id
+         )
+         INSERT INTO document_assets(document_id,asset_id)
+         SELECT DISTINCT $1,asset_id FROM inserted_refs
+         ON CONFLICT DO NOTHING`,
+        [row.id, refs.map((ref) => ref.node), refs.map((ref) => ref.media)],
       );
     }
     await this.packs.syncCanvas(sql, user, row.workspace_id, row.id, document);
