@@ -192,15 +192,4 @@ export class S3Storage implements Storage {
       { expiresIn: 300 },
     );
   }
-  async uploadUrl(key: string, mime: string) {
-    return getSignedUrl(
-      this.client,
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        ContentType: mime,
-      }),
-      { expiresIn: 300 },
-    );
-  }
 }

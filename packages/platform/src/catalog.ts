@@ -239,15 +239,6 @@ export class StudioCatalog {
     }
     return { ...groups };
   }
-  async runtime(mode: "request" | "pull", sql: Sql = this.db) {
-    const rows = (
-      await sql.query(
-        "SELECT c.id,c.runtime FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE v.manifest->>'mode'=$1 AND c.runtime<>'{}'::jsonb ORDER BY c.position,c.id",
-        [mode],
-      )
-    ).rows;
-    return Object.fromEntries(rows.map((r) => [r.id, r.runtime]));
-  }
   async policy(sql: Sql = this.db) {
     const row = await one(sql, "SELECT revision,flags FROM studio_policy");
     return { revision: row.revision, enabled: row.flags };

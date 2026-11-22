@@ -3,46 +3,9 @@ import { z } from "zod";
 import { Platform, uuid, type Actor } from "./platform.js";
 import { one } from "./db.js";
 import { executableJob } from "./retired-jobs.js";
-import { requireValue, passwordRecord } from "./security.js";
+import { requireValue } from "./security.js";
 export class Operations {
   constructor(private p: Platform) {}
-  async user(actor: Actor, id: string, value: unknown) {
-    this.p.admin(actor);
-    uuid.parse(id);
-    const input = z
-      .object({
-        active: z.boolean(),
-        nickname: z.string().min(1).max(40),
-        password: z.string().min(12).max(200).optional(),
-      })
-      .parse(value);
-    return this.p.db.transaction(async (sql) => {
-      const user = await one(
-        sql,
-        "SELECT * FROM users WHERE id=$1 FOR UPDATE",
-        [id],
-      );
-      requireValue(user, 404, "用户不存在");
-      requireValue(
-        input.active || user.role !== "admin",
-        400,
-        "管理员账户不能在此禁用",
-      );
-      await sql.query(
-        "UPDATE users SET active=$2,nickname=$3,password=$4 WHERE id=$1",
-        [
-          id,
-          input.active,
-          input.nickname,
-          input.password ? await passwordRecord(input.password) : user.password,
-        ],
-      );
-      if (!input.active || input.password)
-        await sql.query("DELETE FROM sessions WHERE user_id=$1", [id]);
-      await this.p.audit(sql, actor, "user.update", id);
-      return { ok: true };
-    });
-  }
   async resolve(actor: Actor, id: string, value: unknown) {
     this.p.admin(actor);
     uuid.parse(id);
