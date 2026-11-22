@@ -5,7 +5,7 @@ import {
 } from "./studio-plugin-profile.js";
 import { one, type Sql } from "./db.js";
 import { requireValue } from "./security.js";
-import { validator } from "./plugins.js";
+import { validSavedConfig } from "./connection-address.js";
 import { hasStudioPackages } from "./studio-plugin-profile.js";
 import type { ProviderPlugin, ChatPolicy } from "@fumiao/plugin-sdk/index.js";
 export type ChatConnection = {
@@ -94,7 +94,11 @@ export class ChatProviders {
       }));
       requireValue(
         configs.every((c) =>
-          validator.validate(plugin.manifest.configSchema, c.config),
+          validSavedConfig(
+            plugin.manifest,
+            c.config,
+            c.row.sandbox_address_pause ?? null,
+          ),
         ),
         503,
         "原对话连接配置无效",
@@ -171,7 +175,9 @@ export class ChatProviders {
           row: matches[0]?.row,
           storedConfig,
           config,
-          configured: plugin.chatConfigured!(config),
+          configured:
+            !matches[0]?.row.sandbox_address_pause &&
+            plugin.chatConfigured!(config),
         });
       }
     }

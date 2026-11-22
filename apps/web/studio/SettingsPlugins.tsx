@@ -34,6 +34,7 @@ import "./settings-plugins.css";
 type Service = {
   values: Record<string, unknown>;
   configuredFields: string[];
+  addressPause?: "non-public" | "unresolved";
   id: string;
   name: string;
   plugin_id: string;
@@ -1082,6 +1083,17 @@ export function PluginSettings({
                                       className="plugin-drawer-card plugin-service-card"
                                       key={s.id}
                                     >
+                                      {s.addressPause && (
+                                        <p
+                                          className="plugin-alert plugin-feedback is-error"
+                                          role="status"
+                                        >
+                                          {s.addressPause === "unresolved"
+                                            ? "无法确认服务地址解析到公网。"
+                                            : "当前服务地址不符合公网 HTTPS 要求。"}
+                                          此连接已暂停接收新任务。请编辑服务地址并保存。
+                                        </p>
+                                      )}
                                       <div className="plugin-service-head">
                                         <div className="plugin-service-name">
                                           <strong>{s.name}</strong>
@@ -1137,11 +1149,13 @@ export function PluginSettings({
                                                     );
                                                   if (!health.ready) {
                                                     if (active.current)
-                                                      setReportErrors((old) => ({
-                                                        ...old,
-                                                        [s.id]:
-                                                          "连接检查未通过，请核对服务地址、网络连通性与密钥配置",
-                                                      }));
+                                                      setReportErrors(
+                                                        (old) => ({
+                                                          ...old,
+                                                          [s.id]:
+                                                            "连接检查未通过，请核对服务地址、网络连通性与密钥配置",
+                                                        }),
+                                                      );
                                                     return;
                                                   }
                                                   if (active.current)
@@ -1154,7 +1168,8 @@ export function PluginSettings({
                                                     setReportErrors((old) => ({
                                                       ...old,
                                                       [s.id]:
-                                                        (err as Error).message ||
+                                                        (err as Error)
+                                                          .message ||
                                                         "连接测试失败，请稍后重试",
                                                     }));
                                                 } finally {

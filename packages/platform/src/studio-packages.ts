@@ -1,4 +1,10 @@
-import { sandboxChat } from "./sandbox-chat.js";
+import {
+  addressPause,
+  connectionBase,
+  usesPublicConnection,
+  validSavedConfig,
+  type AddressPause,
+} from "./connection-address.js";
 import { nodeStudioPlugin } from "./node-studio-policy.js";
 import { createHash } from "node:crypto";
 import { nodePoolHooks } from "@fumiao/plugin-sdk/node-pools.js";
@@ -26,7 +32,12 @@ import { z } from "zod";
 import { Ajv } from "ajv";
 import { StudioCatalog } from "./catalog.js";
 import { one, type Sql } from "./db.js";
-import { canonical, connectionModels, validator } from "./plugins.js";
+import {
+  canonical,
+  connectionModels,
+  validator,
+  type PluginRegistry,
+} from "./plugins.js";
 import type { Platform, Actor } from "./platform.js";
 import { DomainError, requireValue } from "./security.js";
 import {
@@ -174,7 +185,7 @@ export function parsePackageFile(value: unknown): PackageFile {
   return result.data;
 }
 
-async function inspectPackage(file: PackageFile) {
+async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
   const binding = file.adapterModule
     ? await officialAdapter(file.id, file.adapterVersion, file.adapterModule)
     : undefined;
@@ -334,7 +345,7 @@ async function inspectPackage(file: PackageFile) {
       (file.remote
         ? remotePlugin(manifest, file.remote.endpoint)
         : manifest.chat?.sandbox
-          ? await sandboxChat(manifest)
+          ? await registry.chatAdapter(manifest)
           : file.studioProgram
             ? await nodeStudioPlugin(manifest, file.studioProgram)
             : portablePlugin(manifest)));
@@ -544,7 +555,10 @@ export class StudioPackages {
   async preview(actor: Actor, value: unknown) {
     this.p.admin(actor);
     const f = parsePackageFile(value);
-    const { manifest: m, contributions } = await inspectPackage(f);
+    const { manifest: m, contributions } = await inspectPackage(
+      f,
+      this.p.registry,
+    );
     const prior = await one(
       this.p.db,
       `SELECT r.package,coalesce(v.manifest,'{"models":[]}'::jsonb) AS manifest FROM studio_packages p JOIN studio_package_releases r USING(id,version)
@@ -697,6 +711,11 @@ export class StudioPackages {
       requireValue(!services.length, 409, "独立扩展不能使用模型连接");
       return [];
     }
+    const inspected: {
+      id: string;
+      revision: number;
+      pause: AddressPause | null;
+    }[] = [];
     for (const s of services) {
       const previous = this.p.vault.open(s.config),
         extra = supplements[s.id] ?? {};
@@ -718,33 +737,33 @@ export class StudioPackages {
         adapter.manifest.configSchema,
         extra,
       );
+      const pause = await addressPause(adapter.manifest, config);
       requireValue(
-        validator.validate(adapter.manifest.configSchema, config),
+        validSavedConfig(adapter.manifest, config, pause),
         409,
         "现有配置缺少新版要求的字段",
       );
-      if (adapter.manifest.chat?.sandbox && previous.apiKey) {
-        const origin = (m: Manifest, c: Record<string, unknown>) => {
-          const provider = m.chat?.providers.find((p) => p.id === c.provider);
-          return URL.parse(String(c.baseUrl || provider?.defaultConfig.baseUrl))
-            ?.origin;
-        };
+      if (usesPublicConnection(adapter.manifest) && previous.apiKey) {
         const savedOrigin =
-          current.old_manifest && origin(current.old_manifest, previous);
+          current.old_manifest &&
+          connectionBase(current.old_manifest, previous)?.origin;
         requireValue(
-          savedOrigin && savedOrigin === origin(adapter.manifest, config),
+          (savedOrigin &&
+            savedOrigin === connectionBase(adapter.manifest, config)?.origin) ||
+            (pause && previous.baseUrl && previous.baseUrl === config.baseUrl),
           409,
           "不能向新的服务地址转发已有密钥",
         );
       }
-      if (adapter.manifest.mode === "request")
+      if (adapter.manifest.mode === "request" && !pause)
         requireValue(
           await adapter.health(config, AbortSignal.timeout(10000)),
           409,
           "新版本使用现有配置未通过连接检查",
         );
+      inspected.push({ id: s.id, revision: s.revision, pause });
     }
-    return services.map((s) => [s.id, s.revision]);
+    return inspected;
   }
   private async manifest(sql: Sql, file: PackageFile) {
     if (file.manifest) {
@@ -821,7 +840,7 @@ export class StudioPackages {
       adapter,
       manifest: inspected,
       contributions,
-    } = await inspectPackage(file);
+    } = await inspectPackage(file, this.p.registry);
     const probed = await this.probe(
       file,
       adapter,
@@ -829,6 +848,7 @@ export class StudioPackages {
       revision,
       rollback,
     );
+    const serviceChecks = new Map(probed.map((s) => [s.id, s]));
     return this.p.db.transaction(async (sql) => {
       await sql.query(
         "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",
@@ -994,6 +1014,7 @@ export class StudioPackages {
           config: string;
           revision: number;
           plugin_version: string;
+          sandbox_address_pause?: AddressPause | null;
         }>(
           "SELECT * FROM connections WHERE plugin_id=$1 AND NOT removed AND NOT fmworker_resource_driver FOR UPDATE",
           [file.id],
@@ -1001,17 +1022,28 @@ export class StudioPackages {
       ).rows;
       if (current?.installed)
         requireValue(
-          services.length === probed.length &&
-            services.every((s) =>
-              probed.some(
-                ([id, revision]) => s.id === id && s.revision === revision,
-              ),
+          services.length === serviceChecks.size &&
+            services.every(
+              (s) => serviceChecks.get(s.id)?.revision === s.revision,
             ),
           409,
           "服务配置已更新，请重新检查",
         );
       for (const service of services) {
-        if (service.plugin_version === file.adapterVersion) continue;
+        const pause = serviceChecks.get(service.id)?.pause ?? null;
+        requireValue(
+          !pause || Object.hasOwn(service, "sandbox_address_pause"),
+          503,
+          "请先执行连接准入迁移",
+        );
+        if (service.plugin_version === file.adapterVersion) {
+          if ((service.sandbox_address_pause ?? null) !== pause)
+            await sql.query(
+              "UPDATE connections SET sandbox_address_pause=$2,revision=revision+1 WHERE id=$1",
+              [service.id, pause],
+            );
+          continue;
+        }
         const config = await this.upgradeConfig(
           sql,
           service,
@@ -1024,7 +1056,7 @@ export class StudioPackages {
           [service.id, service.plugin_version, service.config],
         );
         requireValue(
-          validator.validate(manifest.configSchema, config),
+          validSavedConfig(manifest, config, pause),
           409,
           "现有服务设置与新版不兼容",
         );
@@ -1033,9 +1065,17 @@ export class StudioPackages {
           file.id,
           file.adapterVersion,
         );
+        const writePause = Object.hasOwn(service, "sandbox_address_pause");
         await sql.query(
-          "UPDATE connections SET plugin_version=$2,config=$3,revision=revision+1 WHERE id=$1",
-          [service.id, file.adapterVersion, this.p.vault.seal(config)],
+          "UPDATE connections SET plugin_version=$2,config=$3,revision=revision+1" +
+            (writePause ? ",sandbox_address_pause=$4" : "") +
+            " WHERE id=$1",
+          [
+            service.id,
+            file.adapterVersion,
+            this.p.vault.seal(config),
+            ...(writePause ? [pause] : []),
+          ],
         );
         await sql.query(
           "UPDATE models SET catalog_id=NULL,enabled=false WHERE connection_id=$1",

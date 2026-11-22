@@ -67,6 +67,9 @@ export class PluginRegistry {
     for (const plugin of plugins ?? []) this.remember(plugin);
     for (const p of protocols) this.protocols.set(p.provider, p);
   }
+  chatAdapter(manifest: Manifest) {
+    return sandboxChat(manifest, this.chatTransport);
+  }
   private remember(p: ProviderPlugin) {
     this.builtins.set(p.manifest.id + "@" + p.manifest.version, p);
   }
@@ -281,7 +284,7 @@ export class PluginRegistry {
     const manifest = manifestSchema.parse(value) as Manifest;
     const sandbox =
       manifest.chat?.sandbox && portable && !endpoint
-        ? await sandboxChat(manifest, this.chatTransport)
+        ? await this.chatAdapter(manifest)
         : studioProgram &&
             portable &&
             manifest.mode === "pull" &&
@@ -626,10 +629,7 @@ export class PluginRegistry {
       !Object.hasOwn(row.manifest, "fmworkerResources")
     ) {
       if (row.manifest.chat?.sandbox)
-        return sandboxChat(
-          manifestSchema.parse(row.manifest),
-          this.chatTransport,
-        );
+        return this.chatAdapter(manifestSchema.parse(row.manifest));
       if (await hasStudioPackages(db)) {
         const native = await one(
           db,

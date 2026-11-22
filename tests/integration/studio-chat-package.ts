@@ -85,8 +85,17 @@ export async function verifyChatPackage(page: Page) {
     await expect(
       page.getByText(/对管理员配置的服务地址注入连接密钥/),
     ).toBeVisible();
-    const cancel = page.getByRole("button", { name: "取消", exact: true });
-    await cancel.click();
+    const upgrade = await request(
+      page,
+      "/api/admin/plugins/import",
+      "POST",
+      () => page.getByRole("button", { name: "确认更新", exact: true }).click(),
+    );
+    assert.ok(upgrade.ok(), await upgrade.text());
+    await expect(page.getByText(/此连接已暂停接收新任务/)).toBeVisible();
+    const config = await (await page.request.get("/api/chat/config")).json();
+    assert.deepEqual(Object.keys(config.models), []);
+    await setTab(page, "plugins");
   } finally {
     await provider.cleanup();
   }

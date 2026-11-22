@@ -248,7 +248,7 @@ for (const release of ["native", "sandbox"])
           : await load("compatible-chat");
       // The transport fixture represents one authorized upstream HTTPS origin.
       const send: typeof chatHttp = (url, init) => {
-        assert.equal(url.origin, "https://provider.example");
+        assert.equal(url.origin, "https://1.1.1.1");
         return chatHttp(new URL(url.pathname, wire.origin), {
           ...init,
           lookup: undefined,
@@ -281,7 +281,7 @@ for (const release of ["native", "sandbox"])
                 : {
                     ...wire.config(model),
                     baseUrl:
-                      "https://provider.example" +
+                      "https://1.1.1.1" +
                       new URL(wire.config(model).baseUrl).pathname,
                   },
           },
@@ -358,6 +358,162 @@ for (const release of ["native", "sandbox"])
       }
     },
   );
+
+test("upgrading a private connection pauses only new admissions and keeps the accepted turn and wallet snapshot", async () => {
+  const f = await setup(),
+    wire = await chatProviderFixture(),
+    legacy = await legacyChat(),
+    next = await load("compatible-chat");
+  let publicProbes = 0;
+  const send: typeof chatHttp = async (url, init) => {
+    assert.equal(url.origin, "https://1.1.1.1");
+    assert.equal(init.method, "GET");
+    publicProbes++;
+    return {
+      status: 200,
+      headers: {},
+      body: (async function* () {
+        yield Buffer.from('{"data":[{"id":"gpt-4.1"}]}');
+      })(),
+      close() {},
+    };
+  };
+  f.p.registry = new PluginRegistry(undefined, [], send);
+  const settings = new OriginalChatSettings(f.p),
+    chats = new OriginalChats(f.p);
+  try {
+    await f.packages.install(f.actor, legacy);
+    const previous = wire.config("deepseek-flash");
+    const { id: privateId } = await f.p.createConnection(
+      f.actor,
+      {
+        pluginId: legacy.id,
+        version: legacy.adapterVersion,
+        name: "内网服务",
+        config: previous,
+      },
+      true,
+    );
+    const { id: publicId } = await f.p.createConnection(
+      f.actor,
+      {
+        pluginId: legacy.id,
+        version: legacy.adapterVersion,
+        name: "公网服务",
+        config: {
+          provider: "openai",
+          baseUrl: "https://1.1.1.1/v1/",
+          apiKey: "test-public-key",
+        },
+      },
+      true,
+    );
+    await f.packages.change(f.actor, legacy.id, 1, "enable");
+    await f.db.query("UPDATE wallets SET balance=10");
+    const { conversation } = await chats.create(f.actor, {});
+    const draft = {
+      uid: randomUUID(),
+      model: "deepseek-flash",
+      text: "冻结的请求",
+      expected_revision: conversation.revision,
+      price_revision: (await settings.config(f.actor)).pricing.revision,
+    };
+    await chats.send(f.actor, conversation.id, draft);
+    const frozen = await one(f.db, "SELECT * FROM chat_turns WHERE uid=$1", [
+      draft.uid,
+    ]);
+    const [pkg] = await f.packages.list(f.actor);
+    await f.packages.install(f.actor, next, pkg.revision);
+    assert.equal(publicProbes, 1);
+    const rows = await f.p.studioConnections(f.actor);
+    assert.equal(
+      rows.find((r) => r.id === privateId)?.addressPause,
+      "non-public",
+    );
+    assert.equal(rows.find((r) => r.id === publicId)?.addressPause, undefined);
+    const saved = await one(f.db, "SELECT * FROM connections WHERE id=$1", [
+      privateId,
+    ]);
+    assert.equal(saved.enabled, true);
+    assert.deepEqual(f.p.vault.open(saved.config), previous);
+    assert.equal(saved.plugin_version, next.adapterVersion);
+    assert.deepEqual(Object.keys((await settings.config(f.actor)).models), [
+      "gpt-4.1",
+    ]);
+    f.p.registry = new PluginRegistry(undefined, [], send);
+    wire.setWire("stream", {
+      raw: 'data: {"choices":[{"delta":{"content":"完成"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n',
+    });
+    await chats.send(f.actor, conversation.id, draft);
+    await new ChatRuntime(new ChatExecution(chats)).execute(frozen.id);
+    const completed = await one(f.db, "SELECT * FROM chat_turns WHERE id=$1", [
+      frozen.id,
+    ]);
+    assert.equal(completed.plugin_version, legacy.adapterVersion);
+    assert.equal(completed.config_snapshot, frozen.config_snapshot);
+    assert.equal(
+      (await chats.get(f.actor, conversation.id)).messages.at(-1)?.content,
+      "完成",
+    );
+    const fresh = (await chats.create(f.actor, {})).conversation;
+    await assert.rejects(
+      chats.send(f.actor, fresh.id, {
+        ...draft,
+        uid: randomUUID(),
+        expected_revision: fresh.revision,
+        price_revision: (await settings.config(f.actor)).pricing.revision,
+      }),
+      { status: 409 },
+    );
+    assert.deepEqual(
+      await one(
+        f.db,
+        "SELECT balance::int, held::int FROM wallets JOIN chat_charges USING(workspace_id) WHERE turn_id=$1",
+        [frozen.id],
+      ),
+      { balance: 9, held: 0 },
+    );
+    const change = {
+      revision: saved.revision,
+      enabled: true,
+      concurrency: 1,
+      preserveCredentials: true,
+    };
+    await assert.rejects(
+      f.p.updateConnection(f.actor, privateId, {
+        ...change,
+        config: { baseUrl: "https://1.1.1.1/" },
+      }),
+      /重新填写密钥/,
+    );
+    await f.p.updateConnection(f.actor, privateId, {
+      ...change,
+      config: { baseUrl: "https://1.1.1.1/", apiKey: "new-key" },
+    });
+    assert.deepEqual(
+      Object.keys((await settings.config(f.actor)).models).sort(),
+      ["deepseek-flash", "gpt-4.1"],
+    );
+    assert.equal(
+      (await f.p.studioConnections(f.actor)).find((r) => r.id === privateId)
+        ?.addressPause,
+      undefined,
+    );
+    assert.equal(
+      (
+        await one(
+          f.db,
+          "SELECT count(*)::int AS n FROM chat_turns WHERE uid=$1",
+          [draft.uid],
+        )
+      ).n,
+      1,
+    );
+  } finally {
+    await wire.cleanup();
+    await f.cleanup();
+  }
+});
 
 test("sandbox chat import freezes the program, requires HTTP and secrets, and reloads without a native module", async () => {
   const f = await setup(),
