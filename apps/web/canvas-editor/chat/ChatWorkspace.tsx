@@ -49,7 +49,7 @@ export function ChatWorkspace(props:Props){
  useEffect(()=>{if(input.current&&!inline){input.current.style.height='0px';input.current.style.height=Math.min(input.current.scrollHeight,180)+'px'}},[draft,cid,inline]);
  useEffect(()=>{
   if(!cid)return;let closed=false;const url='/api/chats/'+cid;
-  void req<Snapshot>(url).then(s=>{if(!closed){update(s);setModel(m=>s.conversation.model in (cfgRef.current?.models||{})?s.conversation.model:m);setLoading(false)}}).catch(e=>{if(!closed){setError(e.message);setLoading(false);if(e.status===404)choose('')}});
+  void req<Snapshot>(url).then(s=>{if(!closed){update(s);setModel(m=>s.conversation.model in (cfgRef.current?.models||{})?s.conversation.model:m);setLoading(false)}}).catch(e=>{if(!closed){if(e.status===404)choose('');setError(e.message);setLoading(false)}});
   const events=new EventSource(url+'/events?workspace='+workspace);
   events.onmessage=e=>{if(closed)return;setNetwork(false);const next=JSON.parse(e.data) as Snapshot;update(next);setLoading(false)};
   events.onerror=()=>{if(!closed)setNetwork(true)};
