@@ -4,6 +4,7 @@ import {marked} from 'marked';
 import DOMPurify from 'dompurify';
 import {ModelSelect} from './ModelSelect';
 import {ConversationList,type Conversation} from './ConversationList';
+import {chatFreshness} from './freshness';
 
 export type Message={id:number;role:'user'|'assistant';content:string;state:string;model:string;author_name:string;error?:string;context:string;reply_to:number|null};
 type Snapshot={conversation:Conversation;messages:Message[]};
@@ -25,6 +26,7 @@ const Credit=()=> <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="t
 export function ChatWorkspace(props:Props){
  const {workspace,userId,compact,inline,project,node}=props;
  const scope=`fm-chat-${userId}-${workspace}-${project||'main'}-${node||''}`;
+ const acceptConversation=useMemo(()=>chatFreshness(),[scope]);
  const [list,setList]=useState<Conversation[]>([]),[data,setData]=useState<Snapshot|null>(null),[cid,setCid]=useState(()=>sessionStorage.getItem(scope+'-active')||''),[config,setConfig]=useState<Config|null>(null),[model,setModel]=useState('deepseek-flash');
  const [draft,setDraft]=useState(()=>sessionStorage.getItem(scope+'-draft-'+cid)||''),[pendingDraft,setPendingDraft]=useState<string|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loading,setLoading]=useState(true),[history,setHistory]=useState(false),[rename,setRename]=useState<string|null>(null),[notice,setNotice]=useState(''),[deleted,setDeleted]=useState(''),[copied,setCopied]=useState<number|null>(null),[network,setNetwork]=useState(false),[newBelow,setNewBelow]=useState(false);
  const [picker,setPicker]=useState<Message|null>(null),[projects,setProjects]=useState<{id:string;title:string}[]>([]),[target,setTarget]=useState(''),[canvasName,setCanvasName]=useState('新画布');
@@ -39,7 +41,7 @@ export function ChatWorkspace(props:Props){
  const req=<T=any,>(path:string,body?:unknown,method?:string)=>chatRequest<T>(workspace,path,body,method);
  const loadList=async()=>{const r=await req<{conversations:Conversation[]}>('/api/chats'+(project?'?project='+encodeURIComponent(project)+'&node='+encodeURIComponent(node||''):''));if(alive.current){setList(r.conversations);if(initialHistory.current&&compact&&!current.current&&r.conversations.length){const id=r.conversations[0].id;current.current=id;setCid(id);sessionStorage.setItem(scope+'-active',id)}initialHistory.current=false}};
  const loadConfig=async()=>{const c=await req<Config>('/api/chat/config');if(alive.current){cfgRef.current=c;setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')}};
- const update=(s:Snapshot)=>{if(!alive.current)return;if(s.conversation.id===current.current)setData(s);setList(items=>[s.conversation,...items.filter(c=>c.id!==s.conversation.id)].sort((a,b)=>b.updated-a.updated));};
+ const update=(s:Snapshot)=>{if(!alive.current||!acceptConversation(s.conversation))return;if(s.conversation.id===current.current)setData(s);setList(items=>[s.conversation,...items.filter(c=>c.id!==s.conversation.id)].sort((a,b)=>b.updated-a.updated));};
  const updateDraft=(value:string)=>{setDraft(value);setPendingDraft(null);const key=scope+'-draft-'+current.current;if(value)sessionStorage.setItem(key,value);else sessionStorage.removeItem(key)};
  const applyPresetDraft=(value:string)=>{if(!draft.trim()||draft===value){updateDraft(value);input.current?.focus();return}setPendingDraft(value)};
  const confirmPendingDraft=()=>{if(pendingDraft===null)return;updateDraft(pendingDraft);input.current?.focus()};
