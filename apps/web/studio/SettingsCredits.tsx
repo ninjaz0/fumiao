@@ -49,6 +49,11 @@ function date(stamp: number) {
 function methodName(method: string) {
   return method === "alipay" ? "支付宝" : "USDT-Plasma";
 }
+function mergeCreditRows(rows: CreditEntry[], incoming: CreditEntry[]) {
+  return Array.from(
+    new Map([...rows, ...incoming].map((row) => [row.id, row])).values(),
+  ).sort((a, b) => b.id - a.id);
+}
 export function readOrder(workspace: number, id: string) {
   return api<Order>(
     String(workspace),
@@ -68,22 +73,26 @@ export function Credits({
   notify: Notify;
 }) {
   const { credits, workspace_id: workspace } = state;
-  const [loaded, setLoaded] = useState<{
-    rows: CreditEntry[];
-    before: number | undefined;
-  } | null>(null);
-  const latest = state.credit_history || [];
-  const rows = Array.from(
-    new Map(
-      [...(loaded?.rows || []), ...latest].map((row) => [row.id, row]),
-    ).values(),
-  ).sort((a, b) => b.id - a.id);
-  const before = loaded
-    ? loaded.before
-    : latest.length === 50
-      ? latest.at(-1)?.id
-      : undefined;
+  const latest = state.credit_history;
+  const [previous, setPrevious] = useState(latest);
+  const [rows, setRows] = useState(latest);
+  const [before, setBefore] = useState(
+    latest.length === 50 ? latest.at(-1)?.id : undefined,
+  );
   const [busy, setBusy] = useState(false);
+
+  if (previous !== latest) {
+    setPrevious(latest);
+    if (
+      latest.length === 50 &&
+      (!rows.length || latest.at(-1)!.id > rows[0].id)
+    ) {
+      setRows(latest);
+      setBefore(latest.at(-1)?.id);
+    } else {
+      setRows(mergeCreditRows(rows, latest));
+    }
+  }
 
   async function more(button: HTMLButtonElement) {
     if (busy || before === undefined) return;
@@ -94,11 +103,10 @@ export function Credits({
         "/api/credits?before=" + before,
       );
       if (!button.isConnected) return;
-      setLoaded({
-        rows: [...rows, ...result.history],
-        before:
-          result.history.length === 50 ? result.history.at(-1)?.id : undefined,
-      });
+      setRows((rows) => mergeCreditRows(rows, result.history));
+      setBefore(
+        result.history.length === 50 ? result.history.at(-1)?.id : undefined,
+      );
     } catch (error) {
       notify((error as Error).message);
     } finally {
