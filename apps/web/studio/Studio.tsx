@@ -121,6 +121,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const [state, setState] = useState<StudioState | null>(null);
   const [session, setSession] = useState<DraftSession | null>(null);
   const [expired, setExpired] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState("");
+  const retryBootstrap = useRef(false);
   const [page, setPage] = useState<Page>("home");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("plugins");
   const [settingsVisit, setSettingsVisit] = useState(0);
@@ -251,6 +253,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const refresh = useCallback(
     async (force = false) => {
       if (leaving.current) return;
+      retryBootstrap.current = false;
+      setBootstrapError("");
       const version = ++stateRead.current;
       try {
         const next = await api<StudioState>(workspaceId.current, "/api/state");
@@ -415,6 +419,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             if (version === stateRead.current)
               notify((recovery as Error).message);
           }
+        } else if (!active.current) {
+          retryBootstrap.current = true;
+          setBootstrapError((error as Error).message);
         } else notify((error as Error).message);
       }
     },
@@ -447,7 +454,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     }
     void refresh();
     const poll = window.setInterval(() => {
-      if (active.current && !document.hidden && !busy.current.has("upload"))
+      if (
+        (active.current || retryBootstrap.current) &&
+        !document.hidden &&
+        !busy.current.has("upload")
+      )
         void refresh();
     }, 6000);
     const clock = window.setInterval(() => {
@@ -1627,9 +1638,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         ) : (
           <main
             className="loading-screen"
-            role="status"
-            aria-label="弗淼 AIGC 正在加载"
-            aria-busy="true"
+            role={bootstrapError ? "alert" : "status"}
+            aria-label={bootstrapError ? "工作台加载失败" : "弗淼 AIGC 正在加载"}
+            aria-busy={!bootstrapError}
           >
             <div className="loading-brand">
               <img src={loadingLogo} width="48" height="48" alt="" />
@@ -1637,9 +1648,23 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                 弗淼 <b>AIGC</b>
               </span>
             </div>
-            <div className="loading-track" aria-hidden="true">
-              <span />
-            </div>
+            {bootstrapError ? (
+              <>
+                <p>工作台加载失败，请稍后重试</p>
+                <small>{bootstrapError}</small>
+                <button
+                  type="button"
+                  className="ledger-button"
+                  onClick={() => void refresh()}
+                >
+                  重试
+                </button>
+              </>
+            ) : (
+              <div className="loading-track" aria-hidden="true">
+                <span />
+              </div>
+            )}
           </main>
         )}
       </div>
