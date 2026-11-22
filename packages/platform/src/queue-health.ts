@@ -2,14 +2,72 @@ import { randomUUID } from "node:crypto";
 import type { Platform } from "./platform.js";
 import { executableJob } from "./retired-jobs.js";
 import { one } from "./db.js";
-import { queueHealthSchema } from "@fumiao/plugin-sdk/queue.js";
+import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
+import {
+  queueHealthSchema,
+  type QueueHealth,
+} from "@fumiao/plugin-sdk/queue.js";
+
+async function probeHealth(
+  p: Platform,
+  plugin: ProviderPlugin,
+  sealedConfig: string,
+): Promise<QueueHealth> {
+  try {
+    return queueHealthSchema.parse(
+      await plugin.queueHealth!(
+        p.vault.open(sealedConfig),
+        AbortSignal.timeout(10000),
+      ),
+    );
+  } catch {
+    return { ready: false };
+  }
+}
+
+// A superseded connection can still have queued jobs that must respect its old
+// provider's capacity. Coalesce only matching snapshots and never persist the
+// result as the health of the newly installed service.
+export class FrozenQueueHealth {
+  private readonly recent = new Map<
+    string,
+    { until: number; value: Promise<QueueHealth> }
+  >();
+
+  read(
+    p: Platform,
+    plugin: ProviderPlugin,
+    connection: string,
+    sealedConfig: string,
+  ) {
+    const key = JSON.stringify([
+      connection,
+      plugin.manifest.id,
+      plugin.manifest.version,
+      sealedConfig,
+    ]);
+    const now = Date.now();
+    const cached = this.recent.get(key);
+    if (cached && cached.until > now) return cached.value;
+    for (const [entry, record] of this.recent)
+      if (record.until <= now) this.recent.delete(entry);
+    if (this.recent.size >= 128)
+      this.recent.delete(this.recent.keys().next().value!);
+    const value = probeHealth(p, plugin, sealedConfig).then((health) => ({
+      ...health,
+      checked: Date.now() / 1000,
+    }));
+    this.recent.set(key, { until: now + 15000, value });
+    return value;
+  }
+}
 
 export class QueueHealthPoller {
   constructor(readonly p: Platform) {}
   async refresh(id: string) {
     const current = await one(
       this.p.db,
-      "SELECT plugin_id,plugin_version,revision FROM connections WHERE id=$1 AND enabled",
+      "SELECT plugin_id,plugin_version,revision FROM connections c WHERE id=$1 AND enabled AND to_jsonb(c)->>'sandbox_address_pause' IS NULL",
       [id],
     );
     if (!current) return;
@@ -38,34 +96,23 @@ export class QueueHealthPoller {
       ],
     );
     if (!c) return;
-    let health = { ready: false } as ReturnType<typeof queueHealthSchema.parse>;
-    try {
-      health = queueHealthSchema.parse(
-        await plugin.queueHealth(
-          this.p.vault.open(c.config),
-          AbortSignal.timeout(10000),
-        ),
-      );
-    } catch {
-      /* Failed probes publish only a bounded unavailable state. */
-    } finally {
-      await this.p.db.query(
-        `UPDATE connections SET queue_health=$3,queue_health_revision=$4,queue_refresh_token=NULL,queue_refresh_until=now()+interval '15 seconds'
-    WHERE id=$1 AND queue_refresh_token=$2 AND revision=$4 AND enabled`,
-        [
-          id,
-          token,
-          JSON.stringify({ ...health, checked: Date.now() / 1000 }),
-          c.revision,
-        ],
-      );
-    }
+    const health = await probeHealth(this.p, plugin, c.config);
+    await this.p.db.query(
+      `UPDATE connections SET queue_health=$3,queue_health_revision=$4,queue_refresh_token=NULL,queue_refresh_until=now()+interval '15 seconds'
+       WHERE id=$1 AND queue_refresh_token=$2 AND revision=$4 AND enabled`,
+      [
+        id,
+        token,
+        JSON.stringify({ ...health, checked: Date.now() / 1000 }),
+        c.revision,
+      ],
+    );
   }
   async refreshEnabled() {
     const pending = (
       await this.p.db
         .query(`SELECT c.id FROM connections c JOIN plugin_versions p ON p.id=c.plugin_id AND p.version=c.plugin_version
-   WHERE c.enabled AND p.manifest->'queue' IS NOT NULL AND p.manifest->>'mode'='request'
+   WHERE c.enabled AND to_jsonb(c)->>'sandbox_address_pause' IS NULL AND p.manifest->'queue' IS NOT NULL AND p.manifest->>'mode'='request'
    AND (c.queue_refresh_until IS NULL OR c.queue_refresh_until<now()) ORDER BY c.id`)
     ).rows;
     let next = 0;

@@ -35,6 +35,26 @@ export async function acceptTask(
     409,
     "插件已停用",
   );
+  // The generic submission path also serves directly managed connections.
+  // Serialize the final admission against address edits and package upgrades.
+  const service = await one(
+    sql,
+    `SELECT c.enabled,c.plugin_version,c.config,to_jsonb(c)->>'sandbox_address_pause' AS pause
+     FROM connections c WHERE id=$1 FOR SHARE`,
+    [model.connection_id],
+  );
+  requireValue(
+    !service?.pause,
+    409,
+    "此连接已暂停接收新任务，请联系管理员更新服务地址",
+  );
+  requireValue(
+    service?.enabled &&
+      service.plugin_version === model.plugin_version &&
+      service.config === model.config,
+    409,
+    "服务配置已更新，请重试",
+  );
   requireValue(
     !installation ||
       (

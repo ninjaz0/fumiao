@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import sharp from "sharp";
 import { randomUUID } from "node:crypto";
+import { flowLifecycleFixture, flowVideo } from "../helpers/flow-lifecycle.js";
+import { museLifecycleFixture } from "../helpers/muse-lifecycle.js";
 import { databaseFixture } from "../helpers/database.js";
 import { PluginRegistry } from "@fumiao/platform/plugins.js";
 import { QueueForecasts } from "@fumiao/platform/queue-snapshot.js";
@@ -17,10 +20,7 @@ import { museQueue } from "@fumiao/plugin-muse/queue.js";
 import { flowQueue } from "@fumiao/plugin-flow/queue.js";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import type {
-  ProviderPlugin,
-  QueueContext,
-} from "@fumiao/plugin-sdk/index.js";
+import type { ProviderPlugin, QueueContext } from "@fumiao/plugin-sdk/index.js";
 
 const plugin: ProviderPlugin = {
   ...gpuQueue,
@@ -618,3 +618,133 @@ test(
     }
   },
 );
+
+for (const provider of ["flow", "muse"]) {
+  test(
+    provider +
+      " drains queued work using the old service after an address pause",
+    async () => {
+      const configs: Record<string, unknown>[] = [];
+      let ready = false;
+      const options: Partial<ProviderPlugin> = {
+        async queueHealth(config) {
+          configs.push(config);
+          return { ready, capacity: 1 };
+        },
+      };
+      const muse =
+        provider === "muse"
+          ? await museLifecycleFixture({
+              ...options,
+              downloadArtifact: async () =>
+                sharp({
+                  create: {
+                    width: 16,
+                    height: 16,
+                    channels: 3,
+                    background: "#345678",
+                  },
+                })
+                  .png()
+                  .toBuffer(),
+            })
+          : undefined;
+      const f = muse ?? (await flowLifecycleFixture(options));
+      try {
+        const model = provider === "flow" ? flowVideo : "muse-image";
+        const job = await f.create(model);
+        // Reproduce the persisted state immediately after an adapter upgrade.
+        await f.db.query(
+          `INSERT INTO plugin_versions(id,version,manifest)
+         SELECT id,'2.0.0',manifest || '{"version":"2.0.0"}'::jsonb FROM plugin_versions WHERE id=$1 AND version=$2`,
+          [job.plugin_id, job.plugin_version],
+        );
+        await f.db.query(
+          `UPDATE connections SET plugin_version='2.0.0', revision=revision+1, sandbox_address_pause='non-public',
+         queue_health='{}' WHERE id=$1`,
+          [f.connection],
+        );
+        await assert.rejects(() => f.create(model), /暂停接收新任务/);
+        await new QueueHealthPoller(f.p).refresh(f.connection);
+        assert.equal(configs.length, 0);
+        // The current connection can be repaired while the old queue waits.
+        await f.db.query(
+          "UPDATE connections SET config=$2,revision=revision+1,sandbox_address_pause=NULL WHERE id=$1",
+          [
+            f.connection,
+            f.p.vault.seal({
+              baseUrl: "https://replacement.example",
+              apiKey: "replacement",
+            }),
+          ],
+        );
+        await f.executor.execute(job.id);
+        assert.equal(
+          (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [job.id]))
+            .state,
+          "queued",
+        );
+        assert.equal(f.requests.length, 0);
+        ready = true;
+        const restarted = new Executor(f.p);
+        await Promise.all([
+          restarted.execute(job.id),
+          restarted.execute(job.id),
+        ]);
+        if (muse) {
+          muse.setWire({
+            body: { status: "completed", url: "/v1/media/result.png" },
+          });
+          await new Executor(f.p).execute(job.id);
+        }
+        const done = await one(
+          f.db,
+          "SELECT state,attempts,plugin_version,config_snapshot FROM jobs WHERE id=$1",
+          [job.id],
+        );
+        assert.equal(done.state, "completed");
+        assert.equal(done.attempts, 1);
+        assert.equal(done.plugin_version, job.plugin_version);
+        assert.equal(done.config_snapshot, job.config_snapshot);
+        assert.equal(
+          f.requests.filter((r) => provider === "flow" || r.method === "POST")
+            .length,
+          1,
+        );
+        assert.equal(configs.length, 2);
+        assert.ok(
+          configs.every(
+            (c) =>
+              c.apiKey === "local-fixture" &&
+              String(c.baseUrl).startsWith("http://127.0.0.1:"),
+          ),
+        );
+        assert.deepEqual(
+          (
+            await one(
+              f.db,
+              "SELECT queue_health FROM connections WHERE id=$1",
+              [f.connection],
+            )
+          ).queue_health,
+          {},
+        );
+        assert.equal(
+          (
+            await one(
+              f.db,
+              "SELECT count(*)::int AS n FROM ledger WHERE job_id=$1 AND action='hold'",
+              [job.id],
+            )
+          ).n,
+          1,
+        );
+        const wallet = await f.p.wallet(f.admin, f.wid);
+        assert.equal(Number(wallet.balance), 9998);
+        assert.equal(Number(wallet.held), 0);
+      } finally {
+        await f.cleanup();
+      }
+    },
+  );
+}
