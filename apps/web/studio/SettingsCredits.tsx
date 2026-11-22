@@ -49,6 +49,11 @@ function date(stamp: number) {
 function methodName(method: string) {
   return method === "alipay" ? "支付宝" : "USDT-Plasma";
 }
+function mergeCreditRows(rows: CreditEntry[], incoming: CreditEntry[]) {
+  return Array.from(
+    new Map([...rows, ...incoming].map((row) => [row.id, row])).values(),
+  ).sort((a, b) => b.id - a.id);
+}
 export function readOrder(workspace: number, id: string) {
   return api<Order>(
     String(workspace),
@@ -68,14 +73,31 @@ export function Credits({
   notify: Notify;
 }) {
   const { credits, workspace_id: workspace } = state;
-  const [rows, setRows] = useState(state.credit_history || []);
-  const [before, setBefore] = useState(
-    rows.length === 50 ? rows.at(-1)?.id : undefined,
-  );
+  const latest = state.credit_history;
+  const [previous, setPrevious] = useState(latest);
+  const [ledger, setLedger] = useState({
+    rows: latest,
+    before: latest.length === 50 ? latest.at(-1)?.id : undefined,
+    epoch: 0,
+  });
+  const { rows, before, epoch } = ledger;
   const [busy, setBusy] = useState(false);
+
+  if (previous !== latest) {
+    setPrevious(latest);
+    if (
+      latest.length === 50 &&
+      (!rows.length || latest.at(-1)!.id > rows[0].id)
+    ) {
+      setLedger({ rows: latest, before: latest.at(-1)?.id, epoch: epoch + 1 });
+    } else {
+      setLedger({ ...ledger, rows: mergeCreditRows(rows, latest) });
+    }
+  }
 
   async function more(button: HTMLButtonElement) {
     if (busy || before === undefined) return;
+    const startEpoch = epoch;
     setBusy(true);
     try {
       const result = await api<{ history: CreditEntry[] }>(
@@ -83,9 +105,17 @@ export function Credits({
         "/api/credits?before=" + before,
       );
       if (!button.isConnected) return;
-      setRows((rows) => [...rows, ...result.history]);
-      setBefore(
-        result.history.length === 50 ? result.history.at(-1)?.id : undefined,
+      setLedger((current) =>
+        current.epoch !== startEpoch
+          ? current
+          : {
+              ...current,
+              rows: mergeCreditRows(current.rows, result.history),
+              before:
+                result.history.length === 50
+                  ? result.history.at(-1)?.id
+                  : undefined,
+            },
       );
     } catch (error) {
       notify((error as Error).message);

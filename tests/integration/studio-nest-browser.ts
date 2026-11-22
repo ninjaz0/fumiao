@@ -26,6 +26,126 @@ const chatReply = "隔离验收回复";
 const canvasTitle = "隔离工作台画布";
 const apiTimeout = 20_000;
 
+async function checkCreditHistoryRefresh(page: Page, state: StudioState) {
+  const entries = Array.from({ length: 100 }, (_, index) => ({
+    id: 101 - index,
+    action: "adjust",
+    amount: 1,
+    created: 1700000000 + 101 - index,
+    note: `credit-pagination-${101 - index}`,
+  }));
+  let live = false;
+  let polled = entries.slice(0, 50);
+  let failMore = true;
+  let releaseMore!: () => void;
+  const heldMore = new Promise<void>((resolve) => { releaseMore = resolve; });
+  await page.route("**/api/state", (route) =>
+    route.fulfill({
+      json: {
+        ...state,
+        credits: {
+          ...state.credits,
+          available: state.credits.available + Number(live),
+        },
+        credit_history: polled,
+      },
+    }),
+  );
+  await page.route("**/api/credits?before=*", async (route) => {
+    if (failMore) {
+      failMore = false;
+      return route.fulfill({ status: 500, headers: { "x-fumiao-web": "next" }, json: { detail: "分页暂不可用" } });
+    }
+    const before = Number(
+      new URL(route.request().url()).searchParams.get("before"),
+    );
+    if (before === 300) await heldMore;
+    if (before >= 300) {
+      return route.fulfill({ json: { history: Array.from({ length: 50 }, (_, index) => ({
+        ...entries[0], id: before - index - 1, note: `polled-credit-${before - index - 1}`,
+      })) } });
+    }
+    return route.fulfill({
+      json: {
+        history: entries.filter((entry) => entry.id < before).slice(0, 50),
+      },
+    });
+  });
+  await page.goto(`/studio?workspace=${state.workspace_id}`);
+  await settings(page);
+  await setTab(page, "credits");
+  await request(page, "/api/credits?before=52", "GET", () =>
+    page.locator('[data-act="credit-more"]').click(),
+  );
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(50);
+  await expect(page.locator('[data-act="credit-more"]')).toBeEnabled();
+  await page.locator('[data-act="credit-more"]').click();
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(100);
+  const older = page
+    .locator(".credit-ledger-row")
+    .filter({ hasText: /credit-pagination-2\+1/ });
+  await expect(older).toBeVisible();
+  live = true;
+  polled = [{ ...entries[0], id: 102, note: "credit-live-update" }, ...polled].slice(0, 50);
+  await expect(page.locator(".credit-ledger-row").first()).toContainText(
+    "credit-live-update",
+    { timeout: 15000 },
+  );
+  await expect(older).toBeVisible();
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(101);
+  await page.locator('[data-act="credit-more"]').click();
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(101);
+  await expect(page.locator('[data-act="credit-more"]')).toHaveCount(0);
+  async function pollBatch(first: number, count: number) {
+    const added = Array.from({ length: count }, (_, index) => ({
+      ...entries[0], id: first + index, note: `polled-credit-${first + index}`,
+    })).reverse();
+    polled = [...added, ...polled].slice(0, 50);
+    await expect(page.locator(".credit-ledger-row").first()).toContainText(
+      `polled-credit-${first + count - 1}`, { timeout: 15000 },
+    );
+  }
+  await pollBatch(103, 1);
+  const retained = page.locator(".credit-ledger-row").filter({ hasText: /polled-credit-103\+1/ });
+  await expect(retained).toBeVisible();
+  await pollBatch(104, 25);
+  await pollBatch(129, 25);
+  await expect(retained).toBeVisible();
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(152);
+  await expect(page.locator('[data-act="credit-more"]')).toHaveCount(0);
+  const labels = await page.locator(".credit-ledger-row small").allTextContents();
+  assert.equal(new Set(labels).size, labels.length);
+  console.log("Credit history retains every overlapping poll without duplicates: passed");
+  await pollBatch(300, 50);
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(50);
+  await expect(retained).toHaveCount(0);
+  await expect(page.locator('[data-act="credit-more"]')).toHaveAttribute("data-before", "300");
+  console.log("Credit history restarts pagination when a poll has a gap: passed");
+  const more = page.locator('[data-act="credit-more"]');
+  const pending = page.waitForRequest("**/api/credits?before=300");
+  await more.click();
+  await pending;
+  try {
+    await pollBatch(400, 50);
+    await expect(more).toHaveAttribute("data-before", "400");
+  } finally {
+    releaseMore();
+  }
+  await expect(more).toBeEnabled();
+  await expect(more).toHaveAttribute("data-before", "400");
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(50);
+  const nextPage = page.waitForRequest("**/api/credits?before=400");
+  await more.click();
+  await nextPage;
+  await expect(page.locator(".credit-ledger-row")).toHaveCount(100);
+  await expect(more).toHaveAttribute("data-before", "350");
+  const contiguous = await page.locator(".credit-ledger-row small").allTextContents();
+  assert.deepEqual(contiguous, Array.from({ length: 100 }, (_, index) => ` · polled-credit-${449 - index}`));
+  console.log("Credit history ignores in-flight pages from before a gap reset: passed");
+  console.log("Credit history live refresh preserves loaded pages: passed");
+  await page.close();
+}
+
 async function checkMobileSidebar(page: Page) {
   const viewport = page.viewportSize()!;
   await page.setViewportSize({ width: 375, height: 667 });
@@ -422,6 +542,7 @@ export async function studioBrowser(
     const nav = (name: string) =>
       page.locator(`nav [data-nav="${name}"]`).click();
     const available = (await state()).credits.available;
+    await checkCreditHistoryRefresh(await context.newPage(), await state());
     const sidebar = page.locator(".side");
     const currentSettings = sidebar.locator('nav [data-nav="settings"]');
     await expect(currentSettings).toHaveCount(0);
