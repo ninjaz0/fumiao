@@ -1,3 +1,4 @@
+import { deliverPluginEvent } from "@fumiao/platform/plugin-extensions.js";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -1583,4 +1584,239 @@ test("sandbox media tools process private workspace assets and remove rolled-bac
   );
   assert.equal(audit.outcome, "failed");
   assert.match(audit.detail, /media.transcode×1/);
+});
+
+test("resource menus and automatic deliveries use installed grants, active workspace and a durable retry boundary", async () => {
+  const f = await setup(),
+    app = await createOriginalApp(f.p);
+  try {
+    await app.listen(0, "127.0.0.1");
+    const base = await app.getUrl(),
+      tags = await load("example-asset-tags");
+    const change = async (action: "enable" | "disable") => {
+      const pkg = (await f.packages.list(f.actor)).find(
+        (row) => row.id === tags.id,
+      )!;
+      await f.packages.change(f.actor, tags.id, pkg.revision, action);
+    };
+    const preview = await f.packages.preview(f.actor, tags);
+    assert.ok(preview.changes.some((line) => line.includes("asset.created")));
+    await f.packages.install(f.actor, tags);
+    const { workspace_id: space } = await new OriginalState(f.p).read(f.actor);
+    const ws = (
+      await one(f.db, "SELECT id FROM workspaces WHERE public_id=$1", [space])
+    ).id;
+    const asset = async () =>
+      (
+        await one(
+          f.db,
+          `INSERT INTO assets(id,workspace_id,owner_id,object_key,mime,size,state)
+      VALUES(gen_random_uuid(),$1,$2,gen_random_uuid()::text,'image/png',12,'ready') RETURNING public_id`,
+          [ws, f.actor.id],
+        )
+      ).public_id;
+    const call = (
+      data: object,
+      spaceNumber = space,
+      cookie = "fm_session=" + f.session,
+    ) =>
+      fetch(base + "/api/plugins/example-asset-tags/actions/classification", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-workspace-id": String(spaceNumber),
+          cookie,
+        },
+        body: JSON.stringify(data),
+      });
+    await asset();
+    assert.equal(await deliverPluginEvent(f.p), false);
+    await change("enable");
+    const target = await asset(),
+      data = { version: tags.version, target, requestId: randomUUID() };
+    const results = process.env.TEST_DATABASE_URL
+      ? await Promise.all([deliverPluginEvent(f.p), deliverPluginEvent(f.p)])
+      : [await deliverPluginEvent(f.p), await deliverPluginEvent(f.p)];
+    assert.deepEqual(results.sort(), [false, true]);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await call(data);
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { notice: "素材分类：图片" });
+    }
+    assert.equal(
+      (
+        await one(
+          f.db,
+          "SELECT count(*)::int n FROM studio_plugin_audit WHERE page_id='menu' AND outcome='succeeded'",
+        )
+      ).n,
+      1,
+    );
+    assert.equal((await call({ ...data, target: await asset() })).status, 409);
+    assert.equal((await call({ ...data, version: "1.0.1" })).status, 409);
+    assert.equal((await call(data, space, "")).status, 401);
+    const other = await one(
+      f.db,
+      "INSERT INTO workspaces(id,name,kind,owner_id) VALUES(gen_random_uuid(),'team','team',$1) RETURNING public_id",
+      [f.actor.id],
+    );
+    assert.equal((await call(data, other.public_id)).status, 404);
+    await change("disable");
+    assert.equal((await call(data)).status, 404);
+    await change("enable");
+    assert.equal(await deliverPluginEvent(f.p), true);
+    assert.equal(await deliverPluginEvent(f.p), false);
+    // A failed handler has no committed data writes. Repeated failures become a dead letter.
+    const broken = structuredClone(tags);
+    broken.version = "1.0.1";
+    broken.contributes!.events![0].program =
+      '({async handle(e,h){await h.data.put("partial",true);throw Error("private");}})';
+    await f.packages.install(
+      f.actor,
+      broken,
+      (await f.packages.list(f.actor))[0].revision,
+    );
+    await asset();
+    for (let n = 0; n < 5; n++) {
+      assert.equal(await deliverPluginEvent(f.p), true);
+      await f.db.query("UPDATE studio_event_deliveries SET available_at=now()");
+    }
+    assert.equal(await deliverPluginEvent(f.p), false);
+    assert.equal(
+      (
+        await one(
+          f.db,
+          "SELECT attempts FROM studio_event_deliveries WHERE dead",
+        )
+      ).attempts,
+      5,
+    );
+    assert.equal(
+      await one(f.db, "SELECT 1 FROM studio_plugin_data WHERE key='partial'"),
+      undefined,
+    );
+    await assert.rejects(
+      f.db.transaction(async (sql) => {
+        await sql.query("INSERT INTO members VALUES($1,$2)", [ws, f.actor.id]);
+        throw Error("abort");
+      }),
+    );
+    const menus = (await new OriginalState(f.p).read(f.actor)).plugin_actions;
+    assert.equal(menus[0].version, "1.0.1");
+    assert.ok(!("program" in menus[0]));
+  } finally {
+    await app.close();
+    await f.cleanup();
+  }
+});
+
+test("subscribers receive committed job transitions and actual team membership changes; menu grants follow the current member", async () => {
+  const f = await setup(),
+    app = await createOriginalApp(f.p);
+  try {
+    await app.listen(0, "127.0.0.1");
+    const file = await load("example-review-notes"),
+      identity = new OriginalIdentity(f.p);
+    const program =
+      "({async handle(e,h){await h.data.put(e.id,e.type);return true;}})";
+    file.contributes!.events = (
+      ["member.added", "member.removed", "job.completed", "job.failed"] as const
+    ).map((type) => ({ type, program }));
+    file.contributes!.actions![0].audience = "admin";
+    await f.packages.install(f.actor, file);
+    await f.packages.change(f.actor, file.id, 1, "enable");
+    const member = await one(
+      f.db,
+      "INSERT INTO users(id,name,nickname,password,role) VALUES(gen_random_uuid(),'reviewer','Review','disabled','member') RETURNING id,public_id",
+    );
+    const session = secret();
+    await f.db.query(
+      "INSERT INTO sessions(token,user_id,expires_at) VALUES($1,$2,now()+interval '1 hour')",
+      [createHash("sha256").update(session).digest("hex"), member.id],
+    );
+    const team = (await identity.createWorkspace(f.actor, {
+      name: "审片",
+      members: [Number(member.public_id)],
+    }))!;
+    await identity.updateWorkspace(f.actor, team.id, {
+      name: "审片组",
+      members: [Number(member.public_id)],
+      expected_revision: team.revision,
+    });
+    const ws = (
+      await one(f.db, "SELECT id FROM workspaces WHERE public_id=$1", [team.id])
+    ).id;
+    await f.packages.install(f.actor, await load("gpu"));
+    const model = await one(
+      f.db,
+      "SELECT m.* FROM models m JOIN connections c ON c.id=m.connection_id WHERE c.plugin_id='gpu' LIMIT 1",
+    );
+    const current = await identity.actor(session);
+    const state = await new OriginalState(f.p).read(current, String(team.id));
+    assert.deepEqual(
+      state.plugin_actions.map((a: { id: string }) => a.id),
+      ["read-note"],
+    );
+    const newJob = async () =>
+      await one(
+        f.db,
+        `INSERT INTO jobs(id,workspace_id,owner_id,model_id,connection_id,plugin_id,plugin_version,config_snapshot,provider_model,kind,input,idempotency_key,request_hash,price,state)
+      VALUES(gen_random_uuid(),$1,$2,$3,$4,'gpu','2.0.0','', $5,'video','{}',gen_random_uuid()::text,'test',1,'queued') RETURNING id,public_id`,
+        [ws, f.actor.id, model.id, model.connection_id, model.provider_model],
+      );
+    const completed = await newJob(),
+      failed = await newJob();
+    await assert.rejects(
+      f.db.transaction(async (sql) => {
+        await sql.query("UPDATE jobs SET state='completed' WHERE id=$1", [
+          completed.id,
+        ]);
+        throw Error("rollback");
+      }),
+    );
+    await f.db.query("UPDATE jobs SET state='completed' WHERE id=$1", [
+      completed.id,
+    ]);
+    await f.db.query("UPDATE jobs SET state='completed' WHERE id=$1", [
+      completed.id,
+    ]);
+    await f.db.query("UPDATE jobs SET state='failed' WHERE id=$1", [failed.id]);
+    const base = await app.getUrl();
+    const call = (action: string) =>
+      fetch(base + "/api/plugins/" + file.id + "/actions/" + action, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-workspace-id": String(team.id),
+          cookie: "fm_session=" + session,
+        },
+        body: JSON.stringify({
+          version: file.version,
+          requestId: randomUUID(),
+          target: Number(completed.public_id),
+        }),
+      });
+    assert.equal((await call("note")).status, 403);
+    assert.equal((await call("read-note")).status, 200);
+    await identity.updateWorkspace(f.actor, team.id, {
+      name: "审片组",
+      members: [],
+      expected_revision: team.revision + 1,
+    });
+    assert.ok([403, 404].includes((await call("read-note")).status));
+    for (let i = 0; i < 4; i++)
+      assert.equal(await deliverPluginEvent(f.p), true);
+    assert.equal(await deliverPluginEvent(f.p), false);
+    const { rows } = await f.db.query(
+      "SELECT value FROM studio_plugin_data WHERE workspace_id=$1 ORDER BY value",
+      [ws],
+    );
+    assert.deepEqual(
+      rows.map((r) => r.value),
+      ["job.completed", "job.failed", "member.added", "member.removed"],
+    );
+  } finally {
+    await app.close();
+    await f.cleanup();
+  }
 });

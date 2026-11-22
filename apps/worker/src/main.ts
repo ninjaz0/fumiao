@@ -1,3 +1,4 @@
+import { deliverPluginEvent } from "@fumiao/platform/plugin-extensions.js";
 import {StudioPackages} from "@fumiao/platform/studio-packages.js";
 import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
 import { StoryboardQueue } from "@fumiao/original-api/storyboard-queue.js";
@@ -79,6 +80,19 @@ const pollHealth = async () => {
     checkingHealth = false;
   }
 };
+let eventBatch: Promise<void> | undefined;
+const eventTimer = setInterval(() => {
+  if (stopping || eventBatch) return;
+  eventBatch = (async () => {
+    for (let i = 0; i < 16 && !stopping; i++) {
+      if (!(await deliverPluginEvent(p))) break;
+    }
+  })()
+    .catch(() => console.error("Plugin event delivery unavailable"))
+    .finally(() => {
+      eventBatch = undefined;
+    });
+}, 1000);
 const healthTimer = setInterval(() => void pollHealth(), 15000);
 void pollHealth();
 const updateTimer=setInterval(()=>void new StudioUpdates(p).due().catch(()=>console.error("Plugin update check unavailable")),60000);
@@ -87,9 +101,11 @@ for (const event of ["SIGTERM", "SIGINT"])
   process.on(event, () => {
     stopping = true;
     clearInterval(timer);
+    clearInterval(eventTimer);
     clearInterval(healthTimer);
     clearInterval(updateTimer);
     void Promise.all([
+      eventBatch,
       worker.close(),
       chatQueue.close(),
       storyboardQueue.close(),

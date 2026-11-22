@@ -1,3 +1,4 @@
+import type { MenuEntry } from "@fumiao/plugin-sdk/contributions";
 import {
   Fragment,
   useLayoutEffect,
@@ -25,6 +26,11 @@ export type DialogContent =
       importPack: (pack: Pack) => Promise<void>;
       removePack: (id: string) => Promise<void>;
       deletePack?: (id: string) => Promise<void>;
+    }
+  | {
+      kind: "plugin-action";
+      entry: MenuEntry;
+      run: (values: Record<string, string>) => Promise<void>;
     }
   | { kind: "preview"; id: string; mediaKind: Asset["kind"] }
   | {
@@ -136,13 +142,17 @@ export function AssetDialog({
     ref.current?.close();
   }
 
-  async function confirm() {
-    if (!dialog || content?.kind !== "confirm" || confirmationPending.current)
+  async function confirm(values: Record<string, string> = {}) {
+    if (
+      !dialog ||
+      (content?.kind !== "confirm" && content?.kind !== "plugin-action") ||
+      confirmationPending.current
+    )
       return;
     confirmationPending.current = true;
     setConfirming(true);
     try {
-      await content.run();
+      await content.run(values);
       if (shownDialog.current === dialog) closeDialog();
     } catch (error) {
       notify((error as Error).message);
@@ -159,8 +169,10 @@ export function AssetDialog({
       className={
         content?.kind === "settings" && content.presentation === "invite-sheet"
           ? "ledger-invite-sheet"
-          : content?.kind === "settings" && content.presentation === "account-sheet"
-            ? "console-account-sheet" : undefined
+          : content?.kind === "settings" &&
+              content.presentation === "account-sheet"
+            ? "console-account-sheet"
+            : undefined
       }
       ref={ref}
       onCancel={() => stopDialogMedia(ref.current)}
@@ -228,6 +240,43 @@ export function AssetDialog({
             </button>
           </>
         )}
+        {content?.kind === "plugin-action" && (
+          <form
+            key={content.entry.plugin + "/" + content.entry.id}
+            onSubmit={(e) => {
+              e.preventDefault();
+              const data = new FormData(e.currentTarget);
+              void confirm(
+                Object.fromEntries(
+                  (content.entry.fields ?? []).map((f) => [
+                    f.name,
+                    String(data.get(f.name) ?? ""),
+                  ]),
+                ),
+              );
+            }}
+          >
+            <h2 id="modal-heading">{content.entry.title}</h2>
+            {content.entry.fields?.map((field) => (
+              <label key={field.name}>
+                {field.label}
+                <input
+                  name={field.name}
+                  required={field.required}
+                  maxLength={300}
+                />
+              </label>
+            ))}
+            <div className="buttons">
+              <button className="primary" disabled={confirming}>
+                执行
+              </button>
+              <button type="button" className="ghost" onClick={closeDialog}>
+                取消
+              </button>
+            </div>
+          </form>
+        )}
         {content?.kind === "confirm" && (
           <>
             <h2 id="modal-heading">{content.title}</h2>
@@ -237,15 +286,11 @@ export function AssetDialog({
                 id="confirm"
                 className="primary"
                 disabled={confirming}
-                onClick={confirm}
+                onClick={() => void confirm()}
               >
                 确定
               </button>
-              <button
-                id="back"
-                className="ghost"
-                onClick={closeDialog}
-              >
+              <button id="back" className="ghost" onClick={closeDialog}>
                 取消
               </button>
             </div>

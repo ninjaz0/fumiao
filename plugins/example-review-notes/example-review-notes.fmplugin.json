@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "id": "example-review-notes",
+  "label": "审片备注",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "data"
+    ],
+    "actions": [
+      {
+        "id": "note",
+        "title": "填写审片备注",
+        "target": "job",
+        "audience": "member",
+        "fields": [
+          {
+            "name": "note",
+            "label": "审片备注",
+            "required": true
+          }
+        ],
+        "program": "{\n  async run(job, values, host) {\n    await host.data.put(\"review/\" + job.id, values.note.trim());\n    return { notice: \"已保存任务 #\" + job.id + \" 的审片备注\" };\n  },\n}"
+      },
+      {
+        "id": "read-note",
+        "title": "查看审片备注",
+        "target": "job",
+        "audience": "member",
+        "program": "{\n  async run(job, values, host) {\n    const note = await host.data.get(\"review/\" + job.id);\n    return { notice: note ? note.slice(0, 300) : \"暂无审片备注\" };\n  },\n}"
+      }
+    ]
+  }
+}

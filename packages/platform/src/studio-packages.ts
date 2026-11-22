@@ -7,6 +7,7 @@ import { officialAdapter } from "./distribution/official-adapter.js";
 import {
   manifestSchema,
   type ProviderPlugin,
+  type Manifest,
 } from "@fumiao/plugin-sdk/index.js";
 import {
   contributesSchema,
@@ -82,6 +83,7 @@ export const sourceURL = z
 export const packageFile = z
   .object({
     format: z.literal(1),
+    extensionOnly: z.literal(true).optional(),
     id: z.string().regex(/^[a-z][a-z0-9-]{1,63}$/),
     label: z.string().trim().min(1).max(80),
     version: releaseVersion,
@@ -134,7 +136,14 @@ export const packageFile = z
   .strict()
   .refine(
     (f) =>
-      [f.manifest, f.adapterModule, f.remote].filter(Boolean).length === 1 &&
+      [f.manifest, f.adapterModule, f.remote, f.extensionOnly].filter(Boolean)
+        .length === 1 &&
+      (!f.extensionOnly ||
+        (!f.program &&
+          !f.nodeClient &&
+          !f.studioProgram &&
+          !f.equivalentModels &&
+          (f.contributes?.events?.length || f.contributes?.actions?.length))) &&
       (!f.manifest || !!f.program),
     "插件必须声明一种执行方式",
   )
@@ -165,9 +174,18 @@ async function inspectPackage(file: PackageFile) {
   const binding = file.adapterModule
     ? await officialAdapter(file.id, file.adapterVersion, file.adapterModule)
     : undefined;
-  const manifest =
-    binding?.adapter.manifest ??
-    manifestSchema.parse(file.manifest ?? file.remote?.manifest);
+  const manifest: Manifest = file.extensionOnly
+    ? {
+        id: file.id,
+        label: file.label,
+        version: file.adapterVersion,
+        mode: "request",
+        contractVersion: 1,
+        models: [],
+        configSchema: {},
+      }
+    : (binding?.adapter.manifest ??
+      manifestSchema.parse(file.manifest ?? file.remote?.manifest));
   requireValue(
     manifest.id === file.id && manifest.version === file.adapterVersion,
     400,
@@ -179,6 +197,21 @@ async function inspectPackage(file: PackageFile) {
     hasProgram: !!file.program,
   });
   requireValue(!problems.length, 400, problems.join("；"));
+  for (const [hook, declarations] of [
+    ["handle", contributions.events],
+    ["run", contributions.actions],
+  ] as const) {
+    for (const { program } of declarations ?? []) {
+      try {
+        const inspect = await loadProgram(
+          `({check() { return typeof (${program}\n)[${JSON.stringify(hook)}] === "function"; }})`,
+        );
+        requireValue(inspect("check"), 400, "缺少扩展程序入口");
+      } catch {
+        throw new DomainError(400, "扩展程序入口无效：" + hook);
+      }
+    }
+  }
   if (contributions.settings) {
     // Check schemas before activation, including scopes which have no stored rows.
     // Previewing a release must not register its schema IDs in the shared validator.
@@ -262,14 +295,15 @@ async function inspectPackage(file: PackageFile) {
       400,
       "节点客户端需要节点程序",
     );
-  const adapter =
-    binding?.adapter ??
-    (file.remote
-      ? remotePlugin(manifest, file.remote.endpoint)
-      : file.studioProgram
-        ? await nodeStudioPlugin(manifest, file.studioProgram)
-        : portablePlugin(manifest));
-  return { adapter, contributions };
+  const adapter = file.extensionOnly
+    ? undefined
+    : (binding?.adapter ??
+      (file.remote
+        ? remotePlugin(manifest, file.remote.endpoint)
+        : file.studioProgram
+          ? await nodeStudioPlugin(manifest, file.studioProgram)
+          : portablePlugin(manifest)));
+  return { adapter, manifest, contributions };
 }
 
 const scopeLabels: Record<PageScope, string> = {
@@ -303,6 +337,29 @@ function permissionSummary(
   const added = (label: string, isNew: boolean) =>
     label + (prior && isNew ? "（新增）" : "");
   const lines: string[] = [];
+  for (const event of next.events ?? [])
+    lines.push(
+      added(
+        "所有工作区的事件订阅 · " + event.type,
+        !prior?.events?.some((e) => e.type === event.type),
+      ),
+    );
+  for (const a of next.actions ?? [])
+    lines.push(
+      added(
+        (a.target === "asset" ? "素材" : "任务") +
+          "菜单 · " +
+          a.title +
+          " · " +
+          (a.audience === "member" ? "工作区成员" : "管理员"),
+        !prior?.actions?.some(
+          (old) =>
+            old.id === a.id &&
+            old.target === a.target &&
+            old.audience === a.audience,
+        ),
+      ),
+    );
   if (next.nodePools)
     lines.push(added("节点池 · 接入、派发和成片验收", !prior?.nodePools));
   for (const page of next.settingsPages) {
@@ -436,12 +493,11 @@ export class StudioPackages {
   async preview(actor: Actor, value: unknown) {
     this.p.admin(actor);
     const f = parsePackageFile(value);
-    const { adapter, contributions } = await inspectPackage(f);
-    const m = adapter.manifest;
+    const { manifest: m, contributions } = await inspectPackage(f);
     const prior = await one(
       this.p.db,
-      `SELECT r.package,v.manifest FROM studio_packages p JOIN studio_package_releases r USING(id,version)
-      JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion' WHERE p.id=$1 AND p.installed`,
+      `SELECT r.package,coalesce(v.manifest,'{"models":[]}'::jsonb) AS manifest FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+      LEFT JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion' WHERE p.id=$1 AND p.installed`,
       [f.id],
     );
     const changes: string[] = [];
@@ -548,7 +604,7 @@ export class StudioPackages {
   }
   private async probe(
     file: PackageFile,
-    adapter: ProviderPlugin,
+    adapter: ProviderPlugin | undefined,
     supplements: z.infer<typeof upgradeFields>,
     revision: number | undefined,
     rollback: boolean,
@@ -583,6 +639,10 @@ export class StudioPackages {
         [file.id],
       )
     ).rows;
+    if (!adapter) {
+      requireValue(!services.length, 409, "独立扩展不能使用模型连接");
+      return [];
+    }
     for (const s of services) {
       const previous = this.p.vault.open(s.config),
         extra = supplements[s.id] ?? {};
@@ -688,7 +748,11 @@ export class StudioPackages {
   ) {
     this.p.admin(actor);
     const file = parsePackageFile(value);
-    const { adapter, contributions } = await inspectPackage(file);
+    const {
+      adapter,
+      manifest: inspected,
+      contributions,
+    } = await inspectPackage(file);
     const probed = await this.probe(
       file,
       adapter,
@@ -717,6 +781,26 @@ export class StudioPackages {
         409,
         "同一版本的插件文件不能更改",
       );
+      if (file.extensionOnly && !current)
+        requireValue(
+          !(await one(sql, "SELECT 1 FROM plugin_versions WHERE id=$1", [
+            file.id,
+          ])),
+          409,
+          "扩展标识已由模型提供方使用",
+        );
+      if (current) {
+        const previous = await one(
+          sql,
+          "SELECT package FROM studio_package_releases WHERE id=$1 AND version=$2",
+          [file.id, current.version],
+        );
+        requireValue(
+          !!previous?.package.extensionOnly === !!file.extensionOnly,
+          409,
+          "不能改变插件的执行类型",
+        );
+      }
       if (current?.installed && current.version === file.version)
         return { id: file.id, version: file.version };
       requireValue(
@@ -785,7 +869,7 @@ export class StudioPackages {
           file.id,
         ])
       ).rows;
-      for (const m of adapter.manifest.models.filter((m) => m.studio)) {
+      for (const m of inspected.models.filter((m) => m.studio)) {
         const peers = await sql.query(
           `SELECT v.id,v.manifest FROM studio_catalog c JOIN plugin_versions v ON (v.id,v.version)=(c.plugin_id,c.plugin_version) WHERE c.id=$1 AND c.plugin_id<>$2
           UNION SELECT p.id,v.manifest FROM studio_shared_models s JOIN studio_packages p ON p.id=s.plugin_id AND p.installed JOIN studio_package_releases r ON (r.id,r.version)=(p.id,p.version)
@@ -821,8 +905,11 @@ export class StudioPackages {
           );
         }
       }
-      const manifest = await this.manifest(sql, file);
-      await new StudioCatalog(this.p.db).activate(sql, manifest, true);
+      const manifest = file.extensionOnly
+        ? inspected
+        : await this.manifest(sql, file);
+      if (!file.extensionOnly)
+        await new StudioCatalog(this.p.db).activate(sql, manifest, true);
       if (!release)
         await sql.query(
           "INSERT INTO studio_package_releases VALUES($1,$2,$3)",
@@ -949,12 +1036,12 @@ export class StudioPackages {
       await this.p.db
         .query(`SELECT p.id,p.version,p.previous_version AS "previousVersion",p.enabled,p.removing,p.revision,
       p.update_url AS "updateUrl",p.update_auth IS NOT NULL AS "hasUpdateToken",p.checked_at AS "checkedAt",p.update_info AS "updateInfo",
-      r.package->>'label' AS label, v.version AS "adapterVersion",v.manifest->'configSchema' AS "configSchema",
-      v.manifest->>'mode' AS mode,
+      r.package->>'label' AS label, r.package->>'adapterVersion' AS "adapterVersion",coalesce(v.manifest->'configSchema','{}'::jsonb) AS "configSchema",
+      CASE WHEN r.package ? 'extensionOnly' THEN 'extension' ELSE v.manifest->>'mode' END AS mode,
       (SELECT COALESCE(jsonb_agg(jsonb_build_object('id',c.id,'label',COALESCE(c.display_label,c.descriptor->>'label'),'kind',c.descriptor->>'kind','enabled',COALESCE((g.flags->>c.id)::boolean,false), 'service',s.connection_id,'services',(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',x.id,'name',x.name) ORDER BY x.name,x.id),'[]'::jsonb) FROM connections x JOIN models m ON m.connection_id=x.id JOIN studio_packages t ON t.id=x.plugin_id AND t.installed AND NOT t.removing WHERE m.catalog_id=c.id AND x.enabled AND NOT x.removed)) ORDER BY c.position,c.id),'[]'::jsonb)
         FROM studio_catalog c CROSS JOIN studio_policy g LEFT JOIN studio_model_service s ON s.model_id=c.id WHERE (c.plugin_id=p.id OR EXISTS(SELECT 1 FROM studio_shared_models e WHERE e.model_id=c.id AND e.plugin_id=p.id)) AND NOT c.hidden) AS choices, ARRAY(SELECT m->>'label' FROM jsonb_array_elements(v.manifest->'models') m WHERE m ? 'studio' AND COALESCE((m->>'hidden')::boolean,false)=false) AS models
       FROM studio_packages p JOIN studio_package_releases r USING(id,version)
-      JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion' WHERE p.installed ORDER BY label,p.id`)
+      LEFT JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion' WHERE p.installed AND (v.id IS NOT NULL OR r.package ? 'extensionOnly') ORDER BY label,p.id`)
     ).rows;
   }
   async change(
@@ -976,7 +1063,14 @@ export class StudioPackages {
       );
       requireValue(row && row.revision === revision, 409, "插件已更改，请刷新");
       requireValue(!row.removing, 409, "插件正在移除");
-      if (action === "enable")
+      if (
+        action === "enable" &&
+        !(await one(
+          sql,
+          "SELECT 1 FROM studio_package_releases WHERE id=$1 AND version=$2 AND package ? 'extensionOnly'",
+          [id, row.version],
+        ))
+      )
         requireValue(
           await one(
             sql,
@@ -1007,6 +1101,9 @@ export class StudioPackages {
       return;
     await this.settings.purge(sql, id);
     await purgePluginData(sql, id);
+    await sql.query("DELETE FROM studio_action_receipts WHERE plugin_id=$1", [
+      id,
+    ]);
     await sql.query(
       "DELETE FROM studio_model_service WHERE connection_id IN (SELECT id FROM connections WHERE plugin_id=$1)",
       [id],

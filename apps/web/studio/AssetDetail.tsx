@@ -475,12 +475,14 @@ export function ImageDetail({
   favorite,
   use,
   remove,
+  more,
 }: {
   state: StudioState;
   asset: Asset;
   close: () => void;
   favorite: (id: string, saved: boolean) => void;
   use: (id: string) => void;
+  more?: (button: HTMLButtonElement) => void;
   remove: (id: string) => void;
 }) {
   const { id } = asset;
@@ -509,6 +511,15 @@ export function ImageDetail({
             detail
           />
           <Download id={id} detail />
+          {more && (
+            <button
+              className="icon-button"
+              aria-label="更多"
+              onClick={(e) => more(e.currentTarget)}
+            >
+              <Icon name="more" />
+            </button>
+          )}
         </div>
         <div className="detail-copy">
           <div className="metadata">{`${asset.w} × ${asset.h}`}</div>

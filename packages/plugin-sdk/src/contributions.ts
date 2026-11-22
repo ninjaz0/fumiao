@@ -228,10 +228,52 @@ export const settingsDeclarationSchema = z
   .strict();
 export type SettingsDeclaration = z.infer<typeof settingsDeclarationSchema>;
 
+export const eventTypes = [
+  "job.completed",
+  "job.failed",
+  "asset.created",
+  "member.added",
+  "member.removed",
+] as const;
+const hookProgram = z
+  .string()
+  .min(1)
+  .max(64 * 1024);
+const eventSubscription = z
+  .object({
+    type: z.enum(eventTypes),
+    program: hookProgram,
+  })
+  .strict();
+const resourceAction = z
+  .object({
+    id: slug,
+    title: label,
+    target: z.enum(["asset", "job"]),
+    audience: z.enum(["admin", "member"]).default("admin"),
+    fields: z
+      .array(
+        z
+          .object({ name: slug, label, required: z.boolean().default(false) })
+          .strict(),
+      )
+      .max(8)
+      .optional(),
+    program: hookProgram,
+  })
+  .strict();
+export type ResourceAction = z.infer<typeof resourceAction>;
+export type MenuEntry = Omit<ResourceAction, "program"> & {
+  plugin: string;
+  version: string;
+};
+
 export const contributesSchema = z
   .object({
     version: z.literal(CONTRIBUTIONS_VERSION),
     nodePools: nodePoolSchema.optional(),
+    events: z.array(eventSubscription).max(eventTypes.length).optional(),
+    actions: z.array(resourceAction).max(16).optional(),
     settingsPages: z.array(settingsPageSchema).max(8).default([]),
     settings: settingsDeclarationSchema.optional(),
     hostCapabilities: z
@@ -290,6 +332,14 @@ export function contributionProblems(
   }
   if (new Set(c.http?.origins).size !== (c.http?.origins.length ?? 0))
     problems.push("http.origins 重复");
+  for (const names of [
+    c.events?.map((e) => e.type),
+    c.actions?.map((a) => a.id),
+    ...(c.actions ?? []).map((a) => a.fields?.map((f) => f.name)),
+  ]) {
+    if (names && new Set(names).size !== names.length)
+      problems.push("事件、操作或表单字段标识重复");
+  }
   const pageIds = new Set<string>();
   for (const page of c.settingsPages) {
     if (pageIds.has(page.id)) problems.push("设置页标识重复：" + page.id);

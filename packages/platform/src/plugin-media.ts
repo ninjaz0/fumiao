@@ -90,7 +90,12 @@ export class PluginMedia {
   private readonly staged = new Set<string>();
   constructor(private readonly storage: Storage) {}
   async rollback() {
-    await Promise.all([...this.staged].map((key) => this.storage.remove(key)));
+    await Promise.all(
+      [...this.staged].map(async (key) => {
+        await this.storage.remove(key);
+        this.staged.delete(key);
+      }),
+    );
   }
   async call(
     sql: Sql,

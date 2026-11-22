@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "id": "example-review-notes",
+  "label": "审片备注",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "data"
+    ],
+    "actions": [
+      {
+        "id": "note",
+        "title": "填写审片备注",
+        "target": "job",
+        "audience": "member",
+        "fields": [
+          {
+            "name": "note",
+            "label": "审片备注",
+            "required": true
+          }
+        ],
+        "programFile": "save.js"
+      },
+      {
+        "id": "read-note",
+        "title": "查看审片备注",
+        "target": "job",
+        "audience": "member",
+        "programFile": "read.js"
+      }
+    ]
+  }
+}
