@@ -18,6 +18,7 @@ import {
   settings,
   setTab,
 } from "./studio-settings-browser.js";
+import { checkStorageScope } from "./studio-storage-browser.js";
 
 const imagePrompt = "隔离工作台生成图片";
 const draft = "重启后恢复创作草稿";
@@ -825,6 +826,39 @@ export async function studioBrowser(
     const document = () => read<Project>(canvasPath, workspace);
     await nav("chat");
     const edit = page.getByRole("textbox", { name: "发送消息" });
+    await page.locator("button.fm-chat-new").click();
+    const failedDraft = "首次发送失败后仍保留的草稿";
+    const failedMessagePath = "**/api/chats/*/messages";
+    await page.route(failedMessagePath, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "首次消息发送失败" }),
+      }),
+    );
+    let failedConversationId: string | null = null;
+    try {
+      await edit.fill(failedDraft);
+      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await expect(page.getByText("首次消息发送失败", { exact: true })).toBeVisible();
+      failedConversationId = await page
+        .locator(".fm-chat-conversation-row.selected")
+        .getAttribute("data-conversation");
+      assert.ok(failedConversationId);
+      await expect(edit).toHaveValue(failedDraft);
+    } finally {
+      await page.unroute(failedMessagePath);
+    }
+    await page.reload();
+    await nav("chat");
+    await page.locator("button.fm-chat-new").click();
+    await page
+      .locator(`[data-conversation="${failedConversationId}"] .fm-chat-conversation-open`)
+      .click();
+    await expect(edit).toHaveValue(failedDraft);
+    console.log("Verified failed first chat message draft survives reload in its conversation");
+    await page.locator("button.fm-chat-new").click();
+    await expect(edit).toHaveValue("");
     await edit.fill("把本地回复放入画布");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     const assistant = page.locator(".fm-chat-message.assistant").last();
@@ -973,6 +1007,7 @@ export async function studioBrowser(
     await checkPackRefreshRace(await context.newPage(), studio, before);
     await checkDeletedH3Frame(await context.newPage(), studio, before);
     await checkH3ImageUploadLimit(await context.newPage(), studio, bytes);
+    await checkStorageScope(await context.newPage(), web, await state());
     const jobEntries = before.credit_history.filter(
       (entry) => entry.job === jobId,
     );

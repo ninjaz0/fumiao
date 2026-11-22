@@ -2,9 +2,9 @@ import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {Check,LoaderCircle,Pencil,Trash2,X} from 'lucide-react';
 
 export type Conversation={id:string;title:string;model:string;revision:number;active_turn:string|null;can_delete:boolean;updated:number};
-type Props={items:Conversation[];selected:string;onChoose:(id:string)=>void;onRename:(item:Conversation,title:string)=>Promise<void>;onDelete:(item:Conversation)=>Promise<void>;onRefresh:()=>Promise<void>};
+type Props={items:Conversation[];loading?:boolean;loadError?:string;selected:string;onChoose:(id:string)=>void;onRename:(item:Conversation,title:string)=>Promise<void>;onDelete:(item:Conversation)=>Promise<void>;onRefresh:()=>Promise<void>};
 
-export function ConversationList({items,selected,onChoose,onRename,onDelete,onRefresh}:Props){
+export function ConversationList({items,loading,loadError,selected,onChoose,onRename,onDelete,onRefresh}:Props){
  const [menu,setMenu]=useState<{id:string;x:number;y:number}|null>(null),[editing,setEditing]=useState<{id:string;title:string}|null>(null),[working,setWorking]=useState(''),[error,setError]=useState('');
  const root=useRef<HTMLDivElement>(null),popup=useRef<HTMLDivElement>(null),input=useRef<HTMLInputElement>(null),opener=useRef<HTMLElement|null>(null);
  const target=items.find(item=>item.id===menu?.id);
@@ -39,7 +39,8 @@ export function ConversationList({items,selected,onChoose,onRename,onDelete,onRe
   try{await onDelete(item)}catch(e){setError((e as Error).message);void onRefresh().catch(()=>{})}finally{setWorking('')}
  };
  return <div className="fm-chat-history-items" ref={root}>
-  <div className="fm-chat-list">{!items.length?<p className="fm-chat-list-empty">暂无对话</p>:items.map(item=><div key={item.id} data-conversation={item.id} className={'fm-chat-conversation-row'+(selected===item.id?' selected':'')+(menu?.id===item.id?' menu-open':'')} onContextMenu={e=>{if(editing?.id===item.id)return;e.preventDefault();open(item,e.clientX,e.clientY,e.currentTarget.querySelector('button')!)}}>
+  {loadError&&<div className="fm-chat-history-error" role="alert"><span>{loadError}</span><button type="button" disabled={!!working} onClick={async()=>{setWorking('refresh');try{await onRefresh()}catch{}finally{setWorking('')}}}>重试</button></div>}
+  <div className="fm-chat-list">{loading?<p className="fm-chat-list-empty" role="status">正在载入对话历史…</p>:!items.length?(!loadError&&<p className="fm-chat-list-empty">暂无对话</p>):items.map(item=><div key={item.id} data-conversation={item.id} className={'fm-chat-conversation-row'+(selected===item.id?' selected':'')+(menu?.id===item.id?' menu-open':'')} onContextMenu={e=>{if(editing?.id===item.id)return;e.preventDefault();open(item,e.clientX,e.clientY,e.currentTarget.querySelector('button')!)}}>
    {editing?.id===item.id?<form className="fm-chat-row-rename" onSubmit={e=>{e.preventDefault();void rename()}} onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();if(!working){setEditing(null);setError('');requestAnimationFrame(()=>focusRow(item.id))}}}}>
     <input ref={input} aria-label="对话名称" value={editing.title} maxLength={80} disabled={!!working} onChange={e=>setEditing({...editing,title:e.target.value})}/>
     <button type="submit" aria-label="保存名称" disabled={!!working||!editing.title.trim()}><Check size={15}/></button><button type="button" aria-label="取消改名" disabled={!!working} onClick={()=>{setEditing(null);setError('');requestAnimationFrame(()=>focusRow(item.id))}}><X size={15}/></button>

@@ -4,6 +4,7 @@ import {marked} from 'marked';
 import DOMPurify from 'dompurify';
 import {ModelSelect} from './ModelSelect';
 import {ConversationList,type Conversation} from './ConversationList';
+import {chatFreshness} from './freshness';
 
 export type Message={id:number;role:'user'|'assistant';content:string;state:string;model:string;author_name:string;error?:string;context:string;reply_to:number|null};
 type Snapshot={conversation:Conversation;messages:Message[]};
@@ -25,10 +26,12 @@ const Credit=()=> <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="t
 export function ChatWorkspace(props:Props){
  const {workspace,userId,compact,inline,project,node}=props;
  const scope=`fm-chat-${userId}-${workspace}-${project||'main'}-${node||''}`;
+ const acceptConversation=useMemo(()=>chatFreshness(),[scope]);
  const [list,setList]=useState<Conversation[]>([]),[data,setData]=useState<Snapshot|null>(null),[cid,setCid]=useState(()=>sessionStorage.getItem(scope+'-active')||''),[config,setConfig]=useState<Config|null>(null),[model,setModel]=useState('deepseek-flash');
  const [draft,setDraft]=useState(()=>sessionStorage.getItem(scope+'-draft-'+cid)||''),[pendingDraft,setPendingDraft]=useState<string|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loading,setLoading]=useState(true),[history,setHistory]=useState(false),[rename,setRename]=useState<string|null>(null),[notice,setNotice]=useState(''),[deleted,setDeleted]=useState(''),[copied,setCopied]=useState<number|null>(null),[network,setNetwork]=useState(false),[newBelow,setNewBelow]=useState(false);
  const [picker,setPicker]=useState<Message|null>(null),[projects,setProjects]=useState<{id:string;title:string}[]>([]),[target,setTarget]=useState(''),[canvasName,setCanvasName]=useState('新画布');
  const [applied,setApplied]=useState<{id:string;message:number}|null>(null);
+ const [listLoading,setListLoading]=useState(true),[listError,setListError]=useState('');
  const [writes,setWrites]=useState<Record<string,{cid:string;uid:string}>>(()=>{try{return JSON.parse(sessionStorage.getItem(scope+'-writes')||'{}')}catch{return {}}}),[applying,setApplying]=useState(false),[updatedMessage,setUpdatedMessage]=useState<number|null>(null);
  const writing=useRef<number|null>(null);
  const saveWrites=(fn:(current:Record<string,{cid:string;uid:string}>)=>Record<string,{cid:string;uid:string}>)=>setWrites(current=>{const next=fn(current);sessionStorage.setItem(scope+'-writes',JSON.stringify(next));return next});
@@ -37,19 +40,19 @@ export function ChatWorkspace(props:Props){
  const initialHistory=useRef(true), cfgRef=useRef<Config|null>(null);
  const scroll=useRef<HTMLDivElement>(null),input=useRef<HTMLTextAreaElement>(null),follow=useRef(true),alive=useRef(true),current=useRef(cid),pending=useRef<{signature:string;uid:string}|null>(null);
  const req=<T=any,>(path:string,body?:unknown,method?:string)=>chatRequest<T>(workspace,path,body,method);
- const loadList=async()=>{const r=await req<{conversations:Conversation[]}>('/api/chats'+(project?'?project='+encodeURIComponent(project)+'&node='+encodeURIComponent(node||''):''));if(alive.current){setList(r.conversations);if(initialHistory.current&&compact&&!current.current&&r.conversations.length){const id=r.conversations[0].id;current.current=id;setCid(id);sessionStorage.setItem(scope+'-active',id)}initialHistory.current=false}};
+ const loadList=async()=>{try{const r=await req<{conversations:Conversation[]}>('/api/chats'+(project?'?project='+encodeURIComponent(project)+'&node='+encodeURIComponent(node||''):''));if(alive.current){setList(r.conversations);setListError('');if(initialHistory.current&&compact&&!current.current&&r.conversations.length){const id=r.conversations[0].id;current.current=id;setCid(id);sessionStorage.setItem(scope+'-active',id)}initialHistory.current=false}}catch(e){if(alive.current)setListError((e as Error).message);throw e}finally{if(alive.current)setListLoading(false)}};
  const loadConfig=async()=>{const c=await req<Config>('/api/chat/config');if(alive.current){cfgRef.current=c;setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')}};
- const update=(s:Snapshot)=>{if(!alive.current)return;if(s.conversation.id===current.current)setData(s);setList(items=>[s.conversation,...items.filter(c=>c.id!==s.conversation.id)].sort((a,b)=>b.updated-a.updated));};
+ const update=(s:Snapshot)=>{if(!alive.current||!acceptConversation(s.conversation))return;if(s.conversation.id===current.current)setData(s);setList(items=>[s.conversation,...items.filter(c=>c.id!==s.conversation.id)].sort((a,b)=>b.updated-a.updated));};
  const updateDraft=(value:string)=>{setDraft(value);setPendingDraft(null);const key=scope+'-draft-'+current.current;if(value)sessionStorage.setItem(key,value);else sessionStorage.removeItem(key)};
  const applyPresetDraft=(value:string)=>{if(!draft.trim()||draft===value){updateDraft(value);input.current?.focus();return}setPendingDraft(value)};
  const confirmPendingDraft=()=>{if(pendingDraft===null)return;updateDraft(pendingDraft);input.current?.focus()};
  const cancelPendingDraft=()=>{setPendingDraft(null);input.current?.focus()};
  const choose=(id:string)=>{setDraft(sessionStorage.getItem(scope+'-draft-'+id)||'');setPendingDraft(null);const found=list.find(c=>c.id===id);if(found&&config?.models[found.model])setModel(found.model);current.current=id;setCid(id);setData(null);setError('');setRename(null);setPicker(null);setHistory(false);pending.current=null;setLoading(!!id);follow.current=true;setNewBelow(false);sessionStorage.setItem(scope+'-active',id)};
- useEffect(()=>{alive.current=true;void Promise.all([loadConfig(),loadList()]).catch(e=>setError(e.message)).finally(()=>setLoading(false));const timer=setInterval(()=>{void loadConfig().catch(()=>{});void loadList().catch(()=>{})},10000);return()=>{alive.current=false;clearInterval(timer)}},[workspace,project,node]);
+ useEffect(()=>{alive.current=true;setListLoading(true);setListError('');void Promise.all([loadConfig(),inline?loadList():loadList().catch(()=>{})]).catch(e=>setError(e.message)).finally(()=>setLoading(false));const timer=setInterval(()=>{void loadConfig().catch(()=>{});void loadList().catch(()=>{})},10000);return()=>{alive.current=false;clearInterval(timer)}},[workspace,project,node]);
  useEffect(()=>{if(input.current&&!inline){input.current.style.height='0px';input.current.style.height=Math.min(input.current.scrollHeight,180)+'px'}},[draft,cid,inline]);
  useEffect(()=>{
   if(!cid)return;let closed=false;const url='/api/chats/'+cid;
-  void req<Snapshot>(url).then(s=>{if(!closed){update(s);setModel(m=>s.conversation.model in (cfgRef.current?.models||{})?s.conversation.model:m);setLoading(false)}}).catch(e=>{if(!closed){setError(e.message);setLoading(false);if(e.status===404)choose('')}});
+  void req<Snapshot>(url).then(s=>{if(!closed){update(s);setModel(m=>s.conversation.model in (cfgRef.current?.models||{})?s.conversation.model:m);setLoading(false)}}).catch(e=>{if(!closed){if(e.status===404)choose('');setError(e.message);setLoading(false)}});
   const events=new EventSource(url+'/events?workspace='+workspace);
   events.onmessage=e=>{if(closed)return;setNetwork(false);const next=JSON.parse(e.data) as Snapshot;update(next);setLoading(false)};
   events.onerror=()=>{if(!closed)setNetwork(true)};
@@ -83,7 +86,7 @@ export function ChatWorkspace(props:Props){
   setPendingDraft(null);
   let active=data;
   const context=props.getContext?await props.getContext():undefined;
-  if(!active){active=await req<Snapshot>('/api/chats',{model,context});current.current=active.conversation.id;setCid(active.conversation.id);sessionStorage.setItem(scope+'-active',active.conversation.id);setData(active)}
+  if(!active){active=await req<Snapshot>('/api/chats',{model,context});const key=scope+'-draft-';const saved=sessionStorage.getItem(key);if(saved!==null){sessionStorage.setItem(key+active.conversation.id,saved);sessionStorage.removeItem(key)}current.current=active.conversation.id;setCid(active.conversation.id);sessionStorage.setItem(scope+'-active',active.conversation.id);setData(active)}
   const signature=JSON.stringify([active.conversation.id,model,draft,retry]);
   if(pending.current?.signature!==signature)pending.current={signature,uid:crypto.randomUUID()};
   try{
@@ -141,7 +144,7 @@ export function ChatWorkspace(props:Props){
   <aside className="fm-chat-history" aria-label="对话历史">
    <div className="fm-chat-history-top"><h2>对话</h2><button type="button" className="fm-chat-icon" aria-label="关闭对话历史" onClick={()=>setHistory(false)}><X size={18}/></button></div>
    <button type="button" className="fm-chat-new" onClick={()=>choose('')}><Plus size={18}/>新对话</button>
-   <ConversationList items={list} selected={cid} onChoose={choose} onRefresh={loadList} onDelete={removeConversation} onRename={async(item,title)=>{update(await req<Snapshot>('/api/chats/'+item.id,{title,expected_revision:item.revision},'PATCH'))}}/>
+   <ConversationList items={list} loading={listLoading} loadError={listError} selected={cid} onChoose={choose} onRefresh={loadList} onDelete={removeConversation} onRename={async(item,title)=>{update(await req<Snapshot>('/api/chats/'+item.id,{title,expected_revision:item.revision},'PATCH'))}}/>
   </aside>
   <section className="fm-chat-main" aria-label="AI 对话" inert={history&&Boolean(compact||typeof window!=='undefined'&&window.innerWidth<=760)}>
    <header className="fm-chat-header"><button type="button" className="fm-chat-icon fm-chat-history-toggle" aria-expanded={history} aria-label="对话历史" onClick={()=>setHistory(!history)}><PanelLeft size={18}/></button>
