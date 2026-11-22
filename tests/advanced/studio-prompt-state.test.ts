@@ -778,6 +778,35 @@ test("restoring a saved draft uses the deleted reference's original media type",
   assert.equal(restored.draft.prompt, "<Picture 1> with  and ");
 });
 
+test("saving an audio edit preserves reference types for a suspended video draft", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const state = makeState();
+  const session = readDraft(state);
+  const audio = changeCreation(
+    state,
+    {
+      ...session,
+      refs: ["vid1", "img1"],
+      draft: { ...session.draft, prompt: "<Picture 1> with <Video 1>" },
+    },
+    "audio",
+  );
+  writeDraft(state, audio);
+
+  const next = makeState({ assets: state.assets.filter(({ id }) => id !== "vid1") });
+  writeDraft(next, {
+    ...audio,
+    draft: { ...audio.draft, voiceDescription: "旁白" },
+  });
+
+  const restoredAudio = readDraft(next);
+  assert.equal(restoredAudio.draft.voiceDescription, "旁白");
+  const restoredVideo = changeCreation(next, restoredAudio, "video");
+  assert.deepEqual(restoredVideo.refs, ["img1"]);
+  assert.equal(restoredVideo.draft.prompt, "<Picture 1> with ");
+});
+
 test("#88 readDraft stays compatible with legacy storage drafts and loadJob isolates audio/media", (t) => {
   const env = installFakeEnv();
   t.after(() => env.restore());

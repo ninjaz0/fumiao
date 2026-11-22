@@ -269,6 +269,9 @@ type ReferenceType = "Picture" | "Video" | "Audio";
 type StoredReferenceTypes = Partial<
   Record<string, Exclude<ReferenceType, "Picture">>
 >;
+type StoredDraft = Partial<
+  DraftSession & { referenceTypes: StoredReferenceTypes }
+>;
 function draftSnapshot(session: DraftSession): DraftSnapshot {
   return {
     draft: session.draft,
@@ -355,6 +358,13 @@ export function modelAvailable(state: StudioState, model: string) {
 }
 const keyFor = (state: StudioState) =>
   `fm-draft-${state.me.id}-workspace-${state.workspace_id}`;
+function readStoredDraft(key: string): StoredDraft | null {
+  try {
+    return JSON.parse(sessionStorage.getItem(key) ?? "null");
+  } catch {
+    return null;
+  }
+}
 export function readDraft(state: StudioState): DraftSession {
   const key = keyFor(state);
   const legacyKey = `fm-draft-${state.me.id}`;
@@ -366,12 +376,7 @@ export function readDraft(state: StudioState): DraftSession {
     sessionStorage.setItem(key, legacy);
     sessionStorage.removeItem(legacyKey);
   }
-  let saved: Partial<DraftSession & {
-    referenceTypes: StoredReferenceTypes;
-  }> | null = null;
-  try {
-    saved = JSON.parse(sessionStorage.getItem(key) ?? "null");
-  } catch {}
+  const saved = readStoredDraft(key);
   const storedTypes = saved?.referenceTypes;
   const draft = { ...initialDraft, ...saved?.draft };
   if (saved?.draft && !state.studio_plugins) {
@@ -410,20 +415,22 @@ export function readDraft(state: StudioState): DraftSession {
   };
 }
 export function writeDraft(state: StudioState, session: DraftSession) {
+  const key = keyFor(state);
   const refs = new Set([
     ...session.refs,
     ...(session.suspendedImageDraft?.refs ?? []),
     ...(session.suspendedMediaDraft?.refs ?? []),
   ]);
+  let savedTypes: StoredReferenceTypes | undefined;
   const referenceTypes = Object.fromEntries(
-    [...refs]
-      .map((id) => [id, referenceType(state, id)] as const)
-      .filter(([, type]) => type !== "Picture"),
+    [...refs].flatMap((id) => {
+      const asset = referenceAsset(state, id);
+      if (!asset) savedTypes ??= readStoredDraft(key)?.referenceTypes ?? {};
+      const type = asset ? assetReferenceType(asset) : savedTypes?.[id];
+      return type === "Video" || type === "Audio" ? [[id, type]] : [];
+    }),
   );
-  sessionStorage.setItem(
-    keyFor(state),
-    JSON.stringify({ ...session, referenceTypes }),
-  );
+  sessionStorage.setItem(key, JSON.stringify({ ...session, referenceTypes }));
 }
 
 export const selectedModel = (draft: Draft) =>
@@ -775,13 +782,16 @@ export function packReferences(session: Pick<DraftSession, "draft" | "refs">) {
 }
 export const referenceAsset = (state: StudioState, id: string | null) =>
   state.assets.find((asset) => asset.id === id);
-export function referenceType(state: StudioState, id: string): ReferenceType {
-  const kind = referenceAsset(state, id)?.kind;
+function assetReferenceType(asset?: Asset): ReferenceType {
+  const kind = asset?.kind;
   return kind === "ref_video"
     ? "Video"
     : kind === "ref_audio"
       ? "Audio"
       : "Picture";
+}
+export function referenceType(state: StudioState, id: string): ReferenceType {
+  return assetReferenceType(referenceAsset(state, id));
 }
 export function referenceIndex(state: StudioState, id: string, refs: string[]) {
   return (
