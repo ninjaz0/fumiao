@@ -41,7 +41,7 @@ export async function open(
 export async function assertStudio(
   page: Page,
   react: boolean,
-  explicitMode: "legacy" | "react" | null = null,
+  explicitMode: "react" | null = null,
 ) {
   assert.equal(new URL(page.url()).searchParams.get("studio_ui"), explicitMode);
   const scripts = await page.evaluate(() =>

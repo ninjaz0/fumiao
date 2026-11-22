@@ -63,11 +63,29 @@ async function registeredRoutes(p: Platform) {
 
 const shape = (path: string) => path.replace(/\{[^/{}]+\}|:[^/]+/g, "{}");
 
-async function checkNext(response: Response, { method, path }: Contract) {
+async function checkNext(
+  response: Response,
+  { method, path }: Contract,
+  outage = false,
+) {
   const body = await response.bytes();
-  if (path === "/studio/") {
+  if (outage && (path === "/studio" || path === "/canvas")) {
+    // These pages need a definite session, which only the API can provide.
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get("retry-after"), "5");
+    if (method === "GET")
+      assert.match(Buffer.from(body).toString(), /http-equiv="refresh"/);
+  } else if (path === "/studio/") {
     assert.equal(response.status, 308);
     assert.equal(response.headers.get("location"), "/studio?q=a%20b&q=%2F");
+  } else if (path === "/canvas") {
+    // The probe is anonymous; the canvas list is a member page.
+    assert.equal(response.status, 307);
+    assert.equal(
+      new URL(response.headers.get("location")!, "http://probe.invalid")
+        .pathname,
+      "/studio",
+    );
   } else {
     assert.equal(response.status, 200);
     if (path.startsWith("/static/") || path.startsWith("/avatars/")) {
@@ -88,9 +106,7 @@ async function checkNext(response: Response, { method, path }: Contract) {
             ? /data-session="guest"/
             : path === "/studio"
               ? /id="app"/
-              : path === "/canvas"
-                ? /\/static\/canvas\.js/
-                : /id="canvas-root"/;
+              : /id="canvas-root"/;
         assert.match(html, pageMarker);
       }
     }
@@ -241,7 +257,8 @@ export async function auditRoutes(
       if (retired) {
         assert.equal(response.status, 410, method + " " + path);
         assert.deepEqual(await response.json(), { detail: "贡献服务已停用" });
-      } else if (nextPaths.has(path)) await checkNext(response, { method, path });
+      } else if (nextPaths.has(path))
+        await checkNext(response, { method, path }, true);
       else {
         assert.equal(response.status, 502, method + " " + path);
         if (method !== "HEAD")
@@ -249,7 +266,7 @@ export async function auditRoutes(
       }
     }
     console.log(
-      "With Nest stopped, 95 forwarded routes return 502, 14 retired routes return 410 and all 11 original local routes still respond",
+      "With Nest stopped, 95 forwarded routes return 502, 14 retired routes return 410 and the 11 local routes respond, with /studio and /canvas answering 503",
     );
   };
 }

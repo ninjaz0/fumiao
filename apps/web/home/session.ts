@@ -1,12 +1,12 @@
 import { headers } from "next/headers";
-import { originalBackend } from "../proxy-backend";
+import { backend } from "../proxy-backend";
 
 export async function homepageMember() {
   const cookie = (await headers()).get("cookie");
   if (!cookie) return false;
   try {
     const response = await fetch(
-      new URL("/api/workspaces", originalBackend()),
+      new URL("/api/workspaces", backend()),
       {
         headers: { cookie },
         cache: "no-store",

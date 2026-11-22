@@ -87,7 +87,7 @@ export async function checkStudio(p: Platform, env: NodeJS.ProcessEnv) {
     );
   if (!state.initialized)
     throw new Error(
-      "Studio has no active administrator. Check DATABASE_URL, import the existing workspace, or run API_PROTOCOL=original pnpm bootstrap for a new installation",
+      "Studio has no active administrator. Check DATABASE_URL, import the existing workspace, or run pnpm bootstrap for a new installation",
     );
   if (!state.original_workspace)
     throw new Error(

@@ -16,11 +16,7 @@ function clean(headers: Headers) {
   for (const name of hopHeaders) headers.delete(name);
   headers.delete("content-length");
 }
-export async function forward(
-  request: Request,
-  backend: string,
-  legacy = false,
-) {
+export async function forward(request: Request, backend: string) {
   const incoming = new URL(request.url);
   // The Python comparison backend also exposes these old namespaces.
   // End requests at the public gateway before forwarding credentials or a body.
@@ -97,7 +93,7 @@ export async function forward(
   } catch (error) {
     if (request.signal.aborted) throw error;
     return Response.json(
-      legacy ? { detail: "后端暂时不可用" } : { message: "后端暂时不可用" },
+      { detail: "后端暂时不可用" },
       {
         status: 502,
         headers: {

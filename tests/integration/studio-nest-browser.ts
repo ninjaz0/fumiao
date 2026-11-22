@@ -8,7 +8,6 @@ import { newNode, type Project } from "../../apps/web/canvas-editor/types.js";
 import { H3, type StudioState } from "../../apps/web/studio/state.js";
 import { one } from "../../packages/platform/src/db.js";
 import type { Actor, Platform } from "../../packages/platform/src/platform.js";
-import { originalUI } from "../../packages/web-compat/src/ui.js";
 import { imagesText } from "../../plugins/images/src/text.js";
 import type { studioPayment } from "./studio-nest-payment.js";
 import { verifyChatSettingsRetry } from "./studio-chat-settings.js";
@@ -522,8 +521,9 @@ export async function studioBrowser(
     await expect(page.locator(".shell")).toBeVisible();
     assert.equal(page.url(), web + "/studio");
     await assertStudio(page, true);
-    const original = await context.request.get("/studio?studio_ui=legacy");
-    assert.equal(await original.text(), await originalUI().html("index.html"));
+    const ignored = await context.request.get("/studio?studio_ui=legacy");
+    assert.equal(ignored.status(), 200);
+    assert.doesNotMatch(await ignored.text(), /\/static\/studio\.js/);
     const session = (await context.cookies()).find(
       ({ name }) => name === "fm_session",
     );

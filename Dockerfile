@@ -38,7 +38,7 @@ COPY --from=build /app/packages packages
 COPY --from=build /app/plugins plugins
 COPY --from=build /app/migrations migrations
 COPY --from=build /app/baseline baseline
-COPY scripts/migrate.ts scripts/bootstrap.ts scripts/import-legacy.ts scripts/dev-studio.ts scripts/
+COPY scripts/migrate.ts scripts/bootstrap.ts scripts/import-legacy.ts scripts/dev-studio.ts scripts/reconcile-job.ts scripts/
 RUN mkdir -m 700 /app/media && chown -R node:node /app/media /app/apps/web/.next
 ENV NODE_ENV=production
 USER node

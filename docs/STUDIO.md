@@ -29,8 +29,8 @@ STUDIO_ENV_FILE=.env.studio-nest pnpm start:studio
 已有工作区按 [备份和导入步骤](MIGRATION.md#迁移前) 操作。全新安装才运行以下命令，先将自己的 `ADMIN_PASSWORD` 注入当前进程。积分和提供方连接随后由管理员配置。
 
 ```sh
-API_PROTOCOL=original node --env-file=.env.studio-nest --import tsx scripts/migrate.ts
-API_PROTOCOL=original node --env-file=.env.studio-nest --import tsx scripts/bootstrap.ts
+node --env-file=.env.studio-nest --import tsx scripts/migrate.ts
+node --env-file=.env.studio-nest --import tsx scripts/bootstrap.ts
 ```
 
 ### HTTPS 入口

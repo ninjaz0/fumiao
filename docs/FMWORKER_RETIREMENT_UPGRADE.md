@@ -31,7 +31,7 @@ ORDER BY j.workspace_id, j.public_id;
 ```
 
 - 可从 `retired_fmworker_jobs.previous_receipt`、`fmworker_assignments`、`fmworker_verifications`、`job_runs` 和 `job_assets` 找回额外证据。回执及对象标识限授权人员访问。
-- 确认失败或未受理后，使用现有 Advanced 管理协议的 `POST /api/admin/jobs/:id/resolve`。请求体使用 `{"action":"refund","reason":"记录核对证据，例如上游记录号及核对日期"}`。它按平台正常事务释放冻结并保存审计。重复请求会被任务状态拦住。查询结果中的 `id` 是该接口使用的 UUID。
+- 确认失败或未受理后，在 API 容器内运行 `JOB_ID=<UUID> ACTION=refund REASON="记录核对证据，例如上游记录号及核对日期" pnpm jobs:reconcile`（Compose：`docker compose run --rm --no-deps -e JOB_ID -e ACTION -e REASON api pnpm jobs:reconcile`）。不带 `JOB_ID` 时列出全部待核对任务。操作记在 `ADMIN_NAME`（默认 `admin`）名下。它按平台正常事务释放冻结并保存审计。重复请求会被任务状态拦住。查询结果中的 `id` 是该命令使用的 UUID。
 - 上游成功并有可核验成品时，交由值班管理员和账务负责人处理。先在隔离副本核对私有成品和原冻结，再通过经审批的只结算、不执行的维护流程保存原结果和消费记录。本迁移没有成功结果的补记工具；在该流程可用前保留证据及冻结。证据不足时继续待核对。旧任务的 `resume` 和重新入队均被拒绝。
 - 需要回退其余功能时保持贡献路由关闭、只读归档及凭据撤销生效。若已产生新写入，先停写和对账，回退前保留这些记录。
 

@@ -27,7 +27,7 @@ def available_port():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["up", "status", "logs", "down"])
-    parser.add_argument("service", nargs="?", choices=["web", "api", "api-v2", "worker", "postgres", "redis"])
+    parser.add_argument("service", nargs="?", choices=["web", "api", "worker", "postgres", "redis"])
     args = parser.parse_args()
     if args.service and args.action != "logs":
         parser.error("a service is only valid for logs")
@@ -85,7 +85,7 @@ def main():
             if initialized == "f":
                 compose("run", "--rm", "--no-deps", "-e", "ADMIN_PASSWORD", "migrate", "pnpm", "bootstrap",
                         extra={"ADMIN_PASSWORD": password.read_text().strip()})
-            for services in (("api", "api-v2"), ("worker", "web")):
+            for services in (("api",), ("worker", "web")):
                 compose("up", "-d", "--no-build", "--no-deps", "--renew-anon-volumes", "--wait", *services)
         elif args.action == "down":
             compose("down")
