@@ -87,6 +87,21 @@ try {
   await expect(dialog.getByRole("textbox", { name: "画面", exact: true })).toHaveValue("");
   await expect(dialog.getByRole("button", { name: "采用分镜，不生成视频", exact: true })).toBeDisabled();
   console.log("Storyboard reopening preserves blank draft fields: passed");
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  message = { ...message, id: 101, content: JSON.stringify([shot]) };
+  await page.evaluate(({ key, shot }) => {
+    localStorage.setItem(key + "-chat", "storyboard-test");
+    localStorage.setItem(key + "-proposal", JSON.stringify([{ ...shot, title: "升级前已编辑" }]));
+  }, { key, shot });
+  await open.click();
+  await expect(title).toHaveValue("升级前已编辑");
+  await expect.poll(() => page.evaluate(key => JSON.parse(localStorage.getItem(key + "-proposal") || "null"), key)).toMatchObject({ message: 101, shots: [{ ...shot, title: "升级前已编辑" }] });
+  console.log("Storyboard legacy draft upgrade preserves edits and adopts reply id: passed");
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  message = { ...message, id: 102, content: JSON.stringify([{ ...shot, title: "升级后的新分镜" }]) };
+  await open.click();
+  await expect(title).toHaveValue("升级后的新分镜");
+  console.log("Storyboard new reply after legacy upgrade replaces proposal: passed");
 } finally {
   await browser?.close();
   harness.kill("SIGTERM");

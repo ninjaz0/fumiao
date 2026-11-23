@@ -2,8 +2,8 @@ import {useEffect,useRef,useState} from 'react';
 import {ModelSelect} from './chat/ModelSelect';
 import {chatRequest} from './chat/ChatWorkspace';
 export type SuggestedShot={title:string;prompt:string;narration:string;seconds:5|10|15};
-function restoreStoryboard(text:string):{message:number;shots:SuggestedShot[]}{
- try{const data=JSON.parse(text),rows=Array.isArray(data)?data:data?.shots;if(Array.isArray(rows)&&rows.length<=12&&rows.every(r=>r&&typeof r.title==='string'&&typeof r.prompt==='string'&&typeof r.narration==='string'&&[5,10,15].includes(r.seconds)))return {message:!Array.isArray(data)&&Number.isSafeInteger(data.message)&&data.message>0?data.message:0,shots:rows}}catch{}
+function restoreStoryboard(text:string):{message:number|null;shots:SuggestedShot[]}{
+ try{const data=JSON.parse(text),rows=Array.isArray(data)?data:data?.shots;if(Array.isArray(rows)&&rows.length<=12&&rows.every(r=>r&&typeof r.title==='string'&&typeof r.prompt==='string'&&typeof r.narration==='string'&&[5,10,15].includes(r.seconds)))return {message:Array.isArray(data)||data.message===null?null:Number.isSafeInteger(data.message)&&data.message>0?data.message:0,shots:rows}}catch{}
  return {message:0,shots:[]};
 }
 export function parseStoryboard(text:string):SuggestedShot[]{
@@ -17,7 +17,7 @@ export function parseStoryboard(text:string):SuggestedShot[]{
 }
 export function AiStoryboard({workspace,userId,project,onApply}:{workspace:number;userId:number;project:string;onApply:(shots:SuggestedShot[])=>Promise<void>}){
  const key=`fm-storyboard-${userId}-${workspace}-${project}`;
- const [draft]=useState(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]'));
+ const [draft,setDraft]=useState(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]'));
  const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(draft.shots),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
  const lastMessage=useRef(draft.message);const pending=useRef<any>(null);
  const req=(path:string,body?:unknown)=>chatRequest(workspace,path,body);
@@ -31,6 +31,7 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
    if(!m)return;
    if(m.state==='running')return;
    pending.current=null;localStorage.removeItem(key+'-pending');
+   if(lastMessage.current===null&&draft.shots.length){lastMessage.current=m.id;setDraft(d=>({...d,message:m.id}));return;}
    if(lastMessage.current===m.id)return;lastMessage.current=m.id;
    if(m.state!=='complete'){setError(m.error||'生成未完成，积分已退回');return;}
    setComplete(true);try{setShots(parseStoryboard(m.content));setError('')}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}
@@ -39,7 +40,7 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
   const events=new EventSource('/api/chats/'+cid+'/events?workspace='+workspace);events.onmessage=e=>accept(JSON.parse(e.data));
   return()=>{closed=true;events.close()};
  },[cid,workspace]);
- useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:lastMessage.current,shots}))},[shots,key]);
+ useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:lastMessage.current,shots}))},[shots,key,draft.message]);
  const price=config?.pricing.items.find((p:any)=>p.key===model+'|reply')?.amount;
  const send=async()=>{
   setBusy(true);setError('');
