@@ -156,13 +156,10 @@ const transport: HttpTransport = (url, init, signal) =>
 async function* httpChunks(
   body: Buffer | ReadableStream<Uint8Array>,
   signal: AbortSignal,
+  limit = hostLimits.httpResponseBytes,
 ) {
   if (Buffer.isBuffer(body)) {
-    requireValue(
-      body.length <= hostLimits.httpResponseBytes,
-      413,
-      "上游响应过大",
-    );
+    requireValue(body.length <= limit, 413, "上游响应过大");
     yield body;
     return;
   }
@@ -179,7 +176,7 @@ async function* httpChunks(
       signal.throwIfAborted();
       if (chunk.done) return;
       bytes += chunk.value.byteLength;
-      requireValue(bytes <= hostLimits.httpResponseBytes, 413, "上游响应过大");
+      requireValue(bytes <= limit, 413, "上游响应过大");
       yield Buffer.from(chunk.value);
     }
   } catch (error) {
@@ -190,6 +187,50 @@ async function* httpChunks(
     await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
+}
+
+function approvedURL(target: string, origins: readonly string[]) {
+  let url: URL;
+  try {
+    url = new URL(target);
+  } catch {
+    throw new DomainError(400, "请求地址无效");
+  }
+  requireValue(
+    url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      origins.includes(url.origin),
+    403,
+    "请求地址不在插件声明的范围内",
+  );
+  requirePublicHttps(url);
+  return url;
+}
+
+// Downloads use the same pinned DNS lookup and origin grant as sandbox HTTP.
+// The host consumes binary data directly so it never crosses the JS bridge.
+export async function* importBody(
+  target: string,
+  origins: readonly string[],
+  limit: number,
+  signal: AbortSignal,
+  http: HttpTransport = transport,
+) {
+  signal.throwIfAborted();
+  const url = approvedURL(target, origins);
+  let response: Awaited<ReturnType<HttpTransport>>;
+  try {
+    response = await http(url, { method: "GET", headers: {} }, signal);
+  } catch {
+    throw new DomainError(502, "导入素材下载失败");
+  }
+  if (response.status !== 200) {
+    if (!Buffer.isBuffer(response.body))
+      await response.body.cancel().catch(() => {});
+    throw new DomainError(502, "素材来源未返回完整文件");
+  }
+  yield* httpChunks(response.body, signal, limit);
 }
 
 const fetchInput = z.tuple([
@@ -336,21 +377,10 @@ export class PluginHost {
     );
     requireValue(parsed.success, 400, "请求参数无效");
     const [target, init] = parsed.data;
-    let url: URL;
-    try {
-      url = new URL(target);
-    } catch {
-      throw new DomainError(400, "请求地址无效");
-    }
-    requireValue(
-      url.protocol === "https:" &&
-        !url.username &&
-        !url.password &&
-        (this.grant.contributions.http?.origins ?? []).includes(url.origin),
-      403,
-      "请求地址不在插件声明的范围内",
+    const url = approvedURL(
+      target,
+      this.grant.contributions.http?.origins ?? [],
     );
-    requirePublicHttps(url);
     requireValue(
       init.json === undefined || init.body === undefined,
       400,

@@ -384,33 +384,23 @@ export class OriginalIdentity {
     const rows = (
       await sql.query(
         `SELECT w.*,owner.public_id AS public_owner,
-      (SELECT count(*) FROM members m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=w.id AND u.active=true AND u.deleted_at IS NULL) AS member_count
+      (SELECT count(*) FROM members m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=w.id AND u.active=true AND u.deleted_at IS NULL) AS member_count,
+      CASE WHEN $2='admin' AND w.kind='team' THEN ARRAY(SELECT u.public_id FROM members m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=w.id ORDER BY u.public_id) END AS member_ids
       FROM workspaces w JOIN users owner ON owner.id=w.owner_id WHERE (w.kind='personal' AND w.owner_id=$1) OR
       (w.kind='team' AND ($2='admin' OR EXISTS(SELECT 1 FROM members m WHERE m.workspace_id=w.id AND m.user_id=$1))) ORDER BY CASE w.kind WHEN 'personal' THEN 0 ELSE 1 END,w.public_id`,
         [user.id, user.role],
       )
     ).rows;
-    return Promise.all(
-      rows.map(async (w) => ({
-        id: publicId(w.public_id),
-        kind: w.kind,
-        name: w.name,
-        owner: w.kind === "personal" ? publicId(w.public_owner) : null,
-        created: epoch(w.created_at),
-        revision: w.revision,
-        member_count: Number(w.member_count),
-        ...(user.role === "admin" && w.kind === "team"
-          ? {
-              members: (
-                await sql.query(
-                  "SELECT u.public_id FROM members m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=$1 ORDER BY u.public_id",
-                  [w.id],
-                )
-              ).rows.map((u) => publicId(u.public_id)),
-            }
-          : {}),
-      })),
-    );
+    return rows.map((w) => ({
+      id: publicId(w.public_id),
+      kind: w.kind,
+      name: w.name,
+      owner: w.kind === "personal" ? publicId(w.public_owner) : null,
+      created: epoch(w.created_at),
+      revision: w.revision,
+      member_count: Number(w.member_count),
+      ...(w.member_ids ? { members: w.member_ids.map(publicId) } : {}),
+    }));
   }
   async workspaces(user: Actor) {
     return this.p.db.transaction(async (sql) => ({

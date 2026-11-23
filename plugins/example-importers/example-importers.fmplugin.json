@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "id": "example-importers",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "label": "外部素材与分镜导入",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "http"
+    ],
+    "http": {
+      "origins": [
+        "https://raw.githubusercontent.com"
+      ]
+    },
+    "importers": [
+      {
+        "id": "image",
+        "title": "从图片链接导入",
+        "target": "assets",
+        "audience": "member",
+        "inputLabel": "图片地址",
+        "placeholder": "https://raw.githubusercontent.com/…",
+        "program": "{\n  plan({ source }) {\n    return {\n      target: \"assets\",\n      assets: [{ key: \"cover\", kind: \"image\", url: source }],\n    };\n  },\n}"
+      },
+      {
+        "id": "story",
+        "title": "从分镜清单导入画布",
+        "target": "canvas",
+        "audience": "member",
+        "inputLabel": "分镜清单或 JSON 地址",
+        "placeholder": "{\"title\":\"海边清晨\",\"shots\":[\"海面日出\",\"远处的渔船\"]}",
+        "program": "{\n  async plan({ source }, host) {\n    let story;\n    if (source.startsWith(\"https://\")) {\n      const response = await host.http.fetch(source, { method: \"GET\" });\n      if (!response.ok) throw Error(\"无法读取清单\");\n      story = response.json;\n    } else story = JSON.parse(source);\n    const { title, shots } = story;\n    if (!Array.isArray(shots) || !shots.length || shots.length > 64)\n      throw Error(\"清单需要 1–64 个镜头\");\n    const nodes = [],\n      edges = [],\n      sequence = [];\n    shots.forEach((line, i) => {\n      if (typeof line !== \"string\") throw Error(\"镜头文案必须为文本\");\n      const script = \"script-\" + i,\n        shot = \"shot-\" + i;\n      nodes.push(\n        { id: script, type: \"text\", x: 0, y: 300 * i, text: line },\n        { id: shot, type: \"video\", x: 400, y: 300 * i, prompt: line },\n      );\n      edges.push({ id: \"edge-\" + i, source: script, target: shot });\n      sequence.push(shot);\n    });\n    return {\n      target: \"canvas\",\n      canvas: { title, nodes, edges, shots: sequence },\n    };\n  },\n}"
+      }
+    ]
+  }
+}

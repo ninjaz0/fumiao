@@ -203,6 +203,7 @@ type LibraryActions = {
 
 export function Library({
   pluginButtons,
+  importButton,
   library,
   state,
   delta,
@@ -211,6 +212,7 @@ export function Library({
   actions,
 }: {
   pluginButtons?: ReactNode;
+  importButton?: ReactNode;
   library: ReturnType<typeof useLibrary>;
   state: StudioState;
   delta: number;
@@ -375,13 +377,16 @@ export function Library({
                 </button>
               </div>
             ) : (
-              <button
-                className="quiet-button"
-                data-act="start-select"
-                onClick={library.start}
-              >
-                多选
-              </button>
+              <>
+                {importButton}
+                <button
+                  className="quiet-button"
+                  data-act="start-select"
+                  onClick={library.start}
+                >
+                  多选
+                </button>
+              </>
             )}
           </div>
         </div>

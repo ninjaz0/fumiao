@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { api, workspaceURL, type Studio } from "./api";
 
+import { PluginImport } from "../studio/PluginImport";
+
 type Project = {
   id: string;
   title: string;
@@ -152,6 +154,18 @@ export default function ProjectList({ studio }: { studio: Studio }) {
       <div className="project-list-body">
         <div className="project-list-heading">
           <h1>画布</h1>
+          <PluginImport
+            key={workspace}
+            entries={studio.plugin_importers}
+            target="canvas"
+            workspace={workspace}
+            onImported={({ canvas }) => {
+              if (canvas)
+                location.assign(
+                  workspaceURL("/canvas/" + canvas.id, workspace),
+                );
+            }}
+          />
           <button className="primary" disabled={busy} onClick={() => create()}>
             <Plus size={18} />
             新建画布

@@ -19,6 +19,7 @@ import {
   canvasResultSchema,
   validCanvasResult,
 } from "@fumiao/plugin-sdk/canvas-nodes.js";
+import { parseImportPlan } from "@fumiao/plugin-sdk/importers.js";
 import { toolArguments } from "@fumiao/plugin-sdk/chat-tools.js";
 import { manifestSchema, receiptSchema } from "@fumiao/plugin-sdk/index.js";
 import { loadProgram, runProgram } from "@fumiao/platform/plugin-program.js";
@@ -192,6 +193,30 @@ export async function authorSuite(directory: string, release?: unknown) {
         );
       }
     }
+  }
+  for (const item of c.importers ?? []) {
+    const origins = c.http?.origins ?? [];
+    add(
+      "importers." + item.id,
+      [{ source: item.target === "assets" ? origins[0] + "/cover.png" : "{}" }],
+      async (args) => {
+        const raw = await runProgram(
+          item.program,
+          "plan",
+          args,
+          host.allowed("write").filter((name) => name === "http.fetch"),
+          (name, params, signal) => {
+            if (
+              ((params[1] as { method?: string } | undefined)?.method ??
+                "GET") !== "GET"
+            )
+              throw Error("导入器只能读取外部来源");
+            return host.call(name, params, signal);
+          },
+        );
+        return parseImportPlan(item.target, raw, origins);
+      },
+    );
   }
   for (const e of c.events ?? []) {
     const resource = e.type.startsWith("asset.")

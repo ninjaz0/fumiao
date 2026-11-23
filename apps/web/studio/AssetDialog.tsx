@@ -138,6 +138,7 @@ export function AssetDialog({
   }, [dialog]);
 
   function closeDialog() {
+    if (confirmationPending.current) return;
     stopDialogMedia(ref.current);
     ref.current?.close();
   }
@@ -153,7 +154,10 @@ export function AssetDialog({
     setConfirming(true);
     try {
       await content.run(values);
-      if (shownDialog.current === dialog) closeDialog();
+      if (shownDialog.current === dialog) {
+        confirmationPending.current = false;
+        closeDialog();
+      }
     } catch (error) {
       notify((error as Error).message);
       if (shownDialog.current === dialog) {
@@ -175,7 +179,10 @@ export function AssetDialog({
             : undefined
       }
       ref={ref}
-      onCancel={() => stopDialogMedia(ref.current)}
+      onCancel={(event) => {
+        if (confirmationPending.current) event.preventDefault();
+        else stopDialogMedia(ref.current);
+      }}
       onClose={() => {
         stopDialogMedia(ref.current);
         closeFrame.current = requestAnimationFrame(() => {
@@ -262,6 +269,7 @@ export function AssetDialog({
                 {field.label}
                 <input
                   name={field.name}
+                  disabled={confirming}
                   required={field.required}
                   maxLength={300}
                 />
@@ -271,7 +279,12 @@ export function AssetDialog({
               <button className="primary" disabled={confirming}>
                 执行
               </button>
-              <button type="button" className="ghost" onClick={closeDialog}>
+              <button
+                type="button"
+                className="ghost"
+                disabled={confirming}
+                onClick={closeDialog}
+              >
                 取消
               </button>
             </div>
@@ -290,7 +303,12 @@ export function AssetDialog({
               >
                 确定
               </button>
-              <button id="back" className="ghost" onClick={closeDialog}>
+              <button
+                id="back"
+                className="ghost"
+                disabled={confirming}
+                onClick={closeDialog}
+              >
                 取消
               </button>
             </div>
@@ -301,6 +319,7 @@ export function AssetDialog({
         id="close-modal"
         type="button"
         aria-label="关闭对话框"
+        disabled={confirming}
         onClick={closeDialog}
       >
         <Icon name="close" />
