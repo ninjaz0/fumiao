@@ -10,7 +10,12 @@ import {
   viewSchema,
 } from "@fumiao/plugin-sdk/contributions.js";
 import { manifestSchema } from "@fumiao/plugin-sdk/index.js";
-import { loadProgram, runProgram } from "@fumiao/platform/plugin-program.js";
+import {
+  loadProgram,
+  programLimits,
+  runProgram,
+} from "@fumiao/platform/plugin-program.js";
+import { hostLimits } from "@fumiao/platform/plugin-host.js";
 import { validator } from "@fumiao/platform/schema.js";
 import { validOriginalRemoteModels } from "@fumiao/plugin-remote/original.js";
 
@@ -90,20 +95,314 @@ test("the notes page keeps its own data through the host", async () => {
   });
   await act("add-note", { text: "第二条" });
   assert.deepEqual(await rows(), [
-    ["notes/000001", "第一条"],
-    ["notes/000002", "第二条"],
+    ["note/000001", "第一条"],
+    ["note/000002", "第二条"],
   ]);
-  await act("remove-note", { key: "notes/000001" });
+  await act("remove-note", { key: "note/000001" });
   await act("add-note", { text: "第三条" });
   assert.deepEqual(await rows(), [
-    ["notes/000002", "第二条"],
-    ["notes/000003", "第三条"],
+    ["note/000002", "第二条"],
+    ["note/000003", "第三条"],
   ]);
   await assert.rejects(act("add-note", { text: "  " }));
   assert.deepEqual(
     notes.actions.map((a) => a.kind),
     ["program", "program"],
   );
+});
+
+for (const legacyCount of [0, 40, 60, 220]) {
+  test(`notes remain usable with ${legacyCount} legacy notes and 60 new notes`, async () => {
+    const notes = page("notes");
+    const store = new Map<string, unknown>();
+    for (let i = 1; i <= legacyCount; i++)
+      store.set(`notes/${String(i).padStart(6, "0")}`, {
+        text: `old ${i}`,
+        savedAt: "",
+      });
+    let calls = 0;
+    const host = async (name: string, args: unknown[]) => {
+      calls++;
+      const key = String(args[0] ?? "");
+      if (name === "data.list") {
+        const keys = [...store.keys()].filter((k) => k.startsWith(key)).sort();
+        return { keys: keys.slice(0, 200), more: keys.length > 200 };
+      }
+      if (name === "data.get") return store.get(key) ?? null;
+      if (name === "data.put") {
+        store.set(key, structuredClone(args[1]));
+        return true;
+      }
+      assert.equal(name, "data.delete");
+      return store.delete(key);
+    };
+    const view = async () => {
+      calls = 0;
+      const result = viewSchema.parse(
+        await runProgram(
+          notes.program,
+          "view",
+          [{}],
+          ["data.get", "data.list"],
+          host,
+        ),
+      );
+      assert.ok(calls <= programLimits.hostCalls);
+      return result;
+    };
+    const act = async (id: string, payload = {}) => {
+      calls = 0;
+      const result = await runProgram(
+        notes.program,
+        "action",
+        [id, payload, {}],
+        ["data.get", "data.list", "data.put", "data.delete"],
+        host,
+      );
+      assert.ok(calls <= programLimits.hostCalls);
+      return result;
+    };
+    const rows = (result: Awaited<ReturnType<typeof view>>) =>
+      result.blocks.flatMap((block) =>
+        block.type === "list" ? block.rows : [],
+      );
+    let result = await view();
+    assert.equal(result.primary, undefined);
+    assert.equal(
+      !!result.description,
+      legacyCount > programLimits.hostCalls - 2,
+    );
+    const initialIds = rows(result).map((row) => row.id);
+    if (legacyCount) {
+      await act("add-note", { text: "during migration" });
+      const added = rows(await view()).find(
+        (row) => row.title === "during migration",
+      );
+      assert.ok(added);
+      await act("remove-note", { key: added.id });
+      result = await view();
+      assert.deepEqual(
+        rows(result)
+          .slice(0, initialIds.length)
+          .map((row) => row.id),
+        initialIds,
+      );
+    }
+    for (let i = 1; i <= 60; i++) {
+      await act("add-note", { text: `new ${i}` });
+      if (legacyCount === 60 && i === 3) {
+        assert.equal(
+          [...store.keys()].filter((key) => key.startsWith("notes/")).length,
+          0,
+        );
+        assert.equal(rows(await view()).length, 63);
+      }
+      if ([32, 40, 60].includes(i)) {
+        const rendered = rows(await view());
+        assert.equal(rendered.length, legacyCount + i);
+        assert.equal(
+          new Set(rendered.map((row) => row.id)).size,
+          rendered.length,
+        );
+      }
+    }
+    assert.equal(
+      [...store.keys()].filter((key) => key.startsWith("notes/")).length,
+      0,
+    );
+    const complete = await view();
+    assert.equal(complete.description, undefined);
+    assert.deepEqual(
+      rows(complete)
+        .slice(0, legacyCount)
+        .map((row) => row.title),
+      Array.from({ length: legacyCount }, (_, i) => `old ${i + 1}`),
+    );
+    const before = rows(await view());
+    for (const row of [before[0], before.at(-1)!])
+      await act("remove-note", { key: row.id });
+    const after = rows(await view());
+    assert.equal(after.length, before.length - 2);
+    assert.ok(
+      after.every((row) => ![before[0].id, before.at(-1)!.id].includes(row.id)),
+    );
+    await assert.rejects(act("add-note", { text: " " }));
+    await assert.rejects(act("unknown"));
+    assert.deepEqual(rows(await view()), after);
+  });
+}
+
+test("deleting an unmigrated legacy note drains a full batch within the call cap", async () => {
+  const store = new Map<string, unknown>();
+  for (let i = 1; i <= 60; i++)
+    store.set(`notes/${String(i).padStart(6, "0")}`, {
+      text: `old ${i}`,
+      savedAt: "",
+    });
+  let calls = 0;
+  const host = async (name: string, args: unknown[]) => {
+    calls++;
+    const key = String(args[0]);
+    if (name === "data.get") return store.get(key) ?? null;
+    if (name === "data.list")
+      return {
+        keys: [...store.keys()]
+          .filter((key) => key.startsWith("notes/"))
+          .sort(),
+        more: false,
+      };
+    if (name === "data.put") return (store.set(key, args[1]), true);
+    assert.equal(name, "data.delete");
+    return store.delete(key);
+  };
+  assert.deepEqual(
+    await runProgram(
+      page("notes").program,
+      "action",
+      ["remove-note", { key: "notes/000060" }, {}],
+      ["data.get", "data.list", "data.put", "data.delete"],
+      host,
+    ),
+    { notice: "备注已删除" },
+  );
+  assert.equal(calls, programLimits.hostCalls);
+  const migrated = store.get("notes-v2") as { notes: { id: string }[] };
+  assert.equal(migrated.notes.length, 14);
+  assert.equal(store.has("notes/000060"), false);
+  assert.equal(store.size - 1 + migrated.notes.length, 59);
+  assert.deepEqual(
+    migrated.notes.map((note) => note.id),
+    Array.from(
+      { length: 14 },
+      (_, i) => `notes/${String(i + 1).padStart(6, "0")}`,
+    ),
+  );
+});
+
+for (const action of ["add-note", "remove-note"]) {
+  test(`${action} migrates legacy notes when the installation is at the key quota`, async () => {
+    const store = new Map<string, unknown>();
+    for (let i = 1; i <= hostLimits.dataPluginKeys; i++)
+      store.set(`notes/${String(i).padStart(6, "0")}`, {
+        text: `old ${i}`,
+        savedAt: "",
+      });
+    const host = async (name: string, args: unknown[]) => {
+      const key = String(args[0]);
+      if (name === "data.get") return store.get(key) ?? null;
+      if (name === "data.list")
+        return {
+          keys: [...store.keys()]
+            .filter((key) => key.startsWith("notes/"))
+            .sort()
+            .slice(0, hostLimits.dataListKeys),
+          more: true,
+        };
+      if (name === "data.put") {
+        if (!store.has(key) && store.size >= hostLimits.dataPluginKeys)
+          throw Error("插件数据超过容量上限");
+        store.set(key, args[1]);
+        return true;
+      }
+      assert.equal(name, "data.delete");
+      return store.delete(key);
+    };
+    assert.deepEqual(
+      await runProgram(
+        page("notes").program,
+        "action",
+        [action, { text: "new", key: "notes/002000" }, {}],
+        ["data.get", "data.list", "data.put", "data.delete"],
+        host,
+      ),
+      { notice: action === "add-note" ? "备注已保存" : "备注已删除" },
+    );
+    const saved = store.get("notes-v2") as {
+      notes: { id: string; text: string }[];
+    };
+    const migrated = saved.notes.filter((note) => note.id.startsWith("notes/"));
+    assert.equal(migrated.length, 14);
+    assert.ok(migrated.every((note) => !store.has(note.id)));
+    assert.equal(
+      store.size - 1 + saved.notes.length,
+      hostLimits.dataPluginKeys + (action === "add-note" ? 1 : -1),
+    );
+    assert.equal(
+      new Set([...store.keys(), ...saved.notes.map((note) => note.id)]).size,
+      store.size + saved.notes.length,
+    );
+    assert.equal(store.has("notes/002000"), action !== "remove-note");
+  });
+}
+
+test("a full notes collection returns a Chinese notice without writing and remains deletable", async () => {
+  const notes = page("notes");
+  const saved = {
+    next: 1,
+    notes: [] as { id: string; text: string; savedAt: string }[],
+  };
+  const text = "中😀".repeat(67).slice(0, 200);
+  for (;;) {
+    saved.notes.push({
+      id: `note/${String(saved.next).padStart(6, "0")}`,
+      text,
+      savedAt: "",
+    });
+    saved.next++;
+    if (Buffer.byteLength(JSON.stringify(saved)) > hostLimits.dataValueBytes) {
+      saved.notes.pop();
+      saved.next--;
+      break;
+    }
+  }
+  const store = new Map<string, unknown>([["notes-v2", saved]]);
+  let puts = 0;
+  const host = async (name: string, args: unknown[]) => {
+    const key = String(args[0]);
+    if (name === "data.get") return store.get(key) ?? null;
+    if (name === "data.list") return { keys: [], more: false };
+    assert.equal(name, "data.put");
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(args[1])) <= hostLimits.dataValueBytes,
+    );
+    puts++;
+    store.set(key, structuredClone(args[1]));
+    return true;
+  };
+  const act = async (id: string, payload: object) =>
+    programActionOutputSchema.parse(
+      await runProgram(
+        notes.program,
+        "action",
+        [id, payload, {}],
+        ["data.get", "data.list", "data.put", "data.delete"],
+        host,
+      ),
+    );
+  const before = JSON.stringify(saved);
+  assert.deepEqual(await act("add-note", { text }), {
+    notice: "备注存储空间已满（最多 256 KB），请先删除部分备注后再保存。",
+  });
+  assert.equal(puts, 0);
+  assert.equal(JSON.stringify(store.get("notes-v2")), before);
+  const view = viewSchema.parse(
+    await runProgram(
+      notes.program,
+      "view",
+      [{}],
+      ["data.get", "data.list"],
+      host,
+    ),
+  );
+  assert.ok(view.blocks.length <= 40);
+  assert.equal(
+    view.blocks.flatMap((block) => (block.type === "list" ? block.rows : []))
+      .length,
+    saved.notes.length,
+  );
+  await act("remove-note", { key: saved.notes[0].id });
+  assert.deepEqual(await act("add-note", { text }), { notice: "备注已保存" });
+  assert.equal(puts, 2);
 });
 
 test("the global form shows schema defaults and saves the displayed revision", async () => {

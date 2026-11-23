@@ -1,3 +1,4 @@
+import { importerSchema } from "./importers.js";
 import { chatToolSchema } from "./chat-tools.js";
 import { canvasNodeSchema } from "./canvas-nodes.js";
 import { viewLeaves } from "./view-blocks.js";
@@ -306,6 +307,7 @@ export const contributesSchema = z
   .object({
     version: z.literal(CONTRIBUTIONS_VERSION),
     nodePools: nodePoolSchema.optional(),
+    importers: z.array(importerSchema).max(16).optional(),
     chatTools: z.array(chatToolSchema).max(16).optional(),
     canvasNodes: z.array(canvasNodeSchema).max(16).optional(),
     paymentMethods: z
@@ -427,6 +429,11 @@ export function contributionProblems(
   }
   if (new Set(c.http?.origins).size !== (c.http?.origins.length ?? 0))
     problems.push("http.origins 重复");
+  if (
+    c.importers?.some((item) => item.target === "assets") &&
+    !caps.has("http")
+  )
+    problems.push("素材导入器需要 http 能力和来源声明");
   if (c.exporters?.length && !caps.has("media"))
     problems.push("导出器需要媒体能力");
   for (const m of c.paymentMethods ?? []) {
@@ -438,6 +445,7 @@ export function contributionProblems(
       problems.push("查单必须绑定网关单号，或提供订单号和金额字段");
   }
   for (const names of [
+    c.importers?.map((i) => i.id),
     c.paymentMethods?.map((m) => m.id),
     c.chatTools?.map(t => t.id),
     c.canvasNodes?.map(n => n.id),

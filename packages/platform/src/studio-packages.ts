@@ -132,6 +132,7 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
     ["create", contributions.paymentMethods],
     ["verify", contributions.paymentMethods],
     ["callback", contributions.paymentMethods],
+    ["plan", contributions.importers],
     ["plan", contributions.exporters],
     ["view", contributions.pages],
     ["run", contributions.canvasNodes],
@@ -324,10 +325,36 @@ function permissionSummary(
     label + (prior && isNew ? "（新增）" : "");
   const lines: string[] = [];
   for (const m of next.paymentMethods ?? []) {
-    const paths = [m.checkoutPath, m.createPath, m.queryPath].filter(Boolean).join("、");
-    const priorMethod = prior?.paymentMethods?.find(old => old.id === m.id);
-    lines.push(added("充值渠道 · " + m.title + " · 收款网关 " + paths + " · " + m.signature,
-      !priorMethod || canonical(priorMethod) !== canonical(m)));
+    const paths = [m.checkoutPath, m.createPath, m.queryPath]
+      .filter(Boolean)
+      .join("、");
+    const priorMethod = prior?.paymentMethods?.find((old) => old.id === m.id);
+    lines.push(
+      added(
+        "充值渠道 · " + m.title + " · 收款网关 " + paths + " · " + m.signature,
+        !priorMethod || canonical(priorMethod) !== canonical(m),
+      ),
+    );
+  }
+  for (const item of next.importers ?? []) {
+    const audience = item.audience === "admin" ? "管理员" : "工作区成员";
+    lines.push(
+      added(
+        "导入器 · " +
+          item.title +
+          " · " +
+          (item.target === "assets" ? "写入素材" : "新建画布") +
+          "（" +
+          audience +
+          "）",
+        !prior?.importers?.some(
+          (i) =>
+            i.id === item.id &&
+            i.target === item.target &&
+            i.audience === item.audience,
+        ),
+      ),
+    );
   }
   for (const t of next.chatTools ?? [])
     lines.push(added("对话工具 · " + t.title + (t.audience === "admin" ? "（管理员）" : "（工作区成员）"), !prior?.chatTools?.some(old => old.id === t.id && old.audience === t.audience)));

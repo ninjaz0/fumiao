@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "id": "example-importers",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "label": "外部素材与分镜导入",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "http"
+    ],
+    "http": {
+      "origins": [
+        "https://raw.githubusercontent.com"
+      ]
+    },
+    "importers": [
+      {
+        "id": "image",
+        "title": "从图片链接导入",
+        "target": "assets",
+        "audience": "member",
+        "inputLabel": "图片地址",
+        "placeholder": "https://raw.githubusercontent.com/…",
+        "programFile": "image.js"
+      },
+      {
+        "id": "story",
+        "title": "从分镜清单导入画布",
+        "target": "canvas",
+        "audience": "member",
+        "inputLabel": "分镜清单或 JSON 地址",
+        "placeholder": "{\"title\":\"海边清晨\",\"shots\":[\"海面日出\",\"远处的渔船\"]}",
+        "programFile": "story.js"
+      }
+    ]
+  }
+}
