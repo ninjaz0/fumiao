@@ -6,6 +6,10 @@ import {
   type AddressPause,
 } from "./connection-address.js";
 import { nodeStudioPlugin } from "./node-studio-policy.js";
+import { packageFile, type PackageFile } from "@fumiao/plugin-sdk/package-file.js";
+export { packageFile, releaseVersion, sourceURL, type PackageFile } from "@fumiao/plugin-sdk/package-file.js";
+import { verifyPackageSignature, type PackageSignature } from "@fumiao/plugin-sdk/package-signing.js";
+import { pinnedPublisher, publisherReview, authorizePublisher } from "./package-publisher.js";
 import { createHash } from "node:crypto";
 import { nodePoolHooks } from "@fumiao/plugin-sdk/node-pools.js";
 import { purgePluginData } from "./plugin-host.js";
@@ -16,7 +20,6 @@ import {
   type Manifest,
 } from "@fumiao/plugin-sdk/index.js";
 import {
-  contributesSchema,
   contributionProblems,
   contributedPages,
   packageContributions,
@@ -41,7 +44,6 @@ import {
 import type { Platform, Actor } from "./platform.js";
 import { DomainError, requireValue } from "./security.js";
 import {
-  settingsPagesSchema,
   type InstalledSettingsPage,
   type PluginSettingsPage,
 } from "@fumiao/plugin-sdk/settings-pages.js";
@@ -75,103 +77,9 @@ export async function installedSettingsPages(
   );
 }
 
-export const releaseVersion = z
-  .string()
-  .regex(/^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/);
-export const sourceURL = z
-  .string()
-  .max(2048)
-  .url()
-  .refine((value) => {
-    const u = new URL(value);
-    return (
-      ["https:", "http:"].includes(u.protocol) &&
-      !u.username &&
-      !u.password &&
-      !u.hash &&
-      !u.search
-    );
-  });
-export const packageFile = z
-  .object({
-    format: z.literal(1),
-    extensionOnly: z.literal(true).optional(),
-    id: z.string().regex(/^[a-z][a-z0-9-]{1,63}$/),
-    label: z.string().trim().min(1).max(80),
-    version: releaseVersion,
-    adapterVersion: releaseVersion,
-    manifest: z.record(z.string(), z.unknown()).optional(),
-    equivalentModels: z.array(z.string().min(1).max(180)).max(500).optional(),
-    updateUrl: sourceURL.optional(),
-    nodeClient: z
-      .object({
-        "install.sh": z.string().max(128 * 1024),
-        "agent.tgz": z.string().max(1024 * 1024),
-        "agent.tgz.sha256": z.string().max(512),
-      })
-      .strict()
-      .optional(),
-    program: z
-      .string()
-      .min(1)
-      .max(256 * 1024)
-      .optional(),
-    studioProgram: z
-      .string()
-      .min(1)
-      .max(256 * 1024)
-      .optional(),
-    contributes: contributesSchema.optional(),
-    settingsPages: settingsPagesSchema.optional(),
-    settingsPage: z
-      .object({
-        title: z.string().min(1).max(60),
-        render: z
-          .string()
-          .min(1)
-          .max(64 * 1024),
-      })
-      .strict()
-      .optional(),
-    remote: z
-      .object({
-        endpoint: sourceURL,
-        manifest: z.record(z.string(), z.unknown()),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict()
-  .refine(
-    (f) =>
-      [f.manifest, f.remote, f.extensionOnly].filter(Boolean).length === 1 &&
-      (!f.extensionOnly ||
-        (!f.program &&
-          !f.nodeClient &&
-          !f.studioProgram &&
-          !f.equivalentModels &&
-          (f.contributes?.paymentMethods?.length ||
-            f.contributes?.exporters?.length ||
-            f.contributes?.events?.length ||
-            f.contributes?.canvasNodes?.length ||
-            f.contributes?.chatTools?.length ||
-            f.contributes?.pages?.length ||
-            f.contributes?.actions?.length))) &&
-      (!f.manifest || !!f.program || !!f.manifest.chat || !!f.studioProgram),
-    "插件必须声明一种执行方式",
-  )
-  .refine(
-    (file) =>
-      file?.settingsPage === undefined || file?.contributes === undefined,
-    {
-      message: "contributes 与旧版 settingsPage 不能同时声明",
-      when: () => true,
-    },
-  );
 export const upgradeFields = z
   .record(z.string().uuid(), z.record(z.string().max(120), z.unknown()))
   .default({});
-export type PackageFile = z.infer<typeof packageFile>;
 export function parsePackageFile(value: unknown): PackageFile {
   if (
     value &&
@@ -180,6 +88,13 @@ export function parsePackageFile(value: unknown): PackageFile {
       Object.hasOwn(value, "legacyArchive"))
   )
     throw new DomainError(400, "旧版原生插件已停止导入，请选择新版沙箱插件包");
+  if (value && typeof value === "object" && Object.hasOwn(value, "signature")) {
+    try {
+      verifyPackageSignature(value as Record<string, unknown>);
+    } catch {
+      throw new DomainError(400, "插件包签名校验失败");
+    }
+  }
   const result = packageFile.safeParse(value);
   if (!result.success) {
     const problem = result.error.issues.find(
@@ -217,6 +132,7 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
     ["create", contributions.paymentMethods],
     ["verify", contributions.paymentMethods],
     ["callback", contributions.paymentMethods],
+    ["plan", contributions.importers],
     ["plan", contributions.exporters],
     ["view", contributions.pages],
     ["run", contributions.canvasNodes],
@@ -409,10 +325,36 @@ function permissionSummary(
     label + (prior && isNew ? "（新增）" : "");
   const lines: string[] = [];
   for (const m of next.paymentMethods ?? []) {
-    const paths = [m.checkoutPath, m.createPath, m.queryPath].filter(Boolean).join("、");
-    const priorMethod = prior?.paymentMethods?.find(old => old.id === m.id);
-    lines.push(added("充值渠道 · " + m.title + " · 收款网关 " + paths + " · " + m.signature,
-      !priorMethod || canonical(priorMethod) !== canonical(m)));
+    const paths = [m.checkoutPath, m.createPath, m.queryPath]
+      .filter(Boolean)
+      .join("、");
+    const priorMethod = prior?.paymentMethods?.find((old) => old.id === m.id);
+    lines.push(
+      added(
+        "充值渠道 · " + m.title + " · 收款网关 " + paths + " · " + m.signature,
+        !priorMethod || canonical(priorMethod) !== canonical(m),
+      ),
+    );
+  }
+  for (const item of next.importers ?? []) {
+    const audience = item.audience === "admin" ? "管理员" : "工作区成员";
+    lines.push(
+      added(
+        "导入器 · " +
+          item.title +
+          " · " +
+          (item.target === "assets" ? "写入素材" : "新建画布") +
+          "（" +
+          audience +
+          "）",
+        !prior?.importers?.some(
+          (i) =>
+            i.id === item.id &&
+            i.target === item.target &&
+            i.audience === item.audience,
+        ),
+      ),
+    );
   }
   for (const t of next.chatTools ?? [])
     lines.push(added("对话工具 · " + t.title + (t.audience === "admin" ? "（管理员）" : "（工作区成员）"), !prior?.chatTools?.some(old => old.id === t.id && old.audience === t.audience)));
@@ -589,6 +531,8 @@ export class StudioPackages {
   async preview(actor: Actor, value: unknown) {
     this.p.admin(actor);
     const f = parsePackageFile(value);
+    const pinned = await pinnedPublisher(this.p.db, f.id);
+    if (!f.signature) authorizePublisher(pinned, undefined);
     const { manifest: m, contributions } = await inspectPackage(
       f,
       this.p.registry,
@@ -661,6 +605,7 @@ export class StudioPackages {
       id: f.id,
       version: f.version,
       label: f.label,
+      publisher: publisherReview(pinned, f.signature),
       models: m.models.filter((m) => m.studio && !m.hidden).map((m) => m.label),
       missing,
       endpoint: f.remote?.endpoint,
@@ -846,9 +791,16 @@ export class StudioPackages {
     revision?: number,
     rollback = false,
     supplements: z.infer<typeof upgradeFields> = {},
+    confirmPublisher?: string,
   ) {
     this.p.admin(actor);
-    const file = parsePackageFile(value);
+    const original = structuredClone(value);
+    const file = parsePackageFile(original);
+    // Preserve the signed JSON before schema defaults are applied, including for offline rollback.
+    const releaseFile = file.signature ? original : file;
+    authorizePublisher(
+      await pinnedPublisher(this.p.db, file.id), file.signature, confirmPublisher,
+    );
     const {
       adapter,
       manifest: inspected,
@@ -872,6 +824,9 @@ export class StudioPackages {
         "SELECT * FROM studio_packages WHERE id=$1 FOR UPDATE",
         [file.id],
       );
+      authorizePublisher(
+        await pinnedPublisher(sql, file.id), file.signature, confirmPublisher,
+      );
       requireValue(!current?.removing, 409, "插件正在移除");
       const release = await one(
         sql,
@@ -879,7 +834,7 @@ export class StudioPackages {
         [file.id, file.version],
       );
       requireValue(
-        !release || canonical(release.package) === canonical(file),
+        !release || canonical(release.package) === canonical(releaseFile),
         409,
         "同一版本的插件文件不能更改",
       );
@@ -1020,7 +975,7 @@ export class StudioPackages {
       if (!release)
         await sql.query(
           "INSERT INTO studio_package_releases VALUES($1,$2,$3)",
-          [file.id, file.version, JSON.stringify(file)],
+          [file.id, file.version, JSON.stringify(releaseFile)],
         );
       const services = (
         await sql.query<{
@@ -1163,6 +1118,8 @@ export class StudioPackages {
       await this.p.db
         .query(`SELECT p.id,p.version,(SELECT prior.version FROM studio_package_releases prior
             WHERE prior.id=p.id AND prior.version=p.previous_version AND prior.package ?| array['manifest','remote','extensionOnly']) AS "previousVersion",p.enabled,p.removing,p.revision,
+      r.package->'signature' AS publisher_signature,
+      (SELECT prior.package->'signature' FROM studio_package_releases prior WHERE prior.id=p.id AND prior.version=p.previous_version) AS previous_signature,
       p.update_url AS "updateUrl",p.update_auth IS NOT NULL AS "hasUpdateToken",p.checked_at AS "checkedAt",p.update_info AS "updateInfo",
       r.package->>'label' AS label, r.package->>'adapterVersion' AS "adapterVersion",coalesce(v.manifest->'configSchema','{}'::jsonb) AS "configSchema",
       ARRAY(SELECT jsonb_build_object('id',m->>'id','title',m->>'title') FROM jsonb_array_elements(r.package->'contributes'->'paymentMethods') m) AS "paymentMethods",
@@ -1172,6 +1129,14 @@ export class StudioPackages {
       FROM studio_packages p JOIN studio_package_releases r USING(id,version)
       LEFT JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion' WHERE p.installed AND (v.id IS NOT NULL OR r.package ? 'extensionOnly') ORDER BY label,p.id`)
     ).rows;
+    for (const row of rows) {
+      const current = (row.publisher_signature as PackageSignature | null) ?? undefined;
+      const prior = (row.previous_signature as PackageSignature | null) ?? undefined;
+      row.publisher = publisherReview(undefined, current);
+      row.rollbackPublisher = row.previousVersion ? publisherReview(current, prior) : null;
+      delete row.publisher_signature;
+      delete row.previous_signature;
+    }
     const providers = rows.filter(row=>row.paymentMethods.length);
     if (providers.length) {
       const channels = (await this.p.db.query(

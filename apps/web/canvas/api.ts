@@ -2,6 +2,7 @@
 // is carried explicitly so the list shares the editor's session and URLs.
 export type Studio = {
   workspace_id: number;
+  plugin_importers?: import("@fumiao/plugin-sdk/importers.js").ImporterEntry[];
   me: { nickname?: string; name: string };
 };
 

@@ -48,7 +48,23 @@ type ServiceReport = {
   models?: string[];
   available?: string[];
 };
+type Publisher = {
+  name: string | null;
+  fingerprint: string | null;
+  previousFingerprint: string | null;
+  change: string | null;
+};
+function PublisherInfo({ publisher }: { publisher: Publisher }) {
+  if (!publisher.fingerprint) return <p>发布者签名 · 未签名</p>;
+  return <div className="plugin-publisher">
+    <p>发布者 · {publisher.name}</p>
+    {publisher.change && <p>原公钥指纹 <code>{publisher.previousFingerprint}</code></p>}
+    <p>{publisher.change ? "新公钥指纹" : "公钥指纹"} <code>{publisher.fingerprint}</code></p>
+  </div>;
+}
 type Plugin = {
+  publisher?: Publisher;
+  rollbackPublisher?: Publisher | null;
   id: string;
   label: string;
   version: string;
@@ -79,6 +95,7 @@ type Plugin = {
   } | null;
 };
 type Preview = {
+  publisher?: Publisher;
   endpoint?: string;
   missing: { id: string; name: string; fields: (Field & { key: string })[] }[];
   changes: string[];
@@ -684,15 +701,18 @@ export function PluginSettings({
                       ),
                     ]),
                   );
+                  const confirmPublisher = form.get("confirmPublisher") || undefined;
                   if (pending.sha256)
                     await call("plugins/" + pending.preview.id + "/update", {
                       revision: existing?.revision,
                       sha256: pending.sha256,
+                      confirmPublisher,
                       supplements,
                     });
                   else
                     await call("plugins/import", {
                       file: pending.file,
+                      confirmPublisher,
                       revision: existing?.revision,
                       supplements,
                     });
@@ -709,6 +729,13 @@ export function PluginSettings({
             <h3>
               {pending.preview.label} · {pending.preview.version}
             </h3>
+            {pending.preview.publisher && <PublisherInfo publisher={pending.preview.publisher} />}
+            {pending.preview.publisher?.change && (
+              <label key={pending.preview.publisher.change}>
+                <input type="checkbox" name="confirmPublisher" value={pending.preview.publisher.change} required />
+                我已核对新公钥指纹，同意更换发布者公钥
+              </label>
+            )}
             <details>
               <summary>模型（{pending.preview.models.length}）</summary>
               <p>{pending.preview.models.join("、")}</p>
@@ -1725,7 +1752,9 @@ export function PluginSettings({
                             </div>
                           </form>
 
-                          {p.previousVersion && (
+                          {p.publisher && <PublisherInfo publisher={p.publisher} />}
+                          {p.previousVersion && p.publisher?.fingerprint && !p.rollbackPublisher?.fingerprint && <p>此插件已固定发布者公钥，上一个版本未签名。</p>}
+                          {p.previousVersion && (!p.publisher?.fingerprint || p.rollbackPublisher?.fingerprint) && (
                             <div className="plugin-rollback-box">
                               <p className="plugin-section-desc">
                                 可回退到上一已安装版本{" "}
@@ -1734,6 +1763,7 @@ export function PluginSettings({
                               </p>
                               {confirmAction === "rollback" ? (
                                 <div className="plugin-confirm-inline">
+                                  {p.rollbackPublisher?.change && <PublisherInfo publisher={p.rollbackPublisher} />}
                                   <span>
                                     确认回退到 {p.previousVersion}？
                                   </span>
@@ -1745,12 +1775,12 @@ export function PluginSettings({
                                         setConfirmAction("");
                                         void action(
                                           "rollback",
-                                          {},
+                                          { confirmPublisher: p.rollbackPublisher?.change ?? undefined },
                                           "已回到上一版",
                                         );
                                       }}
                                     >
-                                      确认回退
+                                      {p.rollbackPublisher?.change ? "确认换钥并回退" : "确认回退"}
                                     </button>
                                     <button
                                       type="button"

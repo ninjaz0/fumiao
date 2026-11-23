@@ -10,6 +10,7 @@ import {
 import type { Request } from "express";
 import { z } from "zod";
 import { readOriginalBody } from "@fumiao/original-api/canvas-http.js";
+import { PluginImports } from "@fumiao/original-api/plugin-importers.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { DomainError, requireValue } from "@fumiao/platform/security.js";
 import { resourceAction } from "@fumiao/platform/plugin-extensions.js";
@@ -34,6 +35,31 @@ export class OriginalPluginPagesController {
     this.pages = new PluginPages(identity.p);
   }
 
+  @Post("importers/:id")
+  @HttpCode(200)
+  async importSource(
+    @Req() req: Request,
+    @Param("plugin") plugin: string,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    const actor = await this.identity.actor(originalSessionToken(req));
+    const abort = new AbortController();
+    const cancel = () => abort.abort();
+    req.res?.once("close", cancel);
+    try {
+      return await new PluginImports(this.identity.p).run(
+        actor,
+        req.get("X-Workspace-Id"),
+        plugin,
+        id,
+        body,
+        AbortSignal.any([abort.signal, AbortSignal.timeout(120000)]),
+      );
+    } finally {
+      req.res?.off("close", cancel);
+    }
+  }
   @Post("actions/:action")
   @HttpCode(200)
   async menu(
