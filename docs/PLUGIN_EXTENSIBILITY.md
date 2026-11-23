@@ -191,3 +191,20 @@ QuickJS 沿用现有限制（16 MB 内存、100 ms、2 MB 输出），无网络�
 `contributes.paymentMethods[]` 提供渠道标识、标题、签名算法、回调的订单号／金额／商户号／交易号字段、应答文本、允许的网关路径和查单成功条件。程序实现 `create`、`callback` 和 `verify`。安装预览列出网关路径与签名算法。管理员在「设置 → 插件」启用扩展后，在插件详情中为该渠道填写 HTTPS 网关、商户号及密钥。商户密钥由宿主加密保存，在签名或查单时注入。程序只能调用该阶段允许的声明路径。收银台必须与配置的网关同源。宿主独立核对签名、订单绑定、金额、网关付款状态和交易号，积分只在数据库事务内入账一次。[支付宝示例](../plugins/payments/package/alipay.js) 与 [USDT-Plasma 示例](../plugins/payments/package/usdt_plasma.js) 使用同一套宿主接口。
 
 迁移 039 为已有实例登记分镜和支付扩展，并保留现有渠道配置、导出快照和账本。全新实例可在「设置 → 插件」导入对应的 `.fmplugin.json` 文件。新充值订单冻结插件版本和加密配置。升级前的订单沿用原商户一致性检查。停用插件会停止接收新单，已受理订单继续用原版本查单、验签。迁移前应按运维手册备份数据库、私有媒体及配套密钥；回退到旧宿主时恢复同一时间点备份。
+
+## 工作区导入器
+
+包可在 `contributes.importers` 中声明最多 16 个入口。每个入口有包内唯一的 `id`、显示名称 `title`、输入框名称 `inputLabel`、可选的 `placeholder` 和入口程序。设置 `target: "assets"` 会在资产库提供按钮，`target: "canvas"` 会在画布列表提供按钮。`audience` 默认是 `admin`，设置成 `member` 后当前工作区成员也可调用。管理员在安装预览中可以核对写入类型、受众与申请的 HTTPS 源。
+
+程序入口为 `plan({source}, host)`。输入最多 65,536 个字符。插件可解析输入文本，也可用 `host.http.fetch` 向获准的公网 HTTPS 源发起 GET。素材包必须申请 `http` 并声明 `http.origins`。返回值使用 `importPlanSchema`，例如下面的素材清单。
+
+```js
+{
+  target: "assets",
+  assets: [{ key: "cover", kind: "image", url: "https://media.example.org/cover.png" }]
+}
+```
+
+项目返回 `{target:"canvas", assets, canvas:{title,nodes,edges,shots}}`。图片节点可用 `image` 指向本次清单的图片键，生成参考素材用 `references` 引用清单中的键。宿主将这些键替换为本工作区的新素材 ID，校验节点、连线与分镜，并创建一幅新画布。每次可导入 8 个文件，图片原文件最多 16 MiB，整批输入和转换后的输出各最多 64 MiB。宿主下载并解码实际内容，音视频遵循参考素材的转码与时长规则。
+
+`POST /api/plugins/:plugin/importers/:id` 接受 `version`、随机 UUID `requestId` 和 `source`。客户端携带 `X-Workspace-Id`。同一操作者在同一工作区重试相同请求可取回原结果，复用编号且更改输入会得到 409。提交前再次校验工作区权限和启用版本。素材、画布、成功回执共同提交，失败的批次不会出现在资产库或画布列表。

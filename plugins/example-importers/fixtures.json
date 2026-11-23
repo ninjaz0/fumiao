@@ -1,0 +1,14 @@
+{
+  "inputs": {
+    "importers.image": [
+      {
+        "source": "https://raw.githubusercontent.com/example/media/main/cover.png"
+      }
+    ],
+    "importers.story": [
+      {
+        "source": "{\"title\":\"海面\",\"shots\":[\"日出\"]}"
+      }
+    ]
+  }
+}

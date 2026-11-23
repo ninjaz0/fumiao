@@ -48,11 +48,22 @@ const releases = [
   { id: "example-review-board" },
   { id: "example-shot-prompt" },
   { id: "example-reading-time" },
+  { id: "example-importers" },
   { id: "example-review-notes" },
   { id: "example-node-pool", program: true, clientBuild: "client/pack.py" },
 ];
 async function packContributions(root, contributes) {
-  for (const page of [...(contributes.settingsPages ?? []), ...(contributes.pages ?? []), ...(contributes.canvasNodes ?? []), ...(contributes.chatTools ?? []), ...(contributes.events ?? []), ...(contributes.actions ?? []), ...(contributes.exporters ?? []), ...(contributes.paymentMethods ?? [])]) {
+  for (const page of [
+    ...(contributes.settingsPages ?? []),
+    ...(contributes.pages ?? []),
+    ...(contributes.canvasNodes ?? []),
+    ...(contributes.chatTools ?? []),
+    ...(contributes.events ?? []),
+    ...(contributes.actions ?? []),
+    ...(contributes.importers ?? []),
+    ...(contributes.exporters ?? []),
+    ...(contributes.paymentMethods ?? []),
+  ]) {
     if (page.programFile) {
       page.program = await expression(join(root, page.programFile));
       delete page.programFile;

@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
-import { studioPluginProfile, pairedPluginAvailable, listedStudioCatalog } from "@fumiao/platform/studio-plugin-profile.js";
+import {
+  studioPluginProfile,
+  pairedPluginAvailable,
+  listedStudioCatalog,
+} from "@fumiao/platform/studio-plugin-profile.js";
+import { importersFor } from "./plugin-importers.js";
 import { resourceMenus } from "@fumiao/platform/plugin-extensions.js";
 import { PluginPages } from "@fumiao/platform/plugin-pages.js";
 import { installedSettingsPages } from "@fumiao/platform/studio-packages.js";
@@ -114,9 +119,12 @@ export class OriginalState {
             nodes: actor.role === "admin" && await pairedPluginAvailable(sql) ? await records.nodes(sql, actor, stamp) : [],
             canvas_nodes: await canvasNodeEntries(sql),
             plugin_actions: await resourceMenus(sql, actor),
-            plugin_pages: pages.filter(page => !page.placement),
-            studio_pages: pages.filter(page => page.placement === "studio"),
-            ...(actor.role === "admin" && { settings_pages: await installedSettingsPages(sql) }),
+            plugin_importers: await importersFor(sql, actor),
+            plugin_pages: pages.filter((page) => !page.placement),
+            studio_pages: pages.filter((page) => page.placement === "studio"),
+            ...(actor.role === "admin" && {
+              settings_pages: await installedSettingsPages(sql),
+            }),
             gpu_node_settings: nodePage ?? null,
             ...plugins.fields,
             video_models: Object.fromEntries(
@@ -160,15 +168,22 @@ export class OriginalState {
               const disk = await statfs(tmpdir());
               free = Number(disk.bavail) * Number(disk.bsize);
             }
-            const policies: Record<string, unknown> = {};
-            for (const s of spaces.filter((s) => s.kind === "team")) {
-              const team = await one(
-                sql,
-                "SELECT id FROM workspaces WHERE public_id=$1",
-                [s.id],
-              );
-              policies[String(s.id)] = listedPolicy(await catalog.teamPolicy(sql, team.id));
-            }
+            const teams = (
+              await sql.query(
+                "SELECT id,public_id FROM workspaces WHERE kind='team' AND public_id=ANY($1::bigint[]) ORDER BY public_id",
+                [spaces.filter((s) => s.kind === "team").map((s) => s.id)],
+              )
+            ).rows;
+            const teamPolicies = await catalog.teamPolicies(
+              sql,
+              teams.map((t) => t.id),
+            );
+            const policies = Object.fromEntries(
+              teams.map((t, i) => [
+                String(t.public_id),
+                listedPolicy(teamPolicies[i]),
+              ]),
+            );
             Object.assign(out, {
               used: Number(capacity.used),
               reserved: Number(capacity.reserved),
@@ -330,7 +345,7 @@ export class OriginalState {
     byModel: Map<string, ProviderPlugin>,
     admissionNote = true,
   ) {
-    const rows = (
+    const visible = (
       await sql.query(`SELECT j.*,u.public_id AS owner_public_id,w.public_id AS workspace_public_id,
       COALESCE(NULLIF(u.nickname,''),u.name) AS author,n.public_id AS node_public_id,
       studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id) AS allowed,
@@ -338,32 +353,41 @@ export class OriginalState {
       FROM jobs j JOIN users u ON u.id=j.owner_id JOIN workspaces w ON w.id=j.workspace_id JOIN models m ON m.id=j.model_id
       JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
       LEFT JOIN gpu_nodes n ON n.id::text=j.remote_id
-      WHERE j.plugin_id!='legacy-archive' AND j.deleted_at IS NULL
+      WHERE j.workspace_id=$1 AND j.plugin_id!='legacy-archive' AND j.deleted_at IS NULL
+        AND j.kind IN ('image','video','audio')
+        AND (v.endpoint IS NULL OR j.original_uid IS NOT NULL)
+      ORDER BY j.public_id`, [workspace])
+    ).rows;
+    const queued = (
+      await sql.query(`SELECT j.id,j.provider_model,j.connection_id,j.kind,
+      studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id) AS allowed,
+      v.manifest->'originalSubmission'->>'version' IN ('2','3') AS remote_studio
+      FROM jobs j JOIN models m ON m.id=j.model_id
+      JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
+      WHERE j.state='queued' AND j.plugin_id!='legacy-archive' AND j.deleted_at IS NULL
         AND j.kind IN ('image','video','audio')
         AND (v.endpoint IS NULL OR j.original_uid IS NOT NULL)
       ORDER BY j.public_id`)
     ).rows;
     const pending = new Map<string, number>(),
       ahead = new Map<string, number>();
-    for (const j of rows)
-      if (j.state === "queued") {
-        const plugin = byModel.get(j.provider_model);
-        requireValue(j.remote_studio || plugin, 503, "任务模型缺少原状态插件");
-        const lane = j.remote_studio
-          ? "remote:" + j.connection_id
-          : plugin!.manifest.originalState!.queueLane === "kind"
-            ? j.kind
-            : plugin!.manifest.id;
-        ahead.set(j.id, j.allowed ? pending.get(lane) || 0 : 0);
-        if (j.allowed) pending.set(lane, (pending.get(lane) || 0) + 1);
-      }
-    const visible = rows.filter((j) => j.workspace_id === workspace),
-      runs = (
-        await sql.query(
-          "SELECT DISTINCT ON(job) * FROM job_runs WHERE job=ANY($1::uuid[]) ORDER BY job,id DESC",
-          [visible.map((j) => j.id)],
-        )
-      ).rows;
+    for (const j of queued) {
+      const plugin = byModel.get(j.provider_model);
+      requireValue(j.remote_studio || plugin, 503, "任务模型缺少原状态插件");
+      const lane = j.remote_studio
+        ? "remote:" + j.connection_id
+        : plugin!.manifest.originalState!.queueLane === "kind"
+          ? j.kind
+          : plugin!.manifest.id;
+      ahead.set(j.id, j.allowed ? pending.get(lane) || 0 : 0);
+      if (j.allowed) pending.set(lane, (pending.get(lane) || 0) + 1);
+    }
+    const runs = (
+      await sql.query(
+        "SELECT DISTINCT ON(job) * FROM job_runs WHERE job=ANY($1::uuid[]) ORDER BY job,id DESC",
+        [visible.map((j) => j.id)],
+      )
+    ).rows;
     const latest = new Map(runs.map((r) => [r.job, r]));
     await attachJobResults(sql, visible);
     const fields = [
