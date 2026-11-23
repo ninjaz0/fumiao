@@ -7,6 +7,7 @@ export async function writeAuthorTemplates(root, destination) {
     await readFile(join(root, "node_modules/sharp/package.json"), "utf8"),
   );
   const templates = {
+    importers: "example-importers",
     providers: "example-studio",
     nodePools: "example-node-pool",
     settingsPages: "example-extension",
@@ -77,6 +78,8 @@ export async function writeAuthorTemplates(root, destination) {
           files[name] = await read(name);
       }
     }
+    if (type === "importers")
+      files["fixtures.json"] = await read("fixtures.json");
     files["package/release.json"] = JSON.stringify(release, null, 2) + "\n";
     await mkdir(destination, { recursive: true });
     await writeFile(

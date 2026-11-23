@@ -19,6 +19,7 @@ import {
   type AssetDialogState,
   type DialogContent,
 } from "./AssetDialog";
+import { PluginImport } from "./PluginImport";
 import { Library, isOwner, useLibrary, type LibraryFilter } from "./Library";
 import type {
   AdminOpen,
@@ -1681,6 +1682,28 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                   />
                 ) : (
                   <Library
+                    importButton={
+                      <PluginImport
+                        key={state.workspace_id}
+                        entries={state.plugin_importers}
+                        target="assets"
+                        workspace={String(state.workspace_id)}
+                        onImported={async ({ assets }) => {
+                          const tabs = {
+                            image: "images",
+                            video: "videos",
+                            audio: "audio",
+                          } as const;
+                          await refresh(true);
+                          if (assets[0])
+                            setFilter({
+                              tab: tabs[assets[0].kind],
+                              scope: "history",
+                            });
+                          notify("已导入 " + assets.length + " 项素材");
+                        }}
+                      />
+                    }
                     library={library}
                     state={state}
                     delta={delta}

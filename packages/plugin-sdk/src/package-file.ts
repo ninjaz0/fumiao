@@ -93,6 +93,7 @@ export const packageFile = z
           !f.studioProgram &&
           !f.equivalentModels &&
           (f.contributes?.paymentMethods?.length ||
+            f.contributes?.importers?.length ||
             f.contributes?.exporters?.length ||
             f.contributes?.events?.length ||
             f.contributes?.canvasNodes?.length ||

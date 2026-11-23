@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
-import { studioPluginProfile, pairedPluginAvailable, listedStudioCatalog } from "@fumiao/platform/studio-plugin-profile.js";
+import {
+  studioPluginProfile,
+  pairedPluginAvailable,
+  listedStudioCatalog,
+} from "@fumiao/platform/studio-plugin-profile.js";
+import { importersFor } from "./plugin-importers.js";
 import { resourceMenus } from "@fumiao/platform/plugin-extensions.js";
 import { PluginPages } from "@fumiao/platform/plugin-pages.js";
 import { installedSettingsPages } from "@fumiao/platform/studio-packages.js";
@@ -114,9 +119,12 @@ export class OriginalState {
             nodes: actor.role === "admin" && await pairedPluginAvailable(sql) ? await records.nodes(sql, actor, stamp) : [],
             canvas_nodes: await canvasNodeEntries(sql),
             plugin_actions: await resourceMenus(sql, actor),
-            plugin_pages: pages.filter(page => !page.placement),
-            studio_pages: pages.filter(page => page.placement === "studio"),
-            ...(actor.role === "admin" && { settings_pages: await installedSettingsPages(sql) }),
+            plugin_importers: await importersFor(sql, actor),
+            plugin_pages: pages.filter((page) => !page.placement),
+            studio_pages: pages.filter((page) => page.placement === "studio"),
+            ...(actor.role === "admin" && {
+              settings_pages: await installedSettingsPages(sql),
+            }),
             gpu_node_settings: nodePage ?? null,
             ...plugins.fields,
             video_models: Object.fromEntries(
