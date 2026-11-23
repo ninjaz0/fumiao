@@ -168,15 +168,22 @@ export class OriginalState {
               const disk = await statfs(tmpdir());
               free = Number(disk.bavail) * Number(disk.bsize);
             }
-            const policies: Record<string, unknown> = {};
-            for (const s of spaces.filter((s) => s.kind === "team")) {
-              const team = await one(
-                sql,
-                "SELECT id FROM workspaces WHERE public_id=$1",
-                [s.id],
-              );
-              policies[String(s.id)] = listedPolicy(await catalog.teamPolicy(sql, team.id));
-            }
+            const teams = (
+              await sql.query(
+                "SELECT id,public_id FROM workspaces WHERE kind='team' AND public_id=ANY($1::bigint[]) ORDER BY public_id",
+                [spaces.filter((s) => s.kind === "team").map((s) => s.id)],
+              )
+            ).rows;
+            const teamPolicies = await catalog.teamPolicies(
+              sql,
+              teams.map((t) => t.id),
+            );
+            const policies = Object.fromEntries(
+              teams.map((t, i) => [
+                String(t.public_id),
+                listedPolicy(teamPolicies[i]),
+              ]),
+            );
             Object.assign(out, {
               used: Number(capacity.used),
               reserved: Number(capacity.reserved),

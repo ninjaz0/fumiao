@@ -244,22 +244,35 @@ export class StudioCatalog {
     return { revision: row.revision, enabled: row.flags };
   }
   async teamPolicy(sql: Sql, wid: string) {
-    const row = await one(
-      sql,
-      "SELECT revision,flags FROM studio_workspace_policy WHERE workspace_id=$1",
-      [wid],
+    return (await this.teamPolicies(sql, [wid]))[0];
+  }
+  async teamPolicies(sql: Sql, wids: string[]) {
+    const rows = new Map(
+      (
+        await sql.query(
+          "SELECT workspace_id,revision,flags FROM studio_workspace_policy WHERE workspace_id=ANY($1::uuid[])",
+          [wids],
+        )
+      ).rows.map((r) => [r.workspace_id, r]),
     );
-    return row
-      ? { revision: row.revision, enabled: row.flags }
-      : {
-          revision: 0,
-          enabled: Object.fromEntries(
-            Object.entries(await this.catalog(sql)).map(([id, spec]) => [
-              id,
-              !spec.hidden,
-            ]),
-          ),
-        };
+    let defaults: Record<string, boolean> | undefined;
+    const policies: { revision: number; enabled: Record<string, boolean> }[] =
+      [];
+    for (const wid of wids) {
+      const row = rows.get(wid);
+      if (row) {
+        policies.push({ revision: row.revision, enabled: row.flags });
+        continue;
+      }
+      defaults ??= Object.fromEntries(
+        Object.entries(await this.catalog(sql)).map(([id, spec]) => [
+          id,
+          !spec.hidden,
+        ]),
+      );
+      policies.push({ revision: 0, enabled: { ...defaults } });
+    }
+    return policies;
   }
   async effective(sql: Sql, wid: string) {
     return Object.fromEntries(
