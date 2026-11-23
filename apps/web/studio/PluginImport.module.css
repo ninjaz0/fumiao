@@ -1,0 +1,40 @@
+.dialog {
+  width: min(28rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 3rem);
+  box-sizing: border-box;
+  padding: 1.5rem;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 0.8rem;
+  background: Canvas;
+  color: CanvasText;
+}
+.dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+.dialog form,
+.dialog label {
+  display: grid;
+  gap: 0.5rem;
+}
+.dialog form {
+  gap: 1rem;
+}
+.dialog h2,
+.dialog p {
+  margin: 0;
+}
+.dialog select,
+.dialog textarea {
+  font: inherit;
+  padding: 0.6rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+.dialog textarea {
+  resize: vertical;
+}
+.dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}

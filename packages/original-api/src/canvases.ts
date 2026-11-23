@@ -184,6 +184,20 @@ export class OriginalCanvases {
         [id, document.nodes.map((node) => node.id)],
       );
   }
+  async importProject(
+    sql: Sql,
+    user: Actor,
+    workspace: string,
+    title: string,
+    raw: unknown,
+  ) {
+    await this.limit(sql, workspace);
+    const document = parseCanvasDocument(raw);
+    const row = await this.insert(sql, user, workspace, title, document);
+    await this.references(sql, user, row, document);
+    await this.nodes(sql, row.id, document);
+    return { id: String(row.public_id), title };
+  }
   async create(user: Actor, value: unknown, selected?: string) {
     const body = parseBody(value, canvasNewFields, true),
       template = body.template ? canvasTemplates[body.template] : undefined;

@@ -1,3 +1,12 @@
+export {
+  importerSchema,
+  importPlanSchema,
+  type Importer,
+  type ImportPlan,
+  type ImportAsset,
+  type ImporterEntry,
+  type ImportResult,
+} from "./importers.js";
 /** Public authoring contract, independent of the Studio database and workers. */
 export {
   packageFile as packageSchema,

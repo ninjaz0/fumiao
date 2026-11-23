@@ -2,7 +2,7 @@
   "format": 1,
   "id": "example-extension",
   "label": "模型目录示例",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "adapterVersion": "1.0.0",
   "remote": {
     "endpoint": "http://127.0.0.1:4100",
