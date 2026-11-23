@@ -1,7 +1,7 @@
 {
   "id": "example-extension",
-  "version": "1.2.0",
-  "notes": "首次发布",
+  "version": "1.2.1",
+  "notes": "修复工作区备注数量较多时无法打开的问题，自动整理旧备注",
   "package": "example-extension.fmplugin.json",
-  "sha256": "fa14eb95dad34e89063eea277276d6aaaace6796092e0bba72074b915a80c24c"
+  "sha256": "515bc049c5546da09fe4dbac2c6afabdf4b6b9758042dfb472297240cf1d0f10"
 }
