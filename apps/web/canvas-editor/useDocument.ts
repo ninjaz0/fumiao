@@ -176,14 +176,18 @@ export function useDocument(project: Project, userId: number) {
         return revision.current;
       })
       .catch((e) => {
+        const conflict = e instanceof ApiError && e.status === 409;
+        const saveError = conflict
+          ? new ApiError("画布已被其他成员修改，请先处理保存冲突。", e.status)
+          : e;
         if (alive.current) {
-          if (e instanceof ApiError && e.status === 409) {
+          if (conflict) {
             blocked.current = true;
             setStatus("conflict");
           } else setStatus("error");
-          setError(e.message);
+          setError(saveError.message);
         }
-        throw e;
+        throw saveError;
       })
       .finally(() => {
         busy.current = null;

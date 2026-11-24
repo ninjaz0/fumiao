@@ -81,6 +81,7 @@ try {
     const cases = [
       ...[503, 409].flatMap((status) => exits.map((exit) => ({ status, exit, denyStorage: false }))),
       { status: 503, exit: exits[0], denyStorage: true },
+      { status: 409, exit: exits[0], denyStorage: true },
     ];
     const failures: unknown[] = [];
     for (const { status, exit, denyStorage } of cases) {
@@ -126,6 +127,7 @@ try {
         await page.goto(editPath);
         const title = page.getByRole("textbox", { name: "画布名称" });
         await expect(title).toHaveValue(initialTitle);
+        const conflictOnExit = status === 409 && denyStorage;
         if (status === 409) {
           const remote = await context.request.put(`${apiPath}/document`, {
             headers, data: {
@@ -134,15 +136,25 @@ try {
           });
           assert.equal(remote.status(), 200, await remote.text());
         }
+        if (conflictOnExit) {
+          const now = new Date();
+          await page.clock.install({ time: now });
+          await page.clock.pauseAt(new Date(now.getTime() + 1000));
+        }
         await title.fill(draftTitle);
         const failedSave = page.waitForResponse((response) =>
           new URL(response.url()).pathname === `${apiPath}/document` &&
           response.request().method() === "PUT" && response.status() === status,
         );
         await title.press("Enter");
+        if (conflictOnExit) {
+          assert.equal(putCount, 0, "the leave action must discover this conflict");
+          await exit.click(page);
+          await page.clock.resume();
+        }
         await failedSave;
         await expect(page.locator(".save-state")).toHaveText(status === 409 ? "保存冲突" : "保存失败，重试");
-        await exit.click(page);
+        if (!conflictOnExit) await exit.click(page);
         const dialog = page.getByRole("dialog", { name: "保存失败，仍要离开？" });
         if (capture) {
           await Promise.race([
@@ -159,7 +171,7 @@ try {
         await expect(page).toHaveURL(origin + editPath);
         const retry = dialog.getByRole("button", { name: "重试保存" });
         if (denyStorage) {
-          await expect(dialog).not.toContainText("本地草稿已保留");
+          await expect(dialog).not.toContainText("已保留");
           await expect(dialog).toContainText("未保存的修改将丢失");
           const download = page.waitForEvent("download");
           await dialog.getByRole("button", { name: "下载本地副本" }).click();
@@ -204,7 +216,7 @@ try {
         assert.equal(stored.title, retrySucceeds ? draftTitle : serverTitle);
         await page.goto(editPath);
         await expect(title).toHaveValue(denyStorage ? serverTitle : draftTitle);
-        if (status === 409) {
+        if (status === 409 && !denyStorage) {
           await expect(page.locator(".save-state")).toHaveText("保存冲突");
           await exit.click(page);
           await expect(dialog).toBeVisible();
