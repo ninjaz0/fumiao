@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -46,6 +47,7 @@ type Panel = {
     actions: { op: string; label: string; summary: string; path: string }[];
   }[];
 };
+const missingModels = "请至少选择一个安装模型";
 
 // Imported descriptions can only invoke the broker operations granted to this slot.
 function allowedPath(path: string) {
@@ -81,6 +83,14 @@ function PanelForm({
     [busy, setBusy] = useState(false);
   const pending = useRef(false),
     command = useRef<HTMLTextAreaElement>(null);
+  const firstModel = useRef<HTMLInputElement>(null);
+  const modelsHint = useId();
+  const [hasModels, setHasModels] = useState(() =>
+    form.options.some((option) => option.selected),
+  );
+  useLayoutEffect(() => {
+    firstModel.current?.setCustomValidity(hasModels ? "" : missingModels);
+  }, [hasModels]);
   useLayoutEffect(() => {
     const dialog = command.current && openDialogFor(command.current);
     if (!dialog) return;
@@ -91,17 +101,19 @@ function PanelForm({
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending.current) return;
-    pending.current = true;
-    setBusy(true);
     const element = e.currentTarget,
       data = new FormData(element),
-      value = String(data.get("node") || "").trim();
+      value = String(data.get("node") || "").trim(),
+      models = data.getAll("models");
+    if (!models.length) {
+      setHasModels(false);
+      return;
+    }
+    pending.current = true;
+    setBusy(true);
     try {
       if (pair) {
-        const { result } = await pair(
-          value === name ? "" : value,
-          data.getAll("models"),
-        );
+        const { result } = await pair(value === name ? "" : value, models);
         if (!result) throw Error("插件未返回接入命令");
         if (openDialogFor(element))
           setResult({
@@ -117,7 +129,7 @@ function PanelForm({
         allowedPath(form.path),
         {
           [form.nameField]: value === name ? "" : value,
-          [form.optionsField]: data.getAll("models"),
+          [form.optionsField]: models,
         },
       );
       if (openDialogFor(element))
@@ -181,12 +193,19 @@ function PanelForm({
             {suggestionError}
           </p>
         )}
-        <fieldset className="install-models">
+        <fieldset
+          className="install-models"
+          aria-describedby={hasModels ? undefined : modelsHint}
+          onChange={(event) =>
+            setHasModels(!!event.currentTarget.querySelector("input:checked"))
+          }
+        >
           <legend>{form.group}</legend>
-          {form.options.map((o) => (
+          {form.options.map((o, index) => (
             <label className="check" key={o.value}>
               <input
                 type="checkbox"
+                ref={index === 0 ? firstModel : undefined}
                 name="models"
                 value={o.value}
                 defaultChecked={o.selected}
@@ -195,8 +214,13 @@ function PanelForm({
               <small>{o.detail}</small>
             </label>
           ))}
+          {!hasModels && (
+            <p id={modelsHint} className="form-message" role="status">
+              {missingModels}
+            </p>
+          )}
         </fieldset>
-        <button className="primary" disabled={busy}>
+        <button className="primary" disabled={busy || !hasModels}>
           {form.button}
         </button>
       </form>

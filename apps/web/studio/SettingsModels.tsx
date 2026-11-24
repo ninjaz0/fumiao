@@ -107,6 +107,52 @@ export function ModelSettings({
   }
 
   const term = search.trim().toLowerCase();
+  const groups = sections.map(([kind, title]) => {
+    const rows = Object.entries(state.model_groups || {})
+      .filter(([, group]) => group.kind === kind)
+      .map(([id, group]) => {
+        const open = group.models.filter(
+          (model) => policy?.enabled[model],
+        ).length;
+        const globalOpen = group.models.filter(
+          (model) => global.enabled[model],
+        ).length;
+        const partial = open > 0 && open < group.models.length;
+        const notes = [
+          partial ? "部分开放" : "",
+          scope === "global" || globalOpen === group.models.length
+            ? ""
+            : globalOpen === 0
+              ? "全站已关闭"
+              : "全站部分开放",
+          id === "gpt-image-2.6-sunburst" && !state.images.configured
+            ? "未配置"
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        return {
+          id,
+          label: group.label,
+          open,
+          partial,
+          notes,
+          hidden: ![
+            group.label,
+            notes,
+            ...group.models.map((model) => state.model_catalog[model]?.provider),
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(term),
+        };
+      });
+    const visibleRows = rows.filter(({ hidden }) => !hidden);
+    return { kind, title, rows, visibleRows };
+  });
+  const noResults =
+    term !== "" && groups.every(({ visibleRows }) => !visibleRows.length);
+
   return (
     <section className="settings-section model-settings" ref={section}>
       <h2>模型管理</h2>
@@ -192,59 +238,21 @@ export function ModelSettings({
           }}
         />
       </div>
-      {sections.map(([kind, title]) => {
-        const rows = Object.entries(state.model_groups || {})
-          .filter(([, group]) => group.kind === kind)
-          .map(([id, group]) => {
-            const open = group.models.filter(
-              (model) => policy?.enabled[model],
-            ).length;
-            const globalOpen = group.models.filter(
-              (model) => global.enabled[model],
-            ).length;
-            const partial = open > 0 && open < group.models.length;
-            const notes = [
-              partial ? "部分开放" : "",
-              scope === "global" || globalOpen === group.models.length
-                ? ""
-                : globalOpen === 0
-                  ? "全站已关闭"
-                  : "全站部分开放",
-              id === "gpt-image-2.6-sunburst" && !state.images.configured
-                ? "未配置"
-                : "",
-            ]
-              .filter(Boolean)
-              .join(" · ");
-            return {
-              id,
-              label: group.label,
-              open,
-              partial,
-              notes,
-              hidden: ![
-                group.label,
-                notes,
-                ...group.models.map(
-                  (model) => state.model_catalog[model]?.provider,
-                ),
-              ]
-                .join(" ")
-                .toLowerCase()
-                .includes(term),
-            };
-          });
+      <div role="status">
+        {noResults && <p className="console-empty">没有匹配的模型</p>}
+      </div>
+      {groups.map(({ kind, title, rows, visibleRows }) => {
         return (
           <section
             key={kind}
             className="model-group ledger-card"
-            hidden={rows.every(({ hidden }) => hidden)}
+            hidden={!visibleRows.length}
           >
             <h3 className="console-model-heading">
               {title}
               <small>
-                {rows.filter((row) => !row.hidden && row.open > 0).length} /{" "}
-                {rows.filter((row) => !row.hidden).length} 开放
+                {visibleRows.filter(({ open }) => open > 0).length} /{" "}
+                {visibleRows.length} 开放
               </small>
             </h3>
             {rows.map(({ id, label, open, partial, notes, hidden }) => (
