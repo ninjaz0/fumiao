@@ -95,7 +95,7 @@ export class ChatRuntime {
     heartbeat.unref();
     try {
       signal.throwIfAborted();
-      const messages = chatContext(claim.rows);
+      const messages = chatContext(claim.rows, claim.skills);
       if (!(await this.store.start(id, lease))) return;
       const plugin = await this.store.p.registry.resolve(
         this.store.p.db,

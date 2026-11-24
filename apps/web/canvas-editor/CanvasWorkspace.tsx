@@ -81,6 +81,7 @@ import {
   Crop,
   Clapperboard,
   List,
+  Sparkles,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { api, upload, downloadJSON, ApiError, workspaceURL } from "./api";
@@ -126,6 +127,8 @@ import { CinematographyPanel } from "./CinematographyPanel";
 import { GridCropModal } from "./GridCropModal";
 import { PrecheckCostModal } from "./PrecheckCostModal";
 import { ReferencePromptInput } from "./ReferencePromptInput";
+import { ProposalDiffPreview } from "./ProposalDiffPreview";
+import { SkillEditorModal } from "./SkillEditorModal";
 import { captureFrame } from "./videoFrame";
 import { VideoThumb } from "./VideoThumb";
 import { canvasVideoThumbnails } from "./videoThumbnails";
@@ -745,6 +748,8 @@ export function CanvasWorkspace({
     layout: "2x2" | "3x3";
   } | null>(null);
   const [showCinePanel, setShowCinePanel] = useState(false);
+  const [agentDock, setAgentDock] = useState(false);
+  const [skillsModal, setSkillsModal] = useState(false);
   const [aiStoryboard, setAiStoryboard] = useState(false);
   const [packPicker, setPackPicker] = useState<string | null>(null);
   const [packMedia, setPackMedia] = useState<Record<string,string[]>>({});
@@ -2545,6 +2550,11 @@ export function CanvasWorkspace({
           />
           <IconButton icon={FileText} label="AI 分镜" onClick={() => setAiStoryboard(true)} />
           <IconButton
+            icon={Sparkles}
+            label="画布 Agent 提案箱"
+            onClick={() => setAgentDock((v) => !v)}
+          />
+          <IconButton
             icon={ListVideo}
             label="镜头列表"
             onClick={() => setShotList(true)}
@@ -4224,6 +4234,25 @@ export function CanvasWorkspace({
             }}
             onClose={() => setGridCropTarget(null)}
           />
+        </Modal>
+      )}
+      {agentDock && (
+        <ProposalDiffPreview
+          workspace={project.workspace}
+          projectId={project.id}
+          revision={doc.revision.current}
+          canEditPolicy={studio.me.role === "admin" || project.owner === studio.me.id}
+          onApplied={() => {
+            void doc.reload();
+            notify("提案已批准并落图到当前画布");
+          }}
+          onOpenSkills={() => setSkillsModal(true)}
+          onClose={() => setAgentDock(false)}
+        />
+      )}
+      {skillsModal && (
+        <Modal title="工作区技能包 (SKILL.md)" wide onClose={() => setSkillsModal(false)}>
+          <SkillEditorModal workspace={project.workspace} />
         </Modal>
       )}
     </div>

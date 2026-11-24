@@ -54,6 +54,13 @@ import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
 import { OriginalSeries } from "@fumiao/original-api/series.js";
+import { OriginalApiTokens } from "@fumiao/original-api/tokens.js";
+import { OriginalSkills } from "@fumiao/original-api/skills.js";
+import {
+  OriginalAgentPolicies,
+  OriginalCanvasProposals,
+} from "@fumiao/original-api/proposals.js";
+import { buildOpenApiSpec } from "@fumiao/original-api/openapi.js";
 import { readCanvasBody } from "@fumiao/original-api/canvas-http.js";
 import type { OriginalDraft } from "@fumiao/plugin-sdk/original.js";
 import type { ReferenceKind } from "@fumiao/plugin-sdk/references.js";
@@ -77,12 +84,14 @@ import {
   originalNodeRequest,
 } from "./original-nodes.js";
 import { OriginalAgentController } from "./original-agent.js";
+import { OriginalMcpController } from "./original-mcp.js";
 import {
   isOriginalChatRequest,
   originalChatRequest,
 } from "./original-chat-request.js";
 import { ChatAdoptionDocumentError } from "@fumiao/original-api/chat-applications.js";
 import {
+  originalBearerToken,
   originalSessionToken as token,
   originalWorkspace,
   type OriginalAuthRequest,
@@ -325,6 +334,41 @@ class OriginalApi {
   ) {
     return this.canvasRuns.batchRun(req.actor, key, body);
   }
+  @Get("api/canvases/:key/proposals")
+  listCanvasProposals(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+  ) {
+    return this.proposals.list(req.actor, key);
+  }
+  @Post("api/canvases/:key/proposals")
+  @HttpCode(200)
+  createCanvasProposal(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.proposals.create(req.actor, key, body);
+  }
+  @Post("api/canvases/:key/proposals/:pid/apply")
+  @HttpCode(200)
+  applyCanvasProposal(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("pid") pid: string,
+    @Body() body: unknown,
+  ) {
+    return this.proposals.apply(req.actor, key, pid, body);
+  }
+  @Post("api/canvases/:key/proposals/:pid/reject")
+  @HttpCode(200)
+  rejectCanvasProposal(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("pid") pid: string,
+  ) {
+    return this.proposals.reject(req.actor, key, pid);
+  }
   @Get("api/chat/config") chatConfig(@Req() req: AuthRequest) {
     return new OriginalChatSettings(this.identity.p).config(
       req.actor,
@@ -438,6 +482,10 @@ class OriginalApi {
   private storyboardExports: OriginalStoryboardExports;
   private batchPrecheck: OriginalBatchPrecheck;
   private series: OriginalSeries;
+  private apiTokens: OriginalApiTokens;
+  private skills: OriginalSkills;
+  private proposals: OriginalCanvasProposals;
+  private agentPolicies: OriginalAgentPolicies;
   constructor(@Inject(OriginalIdentity) private identity: OriginalIdentity) {
     this.packs = new OriginalPacks(identity.p);
     this.uploads = new OriginalUploads(identity.p);
@@ -450,6 +498,63 @@ class OriginalApi {
     this.storyboardExports = new OriginalStoryboardExports(identity.p);
     this.batchPrecheck = new OriginalBatchPrecheck(identity.p);
     this.series = new OriginalSeries(identity.p);
+    this.apiTokens = new OriginalApiTokens(identity.p);
+    this.skills = new OriginalSkills(identity.p);
+    this.proposals = new OriginalCanvasProposals(identity.p);
+    this.agentPolicies = new OriginalAgentPolicies(identity.p);
+  }
+  @Get("api/v1/openapi.json")
+  openApiSpec(@Req() req: Request) {
+    const origin = `${req.protocol}://${req.get("host") || "localhost"}`;
+    return buildOpenApiSpec(origin);
+  }
+  @Get("api/tokens")
+  listTokens(@Req() req: AuthRequest) {
+    return this.apiTokens.list(req.actor, this.selected(req));
+  }
+  @Post("api/tokens")
+  @HttpCode(200)
+  createToken(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.apiTokens.create(req.actor, body, this.selected(req));
+  }
+  @Delete("api/tokens/:id")
+  revokeToken(@Req() req: AuthRequest, @Param("id") id: string) {
+    return this.apiTokens.revoke(req.actor, id, this.selected(req));
+  }
+  @Get("api/skills")
+  listSkills(@Req() req: AuthRequest) {
+    return this.skills.list(req.actor, this.selected(req));
+  }
+  @Post("api/skills")
+  @HttpCode(200)
+  createSkill(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.skills.create(req.actor, body, this.selected(req));
+  }
+  @Post("api/skills/import-zip")
+  @HttpCode(200)
+  importSkillZip(@Req() req: AuthRequest, @Body() body: unknown) {
+    const bytes = Buffer.isBuffer(body) ? body : Buffer.alloc(0);
+    return this.skills.importZip(req.actor, bytes, this.selected(req));
+  }
+  @Put("api/skills/:key")
+  updateSkill(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.skills.update(req.actor, key, body);
+  }
+  @Delete("api/skills/:key")
+  removeSkill(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.skills.remove(req.actor, key);
+  }
+  @Get("api/workspace/agent-policy")
+  getAgentPolicy(@Req() req: AuthRequest) {
+    return this.agentPolicies.get(req.actor, this.selected(req));
+  }
+  @Put("api/workspace/agent-policy")
+  setAgentPolicy(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.agentPolicies.set(req.actor, body, this.selected(req));
   }
   @Post("api/assets")
   @HttpCode(200)
@@ -828,6 +933,7 @@ export async function createOriginalApp(p: Platform) {
       OriginalPluginPagesController,
       OriginalNodesController,
       OriginalAgentController,
+      OriginalMcpController,
       OriginalRechargeController,
     ],
     providers: [
@@ -861,6 +967,22 @@ export async function createOriginalApp(p: Platform) {
   });
   const parseJSON = express.json({ limit: "3mb", strict: false });
   const parseChatKey = express.raw({ limit: "3mb", type: () => true });
+  const parseSkillZip = express.raw({ limit: "300kb", type: () => true });
+  const apiTokens = new OriginalApiTokens(p);
+  const authenticate = async (req: AuthRequest) => {
+    const bearer = originalBearerToken(req);
+    if (bearer) {
+      const requestedWs = req.headers["x-workspace-id"]
+        ? String(req.headers["x-workspace-id"])
+        : new URL(req.originalUrl, "http://localhost").searchParams
+            .getAll("workspace")
+            .at(-1);
+      const auth = await apiTokens.authenticateBearer(bearer, requestedWs);
+      req.tokenAuth = auth;
+      return auth.actor;
+    }
+    return identity.actor(token(req));
+  };
   const prepareChat = originalChatRequest(identity, failure);
   const prepareNodes = originalNodeRequest(identity, failure);
   const prepareRecharge = originalRechargeRequest(identity, failure);
@@ -905,7 +1027,7 @@ export async function createOriginalApp(p: Platform) {
           req.body,
           new URL(req.originalUrl, "http://localhost").searchParams,
         );
-        req.actor = await identity.actor(token(req));
+        req.actor = await authenticate(req);
         // Match the decoded FastAPI path, preserving escaped project IDs for Express.
         req.url =
           path.split("/").map(encodeURIComponent).join("/") +
@@ -941,6 +1063,10 @@ export async function createOriginalApp(p: Platform) {
           error ? failure(error, res) : next(),
         );
       } else next();
+      return;
+    }
+    if (req.method === "POST" && req.path === "/api/skills/import-zip") {
+      parseSkillZip(req, res, (error) => (error ? failure(error, res) : next()));
       return;
     }
     if (
@@ -979,7 +1105,7 @@ export async function createOriginalApp(p: Platform) {
             contract.imageSettings,
             req.body,
           );
-        if (!contract.public) req.actor = await identity.actor(token(req));
+        if (!contract.public) req.actor = await authenticate(req);
       }
       next();
     } catch (error) {

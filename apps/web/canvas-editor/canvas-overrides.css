@@ -722,3 +722,139 @@
   object-fit: cover;
   border-radius: 6px;
 }
+
+/* Wave 4: Proposal-based Canvas Agent Dock (F018/F031) & Skills Modal (F017) */
+.fm-agent-dock {
+  position: fixed;
+  top: 56px;
+  right: 0;
+  bottom: 0;
+  width: min(400px, 92vw);
+  z-index: 38;
+  background: var(--cv-surface);
+  border-left: 1px solid var(--cv-line);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  box-shadow: -8px 0 28px rgba(0, 0, 0, 0.22);
+}
+.fm-agent-head-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fm-policy-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--cv-line);
+  background: var(--cv-hover);
+  font-size: 12px;
+}
+.fm-policy-banner > div {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+}
+.fm-policy-banner select {
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--cv-line);
+  background: var(--cv-surface);
+  color: var(--cv-text);
+  font-size: 12px;
+}
+.fm-proposal-list {
+  display: grid;
+  gap: 10px;
+}
+.fm-proposal-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--cv-line);
+  background: var(--cv-surface);
+  font-size: 12px;
+}
+.fm-proposal-card header,
+.fm-proposal-card footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.fm-proposal-status {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--cv-hover);
+  font-size: 11px;
+}
+.fm-proposal-ops {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 3px;
+  color: var(--cv-muted);
+}
+.fm-proposal-btns {
+  display: inline-flex;
+  gap: 6px;
+}
+.fm-skills-modal {
+  display: grid;
+  gap: 12px;
+}
+.fm-skills-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.fm-skills-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+.fm-skill-editor textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--cv-line);
+  background: var(--cv-surface);
+  color: var(--cv-text);
+}
+.fm-skill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.fm-skill-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--cv-line);
+  font-size: 13px;
+}
+.fm-skill-card p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--cv-muted);
+}
+.fm-skill-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}

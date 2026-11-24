@@ -17,6 +17,7 @@ const settingsTabs = [
   "profile",
   "general",
   "credits",
+  "apiTokens",
   "gpu",
   ...adminSettingsTabs,
 ] as const;

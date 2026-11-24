@@ -39,6 +39,7 @@ import {
   type SettingsTab,
 } from "./settings-tabs";
 import { PluginSettingsPage } from "./PluginSettingsPage";
+import { SettingsApiTokens } from "./SettingsApiTokens";
 
 const adminTabs = [
   ["plugins", "插件", "link", "services"],
@@ -230,6 +231,7 @@ export function Settings({
     ["profile", "个人资料", "account", "account"],
     ["general", "常规", "settings", "account"],
     ["credits", "积分", "drive", "account"],
+    ["apiTokens", "API 与 MCP", "link", "account"],
     ...(!pages && legacyPanel && state.gpu_node_settings
       ? [["gpu", state.gpu_node_settings.title, "gpu", "account"] as const]
       : []),
@@ -353,6 +355,14 @@ export function Settings({
             state={creditState}
             recharge={(button) => void openRecharge("recharge", button)}
             history={(button) => void openRecharge("history", button)}
+            notify={notify}
+          />
+        )}
+        {tab === "apiTokens" && (
+          <SettingsApiTokens
+            key={workspace}
+            workspace={workspace}
+            canEditPolicy={admin || true}
             notify={notify}
           />
         )}
