@@ -93,11 +93,18 @@ export default function ProjectList({ studio }: { studio: Studio }) {
     [search, setSearch] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
+    [deleteBusy, setDeleteBusy] = useState(false),
+    [deleteError, setDeleteError] = useState(""),
     [deleting, setDeleting] = useState<Project | null>(null);
   const query = search.trim().toLowerCase();
   const visibleProjects = query
     ? projects.filter((p) => p.title.trim().toLowerCase().includes(query))
     : projects;
+  const closeDelete = () => {
+    if (deleteBusy) return;
+    setDeleting(null);
+    setDeleteError("");
+  };
   const load = useCallback(
     () =>
       api<{ projects: Project[] }>(workspace, "/api/canvases")
@@ -265,7 +272,10 @@ export default function ProjectList({ studio }: { studio: Studio }) {
                       <IconButton
                         icon={Trash2}
                         label={"删除画布 " + p.title}
-                        onClick={() => setDeleting(p)}
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleting(p);
+                        }}
                       />
                     )}
                   </div>
@@ -278,16 +288,29 @@ export default function ProjectList({ studio }: { studio: Studio }) {
       {deleting && (
         <Modal
           title={"删除“" + deleting.title + "”？"}
-          onClose={() => setDeleting(null)}
+          onClose={closeDelete}
         >
           <p>素材和已经提交的任务会保留。</p>
+          {deleteError && (
+            <p className="error" role="alert">
+              {deleteError}
+            </p>
+          )}
           <div className="dialog-actions">
-            <button className="secondary" onClick={() => setDeleting(null)}>
+            <button
+              className="secondary"
+              disabled={deleteBusy}
+              onClick={closeDelete}
+            >
               取消
             </button>
             <button
               className="primary danger"
+              disabled={deleteBusy}
               onClick={async () => {
+                if (deleteBusy) return;
+                setDeleteBusy(true);
+                setDeleteError("");
                 try {
                   await api(
                     workspace,
@@ -298,7 +321,9 @@ export default function ProjectList({ studio }: { studio: Studio }) {
                   setDeleting(null);
                   await load();
                 } catch (e) {
-                  setError((e as Error).message);
+                  setDeleteError((e as Error).message);
+                } finally {
+                  setDeleteBusy(false);
                 }
               }}
             >
