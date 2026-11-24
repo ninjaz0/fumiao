@@ -1093,6 +1093,23 @@
 #modal #credit-adjust-form .credit-adjust-preview[data-invalid="true"] strong {
   color: var(--danger);
 }
+#modal #recharge-form .recharge-amount-group {
+  display: grid;
+  gap: 6px;
+}
+#modal #recharge-form .formlabel {
+  margin: 0;
+}
+#modal #recharge-form .recharge-field-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+#modal #recharge-form .recharge-field-error {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--danger);
+}
 #modal
   :is(
     #add-member-form,

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   evaluateCreditAdjustment,
+  evaluateRechargeYuan,
+  formatRechargeRangeHint,
   MAX_CREDIT_ADJUSTMENT,
   MAX_WALLET_BALANCE,
 } from "../../apps/web/studio/settings-credits-helpers.js";
@@ -112,4 +114,73 @@ test("evaluateCreditAdjustment rejects non-positive, decimal, badInput and upper
     }).error,
     "调整后账户总余额超出上限",
   );
+});
+
+test("formatRechargeRangeHint and evaluateRechargeYuan enforce server bounds and integer yuan rules", () => {
+  const bounds = { min_yuan: 1, max_yuan: 10_000 };
+
+  assert.equal(
+    formatRechargeRangeHint(bounds.min_yuan, bounds.max_yuan),
+    "单笔充值 ¥1–¥10,000，仅支持整数元",
+  );
+  assert.equal(
+    formatRechargeRangeHint(5, 2_000),
+    "单笔充值 ¥5–¥2,000，仅支持整数元",
+  );
+
+  assert.deepEqual(evaluateRechargeYuan("1", bounds), {
+    valid: true,
+    amount: 1,
+    credits: 10,
+    error: "",
+  });
+  assert.deepEqual(evaluateRechargeYuan("10000", bounds), {
+    valid: true,
+    amount: 10_000,
+    credits: 100_000,
+    error: "",
+  });
+
+  assert.deepEqual(evaluateRechargeYuan("", bounds), {
+    valid: false,
+    amount: null,
+    credits: null,
+    error: "请输入充值金额",
+  });
+  assert.deepEqual(evaluateRechargeYuan("", bounds, true), {
+    valid: false,
+    amount: null,
+    credits: null,
+    error: "充值金额仅支持整数元",
+  });
+  assert.deepEqual(evaluateRechargeYuan("1.5", bounds), {
+    valid: false,
+    amount: null,
+    credits: null,
+    error: "充值金额仅支持整数元",
+  });
+  assert.deepEqual(evaluateRechargeYuan("10.0", bounds), {
+    valid: false,
+    amount: null,
+    credits: null,
+    error: "充值金额仅支持整数元",
+  });
+  assert.deepEqual(evaluateRechargeYuan("0", bounds), {
+    valid: false,
+    amount: null,
+    credits: null,
+    error: "单笔最低充值 ¥1",
+  });
+  assert.deepEqual(evaluateRechargeYuan("-5", bounds), {
+    valid: false,
+    amount: null,
+    credits: null,
+    error: "单笔最低充值 ¥1",
+  });
+  assert.deepEqual(evaluateRechargeYuan("10001", bounds), {
+    valid: false,
+    amount: null,
+    credits: null,
+    error: "单笔最高充值 ¥10,000",
+  });
 });

@@ -154,3 +154,89 @@ export function evaluateCreditAdjustment(
     error: "",
   };
 }
+
+export const RECHARGE_CREDITS_PER_YUAN = 10;
+
+export type RechargeBounds = {
+  min_yuan: number;
+  max_yuan: number;
+};
+
+export type RechargeYuanEvaluation = {
+  valid: boolean;
+  amount: number | null;
+  credits: number | null;
+  error: string;
+};
+
+export function formatRechargeRangeHint(
+  minYuan: number,
+  maxYuan: number,
+): string {
+  return `单笔充值 ¥${minYuan.toLocaleString("en-US")}–¥${maxYuan.toLocaleString("en-US")}，仅支持整数元`;
+}
+
+export function evaluateRechargeYuan(
+  raw: string,
+  bounds: RechargeBounds,
+  badInput = false,
+): RechargeYuanEvaluation {
+  const trimmed = raw.trim();
+  if (badInput) {
+    return {
+      valid: false,
+      amount: null,
+      credits: null,
+      error: "充值金额仅支持整数元",
+    };
+  }
+  if (trimmed === "") {
+    return {
+      valid: false,
+      amount: null,
+      credits: null,
+      error: "请输入充值金额",
+    };
+  }
+  if (!/^-?\d+$/.test(trimmed)) {
+    return {
+      valid: false,
+      amount: null,
+      credits: null,
+      error: "充值金额仅支持整数元",
+    };
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
+    return {
+      valid: false,
+      amount: null,
+      credits: null,
+      error: trimmed.startsWith("-")
+        ? `单笔最低充值 ¥${bounds.min_yuan.toLocaleString("en-US")}`
+        : `单笔最高充值 ¥${bounds.max_yuan.toLocaleString("en-US")}`,
+    };
+  }
+  if (parsed < bounds.min_yuan) {
+    return {
+      valid: false,
+      amount: null,
+      credits: null,
+      error: `单笔最低充值 ¥${bounds.min_yuan.toLocaleString("en-US")}`,
+    };
+  }
+  if (parsed > bounds.max_yuan) {
+    return {
+      valid: false,
+      amount: null,
+      credits: null,
+      error: `单笔最高充值 ¥${bounds.max_yuan.toLocaleString("en-US")}`,
+    };
+  }
+  return {
+    valid: true,
+    amount: parsed,
+    credits: parsed * RECHARGE_CREDITS_PER_YUAN,
+    error: "",
+  };
+}
