@@ -14,6 +14,7 @@ import {
   changeH3Mode,
   checkImages,
   chooseModel,
+  composerFeedback,
   generationRequest,
   H3,
   hasDraftPacks,
@@ -1434,4 +1435,179 @@ test("submittedDraft keeps an image-only video model out of H3 reference mode", 
   assert.equal(isH3(h3Reset.draft), true);
   assert.equal(h3Reset.draft.h3?.mode, "frames");
   assert.equal(h3Reset.draft.h3?.first_frame, null);
+});
+
+test("#53 composerFeedback surfaces visible status and button reason for insufficient credits, unpriced specs, and limits", (t) => {
+  const env = installFakeEnv();
+  t.after(() => env.restore());
+  const base = makeState();
+  const state = makeState({
+    model_forms: {
+      ...base.model_forms,
+      [H3]: {
+        ...base.model_forms[H3],
+        tiers: [
+          { tier: "480|5", when: { quality: [480], seconds: [5] } },
+          { tier: "768|10", when: { quality: [768], seconds: [10] } },
+        ],
+      },
+      "breeze-tts-2": {
+        ...base.model_forms["breeze-tts-2"],
+        tiers: [{ tier: "standard", when: {} }],
+      },
+      "gpt-image-2.6-sunburst": {
+        ...base.model_forms["gpt-image-2.6-sunburst"],
+        tiers: [
+          { tier: "1K|medium", when: { resolution: ["1K"], image_quality: ["medium"] } },
+          { tier: "2K|high", when: { resolution: ["2K"], image_quality: ["high"] } },
+        ],
+      },
+    },
+    pricing: {
+      revision: 1,
+      items: [
+        { key: `${H3}|480|5`, model: H3, kind: "video", label: "480P 5s", amount: 5 },
+        { key: `${H3}|768|10`, model: H3, kind: "video", label: "768P 10s", amount: null },
+        { key: "breeze-tts-2|standard", model: "breeze-tts-2", kind: "audio", label: "语音生成", amount: 1 },
+        { key: "gpt-image-2.6-sunburst|1K|medium", model: "gpt-image-2.6-sunburst", kind: "image", label: "1K 标准", amount: 7 },
+        { key: "gpt-image-2.6-sunburst|2K|high", model: "gpt-image-2.6-sunburst", kind: "image", label: "2K 高清", amount: null },
+      ],
+    },
+    credits: { available: 0, reserved: 0 },
+  });
+
+  // Audio generation with 0 credits: both empty and non-empty prompts surface visible reason.
+  const audioEmpty = changeCreation(state, readDraft(state), "audio");
+  assert.deepEqual(composerFeedback(state, audioEmpty), {
+    status: "当前空间积分不足",
+    submitReason: "当前空间积分不足",
+    priceReason: "当前空间积分不足",
+  });
+  const audioFilled: DraftSession = {
+    ...audioEmpty,
+    draft: { ...audioEmpty.draft, prompt: "你好，欢迎使用弗淼" },
+  };
+  assert.deepEqual(composerFeedback(state, audioFilled), {
+    status: "当前空间积分不足",
+    submitReason: "当前空间积分不足",
+    priceReason: "当前空间积分不足",
+  });
+
+  // Video and Image generation with insufficient credits behave consistently.
+  const videoFilled: DraftSession = {
+    ...readDraft(state),
+    draft: { ...readDraft(state).draft, prompt: "清晨海面日出" },
+  };
+  assert.deepEqual(composerFeedback(state, videoFilled), {
+    status: "当前空间积分不足",
+    submitReason: "当前空间积分不足",
+    priceReason: "当前空间积分不足",
+  });
+  const imageFilled: DraftSession = {
+    ...changeCreation(state, readDraft(state), "image"),
+    draft: { ...changeCreation(state, readDraft(state), "image").draft, prompt: "雪山湖泊" },
+  };
+  assert.deepEqual(composerFeedback({ ...state, credits: { available: 6, reserved: 0 } }, imageFilled), {
+    status: "当前空间积分不足",
+    submitReason: "当前空间积分不足",
+    priceReason: "当前空间积分不足",
+  });
+
+  // Sufficient credits: empty prompt keeps status quiet and explains button state; non-empty enables submit.
+  const funded = { ...state, credits: { available: 10, reserved: 0 } };
+  assert.deepEqual(composerFeedback(funded, audioEmpty), {
+    status: "",
+    submitReason: "请输入要朗读的文字",
+    priceReason: "",
+  });
+  assert.deepEqual(composerFeedback(funded, readDraft(funded)), {
+    status: "",
+    submitReason: "请输入提示词",
+    priceReason: "",
+  });
+  assert.deepEqual(composerFeedback(funded, audioFilled), {
+    status: "",
+    submitReason: "",
+    priceReason: "",
+  });
+
+  // Free tier (0 credits required) with 0 available credits is allowed.
+  const freeAudioState: StudioState = {
+    ...state,
+    pricing: {
+      revision: 2,
+      items: [{ key: "breeze-tts-2|standard", model: "breeze-tts-2", kind: "audio", label: "语音生成", amount: 0 }],
+    },
+  };
+  assert.deepEqual(composerFeedback(freeAudioState, audioFilled), {
+    status: "",
+    submitReason: "",
+    priceReason: "",
+  });
+
+  // Unpriced single-tier model vs unpriced multi-tier spec.
+  const unpricedAudioState: StudioState = {
+    ...funded,
+    pricing: {
+      revision: 3,
+      items: [{ key: "breeze-tts-2|standard", model: "breeze-tts-2", kind: "audio", label: "语音生成", amount: null }],
+    },
+  };
+  assert.deepEqual(composerFeedback(unpricedAudioState, audioFilled), {
+    status: "当前模型尚未定价",
+    submitReason: "当前模型尚未定价",
+    priceReason: "当前模型尚未定价",
+  });
+  const unpricedImageSpec: DraftSession = {
+    ...imageFilled,
+    draft: { ...imageFilled.draft, resolution: "2K", imageQuality: "high" },
+  };
+  assert.deepEqual(composerFeedback(funded, unpricedImageSpec), {
+    status: "当前规格尚未定价",
+    submitReason: "当前规格尚未定价",
+    priceReason: "当前规格尚未定价",
+  });
+
+  // Over character limit takes precedence over credit hint while editing.
+  const overLimitAudio: DraftSession = {
+    ...audioFilled,
+    draft: { ...audioFilled.draft, prompt: "字".repeat(301) },
+  };
+  assert.deepEqual(composerFeedback(state, overLimitAudio), {
+    status: "301 / 300 字",
+    submitReason: "超出字数限制：301 / 300 字",
+    priceReason: "当前空间积分不足",
+  });
+
+  // Submitting hides transient insufficient-credit status after credits are reserved.
+  assert.deepEqual(composerFeedback(state, audioFilled, { submitting: true }), {
+    status: "",
+    submitReason: "提交中",
+    priceReason: "当前空间积分不足",
+  });
+  assert.deepEqual(composerFeedback(state, audioFilled, { uploading: true }), {
+    status: "上传中",
+    submitReason: "上传中",
+    priceReason: "当前空间积分不足",
+  });
+
+  // Unavailable model vs zero-plugin state.
+  const disabledModelState: StudioState = {
+    ...funded,
+    model_policy: { revision: 2, enabled: { ...funded.model_policy.enabled, "breeze-tts-2": false } },
+  };
+  assert.deepEqual(composerFeedback(disabledModelState, audioFilled), {
+    status: "当前模型暂不可用",
+    submitReason: "当前模型暂不可用",
+    priceReason: "",
+  });
+  const noModelSession: DraftSession = {
+    ...audioEmpty,
+    draft: { ...audioEmpty.draft, audioModel: "", prompt: "" },
+  };
+  assert.deepEqual(composerFeedback(funded, noModelSession), {
+    status: "",
+    submitReason: "暂无可用模型",
+    priceReason: "当前模型尚未定价",
+  });
 });

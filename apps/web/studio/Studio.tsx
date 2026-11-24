@@ -58,6 +58,7 @@ import {
   addImages,
   assignFrame,
   checkImages,
+  composerFeedback,
   ensureModel,
   flowIssue,
   frames,
@@ -81,7 +82,6 @@ import {
   selectedModel,
   submittedDraft,
   syncDraftReferences,
-  quote,
   readDraft,
   writeDraft,
   type Asset,
@@ -1417,7 +1417,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       notify("最多输入 " + promptLimit(draft) + " 字");
       return;
     }
-    if (!job && !quote(space, draft).allowed) return;
+    if (!job) {
+      const { priceReason } = composerFeedback(space, session);
+      if (priceReason) {
+        notify(priceReason);
+        return;
+      }
+    }
     void mutate("submit", async () => {
       setSubmitting(true);
       try {

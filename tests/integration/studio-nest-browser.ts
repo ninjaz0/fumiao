@@ -251,6 +251,71 @@ async function checkImageToVideoFrames(page: Page, studio: string, state: Studio
   await page.close();
 }
 
+async function checkComposerCreditFeedback(
+  page: Page,
+  studio: string,
+  state: StudioState,
+) {
+  let availableCredits = 0;
+  let audioAmount: number | null = 1;
+  await page.route("**/api/state", (route) =>
+    route.fulfill({
+      json: {
+        ...state,
+        model_access: { ...state.model_access, "breeze-tts-2": true },
+        credits: { ...state.credits, available: availableCredits },
+        pricing: {
+          ...state.pricing,
+          items: state.pricing.items.map((item) =>
+            item.model === "breeze-tts-2"
+              ? { ...item, amount: audioAmount }
+              : item,
+          ),
+        },
+      },
+    }),
+  );
+  try {
+    await page.goto(studio);
+    await page.locator('.composer [data-menu="creation"]').click();
+    await page.getByRole("option", { name: "语音生成" }).click();
+    const prompt = page.locator("#prompt");
+    const status = page.locator(".composer-status");
+    const submit = page.locator(".generate-button");
+    await prompt.fill("这是一段用于验证积分不足提示的语音草稿");
+    await expect(page.locator(".composer-credit")).toHaveAttribute(
+      "aria-label",
+      "1 积分 · 余额不足",
+    );
+    await expect(status).toBeVisible();
+    await expect(status).toHaveText("当前空间积分不足");
+    await expect(submit).toBeDisabled();
+    await expect(submit).toHaveAttribute("title", "当前空间积分不足");
+    await expect(submit).toHaveAttribute(
+      "aria-label",
+      "生成（当前空间积分不足）",
+    );
+    await prompt.press("Control+Enter");
+    await expect(page.locator("#toast")).toHaveText("当前空间积分不足");
+
+    audioAmount = null;
+    await page.reload();
+    await expect(status).toHaveText("当前模型尚未定价");
+    await expect(submit).toBeDisabled();
+    await expect(submit).toHaveAttribute("title", "当前模型尚未定价");
+
+    audioAmount = 1;
+    availableCredits = 5;
+    await page.reload();
+    await expect(status).toBeHidden();
+    await expect(submit).toBeEnabled();
+    await expect(submit).toHaveAttribute("title", "生成");
+    await expect(submit).toHaveAttribute("aria-label", "生成");
+  } finally {
+    await page.close();
+  }
+}
+
 async function dragPastImage(page: Page) {
   const fixed = page.getByAltText("固定参考图", { exact: true });
   const moving = page.getByAltText("拖动参考图", { exact: true });
@@ -1180,6 +1245,7 @@ export async function studioBrowser(
     const savedCanvas = await document();
     const before = await state();
     await checkImageToVideoFrames(await context.newPage(), studio, before);
+    await checkComposerCreditFeedback(await context.newPage(), studio, before);
     await checkPackRefreshRace(await context.newPage(), studio, before);
     await checkDeletedH3Frame(await context.newPage(), studio, before);
     await checkH3ImageUploadLimit(await context.newPage(), studio, bytes);
