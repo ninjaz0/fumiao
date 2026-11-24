@@ -15,6 +15,7 @@ const blank=()=>({name:'',purpose:'subject',description:'',media:[] as string[]}
 export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[],onImportImages,onImportPack,onRemovePack,onDeletePack}:AssetPacksProps){
  const [packs,setPacks]=useState<Pack[]>([]),[assets,setAssets]=useState<{id:string}[]>([]),[opened,setOpened]=useState<string|null>(null),[chosen,setChosen]=useState<string[]>([]),[editing,setEditing]=useState<Pack|null|undefined>(),[draft,setDraft]=useState(blank),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[removing,setRemoving]=useState<string|null>(null);
  const mountedRef=useRef(true);
+ const fileRef=useRef<HTMLInputElement>(null);
  const workspaceRef=useRef(workspace);
  workspaceRef.current=workspace;
  const loadSeqRef=useRef(0);
@@ -77,7 +78,7 @@ export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[
     <fieldset><legend>用途</legend><div className="fm-pack-purpose">{Object.entries(purposes).map(([key,label])=><button key={key} aria-pressed={draft.purpose===key} onClick={()=>setDraft({...draft,purpose:key})}>{label}</button>)}</div></fieldset>
     <label>说明<textarea value={draft.description} maxLength={2000} rows={3} placeholder="人物特征、服装或场景中需要保留的细节" onChange={e=>setDraft({...draft,description:e.target.value})}/></label>
    </div>
-   <div className="fm-pack-heading"><span>参考图片 · {draft.media.length}/9</span><label className="fm-pack-button"><Upload size={16}/>上传图片<input type="file" hidden accept="image/*,.heic,.heif" disabled={busy||draft.media.length>=9} onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value='';void upload(file)}}/></label></div>
+   <div className="fm-pack-heading"><span>参考图片 · {draft.media.length}/9</span><button className="fm-pack-button" disabled={busy||draft.media.length>=9} onClick={()=>fileRef.current?.click()}><Upload size={16}/>上传图片</button><input ref={fileRef} type="file" hidden accept="image/*,.heic,.heif" onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value='';void upload(file)}}/></div>
    <div className="fm-pack-images">{assets.map(a=><button key={a.id} disabled={busy} aria-label={'选择参考图 '+a.id.slice(0,6)} aria-pressed={draft.media.includes(a.id)} onClick={()=>toggle(a.id)}><img loading="lazy" src={'/media/'+a.id} alt="参考图"/>{draft.media.includes(a.id)&&<span>{draft.media.indexOf(a.id)+1}</span>}</button>)}</div>
    {!assets.length&&<p>上传图片，建立这个素材包。</p>}
    <div className="fm-pack-footer"><button className="fm-pack-primary" disabled={busy||!draft.name.trim()||!draft.media.length} onClick={()=>void save()}>{busy?'保存中…':'保存素材包'}</button></div>
