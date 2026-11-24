@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  DEFAULT_SERVICE_CONCURRENCY,
+  buildUpdateSourcePayload,
   describeSavedService,
   findDuplicateModelIds,
   formatFieldDefault,
+  formatPluginJsonError,
+  offsetToLineColumn,
   parseFieldValue,
+  parsePluginFileJson,
+  parseServiceConcurrency,
   pluginFieldHint,
+  readPluginFile,
 } from "../../apps/web/studio/settings-plugins-helpers.js";
 
 const museSchema = {
@@ -119,5 +126,147 @@ test("pluginFieldHint explains credential retention and origin change accurately
   assert.match(
     pluginFieldHint("publicUrl", { type: "string" }, false, false)!,
     /对外提供访问/,
+  );
+});
+
+test("describeSavedService includes service concurrency when present (#68)", () => {
+  const rows = describeSavedService(museSchema, {
+    values: { baseUrl: "https://muse.internal.example" },
+    configuredFields: ["baseUrl", "apiKey"],
+    concurrency: 4,
+  });
+  assert.deepEqual(rows.at(-1), {
+    key: "concurrency",
+    label: "并行任务上限",
+    value: "4 个",
+  });
+});
+
+test("parseServiceConcurrency defaults blank input and validates integer bounds 1..100 (#68)", () => {
+  assert.equal(parseServiceConcurrency(""), DEFAULT_SERVICE_CONCURRENCY);
+  assert.equal(parseServiceConcurrency("   ", 6), 6);
+  assert.equal(parseServiceConcurrency("1"), 1);
+  assert.equal(parseServiceConcurrency("100"), 100);
+  assert.equal(parseServiceConcurrency(" 12 "), 12);
+
+  for (const invalid of ["0", "101", "-1", "2.5", "1e2", "abc"]) {
+    assert.throws(
+      () => parseServiceConcurrency(invalid),
+      /请检查「并行任务数量」：需填写 1–100 的整数/,
+    );
+  }
+});
+
+test("readPluginFile distinguishes file read failure from JSON syntax errors with line/column (#59)", async () => {
+  await assert.rejects(
+    () =>
+      readPluginFile({
+        text: () => Promise.reject(new Error("NotReadableError")),
+      }),
+    /无法读取插件文件/,
+  );
+
+  const trailingCommaJson = '{\n  "id": "muse",\n  "version": "1.0.0",\n}';
+  await assert.rejects(
+    () =>
+      readPluginFile({
+        text: () => Promise.resolve(trailingCommaJson),
+      }),
+    (err: unknown) => {
+      assert(err instanceof Error);
+      assert.doesNotMatch(err.message, /无法读取插件文件/);
+      assert.match(err.message, /插件文件 JSON 格式错误（第 4 行第 1 列）/);
+      assert.match(err.message, /双引号|尾逗号/);
+      return true;
+    },
+  );
+});
+
+test("offsetToLineColumn and formatPluginJsonError handle LF/CRLF offsets, Firefox positions and redact snippets (#59)", () => {
+  const crlfSource = '{\r\n  "id": "muse",\r\n  "version": 1.0.0\r\n}';
+  assert.deepEqual(offsetToLineColumn(crlfSource, 0), { line: 1, column: 1 });
+  assert.deepEqual(offsetToLineColumn(crlfSource, 36), { line: 3, column: 17 });
+
+  assert.equal(
+    formatPluginJsonError(
+      '{\n  "id": "muse",\n}',
+      new SyntaxError("Unexpected token } in JSON at position 18"),
+    ),
+    '插件文件 JSON 格式错误（第 3 行第 1 列）：意外的符号 "}"（请检查是否存在缺失的属性值或多余的尾逗号）',
+  );
+
+  assert.equal(
+    formatPluginJsonError(
+      '{\n  "id": "muse",\n}',
+      new SyntaxError(
+        "JSON.parse: expected double-quoted property name at line 3 column 1 of the JSON data",
+      ),
+    ),
+    "插件文件 JSON 格式错误（第 3 行第 1 列）：属性名须使用双引号（请检查是否存在多余的尾逗号）",
+  );
+
+  assert.equal(
+    formatPluginJsonError("   \n  ", new SyntaxError("Unexpected end of JSON input")),
+    "插件文件 JSON 格式错误：文件内容为空",
+  );
+
+  const secretLeakAttempt = formatPluginJsonError(
+    'API_KEY=sk-secret-value',
+    new SyntaxError(
+      'Unexpected token \'A\', "API_KEY=sk-secret-value" is not valid JSON',
+    ),
+  );
+  assert.doesNotMatch(secretLeakAttempt, /sk-secret-value/);
+  assert.match(secretLeakAttempt, /插件文件 JSON 格式错误：意外的符号 "A"/);
+
+  const safariLeakAttempt = formatPluginJsonError(
+    '{"apiKey": superSecretToken}',
+    new SyntaxError('JSON Parse error: Unexpected identifier "superSecretToken"'),
+  );
+  assert.doesNotMatch(safariLeakAttempt, /superSecretToken/);
+  assert.match(safariLeakAttempt, /未加双引号的标识符/);
+
+  assert.throws(
+    () => parsePluginFileJson('["not-an-object"]'),
+    /根节点须为 JSON 对象/,
+  );
+  assert.deepEqual(parsePluginFileJson('{"id":"muse"}'), { id: "muse" });
+});
+
+test("buildUpdateSourcePayload retains saved token when blank and clears token only on explicit clear (#70)", () => {
+  const retained = buildUpdateSourcePayload({
+    url: " https://updates.example.com/update.json ",
+    token: "",
+  });
+  assert.deepEqual(retained, { url: "https://updates.example.com/update.json" });
+  assert.equal(Object.hasOwn(retained, "token"), false);
+
+  const whitespaceRetained = buildUpdateSourcePayload({
+    url: "https://updates.example.com/update.json",
+    token: "   ",
+  });
+  assert.equal(Object.hasOwn(whitespaceRetained, "token"), false);
+
+  assert.deepEqual(
+    buildUpdateSourcePayload({
+      url: "https://updates.example.com/update.json",
+      token: " ghp_readonly_token ",
+    }),
+    {
+      url: "https://updates.example.com/update.json",
+      token: "ghp_readonly_token",
+    },
+  );
+
+  assert.deepEqual(
+    buildUpdateSourcePayload({
+      url: "https://updates.example.com/update.json",
+      token: "ignored-draft",
+      clearToken: true,
+    }),
+    {
+      url: "https://updates.example.com/update.json",
+      token: "",
+    },
   );
 });

@@ -17,14 +17,20 @@ import {
 import type { SettingsTab } from "./settings-tabs";
 import { api } from "./api";
 import {
+  DEFAULT_SERVICE_CONCURRENCY,
+  MAX_SERVICE_CONCURRENCY,
+  MIN_SERVICE_CONCURRENCY,
+  buildUpdateSourcePayload,
   describeSavedService,
   findDuplicateModelIds,
   formatFieldDefault,
   modelKindLabels,
   isStringArrayField,
   parseFieldValue,
+  parseServiceConcurrency,
   pluginFieldHint as fieldHint,
   pluginFieldLabel as label,
+  readPluginFile,
   type PluginConfigField as Field,
 } from "./settings-plugins-helpers";
 import "./settings-plugins.css";
@@ -132,6 +138,7 @@ function ServiceForm({
     setError("");
     const form = new FormData(e.currentTarget);
     const config: Record<string, unknown> = {};
+    let concurrency: number;
     try {
       for (const [key, field] of entries) {
         const raw = String(form.get(key) ?? "").trim();
@@ -141,6 +148,10 @@ function ServiceForm({
           continue;
         config[key] = parsed;
       }
+      concurrency = parseServiceConcurrency(
+        String(form.get("$concurrency") ?? ""),
+        service?.concurrency ?? DEFAULT_SERVICE_CONCURRENCY,
+      );
     } catch (err) {
       setError(
         err instanceof Error && err.message.includes("请检查")
@@ -155,13 +166,14 @@ function ServiceForm({
             revision: service.revision,
             enabled: service.enabled,
             preserveCredentials: true,
-            concurrency: service.concurrency,
+            concurrency,
             config,
           }
         : {
             name: String(form.get("name") ?? "").trim(),
             pluginId: plugin.id,
             version: plugin.adapterVersion,
+            concurrency,
             config,
           },
     );
@@ -287,6 +299,29 @@ function ServiceForm({
         </div>
       )}
       {requiredEntries.map(([key, f]) => renderField(key, f))}
+      <div className="plugin-field">
+        <div className="plugin-field-head">
+          <label htmlFor={`${prefix}-concurrency`}>并行任务数量</label>
+          <span className="plugin-field-tag" data-tone="optional">
+            可选
+          </span>
+        </div>
+        <input
+          id={`${prefix}-concurrency`}
+          name="$concurrency"
+          type="number"
+          min={MIN_SERVICE_CONCURRENCY}
+          max={MAX_SERVICE_CONCURRENCY}
+          step={1}
+          inputMode="numeric"
+          defaultValue={service?.concurrency ?? DEFAULT_SERVICE_CONCURRENCY}
+          placeholder={String(DEFAULT_SERVICE_CONCURRENCY)}
+          aria-describedby={`${prefix}-concurrency-hint`}
+        />
+        <p id={`${prefix}-concurrency-hint`} className="plugin-field-hint">
+          单条服务允许同时执行的任务上限（1–100 的整数，默认 1），可按上游配额或吞吐能力调整。
+        </p>
+      </div>
       {optionalEntries.length > 0 && (
         <details
           className="plugin-optional-fields"
@@ -582,12 +617,7 @@ export function PluginSettings({
                     async () => {
                       if (file.size > 3 * 1024 * 1024)
                         throw Error("插件文件过大");
-                      let content;
-                      try {
-                        content = JSON.parse(await file.text());
-                      } catch {
-                        throw Error("无法读取插件文件");
-                      }
+                      const content = await readPluginFile(file);
                       const preview = await call<Preview>(
                         "plugins/preview",
                         content,
@@ -613,6 +643,16 @@ export function PluginSettings({
             )}
           </div>
         </header>
+        {!expandedPlugin && error && (
+          <p className="plugin-feedback is-error" role="alert">
+            {error}
+          </p>
+        )}
+        {!expandedPlugin && message && (
+          <p className="plugin-feedback is-ok" role="status">
+            {message}
+          </p>
+        )}
         {pending && (
           <form
             className="ledger-card plugin-overview plugin-form"
@@ -1609,14 +1649,13 @@ export function PluginSettings({
                             key={p.revision}
                             onSubmit={(e) => {
                               e.preventDefault();
-                              const f = new FormData(e.currentTarget),
-                                token = String(f.get("token") || "");
+                              const f = new FormData(e.currentTarget);
                               void action(
                                 "source",
-                                {
-                                  url: f.get("url") || null,
-                                  ...(token ? { token } : {}),
-                                },
+                                buildUpdateSourcePayload({
+                                  url: String(f.get("url") || ""),
+                                  token: String(f.get("token") || ""),
+                                }),
                                 "更新源已保存",
                               );
                             }}
@@ -1670,11 +1709,38 @@ export function PluginSettings({
                                 }
                               />
                               <p className="plugin-field-hint">
-                                仅用于访问私有更新源，加密保存且不回显。
+                                {p.hasUpdateToken
+                                  ? "仅用于访问私有更新源，加密保存且不回显；留空保存将沿用当前令牌，如需移除可点击「清除已保存令牌」。"
+                                  : "仅用于访问私有更新源，加密保存且不回显。"}
                               </p>
                             </div>
                             <div className="plugin-form-actions">
                               <button type="submit">保存更新设置</button>
+                              {p.hasUpdateToken && (
+                                <button
+                                  type="button"
+                                  className="plugin-btn-danger"
+                                  onClick={(e) => {
+                                    const form = e.currentTarget.form;
+                                    if (form && !form.reportValidity()) return;
+                                    const rawUrl = form
+                                      ? String(
+                                          new FormData(form).get("url") ?? "",
+                                        )
+                                      : (p.updateUrl ?? "");
+                                    void action(
+                                      "source",
+                                      buildUpdateSourcePayload({
+                                        url: rawUrl,
+                                        clearToken: true,
+                                      }),
+                                      "已清除已保存的只读令牌",
+                                    );
+                                  }}
+                                >
+                                  清除已保存令牌
+                                </button>
+                              )}
                               {p.updateUrl && (
                                 <button
                                   type="button"
@@ -1800,8 +1866,6 @@ export function PluginSettings({
         </div>
         {loadingPlugins && !plugins && !pluginsError && <p>正在读取插件…</p>}
       </fieldset>
-      {!expandedPlugin && error && <p role="alert">{error}</p>}
-      {!expandedPlugin && message && <p role="status">{message}</p>}
     </section>
   );
 }
