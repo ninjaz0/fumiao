@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAppearance } from "../home/controls";
+import { AuthPasswordField } from "./AuthPasswordField";
 
 type Mode = "login" | "register";
 const moon = "M20 14.4A8.4 8.4 0 019.6 4a8.5 8.5 0 1010.4 10.4z";
@@ -310,20 +311,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                     </label>
                   )}
                   {"\n      "}
-                  <label className="formlabel">
-                    密码
-                    <input
-                      required
-                      name="pw"
-                      type="password"
-                      minLength={registering ? 10 : 1}
-                      maxLength={200}
-                      autoComplete={
-                        registering ? "new-password" : "current-password"
-                      }
-                      placeholder={registering ? "至少 10 位" : ""}
-                    />
-                  </label>
+                  <AuthPasswordField registering={registering} />
                   {"\n      "}
                   {registering && (
                     <label className="formlabel">
