@@ -663,6 +663,45 @@ export async function studioBrowser(
     await expect(nextTier).toBeFocused();
     await expect.poll(distanceFromActions).toBeGreaterThanOrEqual(0);
 
+    // A mobile keyboard may move the action bar after the input gains focus.
+    await nextTier.blur();
+    await page.evaluate(
+      (distance) => window.scrollBy(0, 32 - distance),
+      await distanceFromActions(),
+    );
+    await nextTier.focus();
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    }));
+    const keyboardHeight = 80;
+    const clearance = await distanceFromActions();
+    assert.ok(clearance > 0 && clearance < keyboardHeight, "Focused input starts just above the bar");
+    const barTop = () => priceForm.locator(".price-form-actions").evaluate(
+      (bar) => bar.getBoundingClientRect().top,
+    );
+    const originalTop = await barTop();
+    await page.evaluate((height) => {
+      const viewport = window.visualViewport!;
+      Object.defineProperty(viewport, "height", {
+        configurable: true,
+        value: viewport.height - height,
+      });
+      viewport.dispatchEvent(new Event("resize"));
+    }, keyboardHeight);
+    try {
+      await expect(nextTier).toBeFocused();
+      await expect.poll(barTop).toBeLessThan(originalTop);
+      await expect.poll(distanceFromActions, {
+        message: "Focused price input must stay above the bar when the keyboard opens",
+      }).toBeGreaterThanOrEqual(0);
+    } finally {
+      await page.evaluate(() => {
+        const viewport = window.visualViewport!;
+        Reflect.deleteProperty(viewport, "height");
+        viewport.dispatchEvent(new Event("resize"));
+      });
+    }
+
     // Exercise the real API's conflict response without changing the fixture.
     await page.route("**/api/settings/prices", async (route) => {
       const draft = route.request().postDataJSON();

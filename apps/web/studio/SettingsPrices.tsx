@@ -20,6 +20,16 @@ type PriceDraft = {
   values: Record<string, string>;
 };
 
+function revealFocusedPrice(bar: HTMLDivElement | null) {
+  const input = document.activeElement;
+  if (!bar || !(input instanceof HTMLInputElement) ||
+      !bar.closest("form")?.contains(input)) return;
+  const actionBounds = bar.getBoundingClientRect();
+  const inputBounds = input.getBoundingClientRect();
+  if (inputBounds.top < actionBounds.bottom && inputBounds.bottom > actionBounds.top)
+    window.scrollBy({ top: inputBounds.bottom - actionBounds.top + 8, behavior: "instant" });
+}
+
 export function PriceSettings({
   state,
   visible,
@@ -41,18 +51,26 @@ export function PriceSettings({
     const viewport = window.visualViewport;
     if (!visible || !bar || !viewport) return;
 
-    // Mobile keyboards can shrink only the visual viewport.
+    let previousInset = 0;
+    let frame = 0;
+    // Mobile keyboards can move the sticky bar after the input gains focus.
     const syncViewport = () => {
       const inset = Math.max(
         0,
         window.innerHeight - viewport.offsetTop - viewport.height,
       );
       bar.style.setProperty("--price-viewport-inset", `${inset}px`);
+      if (inset > previousInset) {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => revealFocusedPrice(bar));
+      }
+      previousInset = inset;
     };
     syncViewport();
     viewport.addEventListener("resize", syncViewport);
     viewport.addEventListener("scroll", syncViewport);
     return () => {
+      cancelAnimationFrame(frame);
       viewport.removeEventListener("resize", syncViewport);
       viewport.removeEventListener("scroll", syncViewport);
     };
@@ -82,14 +100,10 @@ export function PriceSettings({
 
   const summary = summarizePrices(pricing.items, catalog, values);
 
-  function revealFocusedPrice({ target }: FocusEvent<HTMLFormElement>) {
+  function onPriceFocus({ target }: FocusEvent<HTMLFormElement>) {
     if (!(target instanceof HTMLInputElement)) return;
     requestAnimationFrame(() => {
-      if (document.activeElement !== target) return;
-      const bar = actions.current?.getBoundingClientRect();
-      const input = target.getBoundingClientRect();
-      if (bar && input.top < bar.bottom && input.bottom > bar.top)
-        window.scrollBy({ top: input.bottom - bar.top + 8, behavior: "instant" });
+      if (document.activeElement === target) revealFocusedPrice(actions.current);
     });
   }
 
@@ -167,7 +181,7 @@ export function PriceSettings({
             <dd className="price-rate">{PRICE_CREDIT_RATE_TEXT}</dd>
           </div>
         </dl>
-        <form id="price-form" onSubmit={save} onFocus={revealFocusedPrice}>
+        <form id="price-form" onSubmit={save} onFocus={onPriceFocus}>
           {summary.sections.map((section) => (
             <PriceSection
               key={section.key}
