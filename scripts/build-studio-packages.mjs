@@ -151,7 +151,9 @@ for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of
             ? "节点池协议升级，排空任务后重新接入实例"
             : id === "muse" || id === "flow"
               ? "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS"
-              : "首次发布",
+              : id === "example-node-pool"
+                ? "修复节点工作机拉取任务参考素材路径与安全文件名处理"
+                : "首次发布",
       package: path,
       sha256: hash(data),
     }),

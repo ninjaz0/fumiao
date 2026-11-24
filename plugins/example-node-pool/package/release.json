@@ -2,7 +2,7 @@
   "format": 1,
   "id": "example-node-pool",
   "label": "ComfyUI 节点池",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "adapterVersion": "1.0.0",
   "contributes": {
     "version": 1,

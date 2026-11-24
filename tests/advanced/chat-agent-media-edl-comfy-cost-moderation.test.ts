@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -1227,4 +1228,154 @@ test("#17 F005/F024: observability distinguishes unknown vs configured real upst
   ).rows[0];
   assert.equal(Number(walletAfterReconcile.balance), 93);
   assert.equal(Number(walletAfterReconcile.held), 0);
+});
+
+test("#16 example-node-pool release immutability & upgrade: installing legacy 1.1.0 rejects mutated 1.1.0 (409), upgrades cleanly to shipped 1.2.0 artifact matching update.json, and keeps 1.1.0 release & in-flight job snapshot intact", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+
+  const pkgPath = resolve(
+    process.cwd(),
+    "plugins/example-node-pool/example-node-pool.fmplugin.json",
+  );
+  const updatePath = resolve(
+    process.cwd(),
+    "plugins/example-node-pool/update.json",
+  );
+  const rawPkgText = readFileSync(pkgPath, "utf8");
+  const updateMeta = JSON.parse(readFileSync(updatePath, "utf8")) as {
+    id: string;
+    version: string;
+    package: string;
+    sha256: string;
+  };
+  const newPkg = packageFile.parse(JSON.parse(rawPkgText));
+
+  // Verify shipped artifact and update.json match byte-for-byte with bumped version 1.2.0
+  assert.equal(updateMeta.id, "example-node-pool");
+  assert.equal(updateMeta.version, "1.2.0");
+  assert.equal(newPkg.version, "1.2.0");
+  assert.equal(
+    createHash("sha256").update(rawPkgText).digest("hex"),
+    updateMeta.sha256,
+    "update.json sha256 must match shipped example-node-pool.fmplugin.json",
+  );
+
+  // Build an immutable legacy 1.1.0 package with distinct historical agent.tgz bytes
+  const legacyTgz = gzipSync(Buffer.from("legacy-worker-1.1.0-payload", "utf8"));
+  const legacySha = createHash("sha256").update(legacyTgz).digest("hex");
+  const legacyPkg = packageFile.parse({
+    ...structuredClone(newPkg),
+    version: "1.1.0",
+    nodeClient: {
+      ...newPkg.nodeClient!,
+      "agent.tgz": legacyTgz.toString("base64"),
+      "agent.tgz.sha256": Buffer.from(`${legacySha}  agent.tgz\n`, "utf8").toString(
+        "base64",
+      ),
+    },
+  });
+
+  const pkgs = new StudioPackages(f.p);
+  // 1. Install and enable legacy 1.1.0
+  await pkgs.install(f.admin, legacyPkg);
+  const initialRow = (
+    await f.p.db.query(
+      "SELECT version, revision FROM studio_packages WHERE id='example-node-pool'",
+    )
+  ).rows[0];
+  assert.equal(initialRow.version, "1.1.0");
+  await pkgs.change(
+    f.admin,
+    "example-node-pool",
+    Number(initialRow.revision),
+    "enable",
+  );
+
+  // Seed an in-flight queued job pinned to frozen package_version='1.1.0'
+  const poolModel = (
+    await f.p.db.query(
+      `SELECT m.id, m.connection_id, c.plugin_id, c.plugin_version, m.provider_model
+         FROM models m
+         JOIN connections c ON c.id = m.connection_id
+        WHERE c.plugin_id = 'example-node-pool'
+        LIMIT 1`,
+    )
+  ).rows[0];
+  assert.ok(poolModel, "example-node-pool model must be registered on install");
+  const inFlightJobId = randomUUID();
+  await f.p.db.query(
+    `INSERT INTO jobs(
+       id, workspace_id, owner_id, model_id, connection_id,
+       plugin_id, plugin_version, package_version, config_snapshot,
+       provider_model, kind, input, idempotency_key, request_hash,
+       price, state, original_view, attempts
+     )
+     VALUES (
+       $1,$2,$3,$4,$5,$6,$7,'1.1.0',$8,$9,'image',
+       '{"prompt":"in-flight v1.1.0","params":{},"references":[]}'::jsonb,
+       $10,'h',1,'queued','{}'::jsonb,0
+     )`,
+    [
+      inFlightJobId,
+      f.workspace.id,
+      f.admin.id,
+      poolModel.id,
+      poolModel.connection_id,
+      poolModel.plugin_id,
+      poolModel.plugin_version,
+      f.p.vault.seal({}),
+      poolModel.provider_model,
+      randomUUID(),
+    ],
+  );
+
+  // 2. Re-importing mutated bytes under the SAME 1.1.0 version MUST fail with 409!
+  const mutatedSameVersion = packageFile.parse({
+    ...structuredClone(newPkg),
+    version: "1.1.0",
+  });
+  await assert.rejects(
+    pkgs.install(f.admin, mutatedSameVersion),
+    (err: any) => err?.status === 409,
+  );
+
+  // 3. Upgrade cleanly from 1.1.0 -> shipped 1.2.0 artifact with optimistic revision check!
+  const beforeUpgrade = (
+    await f.p.db.query(
+      "SELECT revision FROM studio_packages WHERE id='example-node-pool'",
+    )
+  ).rows[0];
+  await pkgs.install(f.admin, newPkg, Number(beforeUpgrade.revision));
+  const upgradedRow = (
+    await f.p.db.query(
+      "SELECT version, installed, enabled FROM studio_packages WHERE id='example-node-pool'",
+    )
+  ).rows[0];
+  assert.equal(upgradedRow.version, "1.2.0");
+  assert.equal(upgradedRow.installed, true);
+  assert.equal(upgradedRow.enabled, true);
+
+  // 4. Both historical 1.1.0 and new 1.2.0 releases remain intact, and the in-flight job retains frozen 1.1.0!
+  const releases = (
+    await f.p.db.query(
+      "SELECT version, package->'nodeClient'->>'agent.tgz' AS tgz FROM studio_package_releases WHERE id='example-node-pool' ORDER BY version",
+    )
+  ).rows;
+  assert.deepEqual(
+    releases.map((r) => String(r.version)),
+    ["1.1.0", "1.2.0"],
+  );
+  const v11Tar = gunzipSync(Buffer.from(String(releases[0].tgz), "base64")).toString("utf8");
+  const v12Tar = gunzipSync(Buffer.from(String(releases[1].tgz), "base64")).toString("utf8");
+  assert.ok(v11Tar.includes("legacy-worker-1.1.0-payload"));
+  assert.ok(v12Tar.includes("/jobs/{job_id}/ref/{asset_key}"));
+
+  const inFlightAfter = (
+    await f.p.db.query("SELECT state, package_version FROM jobs WHERE id=$1", [
+      inFlightJobId,
+    ])
+  ).rows[0];
+  assert.equal(inFlightAfter.state, "queued");
+  assert.equal(inFlightAfter.package_version, "1.1.0");
 });
