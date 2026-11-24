@@ -29,9 +29,13 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
    if(closed)return;setRunning(!!s.conversation.active_turn);
    const m=[...s.messages].reverse().find((m:any)=>m.role==='assistant');
    if(!m)return;
+   if(lastMessage.current===null&&draft.shots.length){
+    const p=pending.current,boundary=s.messages.find((r:any)=>r.role==='assistant'&&(r.state==='running'||r.turn===s.conversation.active_turn))||(p?.cid===cid&&s.conversation.revision>p.body.expected_revision?[...s.messages].reverse().find((r:any)=>r.role==='user'&&r.content===p.body.text):null);
+    const rows=boundary?s.messages.slice(0,s.messages.indexOf(boundary)):s.messages,previous=[...rows].reverse().find((r:any)=>r.role==='assistant'&&r.state!=='running');
+    lastMessage.current=previous?.id||0;setDraft(d=>({...d,message:lastMessage.current}));
+   }
    if(m.state==='running')return;
    pending.current=null;localStorage.removeItem(key+'-pending');
-   if(lastMessage.current===null&&draft.shots.length){lastMessage.current=m.id;setDraft(d=>({...d,message:m.id}));return;}
    if(lastMessage.current===m.id)return;lastMessage.current=m.id;
    if(m.state!=='complete'){setError(m.error||'生成未完成，积分已退回');return;}
    setComplete(true);try{setShots(parseStoryboard(m.content));setError('')}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}

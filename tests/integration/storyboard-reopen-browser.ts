@@ -43,9 +43,11 @@ try {
     localStorage.setItem(key + "-proposal", JSON.stringify([shot]));
     localStorage.setItem(key + "-brief", "记录清晨的湖光");
   }, { key, shot });
-  let message = { id: 101, role: "assistant", state: "complete", content: JSON.stringify([shot]) };
-  const snapshot = () => ({ conversation: { id: "storyboard-test", active_turn: null }, messages: [message] });
-  await page.route("**/api/chats/storyboard-test/events?*", route => route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify(snapshot())}\n\n` }));
+  let message: { id: number; role: string; state: string; content: string; turn?: string; error?: string } = { id: 101, role: "assistant", state: "complete", content: JSON.stringify([shot]) };
+  let history: typeof message[] = [], activeTurn: string | null = null, revision = 1;
+  const snapshot = () => ({ conversation: { id: "storyboard-test", active_turn: activeTurn, revision }, messages: [...history, message] });
+  let eventSnapshots: ReturnType<typeof snapshot>[] | undefined;
+  await page.route("**/api/chats/storyboard-test/events?*", route => route.fulfill({ contentType: "text/event-stream", body: (eventSnapshots || [snapshot()]).map(s => `data: ${JSON.stringify(s)}\n\n`).join("") }));
   await page.route("**/api/chats/storyboard-test", route => route.fulfill({ json: snapshot() }));
   await page.goto(`/canvas/${id}?workspace=${state.workspace_id}`);
   const open = page.getByRole("button", { name: "AI 分镜", exact: true });
@@ -102,6 +104,32 @@ try {
   await open.click();
   await expect(title).toHaveValue("升级后的新分镜");
   console.log("Storyboard new reply after legacy upgrade replaces proposal: passed");
+  const failures: unknown[] = [];
+  for (const failed of [false, true]) {
+    await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+    await page.evaluate(({ key, shot, failed }) => {
+      localStorage.setItem(key + "-proposal", JSON.stringify([{ ...shot, title: "生成前的编辑" }]));
+      if (failed) localStorage.removeItem(key + "-pending");
+      else localStorage.setItem(key + "-pending", JSON.stringify({ cid: "storyboard-test", body: { uid: "pending-turn", expected_revision: 1, text: "重新拟定" } }));
+    }, { key, shot, failed });
+    history = [{ id: 101, role: "assistant", state: "complete", turn: "previous-turn", content: JSON.stringify([shot]) }, { id: 102, role: "user", state: "complete", content: "重新拟定" }];
+    message = { ...message, id: 103, turn: "active-turn", state: failed ? "running" : "complete", content: failed ? "" : JSON.stringify([{ ...shot, title: "升级中完成的新分镜" }]) };
+    activeTurn = failed ? "active-turn" : null;
+    revision = failed ? 2 : 3;
+    eventSnapshots = failed ? [snapshot(), { conversation: { ...snapshot().conversation, active_turn: null, revision: 3 }, messages: [...history, { ...message, state: "failed", error: "分镜生成失败，积分已退回" }] }] : undefined;
+    await open.click();
+    try {
+      if (failed) {
+        await expect(dialog.getByRole("alert")).toHaveText("分镜生成失败，积分已退回");
+        await expect(title).toHaveValue("生成前的编辑");
+        console.log("Storyboard active legacy generation failure shows error and preserves edits: passed");
+      } else {
+        await expect(title).toHaveValue("升级中完成的新分镜");
+        console.log("Storyboard pending legacy generation applies completed reply: passed");
+      }
+    } catch (error) { console.error(error); failures.push(error); }
+  }
+  assert.equal(failures.length, 0, "Legacy in-flight generation regression failures");
 } finally {
   await browser?.close();
   harness.kill("SIGTERM");
