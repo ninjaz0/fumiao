@@ -1,0 +1,12 @@
+.auth-noscript {
+  text-align: center;
+}
+
+.auth-noscript a {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+noscript:has(> .auth-noscript) + .loading-screen {
+  display: none;
+}
