@@ -7,6 +7,7 @@ import {
   type SyntheticEvent,
 } from "react";
 import { useAppearance } from "../home/controls";
+import { AuthPasswordField } from "./AuthPasswordField";
 import "./auth.css";
 import styles from "./Auth.module.css";
 
@@ -357,20 +358,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                     </label>
                   )}
                   {"\n      "}
-                  <label className="formlabel">
-                    密码
-                    <input
-                      required
-                      name="pw"
-                      type="password"
-                      minLength={registering ? 10 : 1}
-                      maxLength={200}
-                      autoComplete={
-                        registering ? "new-password" : "current-password"
-                      }
-                      placeholder={registering ? "至少 10 位" : ""}
-                    />
-                  </label>
+                  <AuthPasswordField registering={registering} />
                   {"\n      "}
                   {registering && (
                     <label className="formlabel">
