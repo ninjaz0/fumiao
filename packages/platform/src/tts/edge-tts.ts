@@ -80,6 +80,8 @@ export interface EdgeTtsRequest {
   rate?: string;
   pitch?: string;
   volume?: string;
+  /** Optional custom Edge-compatible WebSocket endpoint (defaults to Microsoft Edge ReadAloud WSS). */
+  endpoint?: string;
 }
 
 export function buildEdgeSsml(req: EdgeTtsRequest): string {
@@ -120,8 +122,13 @@ export async function synthesizeEdgeTts(
   const ssml = buildEdgeSsml(req);
   const connectionId = randomUUID().replaceAll("-", "");
   const secMsGec = computeSecMsGec();
+  const base =
+    req.endpoint && /^wss?:\/\//.test(req.endpoint.trim())
+      ? req.endpoint.trim()
+      : EDGE_WS_BASE;
+  const sep = base.includes("?") ? "&" : "?";
   const url =
-    `${EDGE_WS_BASE}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}` +
+    `${base}${sep}TrustedClientToken=${TRUSTED_CLIENT_TOKEN}` +
     `&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=1-130.0.2849.68` +
     `&ConnectionId=${connectionId}`;
 

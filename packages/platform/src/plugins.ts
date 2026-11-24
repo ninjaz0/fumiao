@@ -99,6 +99,9 @@ export class PluginRegistry {
   requestAdapter(manifest: Manifest, source: string) {
     return sandboxRequest(manifest, source, this.providerTransport);
   }
+  registerBuiltin(p: ProviderPlugin) {
+    this.remember(p);
+  }
   private remember(p: ProviderPlugin) {
     this.builtins.set(p.manifest.id + "@" + p.manifest.version, p);
   }

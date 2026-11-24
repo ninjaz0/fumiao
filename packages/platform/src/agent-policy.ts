@@ -145,27 +145,27 @@ export async function enforceAgentPolicyInTx(
         WHERE proposal_id = $1`,
       [proposal.id],
     );
-    if (scope) {
-      const allowedNodes: string[] = Array.isArray(scope.allowed_node_ids)
-        ? scope.allowed_node_ids.map(String)
-        : [];
-      requireValue(
-        allowedNodes.length > 0,
-        403,
-        "该已批准提案仅包含非扣费画布编辑，未授权执行扣费生成任务",
-      );
-      requireValue(
-        targetNodeId && allowedNodes.includes(targetNodeId),
-        403,
-        "目标节点不在该已批准提案授权的生成范围内",
-      );
-      approvedCredits = Math.max(0, Number(scope.approved_credits ?? approvedCredits));
-    } else if (approvedCredits === 0 && amount > 0) {
-      throw new DomainError(
-        403,
-        "该已批准提案未包含任何已预估的扣费节点，禁止用于执行扣费生成任务",
-      );
-    }
+    // Fail-closed for legacy pre-upgrade applied proposals lacking a node-level scope snapshot
+    // so upgrading never widens approval permissions beyond explicitly approved nodes.
+    requireValue(
+      scope,
+      403,
+      "该历史已落图提案缺少节点级授权快照，请重新发起并批准画布提案后再执行扣费任务",
+    );
+    const allowedNodes: string[] = Array.isArray(scope.allowed_node_ids)
+      ? scope.allowed_node_ids.map(String)
+      : [];
+    requireValue(
+      allowedNodes.length > 0,
+      403,
+      "该已批准提案仅包含非扣费画布编辑，未授权执行扣费生成任务",
+    );
+    requireValue(
+      targetNodeId && allowedNodes.includes(targetNodeId),
+      403,
+      "目标节点不在该已批准提案授权的生成范围内",
+    );
+    approvedCredits = Math.max(0, Number(scope.approved_credits ?? approvedCredits));
   }
 
   if (hasScopeTables?.execs) {

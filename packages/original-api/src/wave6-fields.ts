@@ -60,4 +60,10 @@ export const subscriptionPlanCreateFields: Fields = {
 export const subscriptionSubscribeFields: Fields = {
   plan_code: { kind: "string", min: 2, max: 64 },
   order_id: { kind: "string", max: 120, optional: true },
+  uid: { kind: "string", max: 120, optional: true },
+  payment_mode: {
+    kind: "literal",
+    values: ["wallet", "order", "admin"],
+    optional: true,
+  },
 };

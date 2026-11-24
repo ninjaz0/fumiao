@@ -525,7 +525,7 @@ export class OriginalCanvasRuns {
         "audio",
         {
           uid: uuid5(body.uid, `voice:${p.public_id}:${nid}`),
-          model: bindings.resolveAudio(),
+          model: bindings.resolveAudio(node.narration_model),
           prompt: node.narration_text,
           instruction: node.narration_instruction,
           price_revision:

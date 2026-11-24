@@ -114,14 +114,8 @@ export class OriginalState {
             : spaces;
           const pages = isToken ? [] : await new PluginPages(this.p).list(sql, actor);
           const rawProfile = identity.profile(actor);
-          const includeJobs =
-            !isToken ||
-            tokenScopes.has("job:read") ||
-            tokenScopes.has("job:submit");
-          const includeAssets =
-            !isToken ||
-            tokenScopes.has("asset:read") ||
-            tokenScopes.has("asset:write");
+          const includeJobs = !isToken || tokenScopes.has("job:read");
+          const includeAssets = !isToken || tokenScopes.has("asset:read");
           const out: Record<string, any> = {
             ...(plugins.profile ? { studio_plugins: true } : {}),
             server_time: stamp,

@@ -565,6 +565,7 @@ export class OriginalCanvasProposals {
                 quality: node.params?.quality ?? 480,
                 ratio: node.params?.ratio || "16:9",
               },
+          { requireConnection: false },
         );
         if (q.allowed && q.priced) estimatedCredits += q.amount;
       }

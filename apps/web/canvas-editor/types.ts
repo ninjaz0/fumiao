@@ -29,6 +29,8 @@ export type PrecheckResponse = {
   revision: number;
   stale_revision: boolean;
   price_revision: number;
+  precheck_token?: string;
+  executable_keys?: string[];
   items: PrecheckItem[];
   summary: {
     total: number;
@@ -39,6 +41,9 @@ export type PrecheckResponse = {
     total_credits: number;
     available_credits: number;
     sufficient: boolean;
+    budget_blocked?: boolean;
+    budget_blocks?: string[];
+    budget_warnings?: string[];
   };
 };
 export type H3Options = {mode:"reference"|"frames";first_frame?:string|null;last_frame?:string|null;video_audio?:string[]};
@@ -76,6 +81,7 @@ export type CanvasBgm = {
 export type CanvasNode = {
   narration_text?:string;
   narration_instruction?:string;
+  narration_model?:string;
   narration_job?:number|null;
   narration_pending?:number|null;
   audio_strategy?: "replace" | "keep_original" | "mix";

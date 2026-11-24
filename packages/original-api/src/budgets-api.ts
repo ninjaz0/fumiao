@@ -22,34 +22,80 @@ export class OriginalBudgets {
     readonly identity = new OriginalIdentity(p),
   ) {}
 
+  private assertCanManageWorkspacePolicy(actor: Actor, ws: any) {
+    requireValue(
+      !actor.tokenId,
+      403,
+      "修改预算与内容安全策略仅支持浏览器会话，禁止使用 API Token",
+    );
+    requireValue(
+      actor.role === "admin" || ws.owner_id === actor.id,
+      403,
+      "只有工作区负责人或管理员可以修改预算与内容安全策略",
+    );
+  }
+
   async list(actor: Actor, explicitWorkspace?: string) {
     return this.p.db.transaction(async (sql) => {
       const ws = await this.identity.activeWorkspace(sql, actor, explicitWorkspace);
+      const docs = (
+        await sql.query(
+          `SELECT id, public_id, title
+             FROM documents
+            WHERE workspace_id = $1::uuid AND kind = 'canvas' AND NOT deleted
+            ORDER BY updated_at DESC
+            LIMIT 200`,
+          [ws.id],
+        )
+      ).rows;
+      const docByAnyId = new Map<
+        string,
+        { id: string; public_id: string; title: string }
+      >();
+      const projects = docs.map((d) => {
+        const title = String(d.title || "未命名画布");
+        const entry = {
+          id: String(d.id),
+          public_id: String(d.public_id),
+          title,
+        };
+        docByAnyId.set(entry.id, entry);
+        docByAnyId.set(entry.public_id, entry);
+        return entry;
+      });
+
       const policies = (
         await sql.query(
           `SELECT id, scope_type, scope_id, period, warn_limit, cap_limit, mode, enabled, revision, updated_at
              FROM budget_policies
             WHERE (scope_type = 'workspace' AND scope_id = $1::text)
-               OR (scope_type = 'project' AND scope_id IN (
-                    SELECT public_id::text FROM documents WHERE workspace_id = $1::uuid
+               OR (scope_type = 'project' AND (
+                    scope_id IN (SELECT id::text FROM documents WHERE workspace_id = $1::uuid)
+                    OR scope_id IN (SELECT public_id::text FROM documents WHERE workspace_id = $1::uuid)
                   ))
-            ORDER BY scope_type ASC, period ASC`,
+            ORDER BY scope_type ASC, scope_id ASC, period ASC`,
           [ws.id],
         )
       ).rows;
 
       const enriched = [];
       for (const row of policies) {
+        const rawScopeId = String(row.scope_id);
+        const proj =
+          row.scope_type === "project" ? docByAnyId.get(rawScopeId) : undefined;
+        const canonicalScopeId = proj ? proj.id : rawScopeId;
         const usage = await computeScopeSpend(
           sql,
           row.scope_type,
-          String(row.scope_id),
+          canonicalScopeId,
           row.period as BudgetPeriod,
         );
         enriched.push({
           id: String(row.id),
           scope_type: row.scope_type as "workspace" | "project",
-          scope_id: String(row.scope_id),
+          scope_id: canonicalScopeId,
+          project_public_id: proj?.public_id ?? null,
+          project_title: proj?.title ?? null,
           period: row.period as BudgetPeriod,
           warn_limit: Number(row.warn_limit),
           cap_limit: Number(row.cap_limit),
@@ -91,6 +137,10 @@ export class OriginalBudgets {
 
       return {
         workspace_id: Number(ws.public_id),
+        can_manage:
+          !actor.tokenId &&
+          (actor.role === "admin" || ws.owner_id === actor.id),
+        projects,
         policies: enriched,
         alerts,
         moderation: {
@@ -120,8 +170,10 @@ export class OriginalBudgets {
 
     return this.p.db.transaction(async (sql) => {
       const ws = await this.identity.activeWorkspace(sql, actor, explicitWorkspace);
+      this.assertCanManageWorkspacePolicy(actor, ws);
       const scopeType = input.scope_type as "workspace" | "project";
       let scopeId: string;
+      let projectPublicId: string | null = null;
       if (scopeType === "workspace") {
         scopeId = ws.id;
       } else {
@@ -129,11 +181,20 @@ export class OriginalBudgets {
         requireValue(rawProject.length > 0, 400, "项目级预算必须指定项目编号");
         const doc = await one(
           sql,
-          "SELECT public_id FROM documents WHERE workspace_id=$1 AND (public_id::text=$2 OR id::text=$2)",
+          "SELECT id, public_id FROM documents WHERE workspace_id=$1 AND kind='canvas' AND NOT deleted AND (public_id::text=$2 OR id::text=$2)",
           [ws.id, rawProject],
         );
         requireValue(doc, 404, "项目不存在或不属于当前工作区");
-        scopeId = String(doc.public_id);
+        // Canonicalize project scope_id to documents.id (UUID) matching job_projects & canvas_job_links!
+        scopeId = String(doc.id);
+        projectPublicId = String(doc.public_id);
+        // Clean up any legacy public_id-keyed policy row for the same (project, period)
+        if (projectPublicId !== scopeId) {
+          await sql.query(
+            "DELETE FROM budget_policies WHERE scope_type='project' AND scope_id=$1 AND period=$2",
+            [projectPublicId, input.period],
+          );
+        }
       }
 
       const row = await one(
@@ -165,6 +226,7 @@ export class OriginalBudgets {
           id: String(row.id),
           scope_type: row.scope_type,
           scope_id: String(row.scope_id),
+          project_public_id: projectPublicId,
           period: row.period,
           warn_limit: Number(row.warn_limit),
           cap_limit: Number(row.cap_limit),
@@ -185,6 +247,7 @@ export class OriginalBudgets {
     const input = parseBody(body, moderationSettingsFields);
     return this.p.db.transaction(async (sql) => {
       const ws = await this.identity.activeWorkspace(sql, actor, explicitWorkspace);
+      this.assertCanManageWorkspacePolicy(actor, ws);
       const row = await one(
         sql,
         `INSERT INTO workspace_moderation_settings(workspace_id, auto_rewrite, max_attempts, updated_at)

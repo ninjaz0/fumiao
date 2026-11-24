@@ -14,7 +14,9 @@ import { ChatQueue } from "@fumiao/original-api/chat-queue.js";
 import { redisConnection } from "@fumiao/platform/redis.js";
 import { DerivativeQueue } from "@fumiao/platform/derivative-queue.js";
 import { grantDueSubscriptions } from "@fumiao/platform/subscriptions.js";
+import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
 const p = runtime();
+await ensureBuiltinEdgeTts(p);
 const executor = new Executor(p);
 const connection = redisConnection(
   process.env.REDIS_URL || "redis://127.0.0.1:6379",

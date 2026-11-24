@@ -1,4 +1,5 @@
 import { runtime } from "@fumiao/platform/runtime.js";
+import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 if (process.env.STUDIO_LEGACY_SOURCE)
   throw new Error(
@@ -13,7 +14,9 @@ try {
     nickname: process.env.ADMIN_NICKNAME || "管理员",
     password: process.env.ADMIN_PASSWORD,
   };
-  console.log(JSON.stringify(await new OriginalIdentity(p).bootstrap(input)));
+  const admin = await new OriginalIdentity(p).bootstrap(input);
+  await ensureBuiltinEdgeTts(p);
+  console.log(JSON.stringify(admin));
 } finally {
   await p.db.close();
 }

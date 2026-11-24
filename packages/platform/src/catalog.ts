@@ -489,6 +489,7 @@ export class StudioCatalog {
     modelId: string,
     workspace: string,
     params: Record<string, unknown>,
+    options?: { requireConnection?: boolean },
   ): Promise<{
     allowed: boolean;
     priced: boolean;
@@ -497,17 +498,9 @@ export class StudioCatalog {
     revision: number;
     reason?: string;
   }> {
+    const requireConnection = options?.requireConnection ?? true;
     const global = await one(sql, "SELECT price_revision FROM studio_policy");
     const revision = Number(global?.price_revision ?? 1);
-    if (modelId === "edge-tts") {
-      return {
-        allowed: true,
-        priced: true,
-        amount: 0,
-        key: "edge-tts|free",
-        revision,
-      };
-    }
     const catalog = await one(
       sql,
       "SELECT * FROM studio_catalog WHERE id=$1",
@@ -537,6 +530,40 @@ export class StudioCatalog {
         revision,
         reason: "当前空间未开放该模型",
       };
+    }
+    if (requireConnection) {
+      const pkgFilter = (await hasStudioPackages(sql))
+        ? "AND studio_service_selected(m.catalog_id, c.id)"
+        : "";
+      const activeConn = await one(
+        sql,
+        `SELECT 1 AS ok
+           FROM models m
+           JOIN connections c ON c.id = m.connection_id
+           LEFT JOIN model_permissions p ON p.model_id = m.id AND p.workspace_id = $2
+          WHERE m.catalog_id = $1
+            AND c.plugin_id = $3
+            AND c.plugin_version = $4
+            AND c.enabled = TRUE
+            AND NOT c.removed
+            AND COALESCE(p.enabled, TRUE) = TRUE
+            ${pkgFilter}
+          LIMIT 1`,
+        [modelId, workspace, catalog.plugin_id, catalog.plugin_version],
+      );
+      if (!activeConn?.ok) {
+        return {
+          allowed: false,
+          priced: false,
+          amount: 0,
+          key: null,
+          revision,
+          reason:
+            catalog.descriptor?.kind === "audio"
+              ? "音频配音服务尚未配置或连接已停用"
+              : "模型执行连接尚未启用或未配置",
+        };
+      }
     }
     const allTiers = (
       await sql.query("SELECT * FROM studio_prices WHERE model_id=$1 ORDER BY position", [

@@ -57,6 +57,10 @@ const orderHints: Record<string, string> = {
 function date(stamp: number) {
   return new Date(stamp * 1000).toLocaleString();
 }
+function formatPlanPrice(priceFen: number) {
+  const yuan = priceFen / 100;
+  return priceFen % 100 === 0 ? `¥${yuan.toFixed(0)}` : `¥${yuan.toFixed(2)}`;
+}
 function mergeCreditRows(rows: CreditEntry[], incoming: CreditEntry[]) {
   return Array.from(
     new Map([...rows, ...incoming].map((row) => [row.id, row])).values(),
@@ -99,7 +103,9 @@ export function Credits({
       id: string;
       code: string;
       name: string;
+      price_fen: number;
       price_yuan: number;
+      cost_credits: number;
       period_days: number;
       period_credits: number;
     }>
@@ -107,18 +113,37 @@ export function Credits({
   const [subscriptions, setSubscriptions] = useState<
     Array<{
       id: string;
+      plan_code: string;
       plan_name: string;
       status: string;
       period_credits: number;
+      current_period_start: string;
       current_period_end: string;
     }>
   >([]);
+  const [subscribingCode, setSubscribingCode] = useState<string | null>(null);
+  const [orderIdInput, setOrderIdInput] = useState("");
+  const [showOrderActivate, setShowOrderActivate] = useState(false);
+  const subscribeUidRef = useRef<Record<string, string>>({});
+  const [statementFrom, setStatementFrom] = useState("");
+  const [statementTo, setStatementTo] = useState("");
   const [inviteSummary, setInviteSummary] = useState<{
     total_invited: number;
     total_granted_credits: number;
     pending_claim_count: number;
     pending_claim_credits: number;
   } | null>(null);
+
+  async function reloadPlans() {
+    const planRes = await api<{
+      plans: typeof plans;
+      subscriptions: typeof subscriptions;
+    }>(String(workspace), "/api/subscriptions/plans").catch(() => null);
+    if (planRes) {
+      setPlans(planRes.plans);
+      setSubscriptions(planRes.subscriptions);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -145,6 +170,50 @@ export function Credits({
       active = false;
     };
   }, [workspace]);
+
+  async function activatePlan(planCode: string, explicitOrderId?: string) {
+    setSubscribingCode(planCode);
+    const key = `${planCode}:${explicitOrderId || "wallet"}`;
+    if (!subscribeUidRef.current[key]) {
+      subscribeUidRef.current[key] = crypto.randomUUID();
+    }
+    try {
+      const res = await api<{
+        renewed?: boolean;
+        grant_timing?: string;
+        subscription: {
+          plan_name: string;
+          period_credits: number;
+          current_period_start: string;
+          current_period_end: string;
+        };
+      }>(
+        String(workspace),
+        "/api/subscriptions/subscribe",
+        {
+          plan_code: planCode,
+          uid: subscribeUidRef.current[key],
+          ...(explicitOrderId?.trim()
+            ? { order_id: explicitOrderId.trim(), payment_mode: "order" }
+            : { payment_mode: "wallet" }),
+        },
+        "POST",
+      );
+      delete subscribeUidRef.current[key];
+      setOrderIdInput("");
+      const sub = res.subscription;
+      notify(
+        res.renewed
+          ? `已续期「${sub.plan_name}」，有效期顺延至 ${new Date(sub.current_period_end).toLocaleDateString()}（新周期配额将于 ${new Date(sub.current_period_start).toLocaleDateString()} 自动发放）`
+          : `已开通「${sub.plan_name}」，+${sub.period_credits} 周期积分已发放（有效期至 ${new Date(sub.current_period_end).toLocaleDateString()}）`,
+      );
+      await Promise.all([reloadPlans(), refresh?.()]);
+    } catch (err) {
+      notify((err as Error).message || "套餐开通或续期失败");
+    } finally {
+      setSubscribingCode(null);
+    }
+  }
 
   async function redeemCode(e: FormEvent) {
     e.preventDefault();
@@ -195,11 +264,19 @@ export function Credits({
 
   async function downloadStatement(format: "csv" | "pdf") {
     try {
-      const resp = await fetch(`/api/credits/statement?format=${format}`, {
+      const qs = new URLSearchParams({ format });
+      if (statementFrom) qs.set("from", statementFrom);
+      if (statementTo) qs.set("to", statementTo);
+      const resp = await fetch(`/api/credits/statement?${qs.toString()}`, {
         credentials: "same-origin",
         headers: { "X-Workspace-Id": String(workspace) },
       });
-      if (!resp.ok) throw new Error("对账单导出失败");
+      if (!resp.ok) {
+        const errJson = await resp.json().catch(() => null);
+        throw new Error(errJson?.detail || "对账单导出失败");
+      }
+      const total = resp.headers.get("X-Total-Count");
+      const exported = resp.headers.get("X-Exported-Count");
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -207,6 +284,9 @@ export function Credits({
       a.download = `fumiao-statement-ws${workspace}.${format}`;
       a.click();
       URL.revokeObjectURL(url);
+      if (total && exported) {
+        notify(`已导出 ${exported} / ${total} 条对账记录（${format.toUpperCase()}）`);
+      }
     } catch (err) {
       notify((err as Error).message || "对账单导出失败");
     }
@@ -275,9 +355,9 @@ export function Credits({
           <strong>{credits.reserved.toLocaleString()}</strong>
         </div>
       </div>
-      <div className="recharge-info">
+      <div className="recharge-info" style={{ flexWrap: "wrap", gap: 8 }}>
         <span>¥1 = 10 积分</span>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <button
             className="quiet-button"
             data-act="recharge-history"
@@ -285,6 +365,21 @@ export function Credits({
           >
             充值记录
           </button>
+          <input
+            type="date"
+            aria-label="对账单开始日期"
+            value={statementFrom}
+            onChange={(e) => setStatementFrom(e.target.value)}
+            style={{ width: "auto" }}
+          />
+          <span>至</span>
+          <input
+            type="date"
+            aria-label="对账单结束日期"
+            value={statementTo}
+            onChange={(e) => setStatementTo(e.target.value)}
+            style={{ width: "auto" }}
+          />
           <button
             type="button"
             className="quiet-button"
@@ -322,30 +417,115 @@ export function Credits({
 
       {plans.length > 0 && (
         <section className="ledger-card" style={{ marginBottom: 14 }}>
-          <h3 className="credit-heading">周期配额包（复用支付宝 / USDT 充值）</h3>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+              marginBottom: 8,
+            }}
+          >
+            <h3 className="credit-heading" style={{ margin: 0 }}>
+              周期配额包（复用支付宝 / USDT 充值余额开通或续期）
+            </h3>
+            <button
+              type="button"
+              className="quiet-button"
+              onClick={() => setShowOrderActivate((v) => !v)}
+            >
+              {showOrderActivate ? "收起订单号激活" : "使用已支付充值单号激活"}
+            </button>
+          </div>
+          {showOrderActivate && (
+            <div style={{ marginBottom: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input
+                value={orderIdInput}
+                onChange={(e) => setOrderIdInput(e.target.value)}
+                placeholder="输入已支付的支付宝 / USDT 充值订单号（核销原充值积分，绝不重复计账）"
+                style={{ flex: 1, minWidth: 220 }}
+              />
+            </div>
+          )}
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
               gap: 10,
             }}
           >
-            {plans.map((p) => (
-              <div
-                key={p.id}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 8,
-                  border: "1px solid rgba(128,128,128,0.22)",
-                }}
-              >
-                <strong>{p.name}</strong>
-                <div style={{ fontSize: 18, fontWeight: 700, margin: "4px 0" }}>
-                  ¥{p.price_yuan.toFixed(0)} / {p.period_days} 天
+            {plans.map((p) => {
+              const activeForPlan = subscriptions.find(
+                (s) =>
+                  s.plan_code === p.code &&
+                  s.status === "active" &&
+                  new Date(s.current_period_end).getTime() > Date.now(),
+              );
+              const costCredits =
+                p.cost_credits ?? Math.round((p.price_fen ?? p.price_yuan * 100) / 10);
+              const enough = credits.available >= costCredits;
+              const isBusy = subscribingCode === p.code;
+              return (
+                <div
+                  key={p.id}
+                  style={{
+                    padding: "12px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(128,128,128,0.22)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                  }}
+                >
+                  <strong>{p.name}</strong>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>
+                    {formatPlanPrice(p.price_fen ?? Math.round(p.price_yuan * 100))} /{" "}
+                    {p.period_days} 天
+                  </div>
+                  <small>
+                    周期发放 {p.period_credits} 积分（抵扣 {costCredits} 充值积分）
+                  </small>
+                  {activeForPlan && (
+                    <small style={{ color: "#10b981" }}>
+                      当前有效至 {new Date(activeForPlan.current_period_end).toLocaleDateString()}
+                    </small>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={isBusy || (!enough && !orderIdInput.trim())}
+                      onClick={() =>
+                        void activatePlan(
+                          p.code,
+                          showOrderActivate && orderIdInput.trim()
+                            ? orderIdInput.trim()
+                            : undefined,
+                        )
+                      }
+                    >
+                      {isBusy
+                        ? "处理中…"
+                        : activeForPlan
+                          ? `续期 +${p.period_days} 天`
+                          : showOrderActivate && orderIdInput.trim()
+                            ? "凭订单激活"
+                            : "立即开通"}
+                    </button>
+                    {!enough && (
+                      <button
+                        type="button"
+                        className="quiet-button"
+                        onClick={(event) => recharge(event.currentTarget)}
+                      >
+                        余额不足，去充值
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <small>周期发放 {p.period_credits} 积分</small>
-              </div>
-            ))}
+              );
+            })}
           </div>
           {subscriptions.length > 0 && (
             <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
@@ -354,7 +534,7 @@ export function Credits({
                 .filter((s) => s.status === "active")
                 .map(
                   (s) =>
-                    `${s.plan_name}（有效期至 ${new Date(s.current_period_end).toLocaleDateString()}）`,
+                    `${s.plan_name}（${new Date(s.current_period_start).toLocaleDateString()} ~ ${new Date(s.current_period_end).toLocaleDateString()}）`,
                 )
                 .join("、") || "无有效套餐"}
             </div>

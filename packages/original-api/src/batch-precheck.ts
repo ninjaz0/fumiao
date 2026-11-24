@@ -1,13 +1,15 @@
 import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
+import { evaluateBudgetImpact } from "@fumiao/platform/budgets.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one } from "@fumiao/platform/db.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { ReferencePacks } from "@fumiao/platform/packs.js";
-import { requireValue } from "@fumiao/platform/security.js";
+import { hash, requireValue } from "@fumiao/platform/security.js";
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
 import { OriginalCanvases } from "./canvases.js";
+import { resolveSpeakerVoice } from "./dialogue.js";
 import {
   batchQuoteFields,
   canvasBatchPrecheckFields,
@@ -126,7 +128,7 @@ export class OriginalBatchPrecheck {
             try {
               model = bindings.resolveAudio();
             } catch {
-              model = "edge-tts";
+              model = "";
             }
           } else {
             try {
@@ -406,23 +408,30 @@ export class OriginalBatchPrecheck {
               status = "blocked";
             }
             try {
-              model = bindings.resolveAudio();
+              model = bindings.resolveAudio((node as any).narration_model);
             } catch {
-              model = "edge-tts";
+              model = "";
             }
-            const q = await this.catalog.quoteReadOnly(
-              sql,
-              model,
-              project.workspace_id,
-              {},
-            );
-            credits = q.amount;
-            if (model === "edge-tts") {
-              issues.push("使用内置免费 Edge TTS 兜底引擎（0 积分）");
-              if (status === "ready") status = "warning";
-            } else if (!q.allowed || !q.priced) {
-              issues.push(q.reason || "语音模型不可用");
+            if (!model) {
+              issues.push("音频配音服务尚未配置");
               status = "blocked";
+            } else {
+              const q = await this.catalog.quoteReadOnly(
+                sql,
+                model,
+                project.workspace_id,
+                {},
+              );
+              if (!q.allowed || !q.priced) {
+                issues.push(q.reason || "音频配音服务尚未配置或连接已停用");
+                status = "blocked";
+              } else {
+                credits = q.amount;
+                if (model === "edge-tts") {
+                  issues.push("使用内置免费 Edge TTS 兜底引擎（0 积分）");
+                  if (status === "ready") status = "warning";
+                }
+              }
             }
           } else if (stage === "dialogue") {
             const validLines = (node.dialogue_lines ?? []).filter((l) =>
@@ -431,24 +440,62 @@ export class OriginalBatchPrecheck {
             if (!validLines.length) {
               issues.push("镜头未填写多角色对白台词");
               status = "blocked";
-            }
-            try {
-              model = bindings.resolveAudio();
-            } catch {
-              model = "edge-tts";
-            }
-            const q = await this.catalog.quoteReadOnly(
-              sql,
-              model,
-              project.workspace_id,
-              {},
-            );
-            credits = q.amount * validLines.length;
-            if (model === "edge-tts" && validLines.length > 0) {
-              issues.push(
-                `${validLines.length} 句对白将使用内置免费 Edge TTS（0 积分）`,
-              );
-              if (status === "ready") status = "warning";
+            } else {
+              // F027 + F010: Quote EACH line using its actual resolved character/explicit voice model!
+              let lineCreditsSum = 0;
+              const usedModels = new Set<string>();
+              let edgeLineCount = 0;
+              for (const line of validLines) {
+                if (busyNodes.has(`dialogue:${node.id}:${line.id}`)) {
+                  issues.push(`对白「${line.speaker || line.id}」正在生成中`);
+                  status = "blocked";
+                  continue;
+                }
+                const resolved = await resolveSpeakerVoice(
+                  sql,
+                  project.workspace_id,
+                  line,
+                );
+                let lineModel = "";
+                try {
+                  lineModel = bindings.resolveAudio(resolved.model);
+                } catch {
+                  lineModel = "";
+                }
+                if (!lineModel) {
+                  issues.push(
+                    `对白「${line.speaker || line.id}」缺少可用的语音配音服务`,
+                  );
+                  status = "blocked";
+                  continue;
+                }
+                const q = await this.catalog.quoteReadOnly(
+                  sql,
+                  lineModel,
+                  project.workspace_id,
+                  {},
+                );
+                if (!q.allowed || !q.priced) {
+                  issues.push(
+                    `对白「${line.speaker || line.id}」(${lineModel})：${q.reason || "语音模型不可用"}`,
+                  );
+                  status = "blocked";
+                  continue;
+                }
+                usedModels.add(lineModel);
+                lineCreditsSum += q.amount;
+                if (lineModel === "edge-tts") edgeLineCount++;
+              }
+              model = [...usedModels].join(", ");
+              credits = lineCreditsSum;
+              if (status !== "blocked" && edgeLineCount > 0) {
+                issues.push(
+                  edgeLineCount === validLines.length
+                    ? `${validLines.length} 句对白将使用内置免费 Edge TTS（0 积分）`
+                    : `其中 ${edgeLineCount}/${validLines.length} 句对白将使用免费 Edge TTS（0 积分）`,
+                );
+                if (status === "ready") status = "warning";
+              }
             }
           }
 
@@ -469,11 +516,32 @@ export class OriginalBatchPrecheck {
       const warningCount = items.filter((i) => i.status === "warning").length;
       const blockedCount = items.filter((i) => i.status === "blocked").length;
       const totalCredits = items.reduce((sum, i) => sum + i.credits, 0);
+      const budgetImpact = await evaluateBudgetImpact(sql, {
+        workspaceId: project.workspace_id,
+        projectId: String(project.id),
+        amount: totalCredits,
+      });
+      const executableItems = items
+        .filter((i) => i.status !== "blocked")
+        .map((i) => `${i.node_id}:${i.stage}:${i.model}:${i.credits}`)
+        .sort();
+      const precheckToken = hash(
+        JSON.stringify({
+          revision: Number(project.revision),
+          price_revision: priceRevision,
+          total_credits: totalCredits,
+          executable: executableItems,
+        }),
+      );
 
       return {
         revision: Number(project.revision),
         stale_revision: staleRevision,
         price_revision: priceRevision,
+        precheck_token: precheckToken,
+        executable_keys: items
+          .filter((i) => i.status !== "blocked")
+          .map((i) => `${i.node_id}:${i.stage}`),
         items,
         summary: {
           total: items.length,
@@ -484,6 +552,9 @@ export class OriginalBatchPrecheck {
           total_credits: totalCredits,
           available_credits: availableCredits,
           sufficient: availableCredits >= totalCredits,
+          budget_blocked: budgetImpact.blocked,
+          budget_blocks: budgetImpact.blocks,
+          budget_warnings: budgetImpact.warnings,
         },
       };
     });

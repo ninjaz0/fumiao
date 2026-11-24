@@ -128,6 +128,7 @@ export function PrecheckCostModal({
     !submitting &&
     data.summary.runnable > 0 &&
     data.summary.sufficient &&
+    !data.summary.budget_blocked &&
     !data.stale_revision;
 
   return (
@@ -180,6 +181,18 @@ export function PrecheckCostModal({
               {data.summary.available_credits}），请先充值或减少选中镜头。
             </p>
           )}
+          {data.summary.budget_blocked &&
+            (data.summary.budget_blocks ?? []).map((msg, idx) => (
+              <p key={idx} className="error" role="alert">
+                {msg}
+              </p>
+            ))}
+          {!data.summary.budget_blocked &&
+            (data.summary.budget_warnings ?? []).map((msg, idx) => (
+              <p key={idx} className="fm-precheck-warning" role="status">
+                {msg}
+              </p>
+            ))}
           {data.stale_revision && (
             <p className="error" role="alert">
               画布版本已过期，请先关闭弹窗同步保存后再执行预检。

@@ -95,6 +95,7 @@ export const cinematographyFields: Fields = {
 export const canvasNodeFields: Fields = {
   narration_text: text(300, ""),
   narration_instruction: text(300, ""),
+  narration_model: { ...text(80), optional: true },
   narration_job: positive,
   narration_pending: positive,
   audio_strategy: {
@@ -349,6 +350,7 @@ export type CanvasGenerationMode =
 export type CanvasNode = {
   narration_text: string;
   narration_instruction: string;
+  narration_model?: string;
   narration_job: number | null;
   narration_pending: number | null;
   audio_strategy?: "replace" | "keep_original" | "mix";

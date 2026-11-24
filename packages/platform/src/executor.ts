@@ -687,9 +687,18 @@ export class Executor {
         error.certainty === "rejected" &&
         !job.remote_id &&
         !job.receipt
-      )
-        await this.finish(job, "failed", undefined, error.message);
-      else
+      ) {
+        const fellBack = await p.db.transaction(async (sql) => {
+          const current = await one(
+            sql,
+            "SELECT * FROM jobs WHERE id=$1 AND lease_token=$2 FOR UPDATE",
+            [id, job.lease_token],
+          );
+          if (!current) return false;
+          return this.tryAudioFallbackToEdgeTts(sql, current, error.message);
+        });
+        if (!fellBack) await this.finish(job, "failed", undefined, error.message);
+      } else
         await p.db.transaction(async (sql) => {
           const current = await one(
             sql,
@@ -697,6 +706,18 @@ export class Executor {
             [id, job.lease_token],
           );
           if (!current) return;
+          if (
+            current.kind === "audio" &&
+            !current.remote_id &&
+            !current.receipt &&
+            (await this.tryAudioFallbackToEdgeTts(
+              sql,
+              current,
+              error instanceof Error ? error.message : "语音服务不可用",
+            ))
+          ) {
+            return;
+          }
           await new JobTiming(p).end(sql, current, "interrupted");
           await sql.query(
             `UPDATE jobs SET state=CASE WHEN receipt IS NOT NULL THEN 'finalizing' WHEN remote_id IS NOT NULL THEN 'running' ELSE 'uncertain' END,
@@ -708,6 +729,129 @@ export class Executor {
       clearInterval(renew);
       clearTimeout(deadline);
     }
+  }
+  /**
+   * F029 + Q3: Real runtime audio failure fallback to free built-in Edge TTS.
+   * Only fires before upstream acceptance/artifacts (`!remote_id && !receipt`),
+   * releases any commercial credit hold atomically (zero double charge), and
+   * switches the job to enabled `edge-tts` at 0 credits.
+   */
+  private async tryAudioFallbackToEdgeTts(
+    sql: Sql,
+    job: any,
+    reason: string,
+  ): Promise<boolean> {
+    if (
+      job.kind !== "audio" ||
+      job.provider_model === "edge-tts" ||
+      job.remote_id ||
+      job.receipt
+    ) {
+      return false;
+    }
+    const existingParams = (job.input?.params ?? {}) as Record<string, unknown>;
+    if (existingParams._fallback_from) return false;
+
+    const allowed = await one(
+      sql,
+      "SELECT studio_model_allowed('edge-tts', $1) AS ok",
+      [job.workspace_id],
+    );
+    if (!allowed?.ok) return false;
+
+    const edgeModel = await one(
+      sql,
+      `SELECT m.id, m.connection_id, c.plugin_id, c.plugin_version, c.config
+         FROM models m
+         JOIN connections c ON c.id = m.connection_id
+        WHERE m.catalog_id = 'edge-tts'
+          AND c.plugin_id = 'edge-tts'
+          AND c.enabled = TRUE
+          AND NOT c.removed
+        ORDER BY c.id ASC
+        LIMIT 1`,
+    );
+    if (!edgeModel) return false;
+
+    // Release commercial credit hold atomically before switching to 0-credit Edge TTS
+    const originalPrice = Number(job.price ?? 0);
+    if (originalPrice > 0) {
+      const released = await one(
+        sql,
+        "UPDATE wallets SET held = held - $2 WHERE workspace_id = $1 AND held >= $2 RETURNING balance, held",
+        [job.workspace_id, originalPrice],
+      );
+      if (!released) return false;
+      await sql.query(
+        `INSERT INTO ledger(id, workspace_id, job_id, key, action, amount, actor_id, balance_snapshot, held_snapshot, note)
+         VALUES ($1, $2, $3, $4, 'refund', $5, $6, $7, $8, $9)
+         ON CONFLICT (key) DO NOTHING`,
+        [
+          randomUUID(),
+          job.workspace_id,
+          job.id,
+          `refund-fallback:${job.id}`,
+          originalPrice,
+          job.owner_id,
+          released.balance,
+          released.held,
+          `语音引擎 ${job.provider_model} 失败，自动切换免费 Edge TTS 退回冻结`,
+        ],
+      );
+    }
+
+    const nextInput = {
+      ...(job.input ?? {}),
+      modelId: edgeModel.id,
+      params: {
+        ...existingParams,
+        _fallback_from: String(job.provider_model),
+      },
+    };
+    const note = `语音引擎 ${job.provider_model} 不可用（${reason.slice(0, 80)}），已自动切换免费 Edge TTS 兜底`;
+    await new JobTiming(this.platform).end(sql, job, "interrupted");
+    await sql.query(
+      `UPDATE jobs
+          SET model_id = $2,
+              connection_id = $3,
+              plugin_id = $4,
+              plugin_version = $5,
+              config_snapshot = $6,
+              provider_model = 'edge-tts',
+              catalog_id = 'edge-tts',
+              price = 0,
+              price_key = 'edge-tts|free',
+              input = $7::jsonb,
+              state = 'queued',
+              error = NULL,
+              request_note = $8,
+              request_retry_at = NULL,
+              lease_token = NULL,
+              lease_until = NULL,
+              updated_at = now()
+        WHERE id = $1`,
+      [
+        job.id,
+        edgeModel.id,
+        edgeModel.connection_id,
+        edgeModel.plugin_id,
+        edgeModel.plugin_version,
+        edgeModel.config,
+        JSON.stringify(nextInput),
+        note,
+      ],
+    );
+    await sql.query(
+      "INSERT INTO job_events(job_id, state, detail) VALUES ($1, 'queued', $2::jsonb)",
+      [job.id, JSON.stringify({ fallback: "edge-tts", from: job.provider_model })],
+    );
+    await sql.query(
+      `INSERT INTO outbox(job_id, available_at, sent_at)
+       VALUES ($1, now(), NULL)
+       ON CONFLICT (job_id) DO UPDATE SET available_at = now(), sent_at = NULL`,
+      [job.id],
+    );
+    return true;
   }
   private async requestOutcome(sql: Sql, job: any, value: RequestDisposition) {
     const outcome = requestDispositionSchema.parse(value),
@@ -730,6 +874,16 @@ export class Executor {
         [job.id, outcome.note, outcome.delaySeconds],
       );
     } else {
+      // F029: Non-billable audio failure automatically falls back to enabled free Edge TTS
+      if (
+        job.kind === "audio" &&
+        !outcome.uncertain &&
+        !job.remote_id &&
+        !job.receipt &&
+        (await this.tryAudioFallbackToEdgeTts(sql, job, outcome.note || "上游语音失败"))
+      ) {
+        return;
+      }
       // F024: Moderation-blocked rejected/non-billable jobs may neutralize & retry
       // reusing the exact same hold:<job.id> reservation (zero double-billing).
       if (await tryModerationRewrite(sql, job, outcome)) {

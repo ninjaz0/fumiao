@@ -26,6 +26,7 @@ export async function grantDueSubscriptions(p: Platform): Promise<number> {
       `SELECT s.id
          FROM workspace_subscriptions s
         WHERE s.status = 'active'
+          AND s.current_period_start <= now()
           AND s.current_period_end > now()
           AND NOT EXISTS (
             SELECT 1 FROM subscription_grants g

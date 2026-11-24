@@ -130,6 +130,24 @@ test("F035 + F012: REST & MCP strictly enforce token scopes, browser-session-onl
   assert.deepEqual(roState.jobs, []);
   assert.deepEqual(roState.assets, []);
 
+  // Write/submit-only token (WITHOUT job:read / asset:read) MUST still receive empty jobs/assets on GET /api/state!
+  const writeOnlyMint = await tokens.create(
+    f.admin,
+    {
+      name: "Submit/Write Only Token",
+      scopes: ["canvas:read", "job:submit", "asset:write"],
+      rate_limit_rpm: 120,
+    },
+    String(wsA.public_id),
+  );
+  const woStateResp = await fetch(`${http.url}/api/state`, {
+    headers: { Authorization: `Bearer ${writeOnlyMint.token}` },
+  });
+  assert.equal(woStateResp.status, 200);
+  const woState = (await woStateResp.json()) as Record<string, any>;
+  assert.deepEqual(woState.jobs, []);
+  assert.deepEqual(woState.assets, []);
+
   // Meanwhile browser admin session still receives admin fields!
   const browserAdminState = await new OriginalState(f.p).read(
     f.admin,
@@ -525,6 +543,30 @@ test("F031: unified Agent spending policy blocks plan_only across REST/MCP, enfo
     },
   );
   assert.equal(overBudgetRun.status, 403);
+
+  // Legacy pre-upgrade applied proposal WITHOUT an agent_proposal_scopes row MUST fail closed (403)!
+  const legacyPubId = randomUUID().replaceAll("-", "");
+  const canvasRow = (
+    await f.p.db.query("SELECT id FROM documents WHERE public_id=$1", [canvasId])
+  ).rows[0];
+  await f.p.db.query(
+    `INSERT INTO canvas_proposals(id, public_id, project_id, workspace_id, owner_id, base_revision, title, summary, operations, estimated_credits, status, applied_revision)
+     VALUES ($1, $2, $3, $4, $5, $6, '旧版已落图提案', '', '[]'::jsonb, 100, 'applied', $6)`,
+    [randomUUID(), legacyPubId, canvasRow.id, f.workspace.id, f.admin.id, revAfterSticky],
+  );
+  const legacyRun = await fetch(
+    `${http.url}/api/canvases/${canvasId}/nodes/${newNodeId}/runs`,
+    {
+      method: "POST",
+      headers: { ...bearerHeaders, "X-Approved-Proposal-Id": legacyPubId },
+      body: JSON.stringify({
+        expected_revision: revAfterSticky,
+        price_revision: priceRev,
+        uid: randomUUID(),
+      }),
+    },
+  );
+  assert.equal(legacyRun.status, 403);
 
   // 4. Enabling active workspace `cap` budget unlocks `auto_within_budget`
   await budgets.upsertPolicy(

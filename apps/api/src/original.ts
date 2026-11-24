@@ -916,16 +916,24 @@ class OriginalApi {
   async creditStatement(@Req() req: AuthRequest, @Res() res: Response) {
     const query = new URL(req.originalUrl, "http://localhost").searchParams;
     const format = query.getAll("format").at(-1) === "pdf" ? "pdf" : "csv";
+    const from = query.getAll("from").at(-1)?.trim() || undefined;
+    const to = query.getAll("to").at(-1)?.trim() || undefined;
     const result = await this.billingExtras.exportStatement(
       req.actor,
       format,
       this.selected(req),
+      { from, to },
     );
     res.setHeader("Content-Type", result.mime);
     res.setHeader(
       "Content-Disposition",
       `attachment; filename="${result.filename}"`,
     );
+    res.setHeader("X-Total-Count", String(result.totalCount));
+    res.setHeader("X-Exported-Count", String(result.exportedCount));
+    res.setHeader("X-Truncated", result.truncated ? "true" : "false");
+    if (result.from) res.setHeader("X-Statement-From", result.from);
+    if (result.to) res.setHeader("X-Statement-To", result.to);
     res.setHeader("Content-Length", result.bytes.length);
     res.end(result.bytes);
   }
