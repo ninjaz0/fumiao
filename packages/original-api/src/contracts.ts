@@ -26,6 +26,8 @@ import {
   canvasSaveFields,
   episodeCreateFields,
   episodeUpdateFields,
+  sceneCreateFields,
+  sceneUpdateFields,
   seriesCreateFields,
   seriesUpdateFields,
   storyboardExportFields,
@@ -66,6 +68,8 @@ export const identityBodies: Record<string, Fields> = {
   seriesUpdate: seriesUpdateFields,
   episodeCreate: episodeCreateFields,
   episodeUpdate: episodeUpdateFields,
+  sceneCreate: sceneCreateFields,
+  sceneUpdate: sceneUpdateFields,
   tokenCreate: tokenCreateFields,
   skillCreate: skillCreateFields,
   skillUpdate: skillUpdateFields,
@@ -376,6 +380,20 @@ export const identityContracts: Contract[] = [
   {
     method: "DELETE",
     path: /^\/api\/series\/([^/]+)\/episodes\/([^/]+)$/,
+  },
+  {
+    method: "POST",
+    path: /^\/api\/series\/([^/]+)\/episodes\/([^/]+)\/scenes$/,
+    body: "sceneCreate",
+  },
+  {
+    method: "PUT",
+    path: /^\/api\/series\/([^/]+)\/episodes\/([^/]+)\/scenes\/([^/]+)$/,
+    body: "sceneUpdate",
+  },
+  {
+    method: "DELETE",
+    path: /^\/api\/series\/([^/]+)\/episodes\/([^/]+)\/scenes\/([^/]+)$/,
   },
   { method: "POST", path: /^\/api\/assets$/ },
   { method: "PUT", path: /^\/api\/me\/avatar$/ },

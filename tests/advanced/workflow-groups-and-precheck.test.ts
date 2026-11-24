@@ -176,10 +176,17 @@ test("F007 + F010 workflow groups validate parent_id, precheck detects blocked/w
     assert.ok(narrItem && narrItem.status !== "blocked");
 
     // F007: Execute partial group rerun ONLY for stage=["image"]!
+    const imgPrecheck = await precheck.precheckCanvas(f.admin, project.id, {
+      expected_revision: saved.revision,
+      node_ids: ["grp-1"],
+      stages: ["image"],
+    });
     const batchUid = randomUUID();
     const runRes = await f.runs.batchRun(f.admin, project.id, {
       expected_revision: saved.revision,
-      price_revision: report.price_revision,
+      price_revision: imgPrecheck.price_revision,
+      precheck_token: imgPrecheck.precheck_token,
+      expected_total_credits: imgPrecheck.summary.total_credits,
       uid: batchUid,
       node_ids: ["grp-1"],
       stages: ["image"],
@@ -203,7 +210,9 @@ test("F007 + F010 workflow groups validate parent_id, precheck detects blocked/w
     // Retrying batchRun with same uid is strictly idempotent (no double-charge!)
     const retryRes = await f.runs.batchRun(f.admin, project.id, {
       expected_revision: saved.revision,
-      price_revision: report.price_revision,
+      price_revision: imgPrecheck.price_revision,
+      precheck_token: imgPrecheck.precheck_token,
+      expected_total_credits: imgPrecheck.summary.total_credits,
       uid: batchUid,
       node_ids: ["grp-1"],
       stages: ["image"],

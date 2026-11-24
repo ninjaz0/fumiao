@@ -37,10 +37,40 @@ export function PrecheckCostModal({
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  // F010 (#9): Keep a deterministic batch UID per (project, revision, nodes, stages)
-  // across retries/dropped responses so clicking Confirm again replays idempotently.
+  // F010 (#9): Persist deterministic batch UID across retries AND page reloads
+  // keyed by (workspace, project, nodes, stages) so lost responses recover the same receipt.
+  const batchStorageKey = `fm-batch-uid:${workspace}:${projectId}:${[...new Set(nodeIds)].sort().join(",")}:${[...new Set(stages)].sort().join(",")}`;
   const batchUidRef = useRef<{ key: string; uid: string } | null>(null);
-  const batchKey = `${projectId}:${revision}:${nodeIds.join(",")}:${stages.join(",")}`;
+  const getOrCreateBatchUid = () => {
+    if (batchUidRef.current?.key === batchStorageKey) {
+      return batchUidRef.current.uid;
+    }
+    try {
+      const saved = localStorage.getItem(batchStorageKey);
+      if (saved && /^[0-9a-f-]{36}$/i.test(saved)) {
+        batchUidRef.current = { key: batchStorageKey, uid: saved };
+        return saved;
+      }
+    } catch {
+      // Ignore storage errors in restricted contexts.
+    }
+    const fresh = crypto.randomUUID();
+    batchUidRef.current = { key: batchStorageKey, uid: fresh };
+    try {
+      localStorage.setItem(batchStorageKey, fresh);
+    } catch {
+      // Ignore storage errors.
+    }
+    return fresh;
+  };
+  const clearBatchUid = () => {
+    batchUidRef.current = null;
+    try {
+      localStorage.removeItem(batchStorageKey);
+    } catch {
+      // Ignore storage errors.
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -97,10 +127,7 @@ export function PrecheckCostModal({
     if (!data) return;
     setSubmitting(true);
     setError("");
-    if (!batchUidRef.current || batchUidRef.current.key !== batchKey) {
-      batchUidRef.current = { key: batchKey, uid: crypto.randomUUID() };
-    }
-    const uid = batchUidRef.current.uid;
+    const uid = getOrCreateBatchUid();
     try {
       const res = await fetch(`/api/canvases/${projectId}/batch-runs`, {
         method: "POST",
@@ -113,18 +140,19 @@ export function PrecheckCostModal({
           price_revision: data.price_revision,
           precheck_token: data.precheck_token,
           expected_total_credits: data.summary.total_credits,
-          executable_keys: data.executable_keys,
           uid,
           node_ids: nodeIds,
           stages,
         }),
       });
       const json = await res.json();
-      if (!res.ok)
+      if (!res.ok) {
+        if (res.status < 500) clearBatchUid();
         throw new Error(
           typeof json.detail === "string" ? json.detail : "批量提交失败",
         );
-      batchUidRef.current = null;
+      }
+      clearBatchUid();
       await onSubmitted(json);
       onClose();
     } catch (e) {

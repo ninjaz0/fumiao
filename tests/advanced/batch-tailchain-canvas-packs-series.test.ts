@@ -219,14 +219,25 @@ test("#9 F010/F007/F027: mixed-price dialogue precheck matches batchRun, rejects
   assert.ok(pre.precheck_token);
   assert.deepEqual(pre.executable_keys, ["shot1:dialogue"]);
 
-  // 2. Quote drift protection: wrong precheck_token or mismatched expected_total_credits -> 409!
+  // 2. First submit WITHOUT precheck_token MUST be rejected (400)!
+  await assert.rejects(
+    f.runs.batchRun(f.admin, canvasId, {
+      expected_revision: 2,
+      price_revision: pre.price_revision,
+      uid: randomUUID(),
+      node_ids: ["shot1", "shot_empty"],
+      stages: ["dialogue"],
+    }),
+    (err: unknown) => (err as { status?: number })?.status === 400,
+  );
+
+  // 2b. Quote drift protection: wrong precheck_token -> 409!
   await assert.rejects(
     f.runs.batchRun(f.admin, canvasId, {
       expected_revision: 2,
       price_revision: pre.price_revision,
       precheck_token: "stale-token-mismatch",
       expected_total_credits: pre.summary.total_credits,
-      executable_keys: pre.executable_keys,
       uid: randomUUID(),
       node_ids: ["shot1", "shot_empty"],
       stages: ["dialogue"],
@@ -234,14 +245,15 @@ test("#9 F010/F007/F027: mixed-price dialogue precheck matches batchRun, rejects
     (err: unknown) => (err as { status?: number })?.status === 409,
   );
 
-  // 3. Valid locked batchRun submits both lines with line_id, skips shot_empty, and charges strictly 5 credits!
+  // 3. Valid locked batchRun ignores client executable_keys override (trying to include blocked shot_empty),
+  // submits strictly server-bound executable set with line_id, skips shot_empty, and charges 5 credits!
   const stableUid = randomUUID();
   const batch1 = await f.runs.batchRun(f.admin, canvasId, {
     expected_revision: 2,
     price_revision: pre.price_revision,
     precheck_token: pre.precheck_token,
     expected_total_credits: pre.summary.total_credits,
-    executable_keys: pre.executable_keys,
+    executable_keys: ["shot1:dialogue", "shot_empty:dialogue"],
     uid: stableUid,
     node_ids: ["shot1", "shot_empty"],
     stages: ["dialogue"],
@@ -254,21 +266,27 @@ test("#9 F010/F007/F027: mixed-price dialogue precheck matches batchRun, rejects
   );
   assert.ok(batch1.skipped.some((s) => s.node === "shot_empty"));
 
-  // 4. Idempotent replay with the EXACT same uid (simulating dropped response / duplicate click) -> same job_ids, no double charge!
+  // 4. Simulate lost response + another window renames the canvas (revision 2 -> 3) + page reload:
+  // retrying with the original business `uid` MUST return the exact persisted receipt (200, NOT 409)
+  // with zero duplicate jobs or holds!
+  const beforeRename = await f.canvases.get(f.admin, canvasId);
+  const renamed = await f.canvases.save(f.admin, canvasId, {
+    title: "另一个窗口重命名后的画布",
+    expected_revision: beforeRename.revision,
+    document: beforeRename.document,
+  });
+  assert.equal(renamed.revision, 3);
+
   const batchReplay = await f.runs.batchRun(f.admin, canvasId, {
     expected_revision: 2,
     price_revision: pre.price_revision,
     precheck_token: pre.precheck_token,
     expected_total_credits: pre.summary.total_credits,
-    executable_keys: pre.executable_keys,
     uid: stableUid,
     node_ids: ["shot1", "shot_empty"],
     stages: ["dialogue"],
   });
-  assert.deepEqual(
-    batchReplay.submitted.map((s) => s.job_id),
-    batch1.submitted.map((s) => s.job_id),
-  );
+  assert.deepEqual(batchReplay, batch1);
   const walletAfter = (
     await f.p.db.query("SELECT balance, held FROM wallets WHERE workspace_id = $1", [f.workspace.id])
   ).rows[0];
@@ -342,8 +360,17 @@ test("#10 F028: batchRun(video) creates real job_tail_chains dependency for tail
   });
 
   // Submit out-of-order node_ids ["shot2", "shot1", "shot3"] to ALSO prove shot order sorting submits parent first!
+  const precheckSvc = new OriginalBatchPrecheck(f.p);
+  const tailPre = await precheckSvc.precheckCanvas(f.admin, canvasId, {
+    expected_revision: savedShotCanvas.revision,
+    node_ids: ["shot2", "shot1", "shot3"],
+    stages: ["video"],
+  });
   const batch = await f.runs.batchRun(f.admin, canvasId, {
     expected_revision: savedShotCanvas.revision,
+    price_revision: tailPre.price_revision,
+    precheck_token: tailPre.precheck_token,
+    expected_total_credits: tailPre.summary.total_credits,
     uid: randomUUID(),
     node_ids: ["shot2", "shot1", "shot3"],
     stages: ["video"],
@@ -410,8 +437,16 @@ test("#10 F028: batchRun(video) creates real job_tail_chains dependency for tail
     f.admin,
   );
   const heldBefore = Number((await f.p.db.query("SELECT held FROM wallets WHERE workspace_id=$1", [f.workspace.id])).rows[0].held);
+  const failPre = await precheckSvc.precheckCanvas(f.admin, canvasFail, {
+    expected_revision: 2,
+    node_ids: ["p1", "c1"],
+    stages: ["video"],
+  });
   const failBatch = await f.runs.batchRun(f.admin, canvasFail, {
     expected_revision: 2,
+    price_revision: failPre.price_revision,
+    precheck_token: failPre.precheck_token,
+    expected_total_credits: failPre.summary.total_credits,
     uid: randomUUID(),
     node_ids: ["p1", "c1"],
     stages: ["video"],

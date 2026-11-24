@@ -191,7 +191,13 @@ export class OriginalBatchPrecheck {
       node_ids: string[];
       stages: PrecheckStage[];
     };
-    return this.p.db.transaction(async (sql) => {
+    const requestHash = hash(
+      JSON.stringify({
+        node_ids: [...new Set(body.node_ids)].sort(),
+        stages: [...new Set(body.stages)].sort(),
+      }),
+    );
+    const snapshot = await this.p.db.transaction(async (sql) => {
       await sql.query(
         "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
       );
@@ -521,12 +527,18 @@ export class OriginalBatchPrecheck {
         projectId: String(project.id),
         amount: totalCredits,
       });
+      const executableKeys = items
+        .filter((i) => i.status !== "blocked")
+        .map((i) => `${i.node_id}:${i.stage}`);
       const executableItems = items
         .filter((i) => i.status !== "blocked")
         .map((i) => `${i.node_id}:${i.stage}:${i.model}:${i.credits}`)
         .sort();
       const precheckToken = hash(
         JSON.stringify({
+          owner_id: user.id,
+          project_id: String(project.id),
+          request_hash: requestHash,
           revision: Number(project.revision),
           price_revision: priceRevision,
           total_credits: totalCredits,
@@ -535,28 +547,63 @@ export class OriginalBatchPrecheck {
       );
 
       return {
-        revision: Number(project.revision),
-        stale_revision: staleRevision,
-        price_revision: priceRevision,
-        precheck_token: precheckToken,
-        executable_keys: items
-          .filter((i) => i.status !== "blocked")
-          .map((i) => `${i.node_id}:${i.stage}`),
-        items,
-        summary: {
-          total: items.length,
-          ready: readyCount,
-          warning: warningCount,
-          blocked: blockedCount,
-          runnable: readyCount + warningCount,
-          total_credits: totalCredits,
-          available_credits: availableCredits,
-          sufficient: availableCredits >= totalCredits,
-          budget_blocked: budgetImpact.blocked,
-          budget_blocks: budgetImpact.blocks,
-          budget_warnings: budgetImpact.warnings,
+        projectUuid: String(project.id),
+        result: {
+          revision: Number(project.revision),
+          stale_revision: staleRevision,
+          price_revision: priceRevision,
+          precheck_token: precheckToken,
+          executable_keys: executableKeys,
+          items,
+          summary: {
+            total: items.length,
+            ready: readyCount,
+            warning: warningCount,
+            blocked: blockedCount,
+            runnable: readyCount + warningCount,
+            total_credits: totalCredits,
+            available_credits: availableCredits,
+            sufficient: availableCredits >= totalCredits,
+            budget_blocked: budgetImpact.blocked,
+            budget_blocks: budgetImpact.blocks,
+            budget_warnings: budgetImpact.warnings,
+          },
         },
       };
     });
+
+    // Persist server-bound precheck ticket outside the read-only snapshot transaction
+    // so batchRun enforces the exact server-verified executable set & credit quote.
+    const hasTicketTable = Boolean(
+      (
+        await one(
+          this.p.db,
+          "SELECT to_regclass('canvas_precheck_tickets') IS NOT NULL AS ok",
+        )
+      )?.ok,
+    );
+    if (hasTicketTable) {
+      await this.p.db.query(
+        `INSERT INTO canvas_precheck_tickets(
+           token, owner_id, project_id, revision, price_revision,
+           request_hash, executable_keys, total_credits, budget_blocked
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7::text[],$8,$9)
+         ON CONFLICT (token) DO UPDATE SET created_at = now()`,
+        [
+          snapshot.result.precheck_token,
+          user.id,
+          snapshot.projectUuid,
+          snapshot.result.revision,
+          snapshot.result.price_revision,
+          requestHash,
+          snapshot.result.executable_keys,
+          snapshot.result.summary.total_credits,
+          snapshot.result.summary.budget_blocked,
+        ],
+      );
+    }
+
+    return snapshot.result;
   }
 }

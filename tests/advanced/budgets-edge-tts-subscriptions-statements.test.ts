@@ -227,15 +227,19 @@ test("#2 F015: project budget blocks precheck/single/batch/narration/dialogue, t
     (err: unknown) => (err as { status?: number })?.status === 402,
   );
 
-  // Batch run MUST skip/reject due to 402 with 0 submitted!
-  const batchBlocked = await f.runs.batchRun(f.admin, canvasPublicId, {
-    expected_revision: 2,
-    uid: randomUUID(),
-    node_ids: ["img1"],
-    stages: ["image"],
-  });
-  assert.equal(batchBlocked.submitted.length, 0);
-  assert.equal(batchBlocked.skipped.length, 1);
+  // Batch run with budget-blocked precheck ticket MUST reject 402 before submitting any job!
+  await assert.rejects(
+    f.runs.batchRun(f.admin, canvasPublicId, {
+      expected_revision: 2,
+      price_revision: pre.price_revision,
+      precheck_token: pre.precheck_token,
+      expected_total_credits: pre.summary.total_credits,
+      uid: randomUUID(),
+      node_ids: ["img1"],
+      stages: ["image"],
+    }),
+    (err: unknown) => (err as { status?: number })?.status === 402,
+  );
 
   // 2. Raise project cap to exact price of 1 image shot -> allows 1, blocks 2nd (and concurrent!)
   const unitPrice = pre.summary.total_credits;

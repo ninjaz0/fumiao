@@ -2,7 +2,7 @@ import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
-import { requireValue } from "@fumiao/platform/security.js";
+import { hash, requireValue } from "@fumiao/platform/security.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { uuid5 } from "@fumiao/platform/uuid.js";
@@ -853,6 +853,258 @@ export class OriginalCanvasRuns {
       expected_total_credits?: number;
       executable_keys?: string[];
     };
+    const requestHash = hash(
+      JSON.stringify({
+        node_ids: [...new Set(body.node_ids)].sort(),
+        stages: [...new Set(body.stages)].sort(),
+      }),
+    );
+
+    // 1. Check persisted idempotent receipt FIRST (BEFORE revision/precheck checks!)
+    // so retrying a dropped response with the same business `uid` returns the exact
+    // accepted receipt even if another tab renamed/edited the canvas (revision 2 -> 3)
+    // or the user refreshed the page.
+    const init = await this.p.db.transaction(async (sql) => {
+      const p = await this.canvases.project(sql, user, projectKey, true);
+      const hasTables = await one(
+        sql,
+        `SELECT to_regclass('canvas_batch_runs') IS NOT NULL AS has_runs,
+                to_regclass('canvas_precheck_tickets') IS NOT NULL AS has_tickets`,
+      );
+      if (hasTables?.has_runs) {
+        const persisted = await one(
+          sql,
+          `SELECT request_hash, response
+             FROM canvas_batch_runs
+            WHERE owner_id=$1 AND project_id=$2 AND uid=$3`,
+          [user.id, p.id, body.uid],
+        );
+        if (persisted) {
+          requireValue(
+            String(persisted.request_hash) === requestHash,
+            409,
+            "该批量提交 UID 已被用于不同的节点或阶段集合",
+          );
+          return {
+            replayResponse: persisted.response as {
+              submitted: {
+                node: string;
+                stage: PrecheckStage;
+                job_id: number;
+                line_id?: string;
+              }[];
+              skipped: { node: string; stage: PrecheckStage; reason: string }[];
+              total_credits: number;
+            },
+            projectUuid: String(p.id),
+            hasRunsTable: true,
+            plan: [] as ReturnType<typeof expandGroupNodeIds>,
+            shotIndexMap: new Map<string, number>(),
+            serverAllowedKeys: null as Set<string> | null,
+            serverTotalCredits: null as number | null,
+          };
+        }
+      }
+
+      const doc = parseCanvasDocument(canvasDocumentJson(p.document));
+      const targets = expandGroupNodeIds(doc.nodes, body.node_ids);
+      requireValue(targets.length > 0, 400, "未找到可执行的节点");
+
+      // Crash-recovery fallback: if items were already submitted under this `uid` before
+      // `canvas_batch_runs` was persisted (even if revision has since bumped), recover receipt!
+      const candidateMeta = new Map<
+        string,
+        { node: string; stage: PrecheckStage; line_id?: string }
+      >();
+      for (const node of targets) {
+        for (const stage of body.stages) {
+          const itemUid = uuid5(
+            body.uid,
+            `batch:${projectKey}:${node.id}:${stage}`,
+          );
+          candidateMeta.set(itemUid, { node: node.id, stage });
+          if (stage === "dialogue" && node.dialogue_lines?.length) {
+            for (const line of node.dialogue_lines) {
+              candidateMeta.set(
+                uuid5(itemUid, `dialogue:${p.public_id}:${node.id}:${line.id}`),
+                { node: node.id, stage: "dialogue", line_id: line.id },
+              );
+            }
+          }
+        }
+      }
+      const existingLinks = candidateMeta.size
+        ? (
+            await sql.query(
+              `SELECT l.uid, j.public_id AS job_id, COALESCE(j.price, 0)::bigint AS price
+                 FROM canvas_job_links l
+                 JOIN jobs j ON j.id = l.job_id AND j.deleted_at IS NULL
+                WHERE l.owner_id=$1 AND l.project_id=$2 AND l.uid = ANY($3::uuid[])
+                ORDER BY l.id ASC`,
+              [user.id, p.id, [...candidateMeta.keys()]],
+            )
+          ).rows
+        : [];
+      if (existingLinks.length > 0) {
+        const recoveredSubmitted = existingLinks
+          .map((row) => {
+            const meta = candidateMeta.get(String(row.uid));
+            if (!meta) return null;
+            return {
+              node: meta.node,
+              stage: meta.stage,
+              job_id: Number(row.job_id),
+              ...(meta.line_id ? { line_id: meta.line_id } : {}),
+            };
+          })
+          .filter(
+            (
+              x,
+            ): x is {
+              node: string;
+              stage: PrecheckStage;
+              job_id: number;
+              line_id?: string;
+            } => Boolean(x),
+          );
+        const recoveredCredits = existingLinks.reduce(
+          (sum, row) => sum + Number(row.price ?? 0),
+          0,
+        );
+        const recovered = {
+          submitted: recoveredSubmitted,
+          skipped: [] as { node: string; stage: PrecheckStage; reason: string }[],
+          total_credits: recoveredCredits,
+        };
+        if (hasTables?.has_runs) {
+          await sql.query(
+            `INSERT INTO canvas_batch_runs(owner_id, project_id, uid, request_hash, response)
+             VALUES ($1,$2,$3,$4,$5::jsonb)
+             ON CONFLICT (owner_id, project_id, uid) DO NOTHING`,
+            [user.id, p.id, body.uid, requestHash, JSON.stringify(recovered)],
+          );
+        }
+        return {
+          replayResponse: recovered,
+          projectUuid: String(p.id),
+          hasRunsTable: Boolean(hasTables?.has_runs),
+          plan: [] as ReturnType<typeof expandGroupNodeIds>,
+          shotIndexMap: new Map<string, number>(),
+          serverAllowedKeys: null as Set<string> | null,
+          serverTotalCredits: null as number | null,
+        };
+      }
+
+      // 2. NEW submission: enforce expected_revision + mandatory server-bound precheck ticket!
+      requireValue(p.revision === body.expected_revision, 409, canvasConflict);
+      requireValue(
+        typeof body.precheck_token === "string" &&
+          body.precheck_token.trim().length > 0,
+        400,
+        "请先执行批量预检并携带有效预检票据后再确认提交",
+      );
+
+      let serverAllowedKeys: Set<string> | null = null;
+      let serverTotalCredits: number | null = null;
+      if (hasTables?.has_tickets) {
+        const ticket = await one(
+          sql,
+          `SELECT token, revision, price_revision, request_hash, executable_keys, total_credits, budget_blocked
+             FROM canvas_precheck_tickets
+            WHERE token=$1 AND owner_id=$2 AND project_id=$3`,
+          [body.precheck_token, user.id, p.id],
+        );
+        requireValue(
+          ticket,
+          409,
+          "预检票据不存在或已失效，请重新预检后再确认提交",
+        );
+        requireValue(
+          String(ticket.request_hash) === requestHash &&
+            Number(ticket.revision) === Number(p.revision),
+          409,
+          "画布版本或选中节点/阶段与预检票据不一致，请重新预检",
+        );
+        requireValue(
+          !ticket.budget_blocked,
+          402,
+          "预检显示已超出预算硬上限，无法提交",
+        );
+        serverAllowedKeys = new Set(
+          Array.isArray(ticket.executable_keys)
+            ? ticket.executable_keys.map(String)
+            : [],
+        );
+        serverTotalCredits = Number(ticket.total_credits ?? 0);
+      }
+
+      const fallbackVideoOrder = doc.nodes
+        .filter((n) => n.type === "video")
+        .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
+        .map((n) => n.id);
+      const effectiveShots = doc.shots?.length
+        ? doc.shots
+        : fallbackVideoOrder;
+      const orderMap = new Map<string, number>(
+        effectiveShots.map((id, idx) => [id, idx]),
+      );
+      return {
+        replayResponse: null,
+        projectUuid: String(p.id),
+        hasRunsTable: Boolean(hasTables?.has_runs),
+        plan: targets,
+        shotIndexMap: orderMap,
+        serverAllowedKeys,
+        serverTotalCredits,
+      };
+    });
+
+    if (init.replayResponse) {
+      return init.replayResponse;
+    }
+
+    // 3. Re-verify fresh read-only precheck right before submitting to catch concurrent
+    // price changes, pack updates, busy jobs, or budget exhaustion; derive allowed keys
+    // strictly from the server-verified ticket/precheck (NEVER client executable_keys!).
+    const freshPrecheck = await new OriginalBatchPrecheck(
+      this.p,
+    ).precheckCanvas(user, projectKey, {
+      expected_revision: body.expected_revision,
+      node_ids: body.node_ids,
+      stages: body.stages,
+    });
+    if (freshPrecheck.precheck_token !== body.precheck_token) {
+      requireValue(
+        false,
+        409,
+        "画布节点状态、模型报价或可执行集合已发生变化，请重新预检后再确认提交",
+      );
+    }
+    const expectedCredits =
+      body.expected_total_credits ?? init.serverTotalCredits;
+    if (
+      expectedCredits !== null &&
+      expectedCredits !== undefined &&
+      freshPrecheck.summary.total_credits !== expectedCredits
+    ) {
+      requireValue(
+        false,
+        409,
+        `批量报价已变动（预期 ${expectedCredits} 积分，当前 ${freshPrecheck.summary.total_credits} 积分），请重新预检`,
+      );
+    }
+    if (freshPrecheck.summary.budget_blocked) {
+      requireValue(
+        false,
+        402,
+        freshPrecheck.summary.budget_blocks[0] || "已超出预算硬上限",
+      );
+    }
+
+    const allowedKeys =
+      init.serverAllowedKeys ?? new Set(freshPrecheck.executable_keys);
+    const plan = init.plan;
+    const shotIndexMap = init.shotIndexMap;
     const submitted: {
       node: string;
       stage: PrecheckStage;
@@ -861,104 +1113,6 @@ export class OriginalCanvasRuns {
     }[] = [];
     const skipped: { node: string; stage: PrecheckStage; reason: string }[] =
       [];
-
-    const { plan, shotIndexMap, isReplay } = await this.p.db.transaction(
-      async (sql) => {
-        const p = await this.canvases.project(sql, user, projectKey, true);
-        requireValue(p.revision === body.expected_revision, 409, canvasConflict);
-        const doc = parseCanvasDocument(canvasDocumentJson(p.document));
-        const targets = expandGroupNodeIds(doc.nodes, body.node_ids);
-        requireValue(targets.length > 0, 400, "未找到可执行的节点");
-        const fallbackVideoOrder = doc.nodes
-          .filter((n) => n.type === "video")
-          .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
-          .map((n) => n.id);
-        const effectiveShots = doc.shots?.length
-          ? doc.shots
-          : fallbackVideoOrder;
-        const orderMap = new Map<string, number>(
-          effectiveShots.map((id, idx) => [id, idx]),
-        );
-
-        // Compute every candidate link UID for this batch so an idempotent retry with
-        // the exact same `uid` is cleanly recognized even when jobs are now active/busy.
-        const candidateUids: string[] = [];
-        for (const node of targets) {
-          for (const stage of body.stages) {
-            const itemUid = uuid5(
-              body.uid,
-              `batch:${projectKey}:${node.id}:${stage}`,
-            );
-            candidateUids.push(itemUid);
-            if (stage === "dialogue" && node.dialogue_lines?.length) {
-              for (const line of node.dialogue_lines) {
-                candidateUids.push(
-                  uuid5(itemUid, `dialogue:${p.public_id}:${node.id}:${line.id}`),
-                );
-              }
-            }
-          }
-        }
-        const replayRow = candidateUids.length
-          ? await one(
-              sql,
-              "SELECT 1 FROM canvas_job_links WHERE owner_id=$1 AND project_id=$2 AND uid = ANY($3::uuid[]) LIMIT 1",
-              [user.id, p.id, candidateUids],
-            )
-          : null;
-        return {
-          plan: targets,
-          shotIndexMap: orderMap,
-          isReplay: Boolean(replayRow),
-        };
-      },
-    );
-
-    // F010: When caller locks batch execution to a prior Precheck quote/set, verify zero drift!
-    if (
-      !isReplay &&
-      (body.precheck_token !== undefined ||
-        body.expected_total_credits !== undefined)
-    ) {
-      const freshPrecheck = await new OriginalBatchPrecheck(
-        this.p,
-      ).precheckCanvas(user, projectKey, {
-        expected_revision: body.expected_revision,
-        node_ids: body.node_ids,
-        stages: body.stages,
-      });
-      if (
-        body.precheck_token &&
-        freshPrecheck.precheck_token !== body.precheck_token
-      ) {
-        requireValue(
-          false,
-          409,
-          "画布节点状态、模型报价或可执行集合已发生变化，请重新预检后再确认提交",
-        );
-      }
-      if (
-        body.expected_total_credits !== undefined &&
-        freshPrecheck.summary.total_credits !== body.expected_total_credits
-      ) {
-        requireValue(
-          false,
-          409,
-          `批量报价已变动（预期 ${body.expected_total_credits} 积分，当前 ${freshPrecheck.summary.total_credits} 积分），请重新预检`,
-        );
-      }
-      if (freshPrecheck.summary.budget_blocked) {
-        requireValue(
-          false,
-          402,
-          freshPrecheck.summary.budget_blocks[0] || "已超出预算硬上限",
-        );
-      }
-    }
-
-    const allowedKeys = body.executable_keys
-      ? new Set(body.executable_keys)
-      : null;
 
     const stageOrder: PrecheckStage[] = [
       "image",
@@ -1070,10 +1224,25 @@ export class OriginalCanvasRuns {
       totalCredits = Number(feeRow?.total ?? 0);
     }
 
-    return {
+    const response = {
       submitted,
       skipped,
       total_credits: totalCredits,
     };
+    if (init.hasRunsTable) {
+      await this.p.db.query(
+        `INSERT INTO canvas_batch_runs(owner_id, project_id, uid, request_hash, response)
+         VALUES ($1,$2,$3,$4,$5::jsonb)
+         ON CONFLICT (owner_id, project_id, uid) DO NOTHING`,
+        [
+          user.id,
+          init.projectUuid,
+          body.uid,
+          requestHash,
+          JSON.stringify(response),
+        ],
+      );
+    }
+    return response;
   }
 }

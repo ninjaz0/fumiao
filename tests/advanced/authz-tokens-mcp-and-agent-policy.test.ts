@@ -18,6 +18,10 @@ import {
   SESSION_ONLY_OPENAPI_ROUTES,
 } from "@fumiao/original-api/openapi.js";
 import {
+  canvasContracts,
+  identityContracts,
+} from "@fumiao/original-api/contracts.js";
+import {
   createOriginalApp,
   listRegisteredOriginalRoutes,
 } from "../../apps/api/src/original.js";
@@ -654,6 +658,29 @@ test("F035: REST allowlist and OpenAPI spec stay 1-to-1 with real NestJS control
     assert.ok(registered.has(key), `Session-only route missing on controller: ${key}`);
   }
 
+  // 3b. Every API route in TOKEN_REST_ALLOWLIST and SESSION_ONLY_OPENAPI_ROUTES MUST be
+  // registered in OriginalAuthMiddleware contracts so browser Cookie sessions populate req.actor!
+  const allContracts = [...canvasContracts, ...identityContracts];
+  const materializePath = (tpl: string) =>
+    tpl
+      .replace(/:key\b/g, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+      .replace(/:id\b/g, "123")
+      .replace(/:[a-zA-Z0-9_]+/g, "sampleid");
+  for (const entry of [
+    ...TOKEN_REST_ALLOWLIST.map((r) => ({ method: r.method, template: r.template })),
+    ...SESSION_ONLY_OPENAPI_ROUTES.map((r) => ({ method: r.method, template: r.template })),
+  ]) {
+    if (entry.template === "/api/mcp") continue;
+    const sample = materializePath(entry.template);
+    const matched = allContracts.some(
+      (c) => c.method === entry.method.toUpperCase() && c.path.test(sample),
+    );
+    assert.ok(
+      matched,
+      `Missing OriginalAuthMiddleware contract for ${entry.method} ${entry.template} (sample: ${sample})`,
+    );
+  }
+
   // 4. Live HTTP check: real PUT /api/series/:key succeeds, wrong method PATCH & ghost routes fail 403
   const f = await canvasRunsFixture();
   t.after(() => f.cleanup());
@@ -706,4 +733,74 @@ test("F035: REST allowlist and OpenAPI spec stay 1-to-1 with real NestJS control
     const resp = await fetch(`${http.url}${p}`, { method: m, headers });
     assert.equal(resp.status, 403, `Expected 403 on unsupported ${m} ${p}`);
   }
+
+  // 5. #19 Live browser Cookie-authenticated HTTP E2E for 4-level Series -> Season -> Episode -> Scene
+  // verifying real POST /api/login -> Cookie -> OriginalAuthMiddleware populates req.actor
+  // for POST/PUT/DELETE scenes and bound canvas opens!
+  const loginOrigin = "http://localhost:3000";
+  const loginResp = await fetch(`${http.url}/api/login`, {
+    method: "POST",
+    headers: { Origin: loginOrigin, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "admin", password: "canvas-storage-fixture" }),
+  });
+  assert.equal(loginResp.status, 200, await loginResp.clone().text());
+  const rawSetCookie = loginResp.headers.get("set-cookie") ?? "";
+  const sessionCookie = rawSetCookie.split(";")[0];
+  assert.ok(sessionCookie.includes("="), `Missing Set-Cookie from /api/login: ${rawSetCookie}`);
+  const cookieHeaders = {
+    Cookie: sessionCookie,
+    Origin: loginOrigin,
+    "X-Workspace-Id": String(f.workspace.public_id),
+    "Content-Type": "application/json",
+  };
+  const epResp = await fetch(`${http.url}/api/series/${created.id}/episodes`, {
+    method: "POST",
+    headers: cookieHeaders,
+    body: JSON.stringify({ season_no: 1, episode_no: 1, title: "第一集" }),
+  });
+  assert.equal(epResp.status, 200, await epResp.clone().text());
+  const ep = (await epResp.json()) as { id: string; canvas_id: string };
+
+  const scResp = await fetch(
+    `${http.url}/api/series/${created.id}/episodes/${ep.id}/scenes`,
+    {
+      method: "POST",
+      headers: cookieHeaders,
+      body: JSON.stringify({
+        scene_no: 1,
+        title: "第一场 · 码头初遇",
+        summary: "雨夜码头发现神秘线索",
+        create_canvas: true,
+      }),
+    },
+  );
+  assert.equal(scResp.status, 200, await scResp.clone().text());
+  const scene = (await scResp.json()) as { id: string; canvas_id: string | null };
+  assert.ok(scene.canvas_id, "Scene creation over Cookie HTTP must return bound canvas_id");
+
+  const scPut = await fetch(
+    `${http.url}/api/series/${created.id}/episodes/${ep.id}/scenes/${scene.id}`,
+    {
+      method: "PUT",
+      headers: cookieHeaders,
+      body: JSON.stringify({ title: "第一场 · 码头初遇（修订）" }),
+    },
+  );
+  assert.equal(scPut.status, 200, await scPut.clone().text());
+
+  const boundCanvasResp = await fetch(
+    `${http.url}/api/canvases/${scene.canvas_id}`,
+    { method: "GET", headers: cookieHeaders },
+  );
+  assert.equal(boundCanvasResp.status, 200, await boundCanvasResp.clone().text());
+  const boundCanvas = (await boundCanvasResp.json()) as {
+    document: { nodes: { type: string }[] };
+  };
+  assert.ok(boundCanvas.document.nodes.some((n) => n.type === "sticky"));
+
+  const scDel = await fetch(
+    `${http.url}/api/series/${created.id}/episodes/${ep.id}/scenes/${scene.id}`,
+    { method: "DELETE", headers: cookieHeaders },
+  );
+  assert.equal(scDel.status, 200, await scDel.clone().text());
 });
