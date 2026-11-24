@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { chromium, expect, type Page } from "@playwright/test";
+import { verifyChatEmptyGuidance } from "./studio-chat-empty-guidance.js";
 
 export async function verifyChatHistory(page: Page) {
   let fail = true;
@@ -71,6 +72,7 @@ export async function verifyChatHistory(page: Page) {
     await page.unroute("**/api/chats");
     await page.unroute("**/api/chat/config");
   }
+  await verifyChatEmptyGuidance(page);
 }
 
 // Also run independently against smoke-studio-nest --serve.

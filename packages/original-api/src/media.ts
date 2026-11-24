@@ -173,6 +173,12 @@ export class OriginalMedia {
         "只能删除自己的素材",
       );
       await this.protect(sql, asset.id);
+      const inputLabel =
+        asset.original_kind === "ref_video"
+          ? "这段视频"
+          : asset.original_kind === "ref_audio"
+            ? "这段音频"
+            : "这张图";
       requireValue(
         !(await one(
           sql,
@@ -180,7 +186,7 @@ export class OriginalMedia {
           [asset.id],
         )),
         409,
-        "仍有作品或任务引用这张图，请先删除相关版本",
+        `仍有作品或任务引用${inputLabel}，请先删除相关版本`,
       );
       requireValue(
         !(await one(

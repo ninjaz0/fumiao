@@ -17,14 +17,20 @@ import {
 import type { SettingsTab } from "./settings-tabs";
 import { api } from "./api";
 import {
+  DEFAULT_SERVICE_CONCURRENCY,
+  MAX_SERVICE_CONCURRENCY,
+  MIN_SERVICE_CONCURRENCY,
+  buildUpdateSourcePayload,
   describeSavedService,
   findDuplicateModelIds,
   formatFieldDefault,
   modelKindLabels,
   isStringArrayField,
   parseFieldValue,
+  parseServiceConcurrency,
   pluginFieldHint as fieldHint,
   pluginFieldLabel as label,
+  readPluginFile,
   type PluginConfigField as Field,
 } from "./settings-plugins-helpers";
 import "./settings-plugins.css";
@@ -132,6 +138,7 @@ function ServiceForm({
     setError("");
     const form = new FormData(e.currentTarget);
     const config: Record<string, unknown> = {};
+    let concurrency: number;
     try {
       for (const [key, field] of entries) {
         const raw = String(form.get(key) ?? "").trim();
@@ -141,6 +148,10 @@ function ServiceForm({
           continue;
         config[key] = parsed;
       }
+      concurrency = parseServiceConcurrency(
+        String(form.get("$concurrency") ?? ""),
+        service?.concurrency ?? DEFAULT_SERVICE_CONCURRENCY,
+      );
     } catch (err) {
       setError(
         err instanceof Error && err.message.includes("请检查")
@@ -155,13 +166,14 @@ function ServiceForm({
             revision: service.revision,
             enabled: service.enabled,
             preserveCredentials: true,
-            concurrency: service.concurrency,
+            concurrency,
             config,
           }
         : {
             name: String(form.get("name") ?? "").trim(),
             pluginId: plugin.id,
             version: plugin.adapterVersion,
+            concurrency,
             config,
           },
     );
@@ -287,6 +299,29 @@ function ServiceForm({
         </div>
       )}
       {requiredEntries.map(([key, f]) => renderField(key, f))}
+      <div className="plugin-field">
+        <div className="plugin-field-head">
+          <label htmlFor={`${prefix}-concurrency`}>并行任务数量</label>
+          <span className="plugin-field-tag" data-tone="optional">
+            可选
+          </span>
+        </div>
+        <input
+          id={`${prefix}-concurrency`}
+          name="$concurrency"
+          type="number"
+          min={MIN_SERVICE_CONCURRENCY}
+          max={MAX_SERVICE_CONCURRENCY}
+          step={1}
+          inputMode="numeric"
+          defaultValue={service?.concurrency ?? DEFAULT_SERVICE_CONCURRENCY}
+          placeholder={String(DEFAULT_SERVICE_CONCURRENCY)}
+          aria-describedby={`${prefix}-concurrency-hint`}
+        />
+        <p id={`${prefix}-concurrency-hint`} className="plugin-field-hint">
+          单条服务允许同时执行的任务上限（1–100 的整数，默认 1），可按上游配额或吞吐能力调整。
+        </p>
+      </div>
       {optionalEntries.length > 0 && (
         <details
           className="plugin-optional-fields"
@@ -582,12 +617,7 @@ export function PluginSettings({
                     async () => {
                       if (file.size > 3 * 1024 * 1024)
                         throw Error("插件文件过大");
-                      let content;
-                      try {
-                        content = JSON.parse(await file.text());
-                      } catch {
-                        throw Error("无法读取插件文件");
-                      }
+                      const content = await readPluginFile(file);
                       const preview = await call<Preview>(
                         "plugins/preview",
                         content,
@@ -613,6 +643,16 @@ export function PluginSettings({
             )}
           </div>
         </header>
+        {!expandedPlugin && error && (
+          <p className="plugin-feedback is-error" role="alert">
+            {error}
+          </p>
+        )}
+        {!expandedPlugin && message && (
+          <p className="plugin-feedback is-ok" role="status">
+            {message}
+          </p>
+        )}
         {pending && (
           <form
             className="ledger-card plugin-overview plugin-form"
@@ -800,7 +840,7 @@ export function PluginSettings({
               </label>
             );
             return (
-              <article className="ledger-card plugin-connection" key={p.id}>
+              <article className="plugin-connection" key={p.id}>
                 <div className="plugin-card-head">
                   <span className="plugin-mark" aria-hidden="true">
                     {p.id.slice(0, 2).toUpperCase()}
@@ -915,36 +955,177 @@ export function PluginSettings({
                         </p>
                       </section>
 
-                      {p.enabled && p.paymentMethods?.map(method=>(
-                        <section className="plugin-drawer-card" key={method.id}>
-                          <h4>{method.title}</h4>
-                          {method.configured && <label className="plugin-inline">
-                            <input type="checkbox" checked={method.enabled} disabled={busy}
-                              onChange={e=>void action("payment-methods/"+method.id,{enabled:e.target.checked},"渠道已更新")} />
-                            允许新充值
-                          </label>}
-                          <details>
-                            <summary>{method.configured?"更换商户配置":"配置商户"}</summary>
-                            <form className="settings-form" onSubmit={e=>{
-                              e.preventDefault();
-                              const form=e.currentTarget;
-                              const data=new FormData(form);
-                              void run(async()=>{
-                                await call(base+"payment-methods/"+method.id,{revision:p.revision,enabled:method.configured?method.enabled:true,config:{
-                                  gateway:data.get("gateway"),pid:data.get("pid"),key:data.get("key"),cid:data.get("cid")||undefined,
-                                }});
-                                form.reset();
-                              },"商户配置已保存");
-                            }}>
-                              <label>网关 HTTPS 地址<input type="url" name="gateway" required /></label>
-                              <label>商户号<input name="pid" required /></label>
-                              <label>商户密钥<input type="password" name="key" autoComplete="new-password" required /></label>
-                              <label>通道号（可选）<input name="cid" /></label>
-                              <button type="submit" disabled={busy}>保存商户配置</button>
-                            </form>
-                          </details>
-                        </section>
-                      ))}
+                      {p.enabled &&
+                        p.paymentMethods?.map((method) => {
+                          const prefix = `payment-${p.id}-${method.id}`;
+                          return (
+                            <section
+                              className="plugin-drawer-card"
+                              key={method.id}
+                            >
+                              <div className="plugin-drawer-state">
+                                <div className="plugin-master-title">
+                                  <h4>{method.title}</h4>
+                                  <span
+                                    className="plugin-pill"
+                                    data-tone={
+                                      !method.configured
+                                        ? "warn"
+                                        : method.enabled
+                                          ? "ok"
+                                          : undefined
+                                    }
+                                  >
+                                    {!method.configured
+                                      ? "未配置"
+                                      : method.enabled
+                                        ? "已启用"
+                                        : "已停用"}
+                                  </span>
+                                </div>
+                                {method.configured && (
+                                  <label className="plugin-inline">
+                                    <input
+                                      type="checkbox"
+                                      checked={method.enabled}
+                                      disabled={busy}
+                                      onChange={(e) =>
+                                        void action(
+                                          "payment-methods/" + method.id,
+                                          { enabled: e.target.checked },
+                                          "渠道已更新",
+                                        )
+                                      }
+                                    />
+                                    允许新充值
+                                  </label>
+                                )}
+                              </div>
+                              <details className="plugin-drawer-details">
+                                <summary>
+                                  <span className="plugin-details-title">
+                                    {method.configured
+                                      ? "更换商户配置"
+                                      : "配置商户"}
+                                  </span>
+                                  <span className="plugin-details-meta">
+                                    <ChevronDown size={15} />
+                                  </span>
+                                </summary>
+                                <div className="plugin-details-body">
+                                  <form
+                                    className="plugin-form"
+                                    onSubmit={(e) => {
+                                      e.preventDefault();
+                                      const form = e.currentTarget;
+                                      const data = new FormData(form);
+                                      void run(async () => {
+                                        await call(
+                                          base + "payment-methods/" + method.id,
+                                          {
+                                            revision: p.revision,
+                                            enabled: method.configured
+                                              ? method.enabled
+                                              : true,
+                                            config: {
+                                              gateway: data.get("gateway"),
+                                              pid: data.get("pid"),
+                                              key: data.get("key"),
+                                              cid:
+                                                data.get("cid") || undefined,
+                                            },
+                                          },
+                                        );
+                                        form.reset();
+                                      }, "商户配置已保存");
+                                    }}
+                                  >
+                                    <div className="plugin-field">
+                                      <div className="plugin-field-head">
+                                        <label htmlFor={`${prefix}-gateway`}>
+                                          网关 HTTPS 地址
+                                        </label>
+                                        <span
+                                          className="plugin-field-tag"
+                                          data-tone="required"
+                                        >
+                                          必填
+                                        </span>
+                                      </div>
+                                      <input
+                                        id={`${prefix}-gateway`}
+                                        type="url"
+                                        name="gateway"
+                                        required
+                                      />
+                                    </div>
+                                    <div className="plugin-field">
+                                      <div className="plugin-field-head">
+                                        <label htmlFor={`${prefix}-pid`}>
+                                          商户号
+                                        </label>
+                                        <span
+                                          className="plugin-field-tag"
+                                          data-tone="required"
+                                        >
+                                          必填
+                                        </span>
+                                      </div>
+                                      <input
+                                        id={`${prefix}-pid`}
+                                        name="pid"
+                                        required
+                                      />
+                                    </div>
+                                    <div className="plugin-field">
+                                      <div className="plugin-field-head">
+                                        <label htmlFor={`${prefix}-key`}>
+                                          商户密钥
+                                        </label>
+                                        <span
+                                          className="plugin-field-tag"
+                                          data-tone="required"
+                                        >
+                                          必填
+                                        </span>
+                                      </div>
+                                      <input
+                                        id={`${prefix}-key`}
+                                        type="password"
+                                        name="key"
+                                        autoComplete="new-password"
+                                        required
+                                      />
+                                    </div>
+                                    <div className="plugin-field">
+                                      <div className="plugin-field-head">
+                                        <label htmlFor={`${prefix}-cid`}>
+                                          通道号（可选）
+                                        </label>
+                                        <span
+                                          className="plugin-field-tag"
+                                          data-tone="optional"
+                                        >
+                                          可选
+                                        </span>
+                                      </div>
+                                      <input id={`${prefix}-cid`} name="cid" />
+                                    </div>
+                                    <div className="plugin-form-actions">
+                                      <button
+                                        type="submit"
+                                        className="console-primary"
+                                        disabled={busy}
+                                      >
+                                        保存商户配置
+                                      </button>
+                                    </div>
+                                  </form>
+                                </div>
+                              </details>
+                            </section>
+                          );
+                        })}
                       {p.mode !== "extension" && <>
                       <section className="plugin-drawer-section">
                         <div className="plugin-drawer-section-head">
@@ -1609,14 +1790,13 @@ export function PluginSettings({
                             key={p.revision}
                             onSubmit={(e) => {
                               e.preventDefault();
-                              const f = new FormData(e.currentTarget),
-                                token = String(f.get("token") || "");
+                              const f = new FormData(e.currentTarget);
                               void action(
                                 "source",
-                                {
-                                  url: f.get("url") || null,
-                                  ...(token ? { token } : {}),
-                                },
+                                buildUpdateSourcePayload({
+                                  url: String(f.get("url") || ""),
+                                  token: String(f.get("token") || ""),
+                                }),
                                 "更新源已保存",
                               );
                             }}
@@ -1670,11 +1850,31 @@ export function PluginSettings({
                                 }
                               />
                               <p className="plugin-field-hint">
-                                仅用于访问私有更新源，加密保存且不回显。
+                                {p.hasUpdateToken
+                                  ? "仅用于访问私有更新源，加密保存且不回显；留空保存将沿用当前令牌，如需移除可点击「清除已保存令牌」。"
+                                  : "仅用于访问私有更新源，加密保存且不回显。"}
                               </p>
                             </div>
                             <div className="plugin-form-actions">
                               <button type="submit">保存更新设置</button>
+                              {p.hasUpdateToken && (
+                                <button
+                                  type="button"
+                                  className="plugin-btn-danger"
+                                  onClick={() => {
+                                    void action(
+                                      "source",
+                                      buildUpdateSourcePayload({
+                                        savedUrl: p.updateUrl,
+                                        clearToken: true,
+                                      }),
+                                      "已清除已保存的只读令牌",
+                                    );
+                                  }}
+                                >
+                                  清除已保存令牌
+                                </button>
+                              )}
                               {p.updateUrl && (
                                 <button
                                   type="button"
@@ -1800,8 +2000,6 @@ export function PluginSettings({
         </div>
         {loadingPlugins && !plugins && !pluginsError && <p>正在读取插件…</p>}
       </fieldset>
-      {!expandedPlugin && error && <p role="alert">{error}</p>}
-      {!expandedPlugin && message && <p role="status">{message}</p>}
     </section>
   );
 }

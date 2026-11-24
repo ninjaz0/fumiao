@@ -13,6 +13,10 @@ import {
 import Auth from "../auth/Auth";
 import { ApiError, workspaceURL } from "../canvas/api";
 import { ChatWorkspace } from "../canvas-editor/chat/ChatWorkspace";
+import {
+  resolveChatConfigTarget,
+  resolveChatModelScope,
+} from "../canvas-editor/chat/guidance";
 import { ImageDetail, JobDetail } from "./AssetDetail";
 import {
   AssetDialog,
@@ -21,6 +25,7 @@ import {
 } from "./AssetDialog";
 import { PluginImport } from "./PluginImport";
 import { Library, isOwner, useLibrary, type LibraryFilter } from "./Library";
+import { deleteAssetPrompt } from "./media-metadata";
 import type {
   AdminOpen,
   AdminRequest,
@@ -57,6 +62,7 @@ import {
   addImages,
   assignFrame,
   checkImages,
+  composerFeedback,
   ensureModel,
   flowIssue,
   frames,
@@ -80,7 +86,6 @@ import {
   selectedModel,
   submittedDraft,
   syncDraftReferences,
-  quote,
   readDraft,
   writeDraft,
   type Asset,
@@ -241,8 +246,25 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     const url = new URL(location.href);
     if (url.searchParams.get("recharge")) setSettingsTab("credits");
     else if (url.searchParams.has("settings")) {
-      setSettingsTab((url.searchParams.get("settings") || "plugins") as SettingsTab);
+      const requestedSettings = (url.searchParams.get("settings") ||
+        "plugins") as SettingsTab;
+      if (requestedSettings === "models") {
+        const requestedScope = url.searchParams.get("scope");
+        modelPreferences.current.scope =
+          requestedScope !== null &&
+          (requestedScope === "global" ||
+            Boolean(
+              active.current?.workspaces.some(
+                (space) =>
+                  space.kind === "team" && String(space.id) === requestedScope,
+              ),
+            ))
+            ? requestedScope
+            : resolveChatModelScope(active.current);
+      }
+      setSettingsTab(requestedSettings);
       url.searchParams.delete("settings");
+      url.searchParams.delete("scope");
       history.replaceState(null, "", url);
     } else {
       const requested = url.searchParams.get("page");
@@ -435,6 +457,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           closeMenu();
         workspaceId.current = String(next.workspace_id);
         if (previous && !force) onLibraryRead.current?.(previous, next);
+        setDialog((current) => {
+          if (current?.content.kind !== "preview" || !current.content.manage)
+            return current;
+          const previewId = current.content.id;
+          return next.assets.some((asset) => asset.id === previewId)
+            ? current
+            : null;
+        });
         active.current = next;
         receivedAt.current = Date.now();
         setDelta(0);
@@ -976,13 +1006,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     });
   }
 
-  function preview(id: string, button: HTMLButtonElement) {
+  function preview(id: string, button: HTMLButtonElement, manage = false) {
     showDialog(
       {
         kind: "preview",
         id,
         mediaKind: active.current?.assets.find((asset) => asset.id === id)
           ?.kind,
+        manage,
       },
       button,
     );
@@ -997,10 +1028,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     };
   }
 
-  function useAsset(id: string) {
+  function useAsset(id: string): string | null | undefined {
     const space = active.current;
     const session = currentDraft.current;
-    if (!space || !session || busy.current.has("upload")) return;
+    if (!space || !session || busy.current.has("upload")) return undefined;
     try {
       const type = referenceType(space, id);
       if (session.draft.kind === "audio")
@@ -1018,7 +1049,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         !session.draft.packs?.some((pack) => pack.media.includes(id))
       ) {
         changeRefs(session.refs.filter((ref) => ref !== id), id);
-        return;
+        return null;
       }
       if (type === "Picture") next = addImages(space, session, [id]);
       else if (!isH3(session.draft))
@@ -1046,8 +1077,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           ),
         );
       if (!referencePicking) openHomeComposer();
+      return null;
     } catch (error) {
-      notify((error as Error).message);
+      const message = (error as Error).message;
+      notify(message);
+      return message;
     }
   }
 
@@ -1231,23 +1265,29 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     title: string,
     summary: string,
     remove: () => Promise<void>,
+    opener?: HTMLElement | null,
+    onCancel?: () => void,
   ) {
-    showDialog({
-      kind: "confirm",
-      title,
-      summary,
-      run: async () => {
-        try {
-          await remove();
-        } catch (error) {
-          if (error instanceof ApiError && [401, 403].includes(error.status))
-            void refresh();
-          throw error;
-        }
-        await refresh(true);
-        library.redrawLibrary();
+    showDialog(
+      {
+        kind: "confirm",
+        title,
+        summary,
+        onCancel,
+        run: async () => {
+          try {
+            await remove();
+          } catch (error) {
+            if (error instanceof ApiError && [401, 403].includes(error.status))
+              void refresh();
+            throw error;
+          }
+          await refresh(true);
+          library.redrawLibrary();
+        },
       },
-    });
+      opener,
+    );
   }
 
   function deleteSelected() {
@@ -1285,10 +1325,16 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     );
   }
 
-  function deleteImage(id: string) {
+  function deleteAsset(id: string, opener?: HTMLElement | null) {
+    const asset = active.current?.assets.find((item) => item.id === id);
+    const { title, summary } = deleteAssetPrompt(asset?.kind);
+    const previousPreview =
+      dialog?.content.kind === "preview" && dialog.content.id === id
+        ? dialog
+        : null;
     confirmDelete(
-      "删除该图片？",
-      "正在被任务或作品引用的图片会保留。",
+      title,
+      summary,
       async () => {
         await api(
           workspaceId.current,
@@ -1296,8 +1342,20 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           undefined,
           "DELETE",
         );
-        transition(null, false);
+        if (detail && "image" in detail && detail.image === id)
+          transition(null, false);
       },
+      previousPreview ? previousPreview.opener : opener,
+      previousPreview
+        ? () => {
+            setDialog(previousPreview);
+            requestAnimationFrame(() =>
+              document
+                .querySelector<HTMLElement>('#modal [data-act="delete-asset"]')
+                ?.focus({ preventScroll: true }),
+            );
+          }
+        : undefined,
     );
   }
 
@@ -1380,7 +1438,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       notify("最多输入 " + promptLimit(draft) + " 字");
       return;
     }
-    if (!job && !quote(space, draft).allowed) return;
+    if (!job) {
+      const { priceReason } = composerFeedback(space, session);
+      if (priceReason) {
+        notify(priceReason);
+        return;
+      }
+    }
     void mutate("submit", async () => {
       setSubmitting(true);
       try {
@@ -1658,7 +1722,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                         ? (button) => openMenu("detail-more", button)
                         : undefined
                     }
-                    remove={deleteImage}
+                    remove={deleteAsset}
                   />
                 ) : page === "home" && !detail ? (
                   <div className="home-view">
@@ -1687,6 +1751,20 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       key={`${state.me.id}:${state.workspace_id}:${chatVisit}`}
                       userId={state.me.id}
                       workspace={state.workspace_id}
+                      isAdmin={state.me.role === "admin"}
+                      onConfigureModels={
+                        state.me.role === "admin"
+                          ? () => {
+                              const target = resolveChatConfigTarget(state);
+                              if (target === "models") {
+                                modelPreferences.current.scope =
+                                  resolveChatModelScope(state);
+                              }
+                              setSettingsTab(target);
+                              navigate("settings");
+                            }
+                          : undefined
+                      }
                       openCanvas={followCanvas}
                     />
                   </div>
@@ -1783,8 +1861,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       edit: editJob,
                       job: openJob,
                       image: (id) => transition({ image: id }),
-                      preview,
+                      preview: (id, button, manage = true) =>
+                        preview(
+                          id,
+                          button,
+                          manage && !library.selecting && !referencePicking,
+                        ),
                       use: useAsset,
+                      remove: deleteAsset,
                       filter: setFilter,
                       batchFavorite: () =>
                         saveFavorites(library.keys, !library.allSaved),
@@ -1846,6 +1930,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         notify={notify}
         state={state}
         session={session}
+        onFavorite={favorite}
+        onUse={useAsset}
+        onDelete={deleteAsset}
       />
       <div
         id="popover"
