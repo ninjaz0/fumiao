@@ -417,6 +417,7 @@ type ContextValue = {
   downstream: (id: string) => void;
   selectMedia: (id: string) => void;
   preview: (node: CanvasNode) => void;
+  beginEditing: (id: string) => void;
   setEditing: (id: string | null) => void;
 };
 const NodeContext = createContext<ContextValue>(null!);
@@ -471,10 +472,8 @@ const ContentNode = memo(function ContentNode({
       <div
         className="node-content"
         onDoubleClick={() => {
-          if (isText) {
-            ctx.begin();
-            ctx.setEditing(n.id);
-          } else if (media) ctx.preview(n);
+          if (isText) ctx.beginEditing(n.id);
+          else if (media) ctx.preview(n);
         }}
       >
         {n.extension ? <PluginNodeOutputs extension={n.extension}/> : isText ? (
@@ -495,14 +494,20 @@ const ContentNode = memo(function ContentNode({
                 e.stopPropagation();
                 if (e.key === "Escape") {
                   e.preventDefault();
-                  e.currentTarget.blur();
+                  if (n.type === "sticky") {
+                    e.currentTarget
+                      .closest<HTMLElement>(".react-flow__node")
+                      ?.focus();
+                  } else e.currentTarget.blur();
                 }
               }}
             />
           ) : (
             <div className="text-display">
               {n.text || (
-                <span>双击{n.type === "text" ? "输入文本" : "添加便签"}</span>
+                <span>
+                  {n.type === "text" ? "双击输入文本" : "按 Enter 或双击添加便签"}
+                </span>
               )}
             </div>
           )
@@ -965,6 +970,13 @@ export function CanvasWorkspace({
     }
     if(updates.size)doc.change(d=>({...d,document:{...d.document,nodes:d.document.nodes.map(n=>updates.has(n.id)?{...n,narration_job:updates.get(n.id)!,narration_pending:null}:n)}}));
   },[runById,doc.value.document.nodes,doc.status]);
+  const beginEditing = useCallback(
+    (id: string) => {
+      doc.begin();
+      setEditing(id);
+    },
+    [doc.begin],
+  );
   const contextValue = useMemo(
     () => ({
       edit,
@@ -983,9 +995,10 @@ export function CanvasWorkspace({
           setPreview({ node, media, run });
         }
       },
+      beginEditing,
       setEditing,
     }),
-    [edit, doc.begin, doc.end],
+    [edit, doc.begin, doc.end, beginEditing],
   );
   const videoPort = useMemo(
     () =>
@@ -1036,7 +1049,9 @@ export function CanvasWorkspace({
         height: n.height,
         style: { width: n.width, height: n.height },
         selected: isSelected,
-        ariaLabel: names[n.type] + "节点 " + n.title,
+        ariaLabel:
+          names[n.type] + "节点 " + n.title +
+          (n.type === "sticky" && !n.extension ? "，按 Enter 编辑" : ""),
       };
       nextCache.set(n.id, next);
       return next;
@@ -2132,6 +2147,20 @@ export function CanvasWorkspace({
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          onKeyDown={(e) => {
+            const target = e.target;
+            if (
+              e.key !== "Enter" ||
+              !(target instanceof HTMLElement) ||
+              !target.matches(".react-flow__node")
+            ) return;
+            const note = doc.ref.current.document.nodes.find(
+              (n) => n.id === target.dataset.id,
+            );
+            if (note?.type !== "sticky" || note.extension) return;
+            e.preventDefault();
+            beginEditing(note.id);
+          }}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={connect}
