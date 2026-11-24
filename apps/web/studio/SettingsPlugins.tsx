@@ -800,7 +800,7 @@ export function PluginSettings({
               </label>
             );
             return (
-              <article className="ledger-card plugin-connection" key={p.id}>
+              <article className="plugin-connection" key={p.id}>
                 <div className="plugin-card-head">
                   <span className="plugin-mark" aria-hidden="true">
                     {p.id.slice(0, 2).toUpperCase()}
