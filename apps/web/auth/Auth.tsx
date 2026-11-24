@@ -300,7 +300,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                       name="user"
                       autoComplete="username"
                       minLength={registering ? undefined : 1}
-                      maxLength={registering ? undefined : 32}
+                      maxLength={32}
                       pattern={
                         registering ? registrationUsernamePattern : undefined
                       }

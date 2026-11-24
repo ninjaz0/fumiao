@@ -87,7 +87,7 @@ test(
       );
       await register.click();
 
-      for (const invalid of ["a", "a".repeat(33), "a😀"]) {
+      for (const invalid of ["a", "a😀"]) {
         await username.fill(invalid);
         await expect(username).toHaveValue(invalid);
         assert.equal(
@@ -98,8 +98,12 @@ test(
         );
       }
 
-      const valid = "汉É٩_.-" + "𐐀".repeat(26);
-      await username.fill(`  ${valid}  `);
+      await username.fill("𐐀".repeat(17));
+      await expect(username).toHaveValue("𐐀".repeat(16));
+
+      const valid = "汉É٩_.-" + "𐐀".repeat(12);
+      await username.fill(` ${valid} `);
+      await expect(username).toHaveValue(` ${valid} `);
       await expect(feedback).toBeHidden();
       assert.equal(
         await username.evaluate(
