@@ -85,6 +85,7 @@ export async function api<T>(
   path: string,
   body?: object,
   method = body === undefined ? "GET" : "POST",
+  signal?: AbortSignal,
 ): Promise<T> {
   const raw = body instanceof File;
   const response = await fetch(path, {
@@ -98,8 +99,10 @@ export async function api<T>(
         : {}),
     },
     body: raw ? body : body && JSON.stringify(body),
+    signal,
   });
   const value = await response.json().catch(() => ({}));
+  signal?.throwIfAborted();
   if (!response.ok) {
     throw new ApiError(errorDetail(value.detail), response.status);
   }
