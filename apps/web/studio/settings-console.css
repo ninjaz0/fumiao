@@ -481,7 +481,7 @@ body:has(.ledger-settings) #modal {
 
 /* Profile page */
 .ledger-settings .profile-section {
-  max-width: 720px;
+  max-width: none;
 }
 .ledger-settings .profile-section .ledger-card {
   padding: 20px 24px;
@@ -605,6 +605,106 @@ body:has(.ledger-settings) #modal {
 @media (prefers-reduced-motion: reduce) {
   .ledger-settings .settings-navigation button,
   .ledger-settings .profile-section .profile-input-action input {
+    transition: none;
+  }
+}
+
+/* Settings pages: shared rhythm */
+.ledger-settings .settings-content > * {
+  max-width: none;
+}
+.ledger-settings .settings-content .page-heading {
+  align-items: flex-start;
+  gap: 12px 16px;
+  margin-bottom: 20px;
+}
+.ledger-settings .settings-content .ledger-card {
+  padding: 20px 24px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.ledger-settings .settings-content .ledger-card + .ledger-card {
+  margin-top: 16px;
+}
+.ledger-settings .settings-content .ledger-card h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.ledger-settings .settings-content :is(.ledger-tally, .credit-summary) > div,
+.ledger-settings .settings-content .price-rate-stat {
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.ledger-settings .settings-content :is(.ledger-tally, .credit-summary) dt,
+.ledger-settings .settings-facts dt {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.ledger-settings .settings-content :is(.ledger-tally, .credit-summary) dd {
+  margin: 6px 0 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.ledger-settings .settings-facts dd,
+.ledger-settings .settings-content :is(.storage-total, .price-rate) {
+  font-variant-numeric: tabular-nums;
+}
+.ledger-settings
+  .settings-content
+  :is(.empty-note, .members-empty, .console-empty) {
+  margin: 0;
+  padding: 28px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+.ledger-settings
+  .settings-content
+  :is(
+    input[type="search"],
+    .model-search input,
+    .workspace-member-search input,
+    .model-search,
+    .workspace-member-search
+  ):is(input) {
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+}
+.ledger-settings .settings-content :is(input, select, textarea):focus-visible {
+  border-color: var(--blue);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.ledger-settings .settings-content :is(button, [role="tab"], a):focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.ledger-settings .settings-content table th {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.ledger-settings
+  .settings-content
+  :is(.workspace-row, .price-row, .setting-row) {
+  transition: background-color 120ms ease-out;
+}
+.ledger-settings .settings-content :is(.workspace-row, .price-row):hover {
+  background: color-mix(in srgb, var(--selected) 55%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ledger-settings
+    .settings-content
+    :is(.workspace-row, .price-row, .setting-row) {
     transition: none;
   }
 }
