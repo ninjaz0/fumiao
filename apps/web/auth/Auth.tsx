@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAppearance } from "../home/controls";
+import styles from "./Auth.module.css";
 
 type Mode = "login" | "register";
 const moon = "M20 14.4A8.4 8.4 0 019.6 4a8.5 8.5 0 1010.4 10.4z";
@@ -354,11 +355,12 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                         : "登录"}
                   </button>
                   {"\n      "}
-                  <p className="auth-switch">
+                  <p className={`auth-switch ${styles.switchRow}`}>
                     {registering ? "已有账户？" : "还没有账户？"}
                     <a
                       href={registering ? "#login" : "#register"}
                       id="auth-switch"
+                      className={styles.switchLink}
                       onClick={switchMode}
                     >
                       {registering ? "登录" : "注册"}
