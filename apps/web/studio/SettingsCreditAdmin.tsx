@@ -212,16 +212,18 @@ function AccountHistory({
       <h2 id="modal-heading">{`${account?.name || ""} · 积分明细`}</h2>
       <CreditLedger rows={rows} />
       {before !== undefined && (
-        <button
-          className="quiet-button"
-          data-act="credit-more"
-          data-workspace={workspace}
-          data-before={before}
-          disabled={busy}
-          onClick={(event) => void more(event.currentTarget)}
-        >
-          加载更多
-        </button>
+        <div className="ledger-list-more">
+          <button
+            className="quiet-button"
+            data-act="credit-more"
+            data-workspace={workspace}
+            data-before={before}
+            disabled={busy}
+            onClick={(event) => void more(event.currentTarget)}
+          >
+            加载更多
+          </button>
+        </div>
       )}
     </>
   );

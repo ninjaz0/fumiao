@@ -158,15 +158,17 @@ export function Credits({
         <h3 className="credit-heading">积分明细</h3>
         <CreditLedger rows={rows} />
         {before !== undefined && (
-          <button
-            className="quiet-button"
-            data-act="credit-more"
-            data-before={before}
-            disabled={busy}
-            onClick={(event) => void more(event.currentTarget)}
-          >
-            加载更多
-          </button>
+          <div className="ledger-list-more">
+            <button
+              className="quiet-button"
+              data-act="credit-more"
+              data-before={before}
+              disabled={busy}
+              onClick={(event) => void more(event.currentTarget)}
+            >
+              加载更多
+            </button>
+          </div>
         )}
       </section>
     </section>
@@ -400,14 +402,16 @@ export function RechargeHistory({
         )}
       </div>
       {before !== undefined && (
-        <button
-          className="quiet-button"
-          id="recharge-more"
-          disabled={busy}
-          onClick={(event) => void more(event.currentTarget)}
-        >
-          加载更多
-        </button>
+        <div className="ledger-list-more">
+          <button
+            className="quiet-button"
+            id="recharge-more"
+            disabled={busy}
+            onClick={(event) => void more(event.currentTarget)}
+          >
+            加载更多
+          </button>
+        </div>
       )}
     </>
   );
