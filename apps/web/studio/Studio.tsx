@@ -96,6 +96,8 @@ import {
 type Page = Exclude<Destination, "canvas"> | "settings";
 type Detail = { job: number } | { image: string };
 type StudioMenu = Menu | ComposerMenu;
+const stateReadTimeout = 20_000;
+
 function isComposerMenu(menu: StudioMenu): menu is ComposerMenu {
   return menu !== "workspaces" && menu !== "account" && menu !== "detail-more";
 }
@@ -176,7 +178,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const currentDraft = useRef<DraftSession | null>(null);
   const workspaceId = useRef<string | null>(null);
   const stateRead = useRef(0);
-  const pendingStateReads = useRef(0);
+  const pendingStateRead = useRef<{
+    version: number;
+    controller: AbortController;
+  } | null>(null);
   const leaving = useRef(false);
   const onLibraryRead = useRef<
     ((before: StudioState, after: StudioState) => void) | null
@@ -276,9 +281,21 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       retryBootstrap.current = false;
       setBootstrapError("");
       const version = ++stateRead.current;
-      ++pendingStateReads.current;
+      pendingStateRead.current?.controller.abort();
+      const controller = new AbortController();
+      pendingStateRead.current = { version, controller };
+      const deadline = window.setTimeout(
+        () => controller.abort(new Error("状态刷新超时，正在重试")),
+        stateReadTimeout,
+      );
       try {
-        const next = await api<StudioState>(workspaceId.current, "/api/state");
+        const next = await api<StudioState>(
+          workspaceId.current,
+          "/api/state",
+          undefined,
+          "GET",
+          controller.signal,
+        );
         if (version !== stateRead.current || leaving.current) return;
         const previous = active.current;
         if (
@@ -306,6 +323,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             const result = await api<{ packs?: Pack[] }>(
               String(next.workspace_id),
               "/api/asset-packs",
+              undefined,
+              "GET",
+              controller.signal,
             );
             if (Array.isArray(result?.packs)) {
               livePacks = new Map(
@@ -445,7 +465,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           setBootstrapError((error as Error).message);
         } else notify((error as Error).message);
       } finally {
-        --pendingStateReads.current;
+        clearTimeout(deadline);
+        if (pendingStateRead.current?.controller === controller)
+          pendingStateRead.current = null;
       }
     },
     [closeMenu, notify, persist],
@@ -481,7 +503,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         (active.current || retryBootstrap.current) &&
         !document.hidden &&
         !busy.current.has("upload") &&
-        !pendingStateReads.current
+        pendingStateRead.current?.version !== stateRead.current
       )
         void refresh();
     }, 6000);
@@ -491,6 +513,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     }, 1000);
     return () => {
       ++stateRead.current;
+      pendingStateRead.current?.controller.abort();
       narrow.removeEventListener("change", onNarrow);
       clearInterval(poll);
       clearInterval(clock);
