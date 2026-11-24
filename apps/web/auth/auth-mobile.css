@@ -1,0 +1,138 @@
+/* Responsive layout overrides for /studio anonymous login and registration.
+   baseline/production/static/studio.css is hash-pinned and must remain intact. */
+
+@media (max-width: 760px) {
+  .auth {
+    --auth-field-gap: 5px;
+  }
+
+  .auth .auth-top {
+    align-items: center;
+    height: 44px;
+    padding: 6px 16px;
+  }
+
+  .auth .auth-body {
+    align-items: flex-start;
+    padding: 4px 16px 20px;
+  }
+
+  .auth .auth-art {
+    display: flex;
+    align-items: center;
+    min-height: 56px;
+    padding: 14px 20px;
+  }
+
+  .auth .auth-form {
+    padding: 20px 20px 22px;
+  }
+
+  .auth .auth-form.auth-register {
+    padding: 18px 20px 20px;
+  }
+
+  .auth .auth-form h1 {
+    font-size: 22px;
+    margin-bottom: 14px;
+  }
+
+  .auth .auth-form .formlabel {
+    margin-block: 10px;
+  }
+
+  .auth .auth-form .formlabel > input {
+    margin-top: var(--auth-field-gap);
+  }
+
+  .auth .auth-form .formlabel input {
+    padding-block: 8px;
+  }
+
+  .auth .auth-form .primary {
+    margin-top: 6px;
+  }
+
+  .auth .auth-switch {
+    margin-top: 16px;
+  }
+}
+
+@media (max-width: 360px) {
+  .auth .auth-top,
+  .auth .auth-body {
+    padding-inline: 12px;
+  }
+
+  .auth .auth-art,
+  .auth .auth-form,
+  .auth .auth-form.auth-register {
+    padding-inline: 16px;
+  }
+}
+
+@media (max-height: 520px) {
+  .auth {
+    --auth-field-gap: 4px;
+  }
+
+  .auth .auth-top {
+    align-items: center;
+    height: 40px;
+    padding: 4px 16px;
+  }
+
+  .auth .auth-body {
+    align-items: flex-start;
+    padding: 4px 16px 16px;
+  }
+
+  .auth .auth-wrap {
+    min-height: 0;
+  }
+
+  .auth .auth-art {
+    padding: 14px 20px;
+  }
+
+  .auth .auth-form,
+  .auth .auth-form.auth-register {
+    padding-block: 16px;
+  }
+
+  .auth .auth-form h1 {
+    font-size: 20px;
+    margin-bottom: 10px;
+  }
+
+  .auth .auth-form .formlabel {
+    margin-block: 8px;
+  }
+
+  .auth .auth-form .formlabel > input {
+    margin-top: var(--auth-field-gap);
+  }
+
+  .auth .auth-form .formlabel input {
+    padding-block: 7px;
+  }
+
+  .auth .auth-form .primary {
+    margin-top: 6px;
+  }
+
+  .auth .auth-switch {
+    margin-top: 12px;
+  }
+}
+
+@media (max-width: 760px) and (max-height: 520px) {
+  .auth .auth-art {
+    min-height: 44px;
+    padding: 8px 16px;
+  }
+
+  .auth .auth-home:focus-visible {
+    outline-offset: 2px;
+  }
+}

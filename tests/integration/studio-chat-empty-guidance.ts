@@ -296,6 +296,135 @@ export async function verifyAdminCanvasEmptyGuidance(
   }
 }
 
+export async function verifyTeamCanvasModelScopeGuidance(
+  context: BrowserContext,
+  origin: string,
+  team: { id: number; name: string },
+) {
+  const headers = { Origin: origin, "X-Workspace-Id": String(team.id) };
+  const initialState = await (
+    await context.request.get("/api/state", { headers })
+  ).json();
+  const chatModels = Object.values<any>(initialState.model_groups || {})
+    .filter((group) => group.kind === "chat")
+    .flatMap((group) => group.models as string[]);
+  assert.ok(
+    chatModels.length > 0,
+    "Expected at least one chat model in catalog before testing team policy scope",
+  );
+
+  for (const model of chatModels) {
+    const latest = await (
+      await context.request.get("/api/state", { headers })
+    ).json();
+    const teamPolicy = latest.team_model_policies[String(team.id)];
+    const toggled = await context.request.patch("/api/settings/models", {
+      headers,
+      data: {
+        model,
+        enabled: false,
+        group: true,
+        expected_revision: teamPolicy.revision,
+        workspace: team.id,
+      },
+    });
+    assert.ok(toggled.ok(), await toggled.text());
+  }
+
+  const teamPage = await context.newPage();
+  try {
+    const created = await context.request.post("/api/canvases", {
+      headers,
+      data: { title: "团队模型范围验证画布" },
+    });
+    assert.equal(created.status(), 200, await created.text());
+    const project = await created.json();
+    const textNode = { ...newNode("text", 200, 160, 1), title: "团队文案" };
+    const saved = await context.request.put(
+      `/api/canvases/${project.id}/document`,
+      {
+        headers,
+        data: {
+          title: project.title,
+          expected_revision: project.revision,
+          document: { ...project.document, nodes: [textNode], edges: [] },
+        },
+      },
+    );
+    assert.equal(saved.status(), 200, await saved.text());
+
+    await teamPage.goto(`/canvas/${project.id}?workspace=${team.id}`);
+    await teamPage
+      .locator(`.react-flow__node[data-id="${textNode.id}"]`)
+      .click();
+    const inlineInput = teamPage.getByRole("textbox", { name: "文本生成要求" });
+    await expect(inlineInput).toBeVisible();
+    await expect(
+      teamPage.locator(".fm-chat-node .fm-text-presets"),
+    ).toHaveCount(0);
+
+    const banner = teamPage.locator(".fm-chat-node .fm-chat-no-model");
+    await expect(banner).toContainText("当前空间暂无可用对话模型");
+    const link = banner.getByRole("link", { name: "前往配置对话模型" });
+    await expect(link).toHaveAttribute(
+      "href",
+      `/studio?settings=models&scope=${team.id}&workspace=${team.id}`,
+    );
+
+    // Verify #192 draft length indicator works alongside empty-model state and draft persists
+    await inlineInput.fill("草".repeat(10_850));
+    await expect(teamPage.locator(".fm-chat-node .fm-chat-limit")).toHaveText(
+      "10850/12000 字",
+    );
+    const teamDraft = "团队策略关闭时的画布草稿";
+    await inlineInput.fill(teamDraft);
+    await expect(teamPage.locator(".fm-chat-node .fm-chat-limit")).toBeHidden();
+
+    await link.click();
+    await expect(teamPage.locator(".settings-section h2")).toHaveText(
+      "模型管理",
+    );
+    await expect(
+      teamPage.locator(".console-scope summary strong"),
+    ).toHaveText(team.name);
+    await expect(teamPage).toHaveURL(
+      new RegExp(`/studio\\?workspace=${team.id}$`),
+    );
+    const chatSwitch = teamPage
+      .getByRole("switch", { name: /开放AI 对话模型/ })
+      .first();
+    await expect(chatSwitch).not.toBeChecked();
+
+    await teamPage.goBack();
+    await teamPage
+      .locator(`.react-flow__node[data-id="${textNode.id}"]`)
+      .click();
+    await expect(inlineInput).toHaveValue(teamDraft);
+    console.log(
+      "PASS team canvas model scope guidance: opens 模型管理 scoped to current team and preserves draft",
+    );
+  } finally {
+    await teamPage.close();
+    for (const model of chatModels) {
+      const latest = await (
+        await context.request.get("/api/state", { headers })
+      ).json();
+      const teamPolicy = latest.team_model_policies[String(team.id)];
+      const restored = await context.request.patch("/api/settings/models", {
+        headers,
+        data: {
+          model,
+          enabled: true,
+          group: true,
+          expected_revision: teamPolicy.revision,
+          workspace: team.id,
+        },
+      });
+      assert.ok(restored.ok(), await restored.text());
+    }
+  }
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   let origin = process.env.STUDIO_ORIGIN;
   let user = process.env.STUDIO_USER;
@@ -314,6 +443,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     const context = await browser.newContext({
       baseURL: origin,
       viewport: { width: 1280, height: 800 },
+      permissions: ["clipboard-read", "clipboard-write"],
     });
     const login = await context.request.post("/api/login", {
       headers: { Origin: origin },
@@ -327,6 +457,42 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 
     await verifyChatEmptyGuidance(page);
     await verifyAdminCanvasEmptyGuidance(page, origin);
+
+    // Verify #192 paste overflow alert on Studio chat composer
+    await page.locator('nav [data-nav="chat"]').click();
+    const chatInput = page.getByRole("textbox", { name: "发送消息" });
+    await chatInput.fill("");
+    await chatInput.click();
+    await page.evaluate(
+      (value) => navigator.clipboard.writeText(value),
+      "字".repeat(12_005),
+    );
+    await page.keyboard.press("ControlOrMeta+V");
+    await expect(
+      page.locator(".fm-chat-limit").getByRole("alert"),
+    ).toContainText("粘贴内容末尾 5 字未保留");
+    await chatInput.fill("");
+    await expect(page.locator(".fm-chat-limit")).toBeHidden();
+
+    const hasChatCatalog = Object.values<any>(state.model_groups || {}).some(
+      (group) => group.kind === "chat",
+    );
+    if (hasChatCatalog) {
+      const teamName = "画布策略范围团队_" + randomUUID().slice(0, 6);
+      const teamRes = await context.request.post("/api/workspaces", {
+        headers: {
+          Origin: origin,
+          "X-Workspace-Id": String(state.workspace_id),
+        },
+        data: { name: teamName },
+      });
+      assert.equal(teamRes.status(), 200, await teamRes.text());
+      const team = await teamRes.json();
+      await verifyTeamCanvasModelScopeGuidance(context, origin, {
+        id: team.id,
+        name: teamName,
+      });
+    }
 
     const inviteRes = await context.request.post("/api/invite-codes", {
       headers: {

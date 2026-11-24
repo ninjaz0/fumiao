@@ -65,7 +65,7 @@ export type Asset = {
   w: number;
   h: number;
   seconds?: number;
-  has_audio?: boolean;
+  has_audio?: boolean | number;
 };
 export type GpuNode = {
   id: number;
@@ -1706,4 +1706,59 @@ export function quote(state: StudioState, draft: Draft) {
         ? "未定价"
         : `${amount} 积分${available < amount ? " · 余额不足" : ""}`,
   };
+}
+
+export function composerFeedback(
+  state: StudioState,
+  session: DraftSession,
+  options: { uploading?: boolean; submitting?: boolean } = {},
+) {
+  const { draft } = session;
+  const model = selectedModel(draft);
+  const available = modelAvailable(state, model);
+  const issue = referenceIssue(state, session) || flowIssue(state, session);
+  const limit = promptLimit(draft);
+  const overLimit = draft.prompt.length > limit;
+  const hasPrompt = !!draft.prompt.trim();
+  const price = quote(state, draft);
+  const unpricedReason =
+    (modelForm(state, draft)?.tiers.length ?? 0) > 1
+      ? "当前规格尚未定价"
+      : "当前模型尚未定价";
+  const unavailableReason = model ? "当前模型暂不可用" : "暂无可用模型";
+  const priceReason = price.allowed
+    ? ""
+    : price.amount === undefined
+      ? unpricedReason
+      : "当前空间积分不足";
+
+  const status = options.uploading
+    ? "上传中"
+    : options.submitting
+      ? ""
+      : !available
+        ? model || hasPrompt
+          ? unavailableReason
+          : ""
+        : issue ||
+          (overLimit ? `${draft.prompt.length} / ${limit} 字` : priceReason);
+
+  const submitReason = options.submitting
+    ? "提交中"
+    : options.uploading
+      ? "上传中"
+      : !available
+        ? unavailableReason
+        : issue ||
+          (overLimit
+            ? `超出字数限制：${draft.prompt.length} / ${limit} 字`
+            : !price.allowed
+              ? priceReason
+              : !hasPrompt
+                ? draft.kind === "audio"
+                  ? "请输入要朗读的文字"
+                  : "请输入提示词"
+                : "");
+
+  return { status, submitReason, priceReason };
 }

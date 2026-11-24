@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {Download,Film} from 'lucide-react';
 import {api,ApiError} from './api';
 type Exporter={key:string;title:string};
@@ -6,18 +6,41 @@ type Result={id:string;state:string;result:string|null;error:string;revision:num
 export function Composition({project,getRevision,ready,waitingReason}:{project:string;getRevision:()=>Promise<number>;ready:boolean;waitingReason:string}){
  const [results,setResults]=useState<Result[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[pollError,setPollError]=useState(''),[preview,setPreview]=useState<string|null>(null);
  const [exporters,setExporters]=useState<Exporter[]|undefined>(),[selected,select]=useState("");
+ const reload=useRef<(()=>Promise<void>)|null>(null);
  const chosen=exporters?.find(x=>x.key===selected)??exporters?.find(x=>x.key==="storyboard/mp4")??exporters?.[0];
- const load=async()=>{const data=await api<{exports:Result[];exporters?:Exporter[]}>(`/api/canvases/${project}/exports`);setResults(data.exports)};
- useEffect(()=>{let active=true;const poll=async()=>{try{const data=await api<{exports:Result[];exporters?:Exporter[]}>(`/api/canvases/${project}/exports`);if(active){setResults(data.exports);setExporters(data.exporters);setPollError('')}}catch(e){if(active)setPollError((e as Error).message)}};void poll();const timer=setInterval(()=>void poll(),5000);return()=>{active=false;clearInterval(timer)}},[project]);
+ useEffect(()=>{
+  let active=true, requested=0, applied=0;
+  const load=async()=>{
+   if(!active)return;
+   const request=++requested;
+   try{
+    const data=await api<{exports:Result[];exporters?:Exporter[]}>(`/api/canvases/${project}/exports`);
+    if(!active||request<applied)return;
+    applied=request;
+    setResults(data.exports);
+    setExporters(data.exporters);
+    setPollError('');
+   }catch(e){
+    if(!active||request<applied)return;
+    applied=request;
+    setPollError((e as Error).message);
+   }
+  };
+  reload.current=load;
+  void load();
+  const timer=setInterval(()=>void load(),5000);
+  return()=>{active=false;reload.current=null;clearInterval(timer)};
+ },[project]);
  const pending=results.some(r=>['queued','running'].includes(r.state));
  const submit=async()=>{
+  const refresh=reload.current;
   setBusy(true);setError('');setPollError('');const key='fm-compose-'+project;
   try{
    const revision=await getRevision();let body;
    try{body=JSON.parse(localStorage.getItem(key)||'null')}catch{}
    if(!body){body={uid:crypto.randomUUID(),expected_revision:revision,...(chosen?{exporter:chosen.key}:{})};localStorage.setItem(key,JSON.stringify(body))}
    try{await api(`/api/canvases/${project}/exports`,body);localStorage.removeItem(key)}catch(e){if(e instanceof ApiError&&e.status<500)localStorage.removeItem(key);throw e}
-   await load();
+   await refresh?.();
   }catch(e){setError((e as Error).message)}finally{setBusy(false)}
  };
  return <section className="shot-composition" aria-label="成片预览与导出">
