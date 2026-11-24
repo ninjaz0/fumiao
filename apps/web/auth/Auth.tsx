@@ -7,6 +7,7 @@ import {
   type SyntheticEvent,
 } from "react";
 import { useAppearance } from "../home/controls";
+import "./auth.css";
 
 type Mode = "login" | "register";
 const registrationUsernamePattern = String.raw`\s*[\p{L}\p{N}_.\-]{2,32}\s*`;
@@ -215,8 +216,15 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
   return (
     <>
       <div id="app">
+        <noscript>
+          <main className="loading-screen auth-noscript">
+            <h1>登录工作台</h1>
+            <p>请启用 JavaScript 后重新加载页面，以登录或注册弗淼 AIGC 工作台。</p>
+            <a href="/">返回首页</a>
+          </main>
+        </noscript>
         {!ready ? (
-          <main
+          <div
             className="loading-screen"
             role="status"
             aria-label="弗淼 AIGC 正在加载"
@@ -231,7 +239,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
             <div className="loading-track" aria-hidden="true">
               <span />
             </div>
-          </main>
+          </div>
         ) : (
           <div className="auth">
             <header className="auth-top">
