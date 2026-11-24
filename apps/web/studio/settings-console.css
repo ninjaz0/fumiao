@@ -174,7 +174,7 @@ body:has(.ledger-settings) #modal {
   font-weight: 650;
   letter-spacing: -0.02em;
 }
-.ledger-settings .settings-section > h2 {
+.ledger-settings .settings-content .settings-section > h2 {
   margin-bottom: 16px;
 }
 .ledger-settings
@@ -187,6 +187,13 @@ body:has(.ledger-settings) #modal {
 .ledger-settings .ledger-card h3 {
   margin: 0 0 12px;
   font-size: 14px;
+}
+.ledger-settings .fm-chat-service .ledger-card > header > h3 {
+  margin: 0;
+}
+.ledger-settings .fm-chat-service .form-message:empty {
+  min-height: 0;
+  margin: 0;
 }
 .ledger-settings .ledger-appearance .theme-choices button {
   display: grid;
@@ -206,8 +213,7 @@ body:has(.ledger-settings) #modal {
 .ledger-appearance .theme-choices small {
   color: var(--blue);
 }
-.console-description,
-.plugin-heading p {
+.console-description {
   margin: 5px 0 18px;
   color: var(--secondary);
   font-size: 13px;
@@ -505,7 +511,7 @@ body:has(.ledger-settings) #modal {
 .ledger-settings .settings-content {
   padding-top: 32px;
 }
-.ledger-settings .settings-section > h2:has(+ .console-description) {
+.ledger-settings .settings-content .settings-section > h2:has(+ .console-description) {
   margin-bottom: 6px;
 }
 .ledger-settings .settings-section > .console-description {
@@ -647,7 +653,7 @@ body:has(.ledger-settings) #modal {
 .ledger-settings .settings-content > * {
   max-width: none;
 }
-.ledger-settings .settings-content .page-heading {
+.ledger-settings .settings-content .page-heading:not(:where(.plugin-page > *)) {
   align-items: flex-start;
   gap: 12px 16px;
   margin-bottom: 20px;
@@ -657,7 +663,7 @@ body:has(.ledger-settings) #modal {
   border: 1px solid var(--line);
   background: var(--surface);
 }
-.ledger-settings .settings-content .ledger-card + .ledger-card {
+.ledger-settings .settings-content .ledger-card + .ledger-card:not(:where(.plugin-page > *)) {
   margin-top: 16px;
 }
 .ledger-settings .settings-content .ledger-card h3 {
@@ -697,6 +703,9 @@ body:has(.ledger-settings) #modal {
   border-radius: 10px;
   color: var(--muted);
   text-align: center;
+}
+.ledger-settings .settings-content .model-settings .console-empty {
+  margin-top: 14px;
 }
 .ledger-settings
   .settings-content
