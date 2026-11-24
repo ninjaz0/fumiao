@@ -104,6 +104,10 @@ export default function ProjectList({ studio }: { studio: Studio }) {
     [deleteBusy, setDeleteBusy] = useState(false),
     [deleteError, setDeleteError] = useState(""),
     [deleting, setDeleting] = useState<Project | null>(null);
+  const query = search.trim().toLowerCase();
+  const visibleProjects = query
+    ? projects.filter((p) => p.title.trim().toLowerCase().includes(query))
+    : projects;
   const closeDelete = () => {
     if (deleteBusy) return;
     setDeleting(null);
@@ -216,12 +220,17 @@ export default function ProjectList({ studio }: { studio: Studio }) {
               新建画布
             </button>
           </div>
+        ) : !visibleProjects.length ? (
+          <div className="project-empty">
+            <Search size={40} />
+            <h2>没有找到匹配的画布</h2>
+            <button className="secondary" onClick={() => setSearch("")}>
+              清除搜索
+            </button>
+          </div>
         ) : (
           <div className="project-grid">
-            {projects
-              .filter((p) =>
-                p.title.toLowerCase().includes(search.toLowerCase()),
-              )
+            {visibleProjects
               .map((p) => (
                 <article className="project-card" key={p.id}>
                   <a
