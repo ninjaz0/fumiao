@@ -28,8 +28,8 @@ type AgentPolicy = "plan_only" | "propose_and_confirm" | "auto_within_budget";
 
 const POLICY_LABELS: Record<AgentPolicy, string> = {
   plan_only: "只建图不烧费 (plan_only)",
-  propose_and_confirm: "提案确认 (propose_and_confirm)",
-  auto_within_budget: "预算内自动 (auto_within_budget)",
+  propose_and_confirm: "提案人工批准后执行 (propose_and_confirm)",
+  auto_within_budget: "预算硬上限内自动执行 (auto_within_budget)",
 };
 
 export function ProposalDiffPreview({

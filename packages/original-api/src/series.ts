@@ -45,6 +45,11 @@ export class OriginalSeries {
       [key, user.id, user.role],
     );
     requireValue(row, 404, "剧集项目不存在或无权访问");
+    requireValue(
+      !user.tokenWorkspaceId || row.workspace_id === user.tokenWorkspaceId,
+      403,
+      "API Token 无权跨工作区访问该剧集项目",
+    );
     return row;
   }
   private async episodesForSeries(sql: Sql, seriesIds: string[]) {

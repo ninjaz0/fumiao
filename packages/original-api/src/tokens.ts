@@ -52,6 +52,104 @@ export function requireTokenScope(
   );
 }
 
+export type TokenRouteRule = {
+  method: string;
+  path: RegExp;
+  scope: WorkspaceTokenScope;
+  /** True when the operation submits paid AI generation work (governed by F031 Agent policy). */
+  paidAgentAction?: boolean;
+};
+
+/**
+ * F035: Explicit REST API allowlist for workspace-scoped Bearer Tokens (`fmk_...`).
+ * Any route NOT listed here (including all `/api/admin/*`, `/api/users*`, `/api/workspaces*`,
+ * `/api/tokens*`, `/api/workspace/agent-policy`, `/api/budgets*`, `/api/redeem`,
+ * `/api/subscriptions/*`, `/api/me*`, `/api/settings/*`, and proposal `apply`/`reject`)
+ * is strictly browser-session-only and rejected with 403 for Bearer tokens — even when
+ * the token was issued by an administrator.
+ */
+export const TOKEN_REST_ALLOWLIST: readonly TokenRouteRule[] = [
+  // Workspace state & batch quote (read-only)
+  { method: "GET", path: /^\/api\/state$/, scope: "canvas:read" },
+  { method: "POST", path: /^\/api\/quotes\/batch$/, scope: "canvas:read" },
+  // Canvases & storyboard exports
+  { method: "GET", path: /^\/api\/canvases$/, scope: "canvas:read" },
+  { method: "POST", path: /^\/api\/canvases$/, scope: "canvas:write" },
+  { method: "GET", path: /^\/api\/canvases\/[^/]+$/, scope: "canvas:read" },
+  { method: "GET", path: /^\/api\/canvases\/[^/]+\/graph$/, scope: "canvas:read" },
+  { method: "GET", path: /^\/api\/canvases\/[^/]+\/runs$/, scope: "canvas:read" },
+  { method: "GET", path: /^\/api\/canvases\/[^/]+\/exports$/, scope: "canvas:read" },
+  { method: "PUT", path: /^\/api\/canvases\/[^/]+\/document$/, scope: "canvas:write" },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/duplicate$/, scope: "canvas:write" },
+  { method: "DELETE", path: /^\/api\/canvases\/[^/]+$/, scope: "canvas:write" },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/exports$/, scope: "canvas:write" },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/shots\/download$/, scope: "canvas:read" },
+  { method: "GET", path: /^\/api\/storyboard-exports\/[^/]+\/subtitles$/, scope: "canvas:read" },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/batch-precheck$/, scope: "canvas:read" },
+  // Canvas proposals (token may read & propose, NEVER self-apply/approve!)
+  { method: "GET", path: /^\/api\/canvases\/[^/]+\/proposals$/, scope: "canvas:read" },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/proposals$/, scope: "canvas:propose" },
+  // Paid generation actions (require job:submit AND pass F031 Agent spending policy)
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/batch-runs$/, scope: "job:submit", paidAgentAction: true },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/runs$/, scope: "job:submit", paidAgentAction: true },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/candidates$/, scope: "job:submit", paidAgentAction: true },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/narration$/, scope: "job:submit", paidAgentAction: true },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/dialogue$/, scope: "job:submit", paidAgentAction: true },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/execute$/, scope: "job:submit", paidAgentAction: true },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/tail-frame$/, scope: "canvas:write" },
+  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/grid-crop$/, scope: "asset:write" },
+  { method: "POST", path: /^\/api\/generate\/(image|video|audio)$/, scope: "job:submit", paidAgentAction: true },
+  // Jobs
+  { method: "GET", path: /^\/api\/jobs$/, scope: "job:read" },
+  { method: "GET", path: /^\/api\/jobs\/[^/]+$/, scope: "job:read" },
+  { method: "POST", path: /^\/api\/jobs\/[^/]+\/cancel$/, scope: "job:submit" },
+  // Assets & media
+  { method: "POST", path: /^\/api\/assets$/, scope: "asset:write" },
+  { method: "DELETE", path: /^\/api\/assets\/[^/]+$/, scope: "asset:write" },
+  { method: "GET", path: /^\/media\/[^/]+$/, scope: "asset:read" },
+  // Asset packs
+  { method: "GET", path: /^\/api\/asset-packs$/, scope: "pack:read" },
+  { method: "POST", path: /^\/api\/asset-packs\/[^/]+\/turnaround$/, scope: "job:submit", paidAgentAction: true },
+  // Workspace skills
+  { method: "GET", path: /^\/api\/skills$/, scope: "skill:read" },
+  { method: "POST", path: /^\/api\/skills$/, scope: "skill:write" },
+  { method: "POST", path: /^\/api\/skills\/import-zip$/, scope: "skill:write" },
+  { method: "PUT", path: /^\/api\/skills\/[^/]+$/, scope: "skill:write" },
+  { method: "DELETE", path: /^\/api\/skills\/[^/]+$/, scope: "skill:write" },
+  // Series hierarchy
+  { method: "GET", path: /^\/api\/series$/, scope: "canvas:read" },
+  { method: "GET", path: /^\/api\/series\/[^/]+$/, scope: "canvas:read" },
+  { method: "POST", path: /^\/api\/series$/, scope: "canvas:write" },
+  { method: "PATCH", path: /^\/api\/series\/[^/]+$/, scope: "canvas:write" },
+  { method: "DELETE", path: /^\/api\/series\/[^/]+$/, scope: "canvas:write" },
+  { method: "POST", path: /^\/api\/series\/[^/]+\/episodes$/, scope: "canvas:write" },
+  { method: "PATCH", path: /^\/api\/series\/[^/]+\/episodes\/[^/]+$/, scope: "canvas:write" },
+  { method: "DELETE", path: /^\/api\/series\/[^/]+\/episodes\/[^/]+$/, scope: "canvas:write" },
+  // MCP Streamable HTTP
+  { method: "POST", path: /^\/api\/mcp$/, scope: "mcp:use" },
+  { method: "GET", path: /^\/api\/mcp$/, scope: "mcp:use" },
+  { method: "DELETE", path: /^\/api\/mcp$/, scope: "mcp:use" },
+];
+
+export function authorizeTokenHttpRequest(
+  auth: TokenAuthContext,
+  method: string,
+  path: string,
+): TokenRouteRule {
+  const upper = method.toUpperCase();
+  const matched = TOKEN_REST_ALLOWLIST.find(
+    (rule) => rule.method === upper && rule.path.test(path),
+  );
+  if (!matched) {
+    throw new DomainError(
+      403,
+      "该接口仅支持浏览器会话访问，不允许使用工作区 API Token",
+    );
+  }
+  requireTokenScope(auth, matched.scope);
+  return matched;
+}
+
 export class OriginalApiTokens {
   readonly identity: OriginalIdentity;
   constructor(readonly p: Platform) {
@@ -245,6 +343,7 @@ export class OriginalApiTokens {
       ])
       .catch(() => {});
 
+    const scopes = ((row.scopes as string[]) ?? []) as WorkspaceTokenScope[];
     const actor: OriginalActor = {
       id: String(row.user_id),
       public_id: Number(row.user_public_id),
@@ -258,13 +357,17 @@ export class OriginalApiTokens {
       password: String(row.password || ""),
       active: Boolean(row.active),
       deleted_at: row.deleted_at ?? null,
+      tokenId: String(row.token_id),
+      tokenWorkspaceId: String(row.workspace_id),
+      tokenWorkspacePublicId: boundWorkspace,
+      tokenScopes: scopes,
     };
 
     return {
       tokenId: String(row.token_id),
       workspaceId: String(row.workspace_id),
       workspacePublicId: boundWorkspace,
-      scopes: ((row.scopes as string[]) ?? []) as WorkspaceTokenScope[],
+      scopes,
       actor,
     };
   }

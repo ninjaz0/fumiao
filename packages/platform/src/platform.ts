@@ -37,6 +37,10 @@ export type Actor = {
   name: string;
   nickname: string;
   role: string;
+  tokenId?: string;
+  tokenWorkspaceId?: string;
+  tokenWorkspacePublicId?: number;
+  tokenScopes?: readonly string[];
 };
 export const uuid = z.string().uuid();
 const credentials = z.object({
@@ -63,10 +67,20 @@ export class Platform {
     public storage: Storage,
   ) {}
   admin(user: Actor) {
+    requireValue(
+      !user.tokenId,
+      403,
+      "管理员接口仅支持浏览器会话访问，禁止使用工作区 API Token",
+    );
     requireValue(user.role === "admin", 403, "需要管理员权限");
   }
   async workspace(sql: Sql, user: Actor, id: string) {
     uuid.parse(id);
+    requireValue(
+      !user.tokenWorkspaceId || user.tokenWorkspaceId === id,
+      403,
+      "API Token 已绑定所属工作区，禁止跨工作区访问",
+    );
     const row = await one(
       sql,
       `SELECT w.* FROM workspaces w WHERE w.id=$1 AND

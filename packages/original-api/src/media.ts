@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import type { Request, Response } from "express";
 import type { Platform, Actor } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
-import { requireValue } from "@fumiao/platform/security.js";
+import { DomainError, requireValue } from "@fumiao/platform/security.js";
 import { originalUI } from "@fumiao/web-compat/ui.js";
 import { OriginalIdentity, avatars } from "./identity.js";
 import { modifiedSeconds } from "@fumiao/platform/storage.js";
@@ -38,14 +38,47 @@ export class OriginalMedia {
     this.identity = new OriginalIdentity(p);
   }
   async resource(sql: Sql, user: Actor, key: string, workspace?: string) {
+    const effectiveWorkspace = user.tokenWorkspaceId || workspace || null;
+    if (
+      user.tokenWorkspaceId &&
+      workspace &&
+      workspace !== user.tokenWorkspaceId
+    ) {
+      throw new DomainError(403, "API Token 无权跨工作区访问该媒体资产");
+    }
     const asset = await one(
       sql,
       `SELECT a.* FROM assets a JOIN workspaces w ON w.id=a.workspace_id
     WHERE a.public_id=$1 AND a.state='ready' AND ($4::uuid IS NULL OR w.id=$4)
     AND ((w.kind='personal' AND w.owner_id=$2) OR (w.kind='team' AND ($3='admin' OR EXISTS(SELECT 1 FROM members m WHERE m.workspace_id=w.id AND m.user_id=$2))))`,
-      [key, user.id, user.role, workspace || null],
+      [key, user.id, user.role, effectiveWorkspace],
     );
     if (asset) return asset;
+    if (user.tokenWorkspaceId) {
+      // Check if asset exists in another workspace to return clear 403 rather than leaking or silently allowing
+      const cross = await one(
+        sql,
+        "SELECT workspace_id FROM assets WHERE public_id=$1 AND state='ready'",
+        [key],
+      );
+      if (cross && cross.workspace_id !== user.tokenWorkspaceId) {
+        // Still permit read-only access to explicitly published global AssetPack media
+        const globalAsset = await one(
+          sql,
+          `SELECT a.* FROM assets a
+           WHERE a.public_id=$1 AND a.state='ready'
+           AND EXISTS (
+             SELECT 1 FROM document_assets da
+             JOIN documents d ON d.id=da.document_id
+             JOIN asset_pack_meta m ON m.pack_id=d.id
+             WHERE da.asset_id=a.id AND d.kind='pack' AND NOT d.deleted AND m.scope='global'
+           )`,
+          [key],
+        );
+        if (globalAsset) return globalAsset;
+        throw new DomainError(403, "API Token 无权跨工作区访问该媒体资产");
+      }
+    }
     // F022: Read-only access to assets explicitly attached to an active global AssetPack.
     // Never loosens isolation for ordinary private or workspace-scoped media.
     if (!workspace) {

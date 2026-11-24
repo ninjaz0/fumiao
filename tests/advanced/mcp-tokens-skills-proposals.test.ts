@@ -345,7 +345,7 @@ test("F018 + F031 + F012 Proposal-based Canvas Agent, plan_only safety guardrail
     assert.equal(blockedSubmit.body.result.isError, true);
     assert.match(blockedSubmit.body.result.content[0].text, /plan_only/);
 
-    // 7. After explicitly enabling `propose_and_confirm`, MCP `submit_generation_job` is permitted!
+    // 7. After explicitly enabling `propose_and_confirm`, MCP `submit_generation_job` requires the server-verified approved proposal ID!
     await policies.set(
       f.admin,
       { execution_policy: "propose_and_confirm" },
@@ -359,6 +359,7 @@ test("F018 + F031 + F012 Proposal-based Canvas Agent, plan_only safety guardrail
           project_id: project.id,
           node_id: applied.temp_id_map["vid-1"],
           expected_revision: 2,
+          approved_proposal_id: createdProp.id,
         },
       },
       { "mcp-session-id": sessionId! },

@@ -235,6 +235,14 @@ export function extractSkillFromZip(zipBytes: Buffer): ParsedSkill {
 const workspaceAccess = `((w.kind='personal' AND w.owner_id=$2) OR
   (w.kind='team' AND ($3='admin' OR EXISTS(SELECT 1 FROM members m WHERE m.workspace_id=w.id AND m.user_id=$2))))`;
 
+function assertTokenWorkspace(user: Actor, workspaceId: string) {
+  requireValue(
+    !user.tokenWorkspaceId || user.tokenWorkspaceId === workspaceId,
+    403,
+    "API Token 无权跨工作区访问该技能",
+  );
+}
+
 export class OriginalSkills {
   readonly identity: OriginalIdentity;
   constructor(readonly p: Platform) {
@@ -412,6 +420,7 @@ export class OriginalSkills {
         [key, user.id, user.role],
       );
       requireValue(row, 404, "技能不存在或无权访问");
+      assertTokenWorkspace(user, row.workspace_id);
       requireValue(
         Number(row.revision) === Number(body.expected_revision),
         409,
@@ -463,12 +472,13 @@ export class OriginalSkills {
     return this.p.db.transaction(async (sql) => {
       const row = await one(
         sql,
-        `SELECT s.id, s.owner_id
+        `SELECT s.id, s.owner_id, s.workspace_id
          FROM workspace_skills s JOIN workspaces w ON w.id=s.workspace_id
          WHERE s.public_id=$1 AND ${workspaceAccess} FOR UPDATE OF s`,
         [key, user.id, user.role],
       );
       requireValue(row, 404, "技能不存在或无权访问");
+      assertTokenWorkspace(user, row.workspace_id);
       requireValue(
         row.owner_id === user.id || user.role === "admin",
         403,

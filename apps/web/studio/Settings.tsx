@@ -372,7 +372,11 @@ export function Settings({
           <SettingsApiTokens
             key={workspace}
             workspace={workspace}
-            canEditPolicy={admin || true}
+            canEditPolicy={
+              admin ||
+              state.workspaces.find((w) => w.id === workspace)?.kind ===
+                "personal"
+            }
             notify={notify}
           />
         )}

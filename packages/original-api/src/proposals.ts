@@ -341,15 +341,87 @@ export class OriginalAgentPolicies {
     );
     return (row?.execution_policy as AgentExecutionPolicy) ?? "plan_only";
   }
-  /** F031: Hard server-side guardrail preventing paid job submission in plan_only mode. */
-  async assertCanSubmitPaidJob(sql: Sql, workspaceId: string): Promise<void> {
+  /** Checks whether the workspace currently has an active enabled `cap` budget policy. */
+  async hasActiveCapBudget(sql: Sql, workspaceId: string): Promise<boolean> {
+    const table = await one(
+      sql,
+      "SELECT to_regclass('budget_policies') IS NOT NULL AS ok",
+    );
+    if (!table?.ok) return false;
+    const row = await one(
+      sql,
+      `SELECT 1 FROM budget_policies
+        WHERE scope_type = 'workspace'
+          AND scope_id = $1::text
+          AND enabled = TRUE
+          AND mode = 'cap'
+          AND cap_limit > 0
+        LIMIT 1`,
+      [workspaceId],
+    );
+    return Boolean(row);
+  }
+  /**
+   * F031: Unified server-authoritative Agent execution policy guardrail.
+   * Covers MCP tools, Bearer API Token generation routes, and internal Canvas Agent actions.
+   * Normal user browser-session requests bypass this guardrail so user-initiated generation still works.
+   */
+  async enforceForAgentAction(
+    sql: Sql,
+    workspaceId: string,
+    options: {
+      projectId?: string;
+      approvedProposalId?: string | null;
+    } = {},
+  ): Promise<void> {
     const policy = await this.readPolicy(sql, workspaceId);
     if (policy === "plan_only") {
       throw new DomainError(
         403,
-        "当前工作区处于「只建图不烧费 (plan_only)」安全模式，Agent 仅可读写规划与提交画布提案，禁止直接提交扣费生成任务",
+        "当前工作区处于「只建图不烧费 (plan_only)」安全模式，Agent 仅可读取上下文与提交待审批提案，禁止直接提交扣费生成任务或冻结积分",
       );
     }
+    if (policy === "propose_and_confirm") {
+      const pid = options.approvedProposalId?.trim();
+      if (!pid) {
+        throw new DomainError(
+          403,
+          "当前工作区处于「提案人工批准后执行 (propose_and_confirm)」模式，Agent 必须引用已由用户在画布批准落图的提案编号 (approved_proposal_id) 才能执行扣费任务",
+        );
+      }
+      const proposal = await one(
+        sql,
+        `SELECT id, project_id, workspace_id, status
+           FROM canvas_proposals
+          WHERE public_id = $1 AND workspace_id = $2`,
+        [pid, workspaceId],
+      );
+      requireValue(
+        proposal && proposal.status === "applied",
+        403,
+        "引用的画布提案不存在、不属于当前工作区或尚未获得人工批准落图",
+      );
+      if (options.projectId && proposal.project_id !== options.projectId) {
+        throw new DomainError(403, "引用的已批准提案与目标画布不匹配");
+      }
+      return;
+    }
+    // policy === "auto_within_budget"
+    const hasCap = await this.hasActiveCapBudget(sql, workspaceId);
+    if (!hasCap) {
+      throw new DomainError(
+        403,
+        "当前工作区尚未启用有效的硬上限预算策略 (mode=cap)，已暂停 Agent 在预算内自动执行扣费任务",
+      );
+    }
+  }
+  /** Legacy alias kept for compatibility. */
+  async assertCanSubmitPaidJob(
+    sql: Sql,
+    workspaceId: string,
+    options?: { projectId?: string; approvedProposalId?: string | null },
+  ): Promise<void> {
+    return this.enforceForAgentAction(sql, workspaceId, options);
   }
   async get(user: OriginalActor, selected?: string) {
     return this.p.db.transaction(async (sql) => {
@@ -359,13 +431,20 @@ export class OriginalAgentPolicies {
         selected,
       );
       const policy = await this.readPolicy(sql, workspace.id);
+      const hasCapBudget = await this.hasActiveCapBudget(sql, workspace.id);
       return {
         workspace: Number(workspace.public_id),
         execution_policy: policy,
+        has_active_cap_budget: hasCapBudget,
       };
     });
   }
   async set(user: OriginalActor, value: unknown, selected?: string) {
+    requireValue(
+      !user.tokenId,
+      403,
+      "修改 Agent 安全执行策略仅支持浏览器会话，禁止使用 API Token",
+    );
     const body = parseBody(value, agentPolicyFields, true) as {
       execution_policy: AgentExecutionPolicy;
     };
@@ -380,6 +459,14 @@ export class OriginalAgentPolicies {
         403,
         "只有工作区负责人或管理员可以修改 Agent 安全执行策略",
       );
+      if (body.execution_policy === "auto_within_budget") {
+        const hasCap = await this.hasActiveCapBudget(sql, workspace.id);
+        requireValue(
+          hasCap,
+          400,
+          "启用「预算上限内自动执行」前，请先在「设置 → 预算与风控」中为当前工作区配置并启用有效的硬上限预算策略 (cap)",
+        );
+      }
       await sql.query(
         `INSERT INTO workspace_agent_policies(workspace_id, execution_policy, updated_by, updated_at)
          VALUES($1, $2, $3, now())
@@ -565,6 +652,11 @@ export class OriginalCanvasProposals {
     proposalKey: string,
     value: unknown,
   ) {
+    requireValue(
+      !user.tokenId,
+      403,
+      "提案审批落图必须由用户在浏览器会话中确认，禁止使用 API Token 自行批准",
+    );
     const body = parseBody(value, proposalApplyFields, true) as {
       expected_revision: number;
     };
@@ -623,6 +715,11 @@ export class OriginalCanvasProposals {
     };
   }
   async reject(user: OriginalActor, projectKey: string, proposalKey: string) {
+    requireValue(
+      !user.tokenId,
+      403,
+      "拒绝画布提案仅支持浏览器会话操作",
+    );
     return this.p.db.transaction(async (sql) => {
       const project = await this.canvases.project(sql, user, projectKey);
       const proposal = await one(

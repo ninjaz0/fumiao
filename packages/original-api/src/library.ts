@@ -75,6 +75,9 @@ export class OriginalLibrary {
     throw new DomainError(400, "资产标识无效");
   }
   async access(sql: Sql, user: Actor, item: Selection, workspace: string) {
+    if (user.tokenWorkspaceId && workspace !== user.tokenWorkspaceId) {
+      throw new DomainError(403, "API Token 无权跨工作区访问该对象");
+    }
     requireValue(
       item.row.workspace_id === workspace,
       404,

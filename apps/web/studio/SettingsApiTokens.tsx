@@ -30,6 +30,26 @@ const SCOPE_LABELS: Record<string, string> = {
   "mcp:use": "连接 MCP Server",
 };
 
+const cardStyle = {
+  minWidth: 0,
+  maxWidth: "100%",
+  boxSizing: "border-box" as const,
+  overflow: "hidden" as const,
+};
+
+const codeBlockStyle = {
+  maxWidth: "100%",
+  boxSizing: "border-box" as const,
+  overflowX: "auto" as const,
+  whiteSpace: "pre-wrap" as const,
+  wordBreak: "break-all" as const,
+  fontSize: 12,
+  padding: 10,
+  borderRadius: 8,
+  background: "rgba(128,128,128,0.12)",
+  margin: "6px 0",
+};
+
 export function SettingsApiTokens({
   workspace,
   canEditPolicy,
@@ -44,6 +64,7 @@ export function SettingsApiTokens({
     Object.keys(SCOPE_LABELS),
   );
   const [policy, setPolicy] = useState<AgentPolicy>("plan_only");
+  const [hasActiveCapBudget, setHasActiveCapBudget] = useState(false);
   const [name, setName] = useState("Claude Code / Cursor MCP");
   const [selectedScopes, setSelectedScopes] = useState<string[]>([
     "canvas:read",
@@ -65,13 +86,14 @@ export function SettingsApiTokens({
         api(String(workspace), "/api/workspace/agent-policy"),
       ])) as [
         { tokens?: ApiToken[]; available_scopes?: string[] },
-        { execution_policy?: AgentPolicy },
+        { execution_policy?: AgentPolicy; has_active_cap_budget?: boolean },
       ];
       setTokens(tRes.tokens || []);
       if (Array.isArray(tRes.available_scopes)) {
         setAvailableScopes(tRes.available_scopes);
       }
       if (pRes.execution_policy) setPolicy(pRes.execution_policy);
+      setHasActiveCapBudget(Boolean(pRes.has_active_cap_budget));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -158,9 +180,15 @@ export function SettingsApiTokens({
   );
 
   return (
-    <div className="settings-section">
+    <div
+      className="settings-section"
+      style={{ minWidth: 0, maxWidth: "100%", boxSizing: "border-box" }}
+    >
       <h2>API 与 MCP 接入</h2>
-      <p className="console-description">
+      <p
+        className="console-description"
+        style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+      >
         签发工作区隔离的 Scoped API Token，将弗淼接入 Claude Code、Cursor 或自研自动化流水线。
         {" "}
         <a href="/api/v1/openapi.json" target="_blank" rel="noreferrer">
@@ -169,60 +197,85 @@ export function SettingsApiTokens({
       </p>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error" role="alert" style={{ overflowWrap: "anywhere" }}>
           {error}
         </p>
       )}
 
-      <div className="ledger-card">
+      <div className="ledger-card" style={cardStyle}>
         <h3>Agent 安全执行开关（防误烧费）</h3>
         <p className="console-description">
-          默认开启「只建图不烧费 (plan_only)」，外部 MCP 与画布助手只能读取上下文与提交待审批提案，无法直接提交扣费生成任务。
+          默认开启「只建图不烧费 (plan_only)」，外部 MCP 与画布 Agent 仅可读取上下文与提交待审批提案，禁止直接扣费；用户本人在浏览器界面的主动生成不受影响。
         </p>
         <select
           aria-label="Agent 执行安全策略"
           disabled={busy || !canEditPolicy}
           value={policy}
+          style={{ width: "100%", maxWidth: "100%", boxSizing: "border-box" }}
           onChange={(e) => void savePolicy(e.target.value as AgentPolicy)}
         >
           <option value="plan_only">只建图不烧费 (plan_only · 推荐)</option>
           <option value="propose_and_confirm">
-            允许授权 Token 提交任务 (propose_and_confirm)
+            提案人工批准后执行 (propose_and_confirm)
           </option>
           <option value="auto_within_budget">
-            预算上限内自动执行 (auto_within_budget)
+            预算硬上限内自动执行 (auto_within_budget)
           </option>
         </select>
+        {!hasActiveCapBudget && (
+          <p className="console-description" style={{ marginTop: 6, fontSize: 12 }}>
+            提示：如需切换为「预算硬上限内自动执行」，请先在「预算与风控」中启用工作区硬上限预算策略 (cap)。
+          </p>
+        )}
       </div>
 
-      <div className="ledger-card">
+      <div className="ledger-card" style={cardStyle}>
         <h3>签发工作区 API Token</h3>
-        <div className="form-grid" style={{ display: "grid", gap: 10 }}>
-          <label>
+        <div
+          className="form-grid"
+          style={{ display: "grid", gap: 10, minWidth: 0, maxWidth: "100%" }}
+        >
+          <label style={{ display: "grid", gap: 4, minWidth: 0 }}>
             名称
             <input
               value={name}
               maxLength={80}
+              style={{ width: "100%", maxWidth: "100%", boxSizing: "border-box" }}
               onChange={(e) => setName(e.target.value)}
             />
           </label>
-          <label>
+          <label style={{ display: "grid", gap: 4, minWidth: 0 }}>
             每分钟速率限制 (RPM)
             <input
               type="number"
               min={1}
               max={6000}
               value={rpm}
+              style={{ width: "100%", maxWidth: "100%", boxSizing: "border-box" }}
               onChange={(e) => setRpm(Number(e.target.value) || 120)}
             />
           </label>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <strong>权限范围 (Scopes)</strong>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                marginTop: 6,
+                maxWidth: "100%",
+              }}
+            >
               {availableScopes.map((s) => (
                 <label
                   key={s}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontSize: 12,
+                    maxWidth: "100%",
+                  }}
                 >
                   <input
                     type="checkbox"
@@ -238,6 +291,7 @@ export function SettingsApiTokens({
             type="button"
             className="primary"
             disabled={busy || !name.trim() || !selectedScopes.length}
+            style={{ width: "100%", maxWidth: "100%", boxSizing: "border-box" }}
             onClick={() => void createToken()}
           >
             {busy ? "签发中…" : "生成 Scoped API Token"}
@@ -245,9 +299,19 @@ export function SettingsApiTokens({
         </div>
 
         {createdSecret && (
-          <div style={{ marginTop: 12, padding: 10, borderRadius: 8, background: "rgba(34,197,94,0.12)" }}>
+          <div
+            style={{
+              marginTop: 12,
+              padding: 10,
+              borderRadius: 8,
+              background: "rgba(34,197,94,0.12)",
+              maxWidth: "100%",
+              boxSizing: "border-box",
+              overflow: "hidden",
+            }}
+          >
             <strong>新 Token（仅显示一次，请妥善保管）：</strong>
-            <pre style={{ overflow: "auto", margin: "6px 0" }}>{createdSecret}</pre>
+            <pre style={codeBlockStyle}>{createdSecret}</pre>
             <button
               type="button"
               className="secondary"
@@ -262,9 +326,9 @@ export function SettingsApiTokens({
         )}
       </div>
 
-      <div className="ledger-card">
+      <div className="ledger-card" style={cardStyle}>
         <h3>MCP Server 连接配置（Claude Code / Cursor）</h3>
-        <pre style={{ overflow: "auto", fontSize: 12 }}>{mcpSnippet}</pre>
+        <pre style={codeBlockStyle}>{mcpSnippet}</pre>
         <button
           type="button"
           className="secondary"
@@ -277,30 +341,41 @@ export function SettingsApiTokens({
         </button>
       </div>
 
-      <div className="ledger-card">
+      <div className="ledger-card" style={cardStyle}>
         <h3>已签发 Token ({tokens.length})</h3>
         {tokens.length === 0 ? (
           <p className="console-description">当前工作区暂无 API Token。</p>
         ) : (
-          <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
             {tokens.map((t) => (
               <div
                 key={t.id}
                 style={{
                   display: "flex",
+                  flexWrap: "wrap",
                   justifyContent: "space-between",
                   alignItems: "center",
                   gap: 10,
                   padding: "8px 10px",
                   borderRadius: 8,
                   border: "1px solid rgba(128,128,128,0.22)",
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  boxSizing: "border-box",
                 }}
               >
-                <div>
-                  <strong>
+                <div style={{ flex: "1 1 200px", minWidth: 0, overflowWrap: "anywhere" }}>
+                  <strong style={{ wordBreak: "break-word" }}>
                     {t.name} <code>{t.prefix}…</code>
                   </strong>
-                  <div style={{ fontSize: 12, opacity: 0.75 }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      opacity: 0.75,
+                      overflowWrap: "anywhere",
+                      wordBreak: "break-word",
+                    }}
+                  >
                     {t.scopes.join(", ")} · {t.rate_limit_rpm} RPM
                     {t.revoked_at ? " · 已吊销" : ""}
                   </div>
@@ -310,6 +385,7 @@ export function SettingsApiTokens({
                     type="button"
                     className="secondary"
                     disabled={busy}
+                    style={{ flexShrink: 0 }}
                     onClick={() => void revokeToken(t.id)}
                   >
                     吊销

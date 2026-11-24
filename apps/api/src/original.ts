@@ -55,7 +55,10 @@ import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
 import { OriginalSeries } from "@fumiao/original-api/series.js";
-import { OriginalApiTokens } from "@fumiao/original-api/tokens.js";
+import {
+  authorizeTokenHttpRequest,
+  OriginalApiTokens,
+} from "@fumiao/original-api/tokens.js";
 import { OriginalSkills } from "@fumiao/original-api/skills.js";
 import {
   OriginalAgentPolicies,
@@ -1091,16 +1094,31 @@ export async function createOriginalApp(p: Platform) {
   const parseChatKey = express.raw({ limit: "3mb", type: () => true });
   const parseSkillZip = express.raw({ limit: "300kb", type: () => true });
   const apiTokens = new OriginalApiTokens(p);
-  const authenticate = async (req: AuthRequest) => {
+  const agentPolicies = new OriginalAgentPolicies(p);
+  const authenticate = async (req: AuthRequest, normalizedPath: string) => {
     const bearer = originalBearerToken(req);
     if (bearer) {
-      const requestedWs = req.headers["x-workspace-id"]
-        ? String(req.headers["x-workspace-id"])
-        : new URL(req.originalUrl, "http://localhost").searchParams
-            .getAll("workspace")
-            .at(-1);
-      const auth = await apiTokens.authenticateBearer(bearer, requestedWs);
-      req.tokenAuth = auth;
+      let auth = req.tokenAuth;
+      if (!auth) {
+        const requestedWs = req.headers["x-workspace-id"]
+          ? String(req.headers["x-workspace-id"])
+          : new URL(req.originalUrl, "http://localhost").searchParams
+              .getAll("workspace")
+              .at(-1);
+        auth = await apiTokens.authenticateBearer(bearer, requestedWs);
+        req.tokenAuth = auth;
+      }
+      const rule = authorizeTokenHttpRequest(auth, req.method, normalizedPath);
+      if (rule.paidAgentAction) {
+        const headerPid = req.headers["x-approved-proposal-id"];
+        const approvedProposalId =
+          typeof headerPid === "string" && headerPid.trim()
+            ? headerPid.trim()
+            : undefined;
+        await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId, {
+          approvedProposalId,
+        });
+      }
       return auth.actor;
     }
     return identity.actor(token(req));
@@ -1110,6 +1128,27 @@ export async function createOriginalApp(p: Platform) {
   const prepareRecharge = originalRechargeRequest(identity, failure);
   app.use(async (req: AuthRequest, res: Response, next: () => void) => {
     const path = decodePath(req.path);
+    // Reject Bearer tokens on browser-session-only endpoints (admin, chat, recharge, tokens, etc.)
+    // before specialized sub-routers run, while letting valid /api/mcp and allowlisted routes proceed.
+    if (originalBearerToken(req) && path !== "/api/mcp") {
+      try {
+        const requestedWs = req.headers["x-workspace-id"]
+          ? String(req.headers["x-workspace-id"])
+          : new URL(req.originalUrl, "http://localhost").searchParams
+              .getAll("workspace")
+              .at(-1);
+        const auth = await apiTokens.authenticateBearer(
+          originalBearerToken(req),
+          requestedWs,
+        );
+        authorizeTokenHttpRequest(auth, req.method, path);
+        req.tokenAuth = auth;
+        req.actor = auth.actor;
+      } catch (error) {
+        failure(error, res);
+        return;
+      }
+    }
     if (await prepareNodes(path, req, res, next)) return;
     if (isOriginalRechargeRequest(path)) {
       await prepareRecharge(req, res, next);
@@ -1149,7 +1188,7 @@ export async function createOriginalApp(p: Platform) {
           req.body,
           new URL(req.originalUrl, "http://localhost").searchParams,
         );
-        req.actor = await authenticate(req);
+        req.actor = await authenticate(req, path);
         // Match the decoded FastAPI path, preserving escaped project IDs for Express.
         req.url =
           path.split("/").map(encodeURIComponent).join("/") +
@@ -1227,7 +1266,7 @@ export async function createOriginalApp(p: Platform) {
             contract.imageSettings,
             req.body,
           );
-        if (!contract.public) req.actor = await authenticate(req);
+        if (!contract.public) req.actor = await authenticate(req, req.path);
       }
       next();
     } catch (error) {

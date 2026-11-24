@@ -103,6 +103,10 @@ const MCP_TOOLS = [
         expected_revision: { type: "integer" },
         price_revision: { type: "integer" },
         uid: { type: "string" },
+        approved_proposal_id: {
+          type: "string",
+          description: "当工作区处于 propose_and_confirm 策略时，需传入已由人工在画布批准落图的提案编号",
+        },
       },
     },
   },
@@ -195,6 +199,24 @@ export class OriginalMcpController {
     };
   }
 
+  private async assertProjectInWorkspace(
+    projectKey: string,
+    workspaceId: string,
+  ): Promise<{ id: string; workspace_id: string }> {
+    const row = await one(
+      this.identity.p.db,
+      "SELECT id, workspace_id FROM documents WHERE public_id=$1 AND kind='canvas' AND NOT deleted",
+      [projectKey],
+    );
+    requireValue(row, 404, "画布不存在或已删除");
+    requireValue(
+      row.workspace_id === workspaceId,
+      403,
+      "目标画布不属于当前 MCP 会话 / API Token 绑定的工作区",
+    );
+    return { id: String(row.id), workspace_id: String(row.workspace_id) };
+  }
+
   private async executeTool(
     ctx: {
       actor: OriginalAuthRequest["actor"];
@@ -213,11 +235,13 @@ export class OriginalMcpController {
       case "get_canvas": {
         requireTokenScope(ctx.tokenAuth, "canvas:read");
         requireValue(typeof args.project_id === "string", 400, "缺少 project_id");
+        await this.assertProjectInWorkspace(args.project_id, ctx.workspaceId);
         return this.proposals.readGraph(ctx.actor, args.project_id);
       }
       case "propose_canvas_patch": {
         requireTokenScope(ctx.tokenAuth, "canvas:propose");
         requireValue(typeof args.project_id === "string", 400, "缺少 project_id");
+        await this.assertProjectInWorkspace(args.project_id, ctx.workspaceId);
         return this.proposals.create(ctx.actor, args.project_id, {
           title: args.title ?? "MCP Agent 画布变更提案",
           summary: args.summary ?? "",
@@ -232,6 +256,7 @@ export class OriginalMcpController {
       case "precheck_batch": {
         requireTokenScope(ctx.tokenAuth, "canvas:read");
         requireValue(typeof args.project_id === "string", 400, "缺少 project_id");
+        await this.assertProjectInWorkspace(args.project_id, ctx.workspaceId);
         return this.precheck.precheckCanvas(ctx.actor, args.project_id, {
           expected_revision: args.expected_revision ?? null,
           node_ids: args.node_ids ?? [],
@@ -240,16 +265,27 @@ export class OriginalMcpController {
       }
       case "submit_generation_job": {
         requireTokenScope(ctx.tokenAuth, "job:submit");
-        // F031: Hard server-side guardrail! Refuses paid job submission in plan_only mode.
-        await this.policies.assertCanSubmitPaidJob(
-          this.identity.p.db,
-          ctx.workspaceId,
-        );
         requireValue(
           typeof args.project_id === "string" &&
             typeof args.node_id === "string",
           400,
           "缺少 project_id 或 node_id",
+        );
+        const target = await this.assertProjectInWorkspace(
+          args.project_id,
+          ctx.workspaceId,
+        );
+        // F031: Enforce workspace agent execution policy on the real target project workspace!
+        await this.policies.enforceForAgentAction(
+          this.identity.p.db,
+          target.workspace_id,
+          {
+            projectId: target.id,
+            approvedProposalId:
+              typeof args.approved_proposal_id === "string"
+                ? args.approved_proposal_id
+                : null,
+          },
         );
         return this.canvasRuns.generate(
           ctx.actor,
@@ -293,6 +329,7 @@ export class OriginalMcpController {
       case "export_storyboard": {
         requireTokenScope(ctx.tokenAuth, "canvas:write");
         requireValue(typeof args.project_id === "string", 400, "缺少 project_id");
+        await this.assertProjectInWorkspace(args.project_id, ctx.workspaceId);
         return this.exports.create(ctx.actor, args.project_id, {
           expected_revision: args.expected_revision,
           exporter: args.exporter ?? "storyboard/mp4",
