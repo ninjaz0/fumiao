@@ -10,7 +10,7 @@ export function Composition({project,getRevision,ready,waitingReason}:{project:s
  const chosen=exporters?.find(x=>x.key===selected)??exporters?.find(x=>x.key==="storyboard/mp4")??exporters?.[0];
  useEffect(()=>{
   let active=true, requested=0, applied=0;
-  const load=async(source:'poll'|'submit')=>{
+  const load=async()=>{
    if(!active)return;
    const request=++requested;
    try{
@@ -21,15 +21,14 @@ export function Composition({project,getRevision,ready,waitingReason}:{project:s
     setExporters(data.exporters);
     setPollError('');
    }catch(e){
-    if(source==='submit')throw e;
     if(!active||request<applied)return;
     applied=request;
     setPollError((e as Error).message);
    }
   };
-  reload.current=()=>load('submit');
-  void load('poll');
-  const timer=setInterval(()=>void load('poll'),5000);
+  reload.current=load;
+  void load();
+  const timer=setInterval(()=>void load(),5000);
   return()=>{active=false;reload.current=null;clearInterval(timer)};
  },[project]);
  const pending=results.some(r=>['queued','running'].includes(r.state));

@@ -49,8 +49,23 @@ try {
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   let polls = 0;
+  let submitted = false;
+  let releaseRefresh!: () => void;
+  const refreshHeld = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  let refreshPending = false;
   await page.route(`**${path}/exports`, async (route) => {
-    if (route.request().method() !== "GET") return route.continue();
+    if (route.request().method() === "POST") {
+      submitted = true;
+      return route.fulfill({ json: {} });
+    }
+    if (submitted) {
+      if (!refreshPending) {
+        refreshPending = true;
+        await refreshHeld;
+        return route.fulfill({ status: 503, json: { detail: "提交后列表暂不可用" } });
+      }
+      return route.fulfill({ json: { exports: [queuedExport] } });
+    }
     const poll = ++polls;
     if (poll === 1) await held;
     await route.fulfill({ json: { exports: poll === 2 ? [queuedExport] : [] } });
@@ -76,6 +91,21 @@ try {
   assert.ok(await queuedStatus.isVisible(), "Queued export disappeared after the older empty poll arrived");
   await expect(composition.getByRole("button", { name: "合成中…" })).toBeDisabled();
   console.log("Queued export stays visible and composition stays disabled after the older empty poll: passed");
+
+  const submit = composition.getByRole("button", { name: "合成预览" });
+  await expect(submit).toBeEnabled({ timeout: 10_000 });
+  await submit.click();
+  await expect.poll(() => refreshPending, { timeout: 5_000 }).toBe(true);
+  await expect(queuedStatus).toBeVisible({ timeout: 10_000 });
+  const failedRefresh = page.waitForResponse(
+    (response) => response.url().endsWith(`${path}/exports`) && response.status() === 503,
+  );
+  releaseRefresh();
+  await (await failedRefresh).finished();
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(composition.getByRole("alert")).toHaveCount(0);
+  await expect(queuedStatus).toBeVisible();
+  console.log("A stale post-submit refresh error does not replace the newer export status: passed");
 } finally {
   await browser?.close();
   harness.kill("SIGTERM");
