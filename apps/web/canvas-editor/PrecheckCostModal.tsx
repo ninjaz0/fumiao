@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Play, ShieldAlert } from "lucide-react";
 import type { PrecheckResponse, PrecheckStage } from "./types";
 
@@ -26,8 +26,8 @@ export function PrecheckCostModal({
   title?: string;
   initialStages?: PrecheckStage[];
   onSubmitted: (result: {
-    submitted: { node: string; stage: PrecheckStage; job_id: number }[];
-    skipped: { node: string; stage: PrecheckStage; reason: string }[];
+    submitted: { node: string; stage: PrecheckStage; job_id: number; line_id?: string }[];
+    skipped: { node: string; stage: PrecheckStage; reason: string; line_id?: string }[];
     total_credits: number;
   }) => void | Promise<void>;
   onClose: () => void;
@@ -37,6 +37,10 @@ export function PrecheckCostModal({
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // F010 (#9): Keep a deterministic batch UID per (project, revision, nodes, stages)
+  // across retries/dropped responses so clicking Confirm again replays idempotently.
+  const batchUidRef = useRef<{ key: string; uid: string } | null>(null);
+  const batchKey = `${projectId}:${revision}:${nodeIds.join(",")}:${stages.join(",")}`;
 
   useEffect(() => {
     let active = true;
@@ -93,6 +97,10 @@ export function PrecheckCostModal({
     if (!data) return;
     setSubmitting(true);
     setError("");
+    if (!batchUidRef.current || batchUidRef.current.key !== batchKey) {
+      batchUidRef.current = { key: batchKey, uid: crypto.randomUUID() };
+    }
+    const uid = batchUidRef.current.uid;
     try {
       const res = await fetch(`/api/canvases/${projectId}/batch-runs`, {
         method: "POST",
@@ -103,7 +111,10 @@ export function PrecheckCostModal({
         body: JSON.stringify({
           expected_revision: revision,
           price_revision: data.price_revision,
-          uid: crypto.randomUUID(),
+          precheck_token: data.precheck_token,
+          expected_total_credits: data.summary.total_credits,
+          executable_keys: data.executable_keys,
+          uid,
           node_ids: nodeIds,
           stages,
         }),
@@ -113,6 +124,7 @@ export function PrecheckCostModal({
         throw new Error(
           typeof json.detail === "string" ? json.detail : "批量提交失败",
         );
+      batchUidRef.current = null;
       await onSubmitted(json);
       onClose();
     } catch (e) {

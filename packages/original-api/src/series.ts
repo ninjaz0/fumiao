@@ -9,6 +9,8 @@ import {
   episodeCreateFields,
   episodeUpdateFields,
   parseCanvasDocument,
+  sceneCreateFields,
+  sceneUpdateFields,
   seriesCreateFields,
   seriesUpdateFields,
 } from "./canvas-draft.js";
@@ -52,6 +54,38 @@ export class OriginalSeries {
     );
     return row;
   }
+  private async scenesForEpisodes(sql: Sql, episodeIds: string[]) {
+    if (!episodeIds.length) return new Map<string, any[]>();
+    const hasTable = await one(
+      sql,
+      "SELECT to_regclass('series_scenes') IS NOT NULL AS ok",
+    );
+    if (!hasTable?.ok) return new Map<string, any[]>();
+    const { rows } = await sql.query(
+      `SELECT sc.*, d.public_id AS canvas_public_id
+         FROM series_scenes sc
+         LEFT JOIN documents d ON d.id = sc.canvas_project_id AND NOT d.deleted
+        WHERE sc.episode_id = ANY($1::uuid[])
+        ORDER BY sc.position ASC, sc.scene_no ASC, sc.created_at ASC`,
+      [episodeIds],
+    );
+    const map = new Map<string, any[]>();
+    for (const r of rows) {
+      const list = map.get(r.episode_id) ?? [];
+      list.push({
+        id: String(r.public_id),
+        scene_no: Number(r.scene_no),
+        title: String(r.title),
+        summary: String(r.summary ?? ""),
+        canvas_id: r.canvas_public_id ? String(r.canvas_public_id) : null,
+        group_node_id: r.group_node_id ? String(r.group_node_id) : null,
+        position: Number(r.position ?? 0),
+        created: Math.floor(new Date(r.created_at).getTime() / 1000),
+      });
+      map.set(r.episode_id, list);
+    }
+    return map;
+  }
   private async episodesForSeries(sql: Sql, seriesIds: string[]) {
     if (!seriesIds.length) return new Map<string, any[]>();
     const { rows } = await sql.query(
@@ -61,6 +95,10 @@ export class OriginalSeries {
        WHERE e.series_id = ANY($1::uuid[])
        ORDER BY e.season_no ASC, e.episode_no ASC, e.created_at ASC`,
       [seriesIds],
+    );
+    const scenesByEp = await this.scenesForEpisodes(
+      sql,
+      rows.map((r) => String(r.id)),
     );
     const map = new Map<string, any[]>();
     for (const r of rows) {
@@ -74,10 +112,32 @@ export class OriginalSeries {
         canvas_id: r.canvas_public_id ?? null,
         revision: Number(r.revision),
         updated: Math.floor(new Date(r.updated_at).getTime() / 1000),
+        scenes: scenesByEp.get(String(r.id)) ?? [],
       });
       map.set(r.series_id, list);
     }
     return map;
+  }
+  private groupSeasons(episodes: any[]) {
+    const bySeason = new Map<number, any[]>();
+    for (const ep of episodes) {
+      const sn = Number(ep.season_no);
+      const bucket = bySeason.get(sn) ?? [];
+      bucket.push(ep);
+      bySeason.set(sn, bucket);
+    }
+    return [...bySeason.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([season_no, eps]) => ({
+        season_no,
+        label: `第 ${season_no} 季`,
+        episode_count: eps.length,
+        scene_count: eps.reduce(
+          (sum, ep) => sum + (Array.isArray(ep.scenes) ? ep.scenes.length : 0),
+          0,
+        ),
+        episodes: eps,
+      }));
   }
   private formatSeries(row: any, episodes: any[], user: Actor) {
     return {
@@ -90,6 +150,7 @@ export class OriginalSeries {
       revision: Number(row.revision),
       updated: Math.floor(new Date(row.updated_at).getTime() / 1000),
       can_delete: row.owner_id === user.id || user.role === "admin",
+      seasons: this.groupSeasons(episodes),
       episodes,
     };
   }
@@ -193,9 +254,10 @@ export class OriginalSeries {
         403,
         "只有创建者或管理员可以删除剧集项目",
       );
-      await sql.query("UPDATE series SET deleted=true, updated_at=now() WHERE id=$1", [
-        row.id,
-      ]);
+      await sql.query(
+        "UPDATE series SET deleted=true, updated_at=now() WHERE id=$1",
+        [row.id],
+      );
       return { ok: true };
     });
   }
@@ -297,6 +359,7 @@ export class OriginalSeries {
         status: body.status,
         canvas_id: canvasPublicId,
         revision: 1,
+        scenes: [],
       };
     });
   }
@@ -367,6 +430,221 @@ export class OriginalSeries {
       await sql.query("UPDATE series SET updated_at=now() WHERE id=$1", [
         series.id,
       ]);
+      return { ok: true };
+    });
+  }
+
+  // ---- F026: 4th Hierarchy Level — Scenes inside Episodes ----
+
+  async createScene(
+    user: Actor,
+    seriesKey: string,
+    episodeKey: string,
+    value: unknown,
+  ) {
+    const body = parseBody(value, sceneCreateFields, true) as {
+      scene_no: number;
+      title: string;
+      summary: string;
+      canvas_id?: string | null;
+      group_node_id?: string | null;
+      create_canvas: boolean;
+    };
+    const title = pythonStrip(body.title);
+    requireValue(title, 400, "请输入分场标题");
+    return this.p.db.transaction(async (sql) => {
+      const series = await this.findSeries(sql, user, seriesKey, true);
+      const ep = await one(
+        sql,
+        "SELECT * FROM series_episodes WHERE series_id=$1 AND public_id=$2 FOR UPDATE",
+        [series.id, episodeKey],
+      );
+      requireValue(ep, 404, "分集不存在");
+      const dup = await one(
+        sql,
+        "SELECT 1 FROM series_scenes WHERE episode_id=$1 AND scene_no=$2",
+        [ep.id, body.scene_no],
+      );
+      requireValue(!dup, 409, `第 ${body.scene_no} 场已存在`);
+
+      let canvasUuid: string | null = null;
+      let canvasPublicId: string | null = null;
+      if (body.canvas_id) {
+        const existing = await this.canvases.project(sql, user, body.canvas_id);
+        requireValue(
+          existing.workspace_id === series.workspace_id,
+          403,
+          "只能绑定同一工作区的画布",
+        );
+        canvasUuid = existing.id;
+        canvasPublicId = existing.public_id;
+      } else if (body.create_canvas && !body.group_node_id) {
+        const epLabel = `S${String(ep.season_no).padStart(2, "0")}E${String(ep.episode_no).padStart(2, "0")}`;
+        const scLabel = `SC${String(body.scene_no).padStart(2, "0")}`;
+        const canvasTitle = `${series.title} · ${epLabel} ${scLabel} ${title}`.slice(
+          0,
+          80,
+        );
+        const notes = [
+          series.synopsis ? `剧集梗概：${series.synopsis}` : "",
+          body.summary?.trim() ? `分场梗概：${body.summary.trim()}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+        const initialDoc = parseCanvasDocument(
+          notes
+            ? {
+                nodes: [
+                  {
+                    id: "scene-brief",
+                    type: "sticky",
+                    title: `${epLabel} ${scLabel} · 分场说明`,
+                    x: 40,
+                    y: 40,
+                    width: 360,
+                    height: 220,
+                    text: notes.slice(0, 11000),
+                    color: "yellow",
+                  },
+                ],
+                edges: [],
+              }
+            : {},
+        );
+        const created = await this.canvases.createBoundCanvas(
+          sql,
+          user,
+          series.workspace_id,
+          canvasTitle,
+          initialDoc,
+        );
+        canvasUuid = created.id;
+        canvasPublicId = created.public_id;
+      } else if (ep.canvas_project_id) {
+        const epCanvas = await one(
+          sql,
+          "SELECT id, public_id FROM documents WHERE id=$1 AND NOT deleted",
+          [ep.canvas_project_id],
+        );
+        if (epCanvas) {
+          canvasUuid = String(epCanvas.id);
+          canvasPublicId = String(epCanvas.public_id);
+        }
+      }
+
+      const scId = randomUUID();
+      const scPublicId = randomUUID().replaceAll("-", "");
+      await sql.query(
+        `INSERT INTO series_scenes(id, public_id, episode_id, scene_no, title, summary, canvas_project_id, group_node_id, position)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $4)`,
+        [
+          scId,
+          scPublicId,
+          ep.id,
+          body.scene_no,
+          title,
+          pythonStrip(body.summary || ""),
+          canvasUuid,
+          body.group_node_id ?? null,
+        ],
+      );
+      await sql.query("UPDATE series SET updated_at=now() WHERE id=$1", [
+        series.id,
+      ]);
+      return {
+        id: scPublicId,
+        episode_id: ep.public_id,
+        scene_no: Number(body.scene_no),
+        title,
+        summary: pythonStrip(body.summary || ""),
+        canvas_id: canvasPublicId,
+        group_node_id: body.group_node_id ?? null,
+      };
+    });
+  }
+
+  async updateScene(
+    user: Actor,
+    seriesKey: string,
+    episodeKey: string,
+    sceneKey: string,
+    value: unknown,
+  ) {
+    const body = parseBody(value, sceneUpdateFields, true) as {
+      scene_no?: number;
+      title?: string;
+      summary?: string;
+      group_node_id?: string | null;
+    };
+    return this.p.db.transaction(async (sql) => {
+      const series = await this.findSeries(sql, user, seriesKey, true);
+      const ep = await one(
+        sql,
+        "SELECT id FROM series_episodes WHERE series_id=$1 AND public_id=$2",
+        [series.id, episodeKey],
+      );
+      requireValue(ep, 404, "分集不存在");
+      const sc = await one(
+        sql,
+        "SELECT * FROM series_scenes WHERE episode_id=$1 AND public_id=$2 FOR UPDATE",
+        [ep.id, sceneKey],
+      );
+      requireValue(sc, 404, "分场不存在");
+      const nextSceneNo = body.scene_no ?? Number(sc.scene_no);
+      const nextTitle =
+        body.title !== undefined ? pythonStrip(body.title) : String(sc.title);
+      requireValue(nextTitle, 400, "请输入分场标题");
+      const nextSummary =
+        body.summary !== undefined
+          ? pythonStrip(body.summary)
+          : String(sc.summary ?? "");
+      const nextGroup =
+        body.group_node_id !== undefined ? body.group_node_id : sc.group_node_id;
+      await sql.query(
+        `UPDATE series_scenes
+            SET scene_no = $2, title = $3, summary = $4, group_node_id = $5, position = $2
+          WHERE id = $1`,
+        [sc.id, nextSceneNo, nextTitle, nextSummary, nextGroup ?? null],
+      );
+      const canvas = sc.canvas_project_id
+        ? await one(
+            sql,
+            "SELECT public_id FROM documents WHERE id=$1 AND NOT deleted",
+            [sc.canvas_project_id],
+          )
+        : null;
+      return {
+        id: String(sc.public_id),
+        scene_no: nextSceneNo,
+        title: nextTitle,
+        summary: nextSummary,
+        canvas_id: canvas?.public_id ?? null,
+        group_node_id: nextGroup ?? null,
+      };
+    });
+  }
+
+  async removeScene(
+    user: Actor,
+    seriesKey: string,
+    episodeKey: string,
+    sceneKey: string,
+  ) {
+    return this.p.db.transaction(async (sql) => {
+      const series = await this.findSeries(sql, user, seriesKey, true);
+      const ep = await one(
+        sql,
+        "SELECT id FROM series_episodes WHERE series_id=$1 AND public_id=$2",
+        [series.id, episodeKey],
+      );
+      requireValue(ep, 404, "分集不存在");
+      const sc = await one(
+        sql,
+        "SELECT id FROM series_scenes WHERE episode_id=$1 AND public_id=$2 FOR UPDATE",
+        [ep.id, sceneKey],
+      );
+      requireValue(sc, 404, "分场不存在");
+      await sql.query("DELETE FROM series_scenes WHERE id=$1", [sc.id]);
       return { ok: true };
     });
   }

@@ -510,6 +510,7 @@ test("#3 F029: built-in Edge TTS works out-of-the-box with zero commercial keys,
   assert.ok(doneExp.result, "Composed MP4 storyboard must produce a real output asset");
 
   // 3. Configurable commercial TTS selection + REAL runtime failure fallback to Edge TTS (releasing held credits!)
+  let commercialErrorMode: "rejected" | "ambiguous" = "rejected";
   const failingCommercialTts: ProviderPlugin = {
     manifest: {
       id: "mock-commercial-tts",
@@ -550,6 +551,9 @@ test("#3 F029: built-in Edge TTS works out-of-the-box with zero commercial keys,
     },
     originalState: { configured: () => true, configuration: () => ({}), project: () => ({}) },
     submit: async () => {
+      if (commercialErrorMode === "ambiguous") {
+        throw new Error("socket hang up after sending request");
+      }
       throw new ProviderError("商业语音余额耗尽", "rejected");
     },
   };
@@ -641,6 +645,77 @@ test("#3 F029: built-in Edge TTS works out-of-the-box with zero commercial keys,
   ).rows[0];
   assert.equal(Number(walletAfter.balance), 100);
   assert.equal(Number(walletAfter.held), 0);
+
+  // 4. Ambiguous/network commercial TTS error MUST stay uncertain (never auto-fallback risking double-billing!)
+  commercialErrorMode = "ambiguous";
+  const ambigSubmitted = await f.runs.narrate(f.admin, canvasId, "shot1", {
+    expected_revision: updatedCanvas.revision,
+    uid: randomUUID(),
+  });
+  const ambigJobRow = (
+    await f.p.db.query("SELECT id FROM jobs WHERE public_id = $1", [ambigSubmitted.id])
+  ).rows[0];
+  await executor.execute(ambigJobRow.id);
+  const ambigAfter = (
+    await f.p.db.query("SELECT state, provider_model, price FROM jobs WHERE id = $1", [ambigJobRow.id])
+  ).rows[0];
+  assert.equal(ambigAfter.state, "uncertain");
+  assert.equal(ambigAfter.provider_model, "tts-1");
+  assert.equal(Number(ambigAfter.price), 5);
+
+  // 5. Free Edge TTS connection failure retries boundedly and finishes cleanly in `failed` (NOT `uncertain`)
+  await ensureBuiltinEdgeTts(f.p, { endpoint: "ws://127.0.0.1:1/closed-edge-tts" });
+  const failCanvas = await f.canvases.save(f.admin, canvasId, {
+    expected_revision: updatedCanvas.revision,
+    title: "Edge TTS Failure Handling Test",
+    document: {
+      schemaVersion: 1,
+      nodes: [
+        {
+          id: "shot1",
+          type: "video",
+          title: "开场镜头",
+          x: 0,
+          y: 0,
+          width: 300,
+          height: 220,
+          prompt: "city sunrise timelapse",
+          narration_text: "测试商业语音失败自动切换免费 Edge TTS 兜底。",
+          narration_model: "tts-1",
+          params: {},
+        },
+        {
+          id: "shot2",
+          type: "video",
+          title: "失败回退检查镜头",
+          x: 340,
+          y: 0,
+          width: 300,
+          height: 220,
+          prompt: "night city rain",
+          narration_text: "验证免费 Edge TTS 连接失败不会卡在 uncertain",
+          narration_model: "edge-tts",
+          params: {},
+        },
+      ],
+      edges: [],
+      shots: ["shot1", "shot2"],
+    },
+  });
+  const failSubmitted = await f.runs.narrate(f.admin, canvasId, "shot2", {
+    expected_revision: failCanvas.revision,
+    uid: randomUUID(),
+  });
+  const failJobRow = (
+    await f.p.db.query("SELECT id FROM jobs WHERE public_id = $1", [failSubmitted.id])
+  ).rows[0];
+  await executor.execute(failJobRow.id);
+  const failAfter = (
+    await f.p.db.query("SELECT state, error FROM jobs WHERE id = $1", [failJobRow.id])
+  ).rows[0];
+  assert.equal(failAfter.state, "failed", "Free Edge TTS connection error must settle cleanly as failed, not uncertain");
+  assert.match(String(failAfter.error), /Edge TTS/);
+  assert.match(String(failAfter.error), /重试/);
 });
 
 test("#4 + #8 F034: subscription zero double-counting, single-use order_id, idempotency, concurrency, renewal chaining, and Chinese multi-page PDF / date-range CSV statements", async (t) => {

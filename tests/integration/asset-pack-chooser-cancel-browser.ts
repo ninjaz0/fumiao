@@ -50,7 +50,7 @@ try {
   const page = await context.newPage();
   await page.goto(`/canvas/${id}?workspace=${workspace}`);
   await page.locator(".react-flow__node").filter({ has: page.getByLabel("节点名称 素材包节点") }).click({ position: { x: 160, y: 140 } });
-  const openPacks = page.locator(".canvas-pack-entry").getByRole("button");
+  const openPacks = page.locator(".canvas-pack-entry").getByRole("button", { name: /^素材包/ });
   await openPacks.click();
   const dialog = page.getByRole("dialog", { name: "素材包" });
   await dialog.getByRole("button", { name: "新建素材包" }).click();

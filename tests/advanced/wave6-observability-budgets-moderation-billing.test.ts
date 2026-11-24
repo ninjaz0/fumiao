@@ -386,8 +386,16 @@ test("F034 + Q5: batch redeem codes, invite rewards, idempotent period quota sub
   const pdf = await billing.exportStatement(f.admin, "pdf", wsPublicId);
   assert.equal(pdf.mime, "application/pdf");
   const pdfStr = pdf.bytes.toString("latin1");
+  const toUtf16BeHex = (value: string) =>
+    Array.from(value, (ch) =>
+      ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0"),
+    ).join("");
   assert.ok(pdfStr.startsWith("%PDF-1.4\n"));
-  assert.ok(pdfStr.includes("FUMIAO STUDIO - CREDIT ACCOUNT STATEMENT"));
+  assert.ok(pdfStr.includes("/BaseFont /STSong-Light"));
+  assert.ok(pdfStr.includes("/Encoding /UniGB-UCS2-H"));
+  assert.ok(pdfStr.includes(toUtf16BeHex("弗淼工作台 · 积分账户对账单")));
+  assert.ok(pdfStr.includes(toUtf16BeHex("内测礼券")));
+  assert.ok(pdfStr.includes(toUtf16BeHex("周期配额包发放")));
   assert.ok(pdfStr.includes("xref\n"));
   assert.ok(pdfStr.trimEnd().endsWith("%%EOF"));
 });

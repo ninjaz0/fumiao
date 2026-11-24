@@ -122,6 +122,11 @@ export const identityBodies: Record<string, Fields> = {
   },
   packTurnaround: {
     views: { kind: "dictionary", nullable: true, optional: true },
+    view: {
+      kind: "literal",
+      values: ["sheet", "front", "side", "back"],
+      optional: true,
+    },
     model: { kind: "string", max: 180, optional: true },
     ratio: {
       kind: "literal",

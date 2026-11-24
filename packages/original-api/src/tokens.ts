@@ -166,6 +166,9 @@ export const TOKEN_REST_ALLOWLIST: readonly TokenRouteRule[] = [
   tokenRule("POST", "/api/series/:key/episodes", "canvas:write", "Series", "在指定季下创建分集与绑定画布"),
   tokenRule("PUT", "/api/series/:key/episodes/:ep", "canvas:write", "Series", "更新分集标题、季号、集号或梗概"),
   tokenRule("DELETE", "/api/series/:key/episodes/:ep", "canvas:write", "Series", "删除分集"),
+  tokenRule("POST", "/api/series/:key/episodes/:ep/scenes", "canvas:write", "Series", "在指定分集下创建分场与绑定画布"),
+  tokenRule("PUT", "/api/series/:key/episodes/:ep/scenes/:scene", "canvas:write", "Series", "更新分场标题、场号或分组映射"),
+  tokenRule("DELETE", "/api/series/:key/episodes/:ep/scenes/:scene", "canvas:write", "Series", "删除分场"),
   // MCP Streamable HTTP
   tokenRule("POST", "/api/mcp", "mcp:use", "MCP", "Fumiao MCP Server Streamable HTTP JSON-RPC 2.0 入口"),
   tokenRule("GET", "/api/mcp", "mcp:use", "MCP", "Fumiao MCP Server SSE 事件通道"),

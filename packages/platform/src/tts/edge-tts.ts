@@ -82,6 +82,30 @@ export interface EdgeTtsRequest {
   volume?: string;
   /** Optional custom Edge-compatible WebSocket endpoint (defaults to Microsoft Edge ReadAloud WSS). */
   endpoint?: string;
+  /** Bounded retry attempts for transient connection failures (default 2, capped at 3). */
+  maxAttempts?: number;
+  /** Delay between retry attempts in ms (default 350). */
+  retryDelayMs?: number;
+}
+
+export type EdgeTtsErrorCode =
+  | "connect_failed"
+  | "closed_early"
+  | "timeout"
+  | "empty_audio"
+  | "send_failed"
+  | "oversize"
+  | "aborted";
+
+export class EdgeTtsError extends Error {
+  constructor(
+    public readonly code: EdgeTtsErrorCode,
+    message: string,
+    public readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = "EdgeTtsError";
+  }
 }
 
 export function buildEdgeSsml(req: EdgeTtsRequest): string {
@@ -111,21 +135,35 @@ export interface EdgeWebSocketLike {
 
 export type EdgeWebSocketFactory = (url: string) => EdgeWebSocketLike;
 
-/** Synthesize MP3 speech using Microsoft Edge ReadAloud WebSocket endpoint. */
-export async function synthesizeEdgeTts(
-  req: EdgeTtsRequest,
+function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new EdgeTtsError("aborted", "Edge TTS 合成已取消", false));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new EdgeTtsError("aborted", "Edge TTS 合成已取消", false));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function synthesizeEdgeTtsOnce(
+  ssml: string,
+  base: string,
   signal: AbortSignal,
-  wsFactory?: EdgeWebSocketFactory,
-  timeoutMs = 30_000,
+  wsFactory: EdgeWebSocketFactory | undefined,
+  timeoutMs: number,
 ): Promise<{ mime: "audio/mpeg"; bytes: Buffer }> {
   signal.throwIfAborted();
-  const ssml = buildEdgeSsml(req);
   const connectionId = randomUUID().replaceAll("-", "");
   const secMsGec = computeSecMsGec();
-  const base =
-    req.endpoint && /^wss?:\/\//.test(req.endpoint.trim())
-      ? req.endpoint.trim()
-      : EDGE_WS_BASE;
   const sep = base.includes("?") ? "&" : "?";
   const url =
     `${base}${sep}TrustedClientToken=${TRUSTED_CLIENT_TOKEN}` +
@@ -138,10 +176,18 @@ export async function synthesizeEdgeTts(
   return new Promise<{ mime: "audio/mpeg"; bytes: Buffer }>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let settled = false;
+    let opened = false;
     let totalBytes = 0;
     const maxBytes = 16 * 1024 * 1024;
-    const ws = createSocket(url);
-    ws.binaryType = "arraybuffer";
+    let ws: EdgeWebSocketLike;
+    try {
+      ws = createSocket(url);
+      ws.binaryType = "arraybuffer";
+    } catch (err) {
+      const detail = err instanceof Error && err.message ? err.message : "无法建立 WebSocket 连接";
+      reject(new EdgeTtsError("connect_failed", `Edge TTS 连接失败（${detail}）`, true));
+      return;
+    }
 
     const finish = (err?: Error) => {
       if (settled) return;
@@ -157,19 +203,24 @@ export async function synthesizeEdgeTts(
         reject(err);
       } else {
         const bytes = Buffer.concat(chunks);
-        if (!bytes.length) reject(new Error("Edge TTS 未返回音频数据"));
-        else resolve({ mime: "audio/mpeg", bytes });
+        if (!bytes.length) {
+          reject(new EdgeTtsError("empty_audio", "Edge TTS 未返回音频数据", true));
+        } else {
+          resolve({ mime: "audio/mpeg", bytes });
+        }
       }
     };
 
-    const onAbort = () => finish(new Error("Edge TTS 合成已取消"));
+    const onAbort = () =>
+      finish(new EdgeTtsError("aborted", "Edge TTS 合成已取消", false));
     signal.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(
-      () => finish(new Error("Edge TTS 合成超时")),
+      () => finish(new EdgeTtsError("timeout", `Edge TTS 合成超时（${Math.round(timeoutMs / 1000)}s）`, true)),
       timeoutMs,
     );
 
     ws.addEventListener("open", () => {
+      opened = true;
       const stamp = new Date().toUTCString();
       const configMsg =
         `X-Timestamp:${stamp}\r\n` +
@@ -199,7 +250,8 @@ export async function synthesizeEdgeTts(
         ws.send(configMsg);
         ws.send(ssmlMsg);
       } catch (e) {
-        finish(e instanceof Error ? e : new Error("Edge TTS 发送失败"));
+        const detail = e instanceof Error && e.message ? e.message : "发送失败";
+        finish(new EdgeTtsError("send_failed", `Edge TTS 发送失败（${detail}）`, true));
       }
     });
 
@@ -226,21 +278,62 @@ export async function synthesizeEdgeTts(
       const payload = buf.subarray(2 + headerLen);
       totalBytes += payload.length;
       if (totalBytes > maxBytes) {
-        finish(new Error("Edge TTS 输出超过 16 MB 限制"));
+        finish(new EdgeTtsError("oversize", "Edge TTS 输出超过 16 MB 限制", false));
         return;
       }
       chunks.push(payload);
     });
 
-    ws.addEventListener("error", () => {
-      finish(new Error("Edge TTS 连接失败"));
+    ws.addEventListener("error", (event: { message?: unknown; error?: { message?: unknown; cause?: unknown } }) => {
+      const rawDetail =
+        (typeof event?.error?.message === "string" && event.error.message.trim()) ||
+        (typeof event?.message === "string" && event.message.trim()) ||
+        (opened ? "连接中断" : "握手被拒绝或网络不可达");
+      finish(new EdgeTtsError("connect_failed", `Edge TTS 连接失败（${rawDetail}）`, true));
     });
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (event: { code?: unknown; reason?: unknown }) => {
       if (!settled) {
         if (chunks.length) finish();
-        else finish(new Error("Edge TTS 连接提前关闭"));
+        else {
+          const code = typeof event?.code === "number" ? event.code : 0;
+          const reason = typeof event?.reason === "string" && event.reason.trim() ? `: ${event.reason.trim()}` : "";
+          const suffix = code ? `（code=${code}${reason}）` : "";
+          finish(new EdgeTtsError("closed_early", `Edge TTS 连接提前关闭${suffix}`, true));
+        }
       }
     });
   });
+}
+
+/** Synthesize MP3 speech using Microsoft Edge ReadAloud WebSocket endpoint with bounded retries. */
+export async function synthesizeEdgeTts(
+  req: EdgeTtsRequest,
+  signal: AbortSignal,
+  wsFactory?: EdgeWebSocketFactory,
+  timeoutMs = 30_000,
+): Promise<{ mime: "audio/mpeg"; bytes: Buffer }> {
+  signal.throwIfAborted();
+  const ssml = buildEdgeSsml(req);
+  const base =
+    req.endpoint && /^wss?:\/\//.test(req.endpoint.trim())
+      ? req.endpoint.trim()
+      : EDGE_WS_BASE;
+  const maxAttempts = Math.max(1, Math.min(3, Math.floor(req.maxAttempts ?? 2)));
+  const retryDelayMs = Math.max(0, Math.min(5_000, Math.floor(req.retryDelayMs ?? 350)));
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await synthesizeEdgeTtsOnce(ssml, base, signal, wsFactory, timeoutMs);
+    } catch (error) {
+      lastError = error;
+      const retryable = error instanceof EdgeTtsError ? error.retryable : false;
+      if (!retryable || attempt >= maxAttempts || signal.aborted) {
+        throw error;
+      }
+      await sleepWithSignal(retryDelayMs * attempt, signal);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new EdgeTtsError("connect_failed", "Edge TTS 连接失败", false);
 }

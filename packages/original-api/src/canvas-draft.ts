@@ -236,6 +236,14 @@ export const canvasBatchRunFields: Fields = {
     ...list(batchStageField, 4),
     default: ["image", "video"],
   },
+  precheck_token: { kind: "string", max: 128, optional: true },
+  expected_total_credits: { kind: "integer", min: 0, max: 100_000_000, optional: true },
+  executable_keys: {
+    kind: "list",
+    item: { kind: "string", min: 1, max: 160 },
+    max: 480,
+    optional: true,
+  },
 };
 export const canvasGridCropFields: Fields = {
   rows: literal([2, 3], 3),
@@ -297,6 +305,20 @@ export const episodeUpdateFields: Fields = {
     values: ["draft", "producing", "review", "done"],
     optional: true,
   },
+};
+export const sceneCreateFields: Fields = {
+  scene_no: { kind: "integer", min: 1, max: 999 },
+  title: { kind: "string", min: 1, max: 120 },
+  summary: { kind: "string", max: 2000, default: "" },
+  canvas_id: { kind: "string", max: 64, nullable: true, optional: true },
+  group_node_id: { kind: "string", max: 80, nullable: true, optional: true },
+  create_canvas: { kind: "boolean", strict: false, default: true },
+};
+export const sceneUpdateFields: Fields = {
+  scene_no: { kind: "integer", min: 1, max: 999, optional: true },
+  title: { kind: "string", min: 1, max: 120, optional: true },
+  summary: { kind: "string", max: 2000, optional: true },
+  group_node_id: { kind: "string", max: 80, nullable: true, optional: true },
 };
 export type CanvasParams = {
   h3: {

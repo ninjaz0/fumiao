@@ -685,6 +685,35 @@ class OriginalApi {
   ) {
     return this.series.removeEpisode(req.actor, key, ep);
   }
+  @Post("api/series/:key/episodes/:ep/scenes")
+  @HttpCode(200)
+  createScene(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("ep") ep: string,
+    @Body() body: unknown,
+  ) {
+    return this.series.createScene(req.actor, key, ep, body);
+  }
+  @Put("api/series/:key/episodes/:ep/scenes/:scene")
+  updateScene(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("ep") ep: string,
+    @Param("scene") scene: string,
+    @Body() body: unknown,
+  ) {
+    return this.series.updateScene(req.actor, key, ep, scene, body);
+  }
+  @Delete("api/series/:key/episodes/:ep/scenes/:scene")
+  removeScene(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("ep") ep: string,
+    @Param("scene") scene: string,
+  ) {
+    return this.series.removeScene(req.actor, key, ep, scene);
+  }
   @Put("api/favorites") favorites(
     @Req() req: AuthRequest,
     @Body() body: unknown,

@@ -672,14 +672,31 @@ export class Executor {
                   interrupted: stage === "submit" && lifecycle.version === 1,
                   uncertain: stage === "submit" && lifecycle.version === 1,
                 };
+        let settledFailed = false;
         await p.db.transaction(async (sql) => {
           const current = await one(
             sql,
             "SELECT * FROM jobs WHERE id=$1 AND lease_token=$2 FOR UPDATE",
             [id, job.lease_token],
           );
-          if (current) await this.requestOutcome(sql, current, outcome);
+          if (current) {
+            settledFailed = await this.requestOutcome(sql, current, outcome);
+          }
         });
+        if (settledFailed) {
+          await wakeTailFrameChildren(
+            p,
+            {
+              id: String(job.id),
+              workspace_id: String(job.workspace_id),
+              owner_id: String(job.owner_id),
+              kind: String(job.kind),
+            },
+            "failed",
+            undefined,
+            AbortSignal.timeout(30_000),
+          ).catch(() => {});
+        }
         return;
       }
       if (
@@ -706,18 +723,8 @@ export class Executor {
             [id, job.lease_token],
           );
           if (!current) return;
-          if (
-            current.kind === "audio" &&
-            !current.remote_id &&
-            !current.receipt &&
-            (await this.tryAudioFallbackToEdgeTts(
-              sql,
-              current,
-              error instanceof Error ? error.message : "语音服务不可用",
-            ))
-          ) {
-            return;
-          }
+          // Never auto-fallback paid commercial providers on ambiguous/generic errors:
+          // lack of remote_id/receipt does not prove the upstream did not accept or bill.
           await new JobTiming(p).end(sql, current, "interrupted");
           await sql.query(
             `UPDATE jobs SET state=CASE WHEN receipt IS NOT NULL THEN 'finalizing' WHEN remote_id IS NOT NULL THEN 'running' ELSE 'uncertain' END,
@@ -853,7 +860,11 @@ export class Executor {
     );
     return true;
   }
-  private async requestOutcome(sql: Sql, job: any, value: RequestDisposition) {
+  private async requestOutcome(
+    sql: Sql,
+    job: any,
+    value: RequestDisposition,
+  ): Promise<boolean> {
     const outcome = requestDispositionSchema.parse(value),
       timing = new JobTiming(this.platform);
     if (outcome.action === "poll") {
@@ -862,6 +873,7 @@ export class Executor {
         "UPDATE jobs SET state='running',lease_token=NULL,lease_until=NULL WHERE id=$1",
         [job.id],
       );
+      return false;
     } else if (outcome.action === "retry") {
       requireValue(
         !job.remote_id && !job.receipt,
@@ -873,22 +885,24 @@ export class Executor {
         "UPDATE jobs SET state='queued',request_note=$2,request_retry_at=now()+($3*interval '1 second'),error=NULL,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1",
         [job.id, outcome.note, outcome.delaySeconds],
       );
+      return false;
     } else {
       // F029: Non-billable audio failure automatically falls back to enabled free Edge TTS
       if (
         job.kind === "audio" &&
         !outcome.uncertain &&
+        !outcome.interrupted &&
         !job.remote_id &&
         !job.receipt &&
         (await this.tryAudioFallbackToEdgeTts(sql, job, outcome.note || "上游语音失败"))
       ) {
-        return;
+        return false;
       }
       // F024: Moderation-blocked rejected/non-billable jobs may neutralize & retry
       // reusing the exact same hold:<job.id> reservation (zero double-billing).
       if (await tryModerationRewrite(sql, job, outcome)) {
         await timing.end(sql, job, "interrupted");
-        return;
+        return false;
       }
       if (outcome.interrupted) await timing.end(sql, job, "interrupted");
       if (outcome.uncertain)
@@ -904,6 +918,7 @@ export class Executor {
         undefined,
         { preserveTiming: !!outcome.interrupted },
       );
+      return true;
     }
   }
   async saveArtifacts(

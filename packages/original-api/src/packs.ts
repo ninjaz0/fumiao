@@ -15,12 +15,27 @@ import { parseDraft } from "./drafts.js";
 import { parseBody } from "./validation.js";
 import { identityBodies } from "./contracts.js";
 
-export function buildTurnaroundPrompt(name: string, description: string, styleNote?: string) {
+export function buildTurnaroundPrompt(
+  name: string,
+  description: string,
+  styleNote?: string,
+  view: "sheet" | "front" | "side" | "back" = "sheet",
+) {
   const detail = description.trim() || name.trim();
+  const viewInstructions: Record<"sheet" | "front" | "side" | "back", string> = {
+    sheet:
+      "同一张宽幅设定图中并排展示该角色的三个标准全身视角：左侧为正面（Front View），中间为正侧面（Side Profile View），右侧为背面（Back View）。",
+    front:
+      "标准全身正面定妆照（Front View）：正对镜头，头身比、五官、发型、服装纹理与配饰清晰完整。",
+    side:
+      "标准全身正侧面定妆照（Side Profile View）：严格 90 度侧面轮廓，发型、五官侧影与服装剪裁与正面完全一致。",
+    back:
+      "标准全身背面定妆照（Back View）：背对镜头展示发尾、服装背部结构与配饰细节，与正面完全一致。",
+  };
   const base = [
-    `角色设定三视图（Turnaround Character Sheet）：「${name.trim()}」`,
-    "同一张宽幅设定图中并排展示该角色的三个标准全身视角：左侧为正面（Front View），中间为正侧面（Side Profile View），右侧为背面（Back View）。",
-    "纯浅灰/纯白无杂物摄影棚背景，三视角头身比、五官、发型、服装纹理与配饰完全一致，自然中立站姿，均匀平光，清晰干净的影视定妆照质感，无多余文字水印。",
+    `角色设定图（Turnaround Character Reference）：「${name.trim()}」`,
+    viewInstructions[view],
+    "纯浅灰/纯白无杂物摄影棚背景，自然中立站姿，均匀平光，清晰干净的影视定妆照质感，无多余文字水印。",
     detail ? `角色特征描述：${detail}` : "",
     styleNote?.trim() ? `补充风格要求：${styleNote.trim()}` : "",
   ]
@@ -121,6 +136,7 @@ export class OriginalPacks {
   ) {
     const body = parseBody(value, identityBodies.packTurnaround, true) as {
       views?: PackTurnaroundViews | null;
+      view?: "sheet" | "front" | "side" | "back";
       model?: string;
       ratio?: string;
       resolution?: string;
@@ -148,10 +164,12 @@ export class OriginalPacks {
       const row = await this.packs.get(sql, user, key, workspace.id, true, "share");
       requireValue(!row.locked, 409, "素材包已锁定，请先解锁后再生成三视图");
       const pack = await this.packs.view(sql, row);
+      const targetView = body.view ?? "sheet";
       const prompt = buildTurnaroundPrompt(
         pack.name,
         pack.description,
         body.style_note,
+        targetView,
       );
       const bindings = await CanvasSubmissionModels.read(sql, {
         strict: false,

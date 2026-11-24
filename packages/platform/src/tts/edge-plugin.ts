@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   OriginalSubmissionError,
+  ProviderError,
   type Manifest,
   type ProviderPlugin,
 } from "@fumiao/plugin-sdk/index.js";
@@ -11,6 +12,7 @@ import type { Platform } from "../platform.js";
 import {
   EDGE_TTS_VOICE_IDS,
   EDGE_TTS_VOICE_LABELS,
+  EdgeTtsError,
   synthesizeEdgeTts,
   type EdgeWebSocketFactory,
 } from "./edge-tts.js";
@@ -216,20 +218,35 @@ export function createEdgeTtsPlugin(
         typeof e.config.endpoint === "string" && e.config.endpoint.trim()
           ? e.config.endpoint.trim()
           : undefined;
-      const { mime, bytes } = await synthesizeEdgeTts(
-        { text: e.input.prompt, voice, rate, pitch, endpoint },
-        e.signal,
-        wsFactory,
-      );
-      return {
-        state: "completed",
-        artifacts: [
-          {
-            mime,
-            url: `data:${mime};base64,${bytes.toString("base64")}`,
-          },
-        ],
-      };
+      try {
+        const { mime, bytes } = await synthesizeEdgeTts(
+          { text: e.input.prompt, voice, rate, pitch, endpoint },
+          e.signal,
+          wsFactory,
+        );
+        return {
+          state: "completed",
+          artifacts: [
+            {
+              mime,
+              url: `data:${mime};base64,${bytes.toString("base64")}`,
+            },
+          ],
+        };
+      } catch (err) {
+        if (err instanceof EdgeTtsError && err.code === "aborted") {
+          throw err;
+        }
+        const detail =
+          err instanceof Error && err.message ? err.message : "Edge TTS 连接失败";
+        // Edge TTS is a 0-credit free provider: a clean pre-artifact connection/handshake
+        // failure should finish in `failed` with a diagnosable message (allowing immediate
+        // user retry or engine switching) instead of leaving the job stuck in `uncertain`.
+        throw new ProviderError(
+          `${detail}。请稍后重试，或在「设置 → 插件」配置自定义 Edge 语音端点或商业/本地语音引擎`,
+          "rejected",
+        );
+      }
     },
   };
 }

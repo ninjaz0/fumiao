@@ -743,7 +743,23 @@ export function CanvasWorkspace({
     [preview, setPreview] = useState<Preview | null>(null),
     [confirm, setConfirm] = useState<null | (() => void)>(null);
   const [shotList, setShotList] = useState(false);
-  const [viewMode, setViewMode] = useState<"canvas" | "split" | "list">("canvas");
+  const [viewMode, setViewModeState] = useState<"canvas" | "split" | "list">(() => {
+    try {
+      const saved = localStorage.getItem("fm-canvas-view-mode");
+      if (saved === "canvas" || saved === "split" || saved === "list") return saved;
+    } catch {
+      // Ignore storage failures in restricted contexts.
+    }
+    return "canvas";
+  });
+  const setViewMode = useCallback((mode: "canvas" | "split" | "list") => {
+    setViewModeState(mode);
+    try {
+      localStorage.setItem("fm-canvas-view-mode", mode);
+    } catch {
+      // Ignore storage failures.
+    }
+  }, []);
   const [precheckTarget, setPrecheckTarget] = useState<{
     nodeIds: string[];
     title?: string;
@@ -1096,14 +1112,50 @@ export function CanvasWorkspace({
   );
   useEffect(()=>{
     if(doc.status==='conflict')return;
-    const updates=new Map<string,number>();
+    const narrationUpdates=new Map<string,number>();
+    const dialogueUpdates=new Map<string,Map<string,number>>();
     for(const node of doc.value.document.nodes){
-      if(!node.narration_pending)continue;
-      const job=runById.get(node.narration_pending);
-      if(job?.status==='done'&&job.result&&job.prompt.trim()===(node.narration_text||'').trim()&&
-         (job.inputs?.instruction||'').trim()===(node.narration_instruction||'').trim())updates.set(node.id,job.id);
+      if(node.narration_pending){
+        const job=runById.get(node.narration_pending);
+        if(job?.status==='done'&&job.result&&job.prompt.trim()===(node.narration_text||'').trim()&&
+           (job.inputs?.instruction||'').trim()===(node.narration_instruction||'').trim()){
+          narrationUpdates.set(node.id,job.id);
+        }
+      }
+      if(node.dialogue_lines?.length){
+        for(const line of node.dialogue_lines){
+          if(!line.audio_pending)continue;
+          const job=runById.get(line.audio_pending);
+          if(job?.status==='done'&&job.result){
+            let map=dialogueUpdates.get(node.id);
+            if(!map){map=new Map();dialogueUpdates.set(node.id,map);}
+            map.set(line.id,job.id);
+          }
+        }
+      }
     }
-    if(updates.size)doc.change(d=>({...d,document:{...d.document,nodes:d.document.nodes.map(n=>updates.has(n.id)?{...n,narration_job:updates.get(n.id)!,narration_pending:null}:n)}}));
+    if(narrationUpdates.size||dialogueUpdates.size){
+      doc.change(d=>({
+        ...d,
+        document:{
+          ...d.document,
+          nodes:d.document.nodes.map(n=>{
+            const nextNarr=narrationUpdates.get(n.id);
+            const nextDlg=dialogueUpdates.get(n.id);
+            if(!nextNarr&&!nextDlg)return n;
+            return {
+              ...n,
+              ...(nextNarr?{narration_job:nextNarr,narration_pending:null}:{}),
+              ...(nextDlg&&n.dialogue_lines?{
+                dialogue_lines:n.dialogue_lines.map(l=>
+                  nextDlg.has(l.id)?{...l,audio_job:nextDlg.get(l.id)!,audio_pending:null}:l
+                ),
+              }:{}),
+            };
+          }),
+        },
+      }));
+    }
   },[runById,doc.value.document.nodes,doc.status]);
   const beginEditing = useCallback(
     (id: string) => {
@@ -2325,12 +2377,23 @@ export function CanvasWorkspace({
   const chooseH3Mode=(mode:'reference'|'frames')=>{
     if(!single)return;
     if(mode==='frames' && single.asset_packs?.length){notify('请先将素材包图片放入画布并取消素材包，再选择首尾帧');return;}
-    if(mode==='reference'){patchParams({h3:{mode,video_audio:[]},h3_refs:[...new Set([...(single.params.h3_refs||[]),h3Options.first_frame,h3Options.last_frame].filter((k):k is string=>Boolean(k)))]});setMenu(null);return;}
+    if(mode==='reference'){
+      edit(single.id,{
+        generation_mode:'omni_ref',
+        params:{
+          ...single.params,
+          h3:{mode,video_audio:[]},
+          h3_refs:[...new Set([...(single.params.h3_refs||[]),h3Options.first_frame,h3Options.last_frame].filter((k):k is string=>Boolean(k)))],
+        },
+      });
+      setMenu(null);
+      return;
+    }
     const images=h3Ids.filter(k=>mediaType(studio.assets.find(a=>a.id===k))==='Picture');
     let last=images[1]||null;const a=studio.assets.find(a=>a.id===images[0]),b=studio.assets.find(a=>a.id===last);
     if(a&&b&&Math.abs(Math.log((a.w/a.h)/(b.w/b.h)))>.035)last=null;
     const options={mode,first_frame:images[0]||null,last_frame:last,video_audio:[]};
-    edit(single.id,{prompt:remapH3Prompt(single.prompt,h3Ids,h3Ids,studio.assets,options),params:{...single.params,h3:options}});setMenu(null);
+    edit(single.id,{generation_mode:'first_last_frame',prompt:remapH3Prompt(single.prompt,h3Ids,h3Ids,studio.assets,options),params:{...single.params,h3:options}});setMenu(null);
   };
   // The public editor records conversion as a separate undoable document edit.
   useEffect(() => {
@@ -2361,6 +2424,165 @@ export function CanvasWorkspace({
             ),
         )
       : [];
+  const availableAudioModels = Object.entries(studio.model_catalog)
+    .filter(([id, spec]) => spec.kind === "audio" && availableModel(id))
+    .map(([id, spec]) => ({ id, label: spec.label || id }));
+  const compositionAudioAssets = [
+    ...studio.assets
+      .filter((a) => a.kind === "audio" || a.kind === "ref_audio")
+      .map((a) => ({
+        id: a.id,
+        label: a.name || `音频 ${a.id.slice(0, 6)}`,
+      })),
+    ...studio.jobs
+      .filter((j) => j.kind === "audio" && j.status === "done" && j.result)
+      .map((j) => ({
+        id: j.result!,
+        label: `${j.model || "配乐"} · ${(j.prompt || "").slice(0, 18) || "#" + j.id}`,
+      })),
+  ].filter((item, idx, arr) => arr.findIndex((x) => x.id === item.id) === idx);
+  const handleInheritTailFrame = async (shotId: string, closeModal = false) => {
+    const source = doc.ref.current.document.nodes.find((n) => n.id === shotId);
+    if (!source) return;
+    await doc.flush();
+    const res = await api<{ asset_id: string; width: number; height: number }>(
+      `/api/canvases/${project.id}/nodes/${shotId}/tail-frame`,
+      {},
+    );
+    const nextIdx = doc.ref.current.document.nodes.length + 1;
+    const imgNode = newNode("image", source.x + source.width + 64, source.y, nextIdx);
+    imgNode.title = `${source.title || "镜头"} · 尾帧`;
+    imgNode.media_id = res.asset_id;
+    imgNode.use_media = true;
+    const vidNode = newNode("video", imgNode.x + imgNode.width + 64, source.y, nextIdx + 1);
+    vidNode.title = `${source.title || "镜头"} 续镜`;
+    vidNode.tail_inherited = true;
+    vidNode.generation_mode = "first_last_frame";
+    vidNode.params = {
+      ...source.params,
+      h3: {
+        mode: "frames",
+        first_frame: res.asset_id,
+        last_frame: null,
+        video_audio: [],
+      },
+    };
+    doc.change((d) => ({
+      ...d,
+      document: {
+        ...d.document,
+        nodes: [...d.document.nodes, imgNode, vidNode],
+        edges: [
+          ...d.document.edges,
+          { id: crypto.randomUUID(), source: imgNode.id, target: vidNode.id },
+        ],
+        shots: [...(d.document.shots ?? []), vidNode.id],
+      },
+    }));
+    notify("已抽取尾帧并创建续接镜头");
+    if (closeModal) setShotList(false);
+    selectOne(vidNode.id);
+    focusNodes([vidNode.id]);
+  };
+  const renderShotNarration = (shot: { id: string }) => {
+    const node = doc.value.document.nodes.find((n) => n.id === shot.id);
+    if (!node) return null;
+    const preferred = node.narration_model?.trim();
+    const audioCandidates = [
+      ...(preferred ? [preferred] : []),
+      "breeze-tts-2",
+      "tts-1",
+      "gpt-4o-mini-tts",
+      "local-tts-compat",
+      "edge-tts",
+    ];
+    const activeAudio =
+      audioCandidates.find((m) => availableModel(m)) ??
+      availableAudioModels[0]?.id ??
+      "";
+    const priceItem = activeAudio
+      ? studio.pricing.items.find((p) => p.key.startsWith(activeAudio + "|"))
+      : undefined;
+    const price = !activeAudio
+      ? null
+      : (priceItem?.amount ?? (activeAudio === "edge-tts" ? 0 : null));
+    const unavailableReason = !activeAudio
+      ? "当前空间未开放语音模型"
+      : price === null
+        ? "语音生成尚未定价"
+        : studio.credits.available < price
+          ? "当前空间积分不足"
+          : "";
+    return (
+      <Narration
+        node={node}
+        runs={runs}
+        cost={price}
+        unavailableReason={unavailableReason}
+        audioModels={availableAudioModels}
+        onEditStart={doc.begin}
+        onEditEnd={doc.end}
+        onChange={(patch, history) => edit(shot.id, patch, history)}
+        onGenerate={async () => {
+          const rev = await doc.flush();
+          const key = `fm-canvas-voice-${studio.me.id}-${project.id}-${shot.id}`;
+          let pending;
+          try {
+            pending = JSON.parse(localStorage.getItem(key) || "null");
+          } catch {}
+          if (!pending) {
+            pending = {
+              uid: crypto.randomUUID(),
+              expected_revision: rev,
+              price_revision: studio.pricing.revision,
+            };
+            localStorage.setItem(key, JSON.stringify(pending));
+          }
+          try {
+            const result = await api(
+              `/api/canvases/${project.id}/nodes/${shot.id}/narration`,
+              pending,
+            );
+            edit(shot.id, { narration_pending: result.id });
+            await doc.flush();
+            localStorage.removeItem(key);
+            await fetchRuns();
+          } catch (e) {
+            if (e instanceof ApiError && e.status < 500)
+              localStorage.removeItem(key);
+            throw e;
+          }
+        }}
+        onGenerateDialogue={async (lineId) => {
+          const rev = await doc.flush();
+          const result = await api<{ items: { line_id: string; id: number }[] }>(
+            `/api/canvases/${project.id}/nodes/${shot.id}/dialogue`,
+            {
+              uid: crypto.randomUUID(),
+              expected_revision: rev,
+              price_revision: studio.pricing.revision,
+              ...(lineId ? { line_id: lineId } : {}),
+            },
+          );
+          const idMap = new Map(result.items.map((it) => [it.line_id, it.id]));
+          const current = doc.ref.current.document.nodes.find(
+            (n) => n.id === shot.id,
+          );
+          if (current?.dialogue_lines?.length) {
+            // F027 (#9): Write ONLY audio_pending on submission; preserve previous
+            // valid audio_job until the new run actually completes with an output asset.
+            edit(shot.id, {
+              dialogue_lines: current.dialogue_lines.map((l) =>
+                idMap.has(l.id) ? { ...l, audio_pending: idMap.get(l.id)! } : l,
+              ),
+            });
+            await doc.flush();
+          }
+          await fetchRuns();
+        }}
+      />
+    );
+  };
   return (
     <div
       ref={workspaceRef}
@@ -3027,14 +3249,33 @@ export function CanvasWorkspace({
             </div>
           )}
           {h3Native&&<H3Inputs key={single.id} options={h3Options} ids={h3Ids} assets={studio.assets} onChange={updateH3} onAsset={a=>setStudio(s=>({...s,assets:[{...a,owner:s.me.id},...s.assets]}))} onMention={token=>edit(single.id,{prompt:single.prompt+token+' '})} onBusy={setH3Busy}/>}
-          {!h3Frames&&<div className="canvas-pack-entry fm-composer-wave3-bar">
-            <button className="secondary" onClick={() => setPackPicker(single.id)}><FolderOpen size={15}/>素材包{single.asset_packs?.length ? ` · ${single.asset_packs.length}` : ''}</button>
+          <div className="fm-composer-wave3-bar">
+            {!h3Frames&&<div className="canvas-pack-entry">
+              <button className="secondary" onClick={() => setPackPicker(single.id)}><FolderOpen size={15}/>素材包{single.asset_packs?.length ? ` · ${single.asset_packs.length}` : ''}</button>
+            </div>}
             <select
               className="fm-mode-select"
               aria-label="分镜生成链路"
-              value={single.generation_mode ?? (single.type === "video" ? "first_last_frame" : "first_frame")}
+              value={
+                single.generation_mode ??
+                (h3Native
+                  ? h3Frames
+                    ? "first_last_frame"
+                    : "omni_ref"
+                  : single.type === "video"
+                    ? "first_last_frame"
+                    : "first_frame")
+              }
               onChange={(e) => {
                 const mode = e.target.value as CanvasGenerationMode;
+                if (h3Native && mode === "omni_ref") {
+                  chooseH3Mode("reference");
+                  return;
+                }
+                if (h3Native && mode === "first_last_frame") {
+                  chooseH3Mode("frames");
+                  return;
+                }
                 edit(single.id, {
                   generation_mode: mode,
                   ...(mode === "grid_preview" ? { grid_layout: single.grid_layout ?? "3x3" } : {}),
@@ -3082,7 +3323,7 @@ export function CanvasWorkspace({
                 宫格裁切
               </button>
             )}
-          </div>}
+          </div>
           {showCinePanel && (
             <CinematographyPanel
               compact
@@ -3090,7 +3331,42 @@ export function CanvasWorkspace({
               onChange={(cinematography) => edit(single.id, { cinematography })}
             />
           )}
-          {h3Native?<H3Prompt value={single.prompt} ids={h3Ids} assets={studio.assets} frames={h3Frames} onChange={prompt=>edit(single.id,{prompt},false)} onFocus={doc.begin} onBlur={doc.end}/>:<ReferencePromptInput
+          {h3Native?<H3Prompt
+            value={single.prompt}
+            ids={h3Ids}
+            assets={studio.assets}
+            frames={h3Frames}
+            packs={availablePacks}
+            onChange={prompt=>edit(single.id,{prompt},false)}
+            onMountPack={(pack) => {
+              const existing = single.asset_packs ?? [];
+              const nextPacks = existing.some((p) => p.id === pack.id)
+                ? existing
+                : [...existing, { id: pack.id, revision: pack.revision, name: pack.name }];
+              setPackMedia((prev) => ({ ...prev, [pack.id]: pack.media }));
+              if (h3Frames) {
+                edit(single.id, {
+                  generation_mode: "omni_ref",
+                  asset_packs: nextPacks,
+                  params: {
+                    ...single.params,
+                    h3: { mode: "reference", video_audio: [] },
+                    h3_refs: [
+                      ...new Set([
+                        ...(single.params.h3_refs || []),
+                        h3Options.first_frame,
+                        h3Options.last_frame,
+                      ].filter((k): k is string => Boolean(k))),
+                    ],
+                  },
+                });
+              } else {
+                edit(single.id, { asset_packs: nextPacks });
+              }
+            }}
+            onFocus={doc.begin}
+            onBlur={doc.end}
+          />:<ReferencePromptInput
             value={single.prompt}
             packs={availablePacks}
             refImages={referenceMedia.filter((id): id is string => Boolean(id))}
@@ -3099,6 +3375,7 @@ export function CanvasWorkspace({
             onChange={(prompt) => edit(single.id, { prompt }, false)}
             onMountPack={(pack) => {
               const existing = single.asset_packs ?? [];
+              setPackMedia((prev) => ({ ...prev, [pack.id]: pack.media }));
               if (!existing.some((p) => p.id === pack.id)) {
                 edit(single.id, {
                   asset_packs: [...existing, { id: pack.id, revision: pack.revision, name: pack.name }],
@@ -3876,22 +4153,53 @@ export function CanvasWorkspace({
       {aiStoryboard && <Modal title="AI 分镜" wide onClose={() => setAiStoryboard(false)}>
         <AiStoryboard workspace={project.workspace} userId={studio.me.id} project={project.id} onApply={async (shots, options)=>{
           await doc.flush();const current=doc.ref.current.document;
-          if(current.nodes.length+shots.length*2>400||current.edges.length+shots.length>1200)throw new Error('画布容量不足（最多 400 节点 / 1200 连线），请先整理节点');
+          const isGridPreview=options.generationMode==='grid_preview';
+          const nodesPerShot=isGridPreview?3:2;
+          const edgesPerShot=isGridPreview?2:1;
+          if(current.nodes.length+shots.length*nodesPerShot>400||current.edges.length+shots.length*edgesPerShot>1200)throw new Error('画布容量不足（最多 400 节点 / 1200 连线），请先整理节点');
           const x=current.nodes.length?Math.max(...current.nodes.map(n=>n.x+n.width))+120:0;
-          const created=shots.map((shot,i)=>({
-            text:{...newNode('text',x+i*400,0,i+1),title:shot.title+' · 文案',text:shot.prompt},
-            video:{
-              ...newNode('video',x+i*400,330,i+1),
+          const created=shots.map((shot,i)=>{
+            const text={...newNode('text',x+i*420,0,i+1),title:shot.title+' · 文案',text:shot.prompt};
+            const gridImage=isGridPreview?{
+              ...newNode('image',x+i*420,280,i+1),
+              title:shot.title+' · 宫格预览',
+              prompt:shot.prompt,
+              generation_mode:'grid_preview' as const,
+              grid_layout:(options.gridLayout??'3x3') as '2x2'|'3x3',
+            }:null;
+            const video={
+              ...newNode('video',x+i*420,isGridPreview?580:330,i+1),
               title:shot.title,
               narration_text:shot.narration,
-              generation_mode:options.generationMode,
-              ...(options.gridLayout?{grid_layout:options.gridLayout}:{}),
+              generation_mode:isGridPreview?'first_frame':options.generationMode,
+              ...(options.gridLayout&&!isGridPreview?{grid_layout:options.gridLayout}:{}),
               ...(options.tailChain&&i>0?{tail_inherited:true}:{}),
               params:{...newNode('video',0,0,1).params,model:'MiniMax H3',seconds:shot.seconds},
+            };
+            return {text,gridImage,video};
+          });
+          doc.change(d=>({
+            ...d,
+            document:{
+              ...d.document,
+              nodes:[...d.document.nodes,...created.flatMap(n=>n.gridImage?[n.text,n.gridImage,n.video]:[n.text,n.video])],
+              edges:[
+                ...d.document.edges,
+                ...created.flatMap(n=>n.gridImage
+                  ? [
+                      {id:crypto.randomUUID(),source:n.text.id,target:n.gridImage.id},
+                      {id:crypto.randomUUID(),source:n.gridImage.id,target:n.video.id},
+                    ]
+                  : [{id:crypto.randomUUID(),source:n.text.id,target:n.video.id}]),
+              ],
+              shots:[...(d.document.shots||[]),...created.map(n=>n.video.id)],
             },
           }));
-          doc.change(d=>({...d,document:{...d.document,nodes:[...d.document.nodes,...created.flatMap(n=>[n.text,n.video])],edges:[...d.document.edges,...created.map(n=>({id:crypto.randomUUID(),source:n.text.id,target:n.video.id}))],shots:[...(d.document.shots||[]),...created.map(n=>n.video.id)]}}));
-          setAiStoryboard(false);setSelected([created[0].video.id]);requestAnimationFrame(()=>focusNodes(created.map(n=>n.video.id)));notify(`已加入 ${shots.length} 个分镜，可编辑后再生成`);
+          setAiStoryboard(false);
+          const firstFocus=created[0].gridImage?created[0].gridImage.id:created[0].video.id;
+          setSelected([firstFocus]);
+          requestAnimationFrame(()=>focusNodes(created.map(n=>n.gridImage?n.gridImage.id:n.video.id)));
+          notify(isGridPreview?`已加入 ${shots.length} 个宫格预览图 + 视频分镜，可先低成本生图并裁切首帧`:`已加入 ${shots.length} 个分镜，可编辑后再生成`);
         }}/>
       </Modal>}
       {packPicker && <Modal title="素材包" wide onClose={() => setPackPicker(null)}>
@@ -3923,68 +4231,14 @@ export function CanvasWorkspace({
                 })
                 .catch((e) => notify((e as Error).message));
             }}
-            onInheritTailFrame={async (shotId) => {
-              const source = doc.ref.current.document.nodes.find((n) => n.id === shotId);
-              if (!source) return;
-              await doc.flush();
-              const res = await api<{ asset_id: string; width: number; height: number }>(
-                `/api/canvases/${project.id}/nodes/${shotId}/tail-frame`,
-                {},
-              );
-              const nextIdx = doc.ref.current.document.nodes.length + 1;
-              const imgNode = newNode("image", source.x + source.width + 64, source.y, nextIdx);
-              imgNode.title = `${source.title || "镜头"} · 尾帧`;
-              imgNode.media_id = res.asset_id;
-              imgNode.use_media = true;
-              const vidNode = newNode("video", imgNode.x + imgNode.width + 64, source.y, nextIdx + 1);
-              vidNode.title = `${source.title || "镜头"} 续镜`;
-              vidNode.tail_inherited = true;
-              vidNode.params = {
-                ...source.params,
-                h3: {
-                  mode: "frames",
-                  first_frame: res.asset_id,
-                  last_frame: null,
-                  video_audio: [],
-                },
-              };
-              doc.change((d) => ({
-                ...d,
-                document: {
-                  ...d.document,
-                  nodes: [...d.document.nodes, imgNode, vidNode],
-                  edges: [
-                    ...d.document.edges,
-                    { id: crypto.randomUUID(), source: imgNode.id, target: vidNode.id },
-                  ],
-                  shots: [...(d.document.shots ?? []), vidNode.id],
-                },
-              }));
-              notify("已抽取尾帧并创建续接镜头");
-              setShotList(false);
-              selectOne(vidNode.id);
-              focusNodes([vidNode.id]);
-            }}
+            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId, true)}
             composition={
               <Composition
                 project={project.id}
                 getRevision={doc.flush}
                 ready={shots.length > 0 && !compositionIssue}
                 waitingReason={compositionIssue}
-                audioAssets={[
-                  ...studio.assets
-                    .filter((a) => a.kind === "audio" || a.kind === "ref_audio")
-                    .map((a) => ({
-                      id: a.id,
-                      label: a.name || `音频 ${a.id.slice(0, 6)}`,
-                    })),
-                  ...studio.jobs
-                    .filter((j) => j.kind === "audio" && j.status === "done" && j.result)
-                    .map((j) => ({
-                      id: j.result!,
-                      label: `${j.model || "配乐"} · ${(j.prompt || "").slice(0, 18) || "#" + j.id}`,
-                    })),
-                ].filter((item, idx, arr) => arr.findIndex((x) => x.id === item.id) === idx)}
+                audioAssets={compositionAudioAssets}
                 bgm={doc.value.document.bgm ?? null}
                 loudnorm={doc.value.document.loudnorm}
                 onMixChange={(patch) =>
@@ -3999,44 +4253,7 @@ export function CanvasWorkspace({
                 }
               />
             }
-            renderNarration={shot=>{
-              const node=doc.value.document.nodes.find(n=>n.id===shot.id)!;
-              const audioCandidates=['breeze-tts-2','edge-tts','tts-1','gpt-4o-mini-tts','local-tts-compat'];
-              const activeAudio=audioCandidates.find((m)=>availableModel(m))??'breeze-tts-2';
-              const priceItem=studio.pricing.items.find((p)=>p.key.startsWith(activeAudio+'|'));
-              const price=priceItem?.amount??(activeAudio==='edge-tts'?0:null);
-              return <Narration node={node} runs={runs} cost={price} unavailableReason={!availableModel(activeAudio)?'当前空间未开放语音模型':price===null?'语音生成尚未定价':studio.credits.available<price?'当前空间积分不足':''}
-                onEditStart={doc.begin}
-                onEditEnd={doc.end}
-                onChange={(patch,history)=>edit(shot.id,patch,history)}
-                onGenerate={async()=>{
-                  const rev=await doc.flush();const key=`fm-canvas-voice-${studio.me.id}-${project.id}-${shot.id}`;
-                  let pending;try{pending=JSON.parse(localStorage.getItem(key)||'null')}catch{}
-                  if(!pending){pending={uid:crypto.randomUUID(),expected_revision:rev,price_revision:studio.pricing.revision};localStorage.setItem(key,JSON.stringify(pending));}
-                  try{const result=await api(`/api/canvases/${project.id}/nodes/${shot.id}/narration`,pending);edit(shot.id,{narration_pending:result.id});await doc.flush();localStorage.removeItem(key);await fetchRuns();}
-                  catch(e){if(e instanceof ApiError&&e.status<500)localStorage.removeItem(key);throw e}
-                }}
-                onGenerateDialogue={async(lineId)=>{
-                  const rev=await doc.flush();
-                  const result=await api<{items:{line_id:string;id:number}[]}>(`/api/canvases/${project.id}/nodes/${shot.id}/dialogue`,{
-                    uid:crypto.randomUUID(),
-                    expected_revision:rev,
-                    price_revision:studio.pricing.revision,
-                    ...(lineId?{line_id:lineId}:{}),
-                  });
-                  const idMap=new Map(result.items.map((it)=>[it.line_id,it.id]));
-                  const current=doc.ref.current.document.nodes.find((n)=>n.id===shot.id);
-                  if(current?.dialogue_lines?.length){
-                    edit(shot.id,{
-                      dialogue_lines:current.dialogue_lines.map((l)=>
-                        idMap.has(l.id)?{...l,audio_pending:idMap.get(l.id)!,audio_job:idMap.get(l.id)!}:l
-                      ),
-                    });
-                    await doc.flush();
-                  }
-                  await fetchRuns();
-                }}/>
-            }}
+            renderNarration={renderShotNarration}
             onRemove={(id) => updateShots((ids) => ids.filter((item) => item !== id))}
             onSelect={(id) => {
               setShotList(false);
@@ -4178,6 +4395,7 @@ export function CanvasWorkspace({
                 )
                 .catch((e) => notify((e as Error).message));
             }}
+            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId, false)}
             onRemove={(id) =>
               updateShots((ids) => ids.filter((item) => item !== id))
             }
@@ -4192,12 +4410,7 @@ export function CanvasWorkspace({
                 getRevision={doc.flush}
                 ready={shots.length > 0 && !compositionIssue}
                 waitingReason={compositionIssue}
-                audioAssets={studio.assets
-                  .filter((a) => a.kind === "audio" || a.kind === "ref_audio")
-                  .map((a) => ({
-                    id: a.id,
-                    label: a.name || `音频 ${a.id.slice(0, 6)}`,
-                  }))}
+                audioAssets={compositionAudioAssets}
                 bgm={doc.value.document.bgm ?? null}
                 loudnorm={doc.value.document.loudnorm}
                 onMixChange={(patch) =>
@@ -4212,55 +4425,7 @@ export function CanvasWorkspace({
                 }
               />
             }
-            renderNarration={(shot) => {
-              const node = doc.value.document.nodes.find((n) => n.id === shot.id);
-              if (!node) return null;
-              const audioCandidates = [
-                "breeze-tts-2",
-                "edge-tts",
-                "tts-1",
-                "gpt-4o-mini-tts",
-                "local-tts-compat",
-              ];
-              const activeAudio =
-                audioCandidates.find((m) => availableModel(m)) ?? "edge-tts";
-              const priceItem = studio.pricing.items.find((p) =>
-                p.key.startsWith(activeAudio + "|"),
-              );
-              const price =
-                priceItem?.amount ?? (activeAudio === "edge-tts" ? 0 : null);
-              return (
-                <Narration
-                  node={node}
-                  runs={runs}
-                  cost={price}
-                  unavailableReason={
-                    price === null
-                      ? "语音生成尚未定价"
-                      : studio.credits.available < price
-                        ? "当前空间积分不足"
-                        : ""
-                  }
-                  onEditStart={doc.begin}
-                  onEditEnd={doc.end}
-                  onChange={(patch, history) => edit(shot.id, patch, history)}
-                  onGenerate={async () => {
-                    const rev = await doc.flush();
-                    const result = await api(
-                      `/api/canvases/${project.id}/nodes/${shot.id}/narration`,
-                      {
-                        uid: crypto.randomUUID(),
-                        expected_revision: rev,
-                        price_revision: studio.pricing.revision,
-                      },
-                    );
-                    edit(shot.id, { narration_pending: result.id });
-                    await doc.flush();
-                    await fetchRuns();
-                  }}
-                />
-              );
-            }}
+            renderNarration={renderShotNarration}
           />
         </aside>
       )}
@@ -4278,6 +4443,49 @@ export function CanvasWorkspace({
             title={precheckTarget.title}
             initialStages={precheckTarget.stages}
             onSubmitted={async (res) => {
+              // F010/F027 (#9): Write back submitted narration_pending & dialogue_lines[].audio_pending
+              // so completed batch audio jobs promote cleanly for playback and storyboard export.
+              const narrMap = new Map<string, number>();
+              const dlgMap = new Map<string, Map<string, number>>();
+              for (const item of res.submitted) {
+                if (item.stage === "narration") {
+                  narrMap.set(item.node, item.job_id);
+                } else if (item.stage === "dialogue" && item.line_id) {
+                  let byLine = dlgMap.get(item.node);
+                  if (!byLine) {
+                    byLine = new Map();
+                    dlgMap.set(item.node, byLine);
+                  }
+                  byLine.set(item.line_id, item.job_id);
+                }
+              }
+              if (narrMap.size || dlgMap.size) {
+                doc.change((d) => ({
+                  ...d,
+                  document: {
+                    ...d.document,
+                    nodes: d.document.nodes.map((n) => {
+                      const nextNarr = narrMap.get(n.id);
+                      const nextDlg = dlgMap.get(n.id);
+                      if (!nextNarr && !nextDlg) return n;
+                      return {
+                        ...n,
+                        ...(nextNarr ? { narration_pending: nextNarr } : {}),
+                        ...(nextDlg && n.dialogue_lines
+                          ? {
+                              dialogue_lines: n.dialogue_lines.map((l) =>
+                                nextDlg.has(l.id)
+                                  ? { ...l, audio_pending: nextDlg.get(l.id)! }
+                                  : l,
+                              ),
+                            }
+                          : {}),
+                      };
+                    }),
+                  },
+                }));
+                await doc.flush();
+              }
               await fetchRuns();
               notify(
                 `已提交 ${res.submitted.length} 项任务（跳过 ${res.skipped.length} 项），合计冻结 ${res.total_credits} 积分`,
@@ -4309,6 +4517,12 @@ export function CanvasWorkspace({
               const src = doc.ref.current.document.nodes.find(
                 (n) => n.id === gridCropTarget.nodeId,
               );
+              const downstreamVideos = doc.ref.current.document.edges
+                .filter((e) => e.source === gridCropTarget.nodeId)
+                .map((e) =>
+                  doc.ref.current.document.nodes.find((n) => n.id === e.target),
+                )
+                .filter((n): n is CanvasNode => Boolean(n && n.type === "video"));
               const nextIdx = doc.ref.current.document.nodes.length + 1;
               const cropped = newNode(
                 "image",
@@ -4319,16 +4533,47 @@ export function CanvasWorkspace({
               cropped.title = `${src?.title || "宫格"} · 格#${opts.row * opts.cols + opts.col + 1}`;
               cropped.media_id = res.asset_id;
               cropped.use_media = true;
+              const downstreamIds = new Set(downstreamVideos.map((v) => v.id));
               doc.change((d) => ({
                 ...d,
                 document: {
                   ...d.document,
-                  nodes: [...d.document.nodes, cropped],
+                  nodes: [
+                    ...d.document.nodes.map((n) =>
+                      downstreamIds.has(n.id)
+                        ? {
+                            ...n,
+                            params: {
+                              ...n.params,
+                              h3: {
+                                mode: "frames" as const,
+                                first_frame: res.asset_id,
+                                last_frame: n.params.h3?.last_frame ?? null,
+                                video_audio: n.params.h3?.video_audio ?? [],
+                              },
+                            },
+                          }
+                        : n,
+                    ),
+                    cropped,
+                  ],
+                  edges: [
+                    ...d.document.edges,
+                    ...downstreamVideos.map((v) => ({
+                      id: crypto.randomUUID(),
+                      source: cropped.id,
+                      target: v.id,
+                    })),
+                  ],
                 },
               }));
               setSelected([cropped.id]);
               focusNodes([cropped.id]);
-              notify("已裁切单格为独立参考图 / 首帧节点");
+              notify(
+                downstreamVideos.length
+                  ? `已裁切单格并设为 ${downstreamVideos.length} 个下游视频分镜的首帧`
+                  : "已裁切单格为独立参考图 / 首帧节点",
+              );
             }}
             onClose={() => setGridCropTarget(null)}
           />

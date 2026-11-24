@@ -50,7 +50,10 @@ export function AssetPacks(props:AssetPacksProps){
  return <WorkspaceAssetPacks key={props.workspace} {...props}/>;
 }
 function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[],onImportImages,onImportPack,onRemovePack,onDeletePack}:AssetPacksProps){
- const [packs,setPacks]=useState<Pack[]>([]),[assets,setAssets]=useState<{id:string}[]>([]),[opened,setOpened]=useState<string|null>(null),[chosen,setChosen]=useState<string[]>([]),[editing,setEditing]=useState<Pack|null|undefined>(),[draft,setDraft]=useState(blank),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[removing,setRemoving]=useState<string|null>(null);
+ const [packs,setPacks]=useState<Pack[]>([]),[assets,setAssets]=useState<{id:string;name?:string}[]>([]),[audioAssets,setAudioAssets]=useState<{id:string;name?:string}[]>([]),[opened,setOpened]=useState<string|null>(null),[chosen,setChosen]=useState<string[]>([]),[editing,setEditing]=useState<Pack|null|undefined>(),[draft,setDraft]=useState(blank),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[removing,setRemoving]=useState<string|null>(null);
+ const [turnaroundView,setTurnaroundView]=useState<'sheet'|'front'|'side'|'back'>('sheet');
+ const [turnaroundDraft,setTurnaroundDraft]=useState<PackTurnaroundViews>({});
+ const [showTurnaroundBind,setShowTurnaroundBind]=useState(false);
  const newDraft=useRef(draft);
  const mountedRef=useRef(true);
  const fileRef=useRef<HTMLInputElement>(null);
@@ -69,12 +72,16 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
   try{
    const [p,s]=await Promise.all([request('/api/asset-packs',undefined,'GET',signal),request('/api/state',undefined,'GET',signal)]);
    if(!mountedRef.current||signal?.aborted||seq!==loadSeqRef.current)return;
-   const loaded=s.assets.filter((a:{kind?:string})=>!a.kind||a.kind==='ref') as {id:string}[];
+   const allAssets=(s.assets??[]) as {id:string;kind?:string;name?:string}[];
+   const jobImages=((s.jobs??[]) as {kind?:string;status?:string;result?:string|null;id?:number}[]).filter(j=>j.kind==='image'&&j.status==='done'&&j.result).map(j=>({id:j.result!,name:`生成图 #${j.id}`}));
+   const loaded=[...allAssets.filter(a=>!a.kind||a.kind==='ref'||a.kind==='image'),...jobImages.filter(ji=>!allAssets.some(a=>a.id===ji.id))];
+   const audioLoaded=allAssets.filter(a=>a.kind==='audio'||a.kind==='ref_audio');
    const loadedIds=new Set(loaded.map(a=>a.id));
    const pending=recentUploadsRef.current.filter(entry=>entry.seq>snapshotUploadSeq).map(entry=>entry.asset);
    recentUploadsRef.current=recentUploadsRef.current.filter(entry=>entry.seq>snapshotUploadSeq&&!loadedIds.has(entry.asset.id));
    setPacks(p.packs);
    setAssets(mergeAssetPackAssets(loaded,pending));
+   setAudioAssets(audioLoaded);
   }catch(e){
    if(mountedRef.current&&!signal?.aborted&&seq===loadSeqRef.current)setError((e as Error).message);
   }finally{
@@ -136,14 +143,36 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
  };
  const generateTurnaround=async(target:Pack)=>{
   setBusy(true);setError('');setNotice('');try{
-   const res=await request(`/api/asset-packs/${target.id}/turnaround`,{uid:crypto.randomUUID(),ratio:'16:9',resolution:'2K'},'POST');
+   const res=await request(`/api/asset-packs/${target.id}/turnaround`,{uid:crypto.randomUUID(),ratio:'16:9',resolution:'2K',view:turnaroundView},'POST');
    if(!mountedRef.current)return;
-   setNotice(`已提交「${target.name}」标准正/侧/背三视图定妆照生成任务 (#${res.job_id})，完成后可在资产库绑定`);
+   const label=turnaroundSlots.find(([k])=>k===turnaroundView)?.[1]??'三视图';
+   setNotice(`已提交「${target.name}」${label}定妆照生成任务 (#${res.job_id})，完成后可在下方直接绑定正/侧/背/总表视图`);
+   setShowTurnaroundBind(true);
+  }catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}
+ };
+ const saveTurnaroundBindings=async(target:Pack)=>{
+  setBusy(true);setError('');setNotice('');try{
+   const cleaned:PackTurnaroundViews={
+    front:turnaroundDraft.front||null,
+    side:turnaroundDraft.side||null,
+    back:turnaroundDraft.back||null,
+    sheet:turnaroundDraft.sheet||null,
+   };
+   await request(`/api/asset-packs/${target.id}/turnaround`,{views:cleaned},'POST');
+   if(!mountedRef.current)return;
+   setNotice(`已保存「${target.name}」三视图定妆照绑定`);
+   await load();
   }catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}
  };
  const apply=async(action:()=>void|Promise<void>)=>{setBusy(true);setError('');try{await action()}catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}};
  const toggle=(id:string)=>setDraft(d=>({...d,media:d.media.includes(id)?d.media.filter(m=>m!==id):d.media.length<9?[...d.media,id]:d.media}));
  const pack=packs.find(p=>p.id===opened), imported=selected.find(p=>p.id===opened);
+ useEffect(()=>{
+  if(pack){
+   setTurnaroundDraft(pack.turnaround_views??{});
+  }
+ },[pack?.id,pack?.revision]);
+ const canEditOpenedPack=Boolean(pack&&!pack.locked&&(pack.scope!=='global'||admin));
  return <div className="fm-packs" aria-busy={busy||loading}>
   {error&&<p role="alert" className="fm-pack-error">{error}</p>}
   {notice&&<p role="status" className="fm-pack-notice">{notice}</p>}
@@ -153,33 +182,65 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
     <label>名称<input value={draft.name} maxLength={60} placeholder="例如：主角 A、展台场景" onChange={e=>setDraft({...draft,name:e.target.value})}/></label>
     <fieldset><legend>用途</legend><div className="fm-pack-purpose">{Object.entries(purposes).map(([key,label])=><button key={key} aria-pressed={draft.purpose===key} onClick={()=>setDraft({...draft,purpose:key})}>{label}</button>)}</div></fieldset>
     <label>说明<textarea value={draft.description} maxLength={2000} rows={3} placeholder="人物特征、服装或场景中需要保留的细节" onChange={e=>setDraft({...draft,description:e.target.value})}/></label>
-    {draft.purpose==='subject'&&<fieldset className="fm-pack-voice">
-     <legend>角色专属声线（对白自动匹配）</legend>
-     <label>预设音色<select value={draft.voice_profile?.voice_id||''} onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),voice_id:e.target.value||undefined}})}>{voicePresets.map(v=><option key={v.id} value={v.id}>{v.label}</option>)}</select></label>
-     <label>默认语速<select value={draft.voice_profile?.rate||'+0%'} onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),rate:e.target.value==='+0%'?undefined:e.target.value}})}>
-      <option value="-20%">偏慢 (-20%)</option><option value="-10%">稍慢 (-10%)</option><option value="+0%">标准</option><option value="+10%">稍快 (+10%)</option><option value="+20%">偏快 (+20%)</option>
-     </select></label>
-     <label>语气与声线描述<input maxLength={300} value={draft.voice_profile?.instruction||''} placeholder="例如：冷静克制的低沉男中音" onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),instruction:e.target.value||undefined}})}/></label>
-    </fieldset>}
    </div>
    <div className="fm-pack-heading"><span>参考图片 · {draft.media.length}/9</span><button className="fm-pack-button" disabled={busy||draft.media.length>=9} onClick={()=>fileRef.current?.click()}><Upload size={16}/>上传图片</button><input ref={fileRef} type="file" hidden accept="image/*,.heic,.heif" onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value='';void upload(file)}}/></div>
    <div className="fm-pack-images">{assets.map(a=><button key={a.id} disabled={busy} aria-label={'选择参考图 '+a.id.slice(0,6)} aria-pressed={draft.media.includes(a.id)} onClick={()=>toggle(a.id)}><img loading="lazy" src={'/media/'+a.id+'?variant=thumb'} onError={ev=>{ev.currentTarget.src='/media/'+a.id}} alt="参考图"/>{draft.media.includes(a.id)&&<span>{draft.media.indexOf(a.id)+1}</span>}</button>)}</div>
    {!assets.length&&<p>上传图片，建立这个素材包。</p>}
+   {draft.purpose==='subject'&&<fieldset className="fm-pack-voice">
+    <legend>角色专属声线与参考音频槽（对白自动匹配）</legend>
+    <label>预设音色<select value={draft.voice_profile?.voice_id||''} onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),voice_id:e.target.value||undefined}})}>{voicePresets.map(v=><option key={v.id} value={v.id}>{v.label}</option>)}</select></label>
+    <label>默认语速<select value={draft.voice_profile?.rate||'+0%'} onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),rate:e.target.value==='+0%'?undefined:e.target.value}})}>
+     <option value="-20%">偏慢 (-20%)</option><option value="-10%">稍慢 (-10%)</option><option value="+0%">标准</option><option value="+10%">稍快 (+10%)</option><option value="+20%">偏快 (+20%)</option>
+    </select></label>
+    <label>参考音频槽<select aria-label="参考音频槽" value={draft.voice_profile?.ref_audio_asset_id||''} onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),ref_audio_asset_id:e.target.value||null}})}>
+     <option value="">不绑定参考音频</option>
+     {audioAssets.map(a=><option key={a.id} value={a.id}>{a.name||`音频 ${a.id.slice(0,8)}`}</option>)}
+    </select></label>
+    <label>语气与声线描述<input maxLength={300} value={draft.voice_profile?.instruction||''} placeholder="例如：冷静克制的低沉男中音" onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),instruction:e.target.value||undefined}})}/></label>
+   </fieldset>}
    <div className="fm-pack-footer"><button className="fm-pack-primary" disabled={busy||!draft.name.trim()||!draft.media.length} onClick={()=>void save()}>{busy?'保存中…':'保存素材包'}</button></div>
   </>:pack?<>
    <div className="fm-pack-detail-heading">
-    <button className="fm-pack-button" disabled={busy} aria-label="返回素材包列表" onClick={()=>{setOpened(null);setChosen([]);setError('');setNotice('')}}><ArrowLeft size={18}/></button>
+    <button className="fm-pack-button" disabled={busy} aria-label="返回素材包列表" onClick={()=>{setOpened(null);setChosen([]);setShowTurnaroundBind(false);setError('');setNotice('')}}><ArrowLeft size={18}/></button>
     <div>
      <h3>{pack.name}{pack.locked&&<span className="fm-badge-lock"><Lock size={12}/>已锁定</span>}{pack.scope==='global'&&<span className="fm-badge-global"><Globe size={12}/>全局</span>}</h3>
-     <p>{purposes[pack.purpose]} · {pack.media.length} 张图片{pack.voice_profile?.voice_id?` · 声线 ${pack.voice_profile.voice_id}`:''}</p>
+     <p>{purposes[pack.purpose]} · {pack.media.length} 张图片{pack.voice_profile?.voice_id?` · 声线 ${pack.voice_profile.voice_id}`:''}{pack.voice_profile?.ref_audio_asset_id?' · 已绑参考音频':''}</p>
     </div>
    </div>
    {pack.description&&<p className="fm-pack-description">{pack.description}</p>}
    <div className="fm-pack-governance-bar">
     {(admin||pack.owner===userId)&&<button type="button" className="fm-pack-button" disabled={busy} onClick={()=>void toggleLock(pack)}>{pack.locked?<><Unlock size={14}/>解锁素材包</>:<><Lock size={14}/>锁定防误改</>}</button>}
     {admin&&!pack.locked&&<button type="button" className="fm-pack-button" disabled={busy} onClick={()=>void toggleScope(pack)}><Globe size={14}/>{pack.scope==='global'?'收回工作区':'发布到全局'}</button>}
-    {pack.purpose==='subject'&&!pack.locked&&<button type="button" className="fm-pack-button" disabled={busy} onClick={()=>void generateTurnaround(pack)}><Sparkles size={14}/>一键生成三视图</button>}
+    {pack.purpose==='subject'&&canEditOpenedPack&&<>
+     <select aria-label="三视图生成视角" className="fm-mode-select" value={turnaroundView} onChange={e=>setTurnaroundView(e.target.value as 'sheet'|'front'|'side'|'back')}>
+      <option value="sheet">三视图总表</option>
+      <option value="front">正面定妆</option>
+      <option value="side">侧面定妆</option>
+      <option value="back">背面定妆</option>
+     </select>
+     <button type="button" className="fm-pack-button" disabled={busy} onClick={()=>void generateTurnaround(pack)}><Sparkles size={14}/>一键生成三视图</button>
+     <button type="button" className="fm-pack-button" disabled={busy} onClick={()=>setShowTurnaroundBind(v=>!v)}>{showTurnaroundBind?'收起三视图绑定':'绑定三视图定妆照'}</button>
+    </>}
    </div>
+   {pack.purpose==='subject'&&showTurnaroundBind&&canEditOpenedPack&&<fieldset className="fm-pack-turnaround-bind">
+    <legend>绑定正 / 侧 / 背 / 总表定妆照</legend>
+    {turnaroundSlots.map(([slotKey,slotLabel])=>{
+     const pool=[...new Set([...pack.media,...assets.map(a=>a.id)])];
+     return <label key={slotKey}>{slotLabel}
+      <select aria-label={`绑定${slotLabel}`} value={turnaroundDraft[slotKey]||''} onChange={e=>setTurnaroundDraft(prev=>({...prev,[slotKey]:e.target.value||null}))}>
+       <option value="">未绑定</option>
+       {pool.map(id=>{
+        const meta=assets.find(a=>a.id===id);
+        return <option key={id} value={id}>{meta?.name||`图片 ${id.slice(0,8)}`}</option>;
+       })}
+      </select>
+     </label>;
+    })}
+    <div className="fm-pack-turnaround-actions">
+     <button type="button" className="fm-pack-button" disabled={busy} onClick={()=>void load()}>刷新素材库</button>
+     <button type="button" className="fm-pack-primary" disabled={busy} onClick={()=>void saveTurnaroundBindings(pack)}>保存三视图绑定</button>
+    </div>
+   </fieldset>}
    {pack.turnaround_views&&Object.values(pack.turnaround_views).some(Boolean)&&<div className="fm-pack-turnaround">
     <strong>标准三视图定妆照</strong>
     <div className="fm-turnaround-strip">{turnaroundSlots.map(([slotKey,slotLabel])=>{

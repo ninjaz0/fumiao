@@ -33,6 +33,7 @@ export function Narration({
   runs,
   cost,
   unavailableReason,
+  audioModels = [],
   onChange,
   onEditStart,
   onEditEnd,
@@ -43,6 +44,7 @@ export function Narration({
   runs: Job[];
   cost: number | null;
   unavailableReason: string;
+  audioModels?: { id: string; label: string }[];
   onChange: (patch: Partial<CanvasNode>, history?: boolean) => void;
   onEditStart?: () => void;
   onEditEnd?: () => void;
@@ -142,6 +144,28 @@ export function Narration({
           />
           首帧去重衔接（尾帧续接镜头）
         </label>
+        {audioModels.length > 0 && (
+          <label>
+            语音引擎
+            <select
+              aria-label="语音引擎"
+              value={node.narration_model || ""}
+              onChange={(e) =>
+                onChange(
+                  { narration_model: e.target.value || undefined },
+                  true,
+                )
+              }
+            >
+              <option value="">自动路由（商云优先 / Edge 免费兜底）</option>
+              {audioModels.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
 
       {onGenerateDialogue && (
@@ -173,11 +197,20 @@ export function Narration({
         <div className="dialogue-editor">
           {lines.map((line, idx) => {
             const lineJob = runs.find((j) => j.id === line.audio_job);
-            const linePending = runs.some(
-              (j) =>
-                j.canvas_node === `dialogue:${node.id}:${line.id}` &&
-                ["queued", "running"].includes(j.status),
-            );
+            const linePendingRun = runs.find((j) => j.id === line.audio_pending);
+            const linePending =
+              Boolean(
+                linePendingRun &&
+                  ["queued", "running"].includes(linePendingRun.status),
+              ) ||
+              runs.some(
+                (j) =>
+                  j.canvas_node === `dialogue:${node.id}:${line.id}` &&
+                  ["queued", "running"].includes(j.status),
+              );
+            const lineFailed =
+              linePendingRun &&
+              ["failed", "cancelled"].includes(linePendingRun.status);
             return (
               <div key={line.id} className="dialogue-row">
                 <div className="dialogue-row-head">
@@ -214,7 +247,7 @@ export function Narration({
                       }
                     }}
                   >
-                    {linePending ? "生成中…" : "合成此句"}
+                    {linePending ? "生成中…" : lineFailed ? "重新合成" : "合成此句"}
                   </button>
                   <button
                     type="button"
@@ -247,6 +280,12 @@ export function Narration({
                   }
                   onBlur={() => onEditEnd?.()}
                 />
+                {lineFailed && (
+                  <p className="error" role="alert">
+                    {linePendingRun.note || "该句对白生成失败"}
+                    {lineJob?.result ? "，已保留原有效音轨。" : "。"}
+                  </p>
+                )}
                 {lineJob?.status === "done" && lineJob.result && (
                   <audio
                     aria-label={`${line.speaker || "角色"}配音`}

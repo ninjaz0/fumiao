@@ -18,7 +18,15 @@ import {
   parseCanvasDocument,
   type CinematographySpec,
 } from "./canvas-draft.js";
-import { expandGroupNodeIds, type PrecheckStage } from "./batch-precheck.js";
+import {
+  expandGroupNodeIds,
+  OriginalBatchPrecheck,
+  type PrecheckStage,
+} from "./batch-precheck.js";
+import {
+  createTailFrameAsset,
+  hasTailChainTable,
+} from "@fumiao/platform/tail-frame.js";
 import { resolveSpeakerVoice } from "./dialogue.js";
 import {
   canvasBytes,
@@ -322,8 +330,148 @@ export class OriginalCanvasRuns {
     const bindings = await CanvasSubmissionModels.read(sql),
       params = node.params,
       model = params.model || bindings.default(node.type),
-      rule = bindings.rules.get(model),
-      native = node.type === "video" && rule?.nativeH3 ? params.h3 : null;
+      rule = bindings.rules.get(model);
+
+    // F011: Honor explicit node.generation_mode instead of letting stale params.h3.mode override it.
+    let native =
+      node.type === "video" && rule?.nativeH3
+        ? params.h3
+          ? node.generation_mode === "omni_ref"
+            ? {
+                ...params.h3,
+                mode: "reference" as const,
+                first_frame: null,
+                last_frame: null,
+              }
+            : node.generation_mode === "first_last_frame"
+              ? { ...params.h3, mode: "frames" as const }
+              : params.h3
+          : node.generation_mode === "first_last_frame"
+            ? {
+                mode: "frames" as const,
+                first_frame: null,
+                last_frame: null,
+                video_audio: [] as string[],
+              }
+            : node.generation_mode === "omni_ref"
+              ? {
+                  mode: "reference" as const,
+                  first_frame: null,
+                  last_frame: null,
+                  video_audio: [] as string[],
+                }
+              : null
+        : null;
+    if (
+      node.type === "video" &&
+      rule?.nativeH3 &&
+      node.generation_mode === "omni_ref" &&
+      params.h3
+    ) {
+      const carried = [params.h3.first_frame, params.h3.last_frame].filter(
+        (id): id is string => Boolean(id),
+      );
+      if (carried.length) refs = [...new Set([...refs, ...carried])];
+    }
+
+    // F028: Automatic tail-frame chain discovery for video shots marked `tail_inherited: true`.
+    // Never touches shots where `tail_inherited` is falsy (preserves explicit first frames).
+    let pendingTailParentJobId: string | null = null;
+    if (node.type === "video" && node.tail_inherited) {
+      const fallbackVideoOrder = doc.nodes
+        .filter((n) => n.type === "video")
+        .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
+        .map((n) => n.id);
+      const shotOrder = doc.shots?.length ? doc.shots : fallbackVideoOrder;
+      const shotIdx = shotOrder.indexOf(nid);
+      const prevNodeId =
+        shotIdx > 0
+          ? shotOrder[shotIdx - 1]
+          : (doc.edges.find(
+              (e) =>
+                e.target === nid &&
+                nodes.get(e.source)?.type === "video",
+            )?.source ?? null);
+      if (prevNodeId) {
+        const prevJob = await one(
+          sql,
+          `SELECT j.id, j.state,
+                  (SELECT a.id FROM job_assets ja JOIN assets a ON a.id=ja.asset_id
+                    WHERE ja.job_id=j.id AND ja.role='output' AND a.state='ready'
+                    ORDER BY a.created_at ASC LIMIT 1) AS output_asset_id
+             FROM canvas_job_links l
+             JOIN jobs j ON j.id = l.job_id
+            WHERE l.project_id = $1 AND l.node = $2 AND j.kind = 'video' AND j.deleted_at IS NULL
+            ORDER BY l.id DESC
+            LIMIT 1`,
+          [p.id, prevNodeId],
+        );
+        if (prevJob && active.includes(String(prevJob.state))) {
+          pendingTailParentJobId = String(prevJob.id);
+        } else if (
+          prevJob &&
+          prevJob.state === "completed" &&
+          prevJob.output_asset_id &&
+          !native?.first_frame
+        ) {
+          const srcAsset = await one(
+            sql,
+            "SELECT id, public_id, object_key FROM assets WHERE id=$1 AND state='ready'",
+            [prevJob.output_asset_id],
+          );
+          if (srcAsset) {
+            const existingTail = await one(
+              sql,
+              `SELECT public_id FROM assets
+                WHERE workspace_id=$1 AND state='ready'
+                  AND metadata->>'derivation'='tail_frame'
+                  AND metadata->>'derived_from'=$2
+                ORDER BY created_at DESC LIMIT 1`,
+              [p.workspace_id, String(srcAsset.public_id)],
+            );
+            let tailPublicId = existingTail
+              ? String(existingTail.public_id)
+              : "";
+            if (!tailPublicId) {
+              try {
+                const extracted = await createTailFrameAsset(
+                  this.p,
+                  sql,
+                  user.id,
+                  String(p.workspace_id),
+                  {
+                    id: String(srcAsset.id),
+                    public_id: String(srcAsset.public_id),
+                    object_key: String(srcAsset.object_key),
+                  },
+                  AbortSignal.timeout(30_000),
+                );
+                tailPublicId = extracted.public_id;
+              } catch {
+                // Keep submission resilient if source asset bytes are unavailable in a mock fixture.
+              }
+            }
+            if (tailPublicId) {
+              if (rule?.nativeH3) {
+                native = {
+                  ...(native ?? {
+                    mode: "frames" as const,
+                    first_frame: null,
+                    last_frame: null,
+                    video_audio: [],
+                  }),
+                  mode: "frames",
+                  first_frame: tailPublicId,
+                };
+              } else if (!refs.includes(tailPublicId)) {
+                refs = [tailPublicId, ...refs];
+              }
+            }
+          }
+        }
+      }
+    }
+
     if (native)
       refs =
         native.mode === "frames"
@@ -405,6 +553,23 @@ export class OriginalCanvasRuns {
       params,
       asset_packs: node.asset_packs,
     });
+    if (pendingTailParentJobId && (await hasTailChainTable(sql))) {
+      const childRow = await one(
+        sql,
+        "SELECT id FROM jobs WHERE public_id=$1 AND deleted_at IS NULL",
+        [result.id],
+      );
+      if (childRow && String(childRow.id) !== pendingTailParentJobId) {
+        await sql.query(
+          `INSERT INTO job_tail_chains(child_job_id, parent_job_id)
+           VALUES ($1, $2)
+           ON CONFLICT (child_job_id) DO NOTHING`,
+          [childRow.id, pendingTailParentJobId],
+        );
+        // Suppress immediate worker dispatch until parent video completes and wakes this child.
+        await sql.query("DELETE FROM outbox WHERE job_id=$1", [childRow.id]);
+      }
+    }
     return result;
   }
   async generate(
@@ -684,20 +849,116 @@ export class OriginalCanvasRuns {
     const body = parseBody(value, canvasBatchRunFields, true) as Run & {
       node_ids: string[];
       stages: PrecheckStage[];
+      precheck_token?: string;
+      expected_total_credits?: number;
+      executable_keys?: string[];
     };
-    const submitted: { node: string; stage: PrecheckStage; job_id: number }[] =
-      [];
+    const submitted: {
+      node: string;
+      stage: PrecheckStage;
+      job_id: number;
+      line_id?: string;
+    }[] = [];
     const skipped: { node: string; stage: PrecheckStage; reason: string }[] =
       [];
 
-    const plan = await this.p.db.transaction(async (sql) => {
-      const p = await this.canvases.project(sql, user, projectKey, true);
-      requireValue(p.revision === body.expected_revision, 409, canvasConflict);
-      const doc = parseCanvasDocument(canvasDocumentJson(p.document));
-      const targets = expandGroupNodeIds(doc.nodes, body.node_ids);
-      requireValue(targets.length > 0, 400, "未找到可执行的节点");
-      return targets;
-    });
+    const { plan, shotIndexMap, isReplay } = await this.p.db.transaction(
+      async (sql) => {
+        const p = await this.canvases.project(sql, user, projectKey, true);
+        requireValue(p.revision === body.expected_revision, 409, canvasConflict);
+        const doc = parseCanvasDocument(canvasDocumentJson(p.document));
+        const targets = expandGroupNodeIds(doc.nodes, body.node_ids);
+        requireValue(targets.length > 0, 400, "未找到可执行的节点");
+        const fallbackVideoOrder = doc.nodes
+          .filter((n) => n.type === "video")
+          .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
+          .map((n) => n.id);
+        const effectiveShots = doc.shots?.length
+          ? doc.shots
+          : fallbackVideoOrder;
+        const orderMap = new Map<string, number>(
+          effectiveShots.map((id, idx) => [id, idx]),
+        );
+
+        // Compute every candidate link UID for this batch so an idempotent retry with
+        // the exact same `uid` is cleanly recognized even when jobs are now active/busy.
+        const candidateUids: string[] = [];
+        for (const node of targets) {
+          for (const stage of body.stages) {
+            const itemUid = uuid5(
+              body.uid,
+              `batch:${projectKey}:${node.id}:${stage}`,
+            );
+            candidateUids.push(itemUid);
+            if (stage === "dialogue" && node.dialogue_lines?.length) {
+              for (const line of node.dialogue_lines) {
+                candidateUids.push(
+                  uuid5(itemUid, `dialogue:${p.public_id}:${node.id}:${line.id}`),
+                );
+              }
+            }
+          }
+        }
+        const replayRow = candidateUids.length
+          ? await one(
+              sql,
+              "SELECT 1 FROM canvas_job_links WHERE owner_id=$1 AND project_id=$2 AND uid = ANY($3::uuid[]) LIMIT 1",
+              [user.id, p.id, candidateUids],
+            )
+          : null;
+        return {
+          plan: targets,
+          shotIndexMap: orderMap,
+          isReplay: Boolean(replayRow),
+        };
+      },
+    );
+
+    // F010: When caller locks batch execution to a prior Precheck quote/set, verify zero drift!
+    if (
+      !isReplay &&
+      (body.precheck_token !== undefined ||
+        body.expected_total_credits !== undefined)
+    ) {
+      const freshPrecheck = await new OriginalBatchPrecheck(
+        this.p,
+      ).precheckCanvas(user, projectKey, {
+        expected_revision: body.expected_revision,
+        node_ids: body.node_ids,
+        stages: body.stages,
+      });
+      if (
+        body.precheck_token &&
+        freshPrecheck.precheck_token !== body.precheck_token
+      ) {
+        requireValue(
+          false,
+          409,
+          "画布节点状态、模型报价或可执行集合已发生变化，请重新预检后再确认提交",
+        );
+      }
+      if (
+        body.expected_total_credits !== undefined &&
+        freshPrecheck.summary.total_credits !== body.expected_total_credits
+      ) {
+        requireValue(
+          false,
+          409,
+          `批量报价已变动（预期 ${body.expected_total_credits} 积分，当前 ${freshPrecheck.summary.total_credits} 积分），请重新预检`,
+        );
+      }
+      if (freshPrecheck.summary.budget_blocked) {
+        requireValue(
+          false,
+          402,
+          freshPrecheck.summary.budget_blocks[0] || "已超出预算硬上限",
+        );
+      }
+    }
+
+    const allowedKeys = body.executable_keys
+      ? new Set(body.executable_keys)
+      : null;
 
     const stageOrder: PrecheckStage[] = [
       "image",
@@ -708,7 +969,17 @@ export class OriginalCanvasRuns {
     const requestedStages = stageOrder.filter((s) => body.stages.includes(s));
 
     for (const stage of requestedStages) {
-      for (const node of plan) {
+      // Order video shots by storyboard shot sequence so tail-frame parents ALWAYS submit before children!
+      const orderedNodes =
+        stage === "video"
+          ? [...plan].sort((a, b) => {
+              const ia = shotIndexMap.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+              const ib = shotIndexMap.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+              return ia - ib;
+            })
+          : plan;
+
+      for (const node of orderedNodes) {
         if (stage === "image" && node.type !== "image") continue;
         if (stage === "video" && node.type !== "video") continue;
         if (
@@ -716,6 +987,15 @@ export class OriginalCanvasRuns {
           node.type !== "video"
         )
           continue;
+
+        if (allowedKeys && !allowedKeys.has(`${node.id}:${stage}`)) {
+          skipped.push({
+            node: node.id,
+            stage,
+            reason: "预检已标记阻塞，按预检集合跳过",
+          });
+          continue;
+        }
 
         const itemUid = uuid5(
           body.uid,
@@ -762,7 +1042,12 @@ export class OriginalCanvasRuns {
               uid: itemUid,
             });
             for (const item of res.items) {
-              submitted.push({ node: node.id, stage, job_id: item.id });
+              submitted.push({
+                node: node.id,
+                stage,
+                job_id: item.id,
+                line_id: item.line_id,
+              });
             }
           }
         } catch (err) {
