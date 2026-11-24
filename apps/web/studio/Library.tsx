@@ -20,6 +20,7 @@ import { mediaURL, type Asset, type Job, type StudioState } from "./state";
 import { MAX_ASSET_SELECTION } from "@fumiao/original-api/asset-limits";
 import { groupHistoryJobs } from "./library-history";
 import { allAssetsSelected, selectAllAssets } from "./library-selection";
+import { formatCardDuration } from "./media-metadata";
 
 export type LibraryTab = "videos" | "images" | "audio";
 export type LibraryScope = "history" | "favorites";
@@ -195,6 +196,7 @@ type LibraryActions = {
   image: (id: string) => void;
   preview: (id: string, button: HTMLButtonElement) => void;
   use: (id: string) => void;
+  remove: (id: string, button: HTMLButtonElement) => void;
   batchFavorite: () => void;
   batchDownload: () => void;
   batchDelete: () => void;
@@ -525,7 +527,12 @@ function UploadCard({
         {images ? (
           <img loading="lazy" src={mediaURL(asset.id)} alt="参考图片" />
         ) : (
-          <ReferenceMedia id={asset.id} kind={asset.kind} />
+          <>
+            <ReferenceMedia id={asset.id} kind={asset.kind} />
+            <span className="asset-duration">
+              {formatCardDuration(asset.seconds)}
+            </span>
+          </>
         )}
       </button>
       <div
@@ -559,6 +566,20 @@ function UploadCard({
             </button>
             <Download id={asset.id} />
             <Favorite id={key} saved={saved} change={actions.favorite} />
+            {!images && isOwner(state, asset) && (
+              <button
+                type="button"
+                data-act="delete-asset"
+                data-key={asset.id}
+                title="删除"
+                aria-label="删除"
+                onClick={(event) =>
+                  actions.remove(asset.id, event.currentTarget)
+                }
+              >
+                <Icon name="trash" />
+              </button>
+            )}
           </>
         )}
       </div>

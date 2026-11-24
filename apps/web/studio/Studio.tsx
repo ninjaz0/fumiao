@@ -21,6 +21,7 @@ import {
 } from "./AssetDialog";
 import { PluginImport } from "./PluginImport";
 import { Library, isOwner, useLibrary, type LibraryFilter } from "./Library";
+import { deleteAssetPrompt } from "./media-metadata";
 import type {
   AdminOpen,
   AdminRequest,
@@ -435,6 +436,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           closeMenu();
         workspaceId.current = String(next.workspace_id);
         if (previous && !force) onLibraryRead.current?.(previous, next);
+        setDialog((current) => {
+          if (current?.content.kind !== "preview" || !current.content.manage)
+            return current;
+          const previewId = current.content.id;
+          return next.assets.some((asset) => asset.id === previewId)
+            ? current
+            : null;
+        });
         active.current = next;
         receivedAt.current = Date.now();
         setDelta(0);
@@ -976,13 +985,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     });
   }
 
-  function preview(id: string, button: HTMLButtonElement) {
+  function preview(id: string, button: HTMLButtonElement, manage = false) {
     showDialog(
       {
         kind: "preview",
         id,
         mediaKind: active.current?.assets.find((asset) => asset.id === id)
           ?.kind,
+        manage,
       },
       button,
     );
@@ -997,10 +1007,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     };
   }
 
-  function useAsset(id: string) {
+  function useAsset(id: string): string | null | undefined {
     const space = active.current;
     const session = currentDraft.current;
-    if (!space || !session || busy.current.has("upload")) return;
+    if (!space || !session || busy.current.has("upload")) return undefined;
     try {
       const type = referenceType(space, id);
       if (session.draft.kind === "audio")
@@ -1018,7 +1028,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         !session.draft.packs?.some((pack) => pack.media.includes(id))
       ) {
         changeRefs(session.refs.filter((ref) => ref !== id), id);
-        return;
+        return null;
       }
       if (type === "Picture") next = addImages(space, session, [id]);
       else if (!isH3(session.draft))
@@ -1046,8 +1056,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           ),
         );
       if (!referencePicking) openHomeComposer();
+      return null;
     } catch (error) {
-      notify((error as Error).message);
+      const message = (error as Error).message;
+      notify(message);
+      return message;
     }
   }
 
@@ -1231,23 +1244,29 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     title: string,
     summary: string,
     remove: () => Promise<void>,
+    opener?: HTMLElement | null,
+    onCancel?: () => void,
   ) {
-    showDialog({
-      kind: "confirm",
-      title,
-      summary,
-      run: async () => {
-        try {
-          await remove();
-        } catch (error) {
-          if (error instanceof ApiError && [401, 403].includes(error.status))
-            void refresh();
-          throw error;
-        }
-        await refresh(true);
-        library.redrawLibrary();
+    showDialog(
+      {
+        kind: "confirm",
+        title,
+        summary,
+        onCancel,
+        run: async () => {
+          try {
+            await remove();
+          } catch (error) {
+            if (error instanceof ApiError && [401, 403].includes(error.status))
+              void refresh();
+            throw error;
+          }
+          await refresh(true);
+          library.redrawLibrary();
+        },
       },
-    });
+      opener,
+    );
   }
 
   function deleteSelected() {
@@ -1285,10 +1304,16 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     );
   }
 
-  function deleteImage(id: string) {
+  function deleteAsset(id: string, opener?: HTMLElement | null) {
+    const asset = active.current?.assets.find((item) => item.id === id);
+    const { title, summary } = deleteAssetPrompt(asset?.kind);
+    const previousPreview =
+      dialog?.content.kind === "preview" && dialog.content.id === id
+        ? dialog
+        : null;
     confirmDelete(
-      "删除该图片？",
-      "正在被任务或作品引用的图片会保留。",
+      title,
+      summary,
       async () => {
         await api(
           workspaceId.current,
@@ -1296,8 +1321,20 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           undefined,
           "DELETE",
         );
-        transition(null, false);
+        if (detail && "image" in detail && detail.image === id)
+          transition(null, false);
       },
+      previousPreview ? previousPreview.opener : opener,
+      previousPreview
+        ? () => {
+            setDialog(previousPreview);
+            requestAnimationFrame(() =>
+              document
+                .querySelector<HTMLElement>('#modal [data-act="delete-asset"]')
+                ?.focus({ preventScroll: true }),
+            );
+          }
+        : undefined,
     );
   }
 
@@ -1658,7 +1695,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                         ? (button) => openMenu("detail-more", button)
                         : undefined
                     }
-                    remove={deleteImage}
+                    remove={deleteAsset}
                   />
                 ) : page === "home" && !detail ? (
                   <div className="home-view">
@@ -1783,8 +1820,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       edit: editJob,
                       job: openJob,
                       image: (id) => transition({ image: id }),
-                      preview,
+                      preview: (id, button) => preview(id, button, true),
                       use: useAsset,
+                      remove: deleteAsset,
                       filter: setFilter,
                       batchFavorite: () =>
                         saveFavorites(library.keys, !library.allSaved),
@@ -1846,6 +1884,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         notify={notify}
         state={state}
         session={session}
+        onFavorite={favorite}
+        onUse={useAsset}
+        onDelete={deleteAsset}
       />
       <div
         id="popover"

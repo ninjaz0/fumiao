@@ -65,7 +65,7 @@ export type Asset = {
   w: number;
   h: number;
   seconds?: number;
-  has_audio?: boolean;
+  has_audio?: boolean | number;
 };
 export type GpuNode = {
   id: number;
