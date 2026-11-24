@@ -82,6 +82,20 @@ try {
     await expect(title).toBeFocused();
     await page.keyboard.press("Shift+Tab");
     await expect(note).toBeFocused();
+    await page.keyboard.press("h");
+    await expect(page.getByRole("button", { name: "抓手 H" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(note).toHaveCSS("pointer-events", "none");
+    await page.keyboard.press("Enter");
+    await expect(editor).toHaveCount(0);
+    await expect(note).toBeFocused();
+    await page.keyboard.press("v");
+    await expect(page.getByRole("button", { name: "选择 V" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await page.keyboard.press("Enter");
     if (evidence) {
       await page.mouse.move(10, 10);

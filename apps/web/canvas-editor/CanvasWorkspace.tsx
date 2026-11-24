@@ -2150,6 +2150,7 @@ export function CanvasWorkspace({
           onKeyDown={(e) => {
             const target = e.target;
             if (
+              hand ||
               e.key !== "Enter" ||
               !(target instanceof HTMLElement) ||
               !target.matches(".react-flow__node")
