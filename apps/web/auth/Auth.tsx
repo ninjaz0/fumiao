@@ -1,10 +1,17 @@
 "use client";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type SyntheticEvent,
+} from "react";
 import { useAppearance } from "../home/controls";
 import "./auth.css";
 import styles from "./Auth.module.css";
 
 type Mode = "login" | "register";
+const registrationUsernamePattern = String.raw`\s*[\p{L}\p{N}_.\-]{2,32}\s*`;
 const moon = "M20 14.4A8.4 8.4 0 019.6 4a8.5 8.5 0 1010.4 10.4z";
 const sun =
   "M12 8a4 4 0 100 8 4 4 0 000-8z M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19";
@@ -103,6 +110,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [username, setUsername] = useState("");
+  const [usernameError, setUsernameError] = useState(false);
   const [note, setNote] = useState("");
   const [toast, setToast] = useState("");
   const [toastVisible, setToastVisible] = useState(false);
@@ -127,6 +135,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
         history.replaceState(null, "", location.pathname + location.search);
       lastHash.current = location.hash;
       setLocationState({ mode, retired, revision: ++revision.current });
+      setUsernameError(false);
       setNote(retired ? "邀请链接已停用，请向管理员获取邀请码后注册。" : "");
       busyRevision.current = null;
       setBusy(false);
@@ -155,10 +164,13 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
     lastHash.current = nextHash;
     focusNext.current = true;
     setLocationState({ mode, retired: false, revision: ++revision.current });
+    setUsernameError(false);
     busyRevision.current = null;
     setBusy(false);
     setNote("");
   };
+  const checkUsername = (event: SyntheticEvent<HTMLInputElement>) =>
+    setUsernameError(event.currentTarget.validity.patternMismatch);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const version = revision.current;
@@ -296,15 +308,41 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                       required
                       name="user"
                       autoComplete="username"
-                      minLength={registering ? 2 : 1}
+                      minLength={registering ? undefined : 1}
                       maxLength={32}
+                      pattern={
+                        registering ? registrationUsernamePattern : undefined
+                      }
+                      aria-invalid={
+                        registering && usernameError ? true : undefined
+                      }
+                      aria-describedby={
+                        registering && usernameError
+                          ? "register-username-error"
+                          : undefined
+                      }
                       value={username}
-                      onChange={(event) => setUsername(event.target.value)}
+                      onChange={(event) => {
+                        setUsername(event.target.value);
+                        if (usernameError) checkUsername(event);
+                      }}
+                      onBlur={registering ? checkUsername : undefined}
+                      onInvalid={registering ? checkUsername : undefined}
                       {...(registering
                         ? { placeholder: "2–32 位中英文、数字或 _ . -" }
                         : {})}
                     />
                   </label>
+                  {registering && (
+                    <div
+                      className="authnote"
+                      id="register-username-error"
+                      role="alert"
+                    >
+                      {usernameError &&
+                        "用户名仅支持 2–32 位中英文、数字或 _ . -，不能含空格"}
+                    </div>
+                  )}
                   {"\n      "}
                   {registering && (
                     <label className="formlabel">
