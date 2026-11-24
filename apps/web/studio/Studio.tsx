@@ -13,6 +13,10 @@ import {
 import Auth from "../auth/Auth";
 import { ApiError, workspaceURL } from "../canvas/api";
 import { ChatWorkspace } from "../canvas-editor/chat/ChatWorkspace";
+import {
+  resolveChatConfigTarget,
+  resolveChatModelScope,
+} from "../canvas-editor/chat/guidance";
 import { ImageDetail, JobDetail } from "./AssetDetail";
 import {
   AssetDialog,
@@ -242,8 +246,25 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     const url = new URL(location.href);
     if (url.searchParams.get("recharge")) setSettingsTab("credits");
     else if (url.searchParams.has("settings")) {
-      setSettingsTab((url.searchParams.get("settings") || "plugins") as SettingsTab);
+      const requestedSettings = (url.searchParams.get("settings") ||
+        "plugins") as SettingsTab;
+      if (requestedSettings === "models") {
+        const requestedScope = url.searchParams.get("scope");
+        modelPreferences.current.scope =
+          requestedScope !== null &&
+          (requestedScope === "global" ||
+            Boolean(
+              active.current?.workspaces.some(
+                (space) =>
+                  space.kind === "team" && String(space.id) === requestedScope,
+              ),
+            ))
+            ? requestedScope
+            : resolveChatModelScope(active.current);
+      }
+      setSettingsTab(requestedSettings);
       url.searchParams.delete("settings");
+      url.searchParams.delete("scope");
       history.replaceState(null, "", url);
     } else {
       const requested = url.searchParams.get("page");
@@ -1730,6 +1751,20 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       key={`${state.me.id}:${state.workspace_id}:${chatVisit}`}
                       userId={state.me.id}
                       workspace={state.workspace_id}
+                      isAdmin={state.me.role === "admin"}
+                      onConfigureModels={
+                        state.me.role === "admin"
+                          ? () => {
+                              const target = resolveChatConfigTarget(state);
+                              if (target === "models") {
+                                modelPreferences.current.scope =
+                                  resolveChatModelScope(state);
+                              }
+                              setSettingsTab(target);
+                              navigate("settings");
+                            }
+                          : undefined
+                      }
                       openCanvas={followCanvas}
                     />
                   </div>

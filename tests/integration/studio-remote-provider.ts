@@ -23,6 +23,12 @@ import { execFileSync } from "node:child_process";
 import sharp from "sharp";
 import { verifyToolConversation } from "./studio-chat-tools.js";
 import { verifyChatPackage } from "./studio-chat-package.js";
+import {
+  verifyAdminCanvasEmptyGuidance,
+  verifyChatEmptyGuidance,
+  verifyMemberContextEmptyGuidance,
+  verifyTeamCanvasModelScopeGuidance,
+} from "./studio-chat-empty-guidance.js";
 
 async function composerMedia(directory: string) {
   const path = join(directory, "composer-media");
@@ -254,6 +260,8 @@ export async function verifyRemoteProvider(
     );
     await expect(page.locator(".generate-button")).toBeDisabled();
     await call("/api/canvases", { data: { title: "零插件画布" } });
+    await verifyChatEmptyGuidance(page);
+    await verifyAdminCanvasEmptyGuidance(page, web);
     await page.getByRole("button", { name: "去导入插件" }).click();
     await expect(page.locator(".settings-section h2")).toHaveText("插件");
     const settingsSearch = page.getByRole("searchbox", { name: "搜索设置项" });
@@ -278,6 +286,10 @@ export async function verifyRemoteProvider(
     const other = await call("/api/workspaces", {
       data: { name: "隔离提供方测试空间" },
     });
+    await verifyTeamCanvasModelScopeGuidance(context, web, {
+      id: other.id,
+      name: "隔离提供方测试空间",
+    });
     const invite = await call("/api/invite-codes", {
       data: { name: "隔离提供方测试用户" },
     });
@@ -291,6 +303,7 @@ export async function verifyRemoteProvider(
         code: invite.code,
       },
     });
+    await verifyMemberContextEmptyGuidance(member, web);
     const install = (
       spec: unknown,
       path = "/first",

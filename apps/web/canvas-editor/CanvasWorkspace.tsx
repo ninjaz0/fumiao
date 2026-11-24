@@ -106,6 +106,7 @@ import {
   type Params,
 } from "./types";
 import {ChatWorkspace, chatRequest} from "./chat/ChatWorkspace";
+import { chatSettingsPath } from "./chat/guidance";
 import { ShotList } from "./ShotList";
 import { VideoVersions } from "./VideoVersions";
 import { AiStoryboard } from "./AiStoryboard";
@@ -3202,7 +3203,15 @@ export function CanvasWorkspace({
         if(!textNode)return null;
         const visible=single?.id===id&&!editing;
         return <section key={id} ref={visible?textPanelRef:undefined} className="node-composer text-node-composer" style={{...COMPOSER_POSITION_STYLE,display:visible?undefined:'none'}} hidden={!visible} aria-label="文本生成器" onKeyDown={e=>e.stopPropagation()}>
-          <ChatWorkspace inline compact workspace={project.workspace} userId={initial.me.id} project={project.id} node={id} nodeTitle={textNode.title}
+          <ChatWorkspace inline compact workspace={project.workspace} userId={initial.me.id} isAdmin={studio.me.role === "admin"}
+            configureHref={studio.me.role === "admin" ? workspaceURL(chatSettingsPath(studio)) : undefined}
+            onConfigureModels={studio.me.role === "admin" ? (e => {
+              if (e.button === 0 && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                e.preventDefault();
+                void closeAndLeave(chatSettingsPath(studio));
+              }
+            }) : undefined}
+            project={project.id} node={id} nodeTitle={textNode.title}
             onActivityChange={active=>setActiveTextNodes(ids=>active?(ids.includes(id)?ids:[...ids,id]):(ids.includes(id)?ids.filter(n=>n!==id):ids))}
             getContext={async()=>({project:project.id,node:id,expected_revision:await doc.flush(),writeback:true})}
             onApply={(cid,message,_mode,options)=>{

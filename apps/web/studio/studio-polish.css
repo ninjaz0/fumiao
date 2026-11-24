@@ -299,6 +299,37 @@
   }
 }
 
+/* 对话无可用模型空态引导 */
+.fm-chat-empty-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 24px;
+}
+.fm-chat .fm-chat-empty-actions .fm-chat-primary {
+  padding: 9px 18px;
+  border-radius: 10px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.fm-chat a.fm-chat-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  line-height: 1.4;
+}
+.fm-chat .fm-chat-no-model {
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--chat-surface);
+  border: 1px solid var(--chat-line);
+}
+.fm-chat .fm-chat-no-model-link {
+  padding: 4px;
+  font-weight: 500;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .side nav button,
   .composer,
