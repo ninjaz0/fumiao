@@ -583,8 +583,14 @@
   color: var(--blue);
 }
 .plugin-feedback.is-error {
-  border-color: var(--plugin-danger-line);
-  background: var(--plugin-danger-soft);
+  border-color: var(
+    --plugin-danger-line,
+    color-mix(in srgb, var(--danger) 32%, var(--line))
+  );
+  background: var(
+    --plugin-danger-soft,
+    color-mix(in srgb, var(--danger) 10%, transparent)
+  );
   color: var(--danger);
 }
 .plugin-inline-note {
