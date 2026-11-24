@@ -628,7 +628,7 @@
   background: var(--surface);
 }
 
-.ledger-card + .ledger-card,
+.ledger-card + .ledger-card:not(:where(.plugin-page > *)),
 #price-form .ledger-card,
 .ledger-settings .model-group {
   margin-top: 14px;
