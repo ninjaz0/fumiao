@@ -131,8 +131,20 @@
   resize: vertical;
 }
 .plugin-page-form [role="alert"],
-#modal .plugin-page-dialog [role="alert"] {
+#modal .plugin-page-dialog [role="alert"],
+.plugin-page-error [role="alert"] {
   color: var(--danger);
+}
+.plugin-page-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
 }
 .plugin-table {
   overflow-x: auto;
