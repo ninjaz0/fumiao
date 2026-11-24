@@ -43,6 +43,7 @@ const scopes = [
 ] as const;
 
 function moveFilterFocus(event: KeyboardEvent<HTMLDivElement>) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
   const tabs = Array.from(
     event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
   );

@@ -76,6 +76,22 @@ try {
     ], "Enter must preserve focus in both asset tab bars");
     console.log("Asset library Enter focus:", JSON.stringify(activeAfterEnter));
 
+    for (const shortcut of [
+      { key: "Home", ctrlKey: true },
+      { key: "End", ctrlKey: true },
+      { key: "ArrowRight", altKey: true },
+      { key: "ArrowRight", metaKey: true },
+    ]) {
+      const uncanceled = await history.evaluate((node, init) =>
+        node.dispatchEvent(new KeyboardEvent("keydown", {
+          ...init, bubbles: true, cancelable: true,
+        })), shortcut);
+      assert.ok(uncanceled, `Modified ${shortcut.key} must retain its default behavior`);
+      await expect(history).toBeFocused();
+      await expect(history).toHaveAttribute("aria-selected", "true");
+    }
+    console.log("Asset library leaves modified keyboard shortcuts uncanceled");
+
     async function navigate(list: Locator, steps: [string, string][]) {
       for (const [key, name] of steps) {
         await page.keyboard.press(key);
