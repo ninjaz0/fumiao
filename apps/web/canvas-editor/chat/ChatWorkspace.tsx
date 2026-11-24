@@ -5,13 +5,14 @@ import DOMPurify from 'dompurify';
 import {ModelSelect} from './ModelSelect';
 import {ConversationList,type Conversation} from './ConversationList';
 import {chatFreshness} from './freshness';
+import {chatSettingsHref,hasAvailableChatModels} from './guidance';
 
 export type Message={id:number;role:'user'|'assistant';content:string;state:string;model:string;author_name:string;error?:string;context:string;reply_to:number|null};
 type Snapshot={conversation:Conversation;messages:Message[]};
 type Config={models:Record<string,{label:string;provider:string}>;pricing:{revision:number;items:{key:string;amount:number|null}[]};credits:{available:number}};
 export type ChatContext={project:string;node:string;expected_revision:number;writeback?:boolean};
 export type ApplyOptions={automatic?:boolean;expectedText?:string;uid?:string};
-type Props={workspace:number;userId:number;compact?:boolean;inline?:boolean;onActivityChange?:(active:boolean)=>void;project?:string;node?:string;nodeTitle?:string;getContext?:()=>Promise<ChatContext>;onApply?:(cid:string,message:Message,mode:'new'|'replace',options?:ApplyOptions)=>Promise<void>;onClose?:()=>void;openCanvas?:(event:MouseEvent<HTMLAnchorElement>)=>void};
+type Props={workspace:number;userId:number;isAdmin?:boolean;configureLabel?:string;configureHref?:string;onConfigureModels?:(event:MouseEvent<HTMLButtonElement|HTMLAnchorElement>)=>void;compact?:boolean;inline?:boolean;onActivityChange?:(active:boolean)=>void;project?:string;node?:string;nodeTitle?:string;getContext?:()=>Promise<ChatContext>;onApply?:(cid:string,message:Message,mode:'new'|'replace',options?:ApplyOptions)=>Promise<void>;onClose?:()=>void;openCanvas?:(event:MouseEvent<HTMLAnchorElement>)=>void};
 class ApiError extends Error {constructor(public status:number,message:string){super(message)}}
 export async function chatRequest<T=any>(workspace:number,path:string,body?:unknown,method?:string):Promise<T>{
  const r=await fetch(path,{method:method||(body===undefined?'GET':'POST'),credentials:'same-origin',headers:{'Content-Type':'application/json','X-Workspace-Id':String(workspace)},body:body===undefined?undefined:JSON.stringify(body)});
@@ -80,6 +81,21 @@ export function ChatWorkspace(props:Props){
  useEffect(()=>{activityCallback.current?.(activeWork)},[activeWork]);
  const price=config?.pricing.items.find(p=>p.key===model+'|reply')?.amount;
  const canSend=!!model&&price!=null&&!!config&&config.credits.available>=price&&!busy&&!applying&&!running&&!loading&&(!cid||!!data);
+ const noModels=hasAvailableChatModels(config)===false;
+ const canConfigure=props.isAdmin??Boolean(props.onConfigureModels||props.configureHref);
+ const configureLabel=props.configureLabel||'前往配置对话模型';
+ const resolvedConfigureHref=props.configureHref||(props.onConfigureModels?undefined:chatSettingsHref(workspace));
+ const renderConfigureAction=(primary:boolean)=>resolvedConfigureHref?(
+  <a className={primary?'fm-chat-primary':'fm-chat-no-model-link'} href={resolvedConfigureHref} onClick={props.onConfigureModels}>{configureLabel}</a>
+ ):(
+  <button type="button" className={primary?'fm-chat-primary':undefined} onClick={props.onConfigureModels}>{configureLabel}</button>
+ );
+ const noModelBanner=noModels&&(
+  <div className="fm-chat-notice fm-chat-no-model" role="status">
+   <span>{canConfigure?'当前空间暂无可用对话模型':'当前空间暂无可用对话模型，请联系管理员开通'}</span>
+   {canConfigure&&renderConfigureAction(false)}
+  </div>
+ );
  const safely=async(fn:()=>Promise<void>)=>{setError('');setBusy(true);try{await fn()}catch(e){setError((e as Error).message)}finally{if(alive.current)setBusy(false)}};
  const send=async(retry?:number)=>safely(async()=>{
   if(!model||(!retry&&!draft.trim()))return;
@@ -125,7 +141,7 @@ export function ChatWorkspace(props:Props){
  );
  if(inline)return <div className="fm-chat fm-chat-node" onKeyDown={e=>{if(e.key==='Escape'&&pendingDraft!==null){cancelPendingDraft();e.stopPropagation()}}}>
   <form className="fm-text-form" onSubmit={e=>{e.preventDefault();if(canSend)void send()}}>
-   <div className="fm-text-presets">{[['补充镜头','保留原意，补充画面主体、动作、镜头运动和环境细节，只输出可直接使用的镜头提示词。'],['改写图生视频','基于当前文字改写为图生视频提示词，重点描述动作、镜头和画面变化，不虚构参考图片中未提供的事实。只输出提示词。']].map(([label,text])=><button type="button" key={label} disabled={busy||running} onClick={()=>applyPresetDraft(text)}>{label}</button>)}</div>
+   {noModelBanner||<div className="fm-text-presets">{[['补充镜头','保留原意，补充画面主体、动作、镜头运动和环境细节，只输出可直接使用的镜头提示词。'],['改写图生视频','基于当前文字改写为图生视频提示词，重点描述动作、镜头和画面变化，不虚构参考图片中未提供的事实。只输出提示词。']].map(([label,text])=><button type="button" key={label} disabled={busy||running||!config} onClick={()=>applyPresetDraft(text)}>{label}</button>)}</div>}
    {draftConfirmBanner}
    <textarea ref={input} className="composer-prompt" aria-label="文本生成要求" placeholder={model?'描述你想生成的文字，或说明修改要求':'暂无可用模型'} value={draft} maxLength={12000} rows={3} onChange={e=>updateDraft(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend&&draft.trim())void send()}}}/>
    {(error||inlineFailure)&&<div className="fm-chat-error" role="alert"><span>{error||inlineFailure}</span>{error&&<button type="button" className="fm-chat-icon" aria-label="关闭错误提示" onClick={()=>setError('')}><X size={14}/></button>}</div>}
@@ -153,7 +169,7 @@ export function ChatWorkspace(props:Props){
    </header>
    <div className="fm-chat-scroll" ref={scroll} onScroll={()=>{const e=scroll.current!;follow.current=e.scrollHeight-e.scrollTop-e.clientHeight<80;if(follow.current)setNewBelow(false)}}>
     <div className="fm-chat-messages">
-     {loading&&!data?<p className="fm-chat-empty-note" role="status">正在载入对话…</p>:!data?.messages.length?<div className="fm-chat-empty"><MessageSquare size={28} strokeWidth={1.5}/><h2>{compact?'想怎样修改这段文字？':'从一个想法开始'}</h2><p>{compact?'回复完成后更新节点文字，可撤销。':'构思故事、打磨文案，或整理下一支视频的提示词。'}</p><div className="fm-chat-starters">{(compact?['润色这段文字','改写成视频提示词']:['帮我构思一段视频脚本','把灵感整理成拍摄提纲']).map(s=><button type="button" key={s} onClick={()=>applyPresetDraft(s)}>{s}<ArrowUp size={14}/></button>)}</div></div>:data.messages.map((m,index)=><article key={m.id} className={'fm-chat-message '+m.role}>
+     {(loading||(!config&&!error))&&!data?<p className="fm-chat-empty-note" role="status">正在载入对话…</p>:!data?.messages.length?(noModels?<div className="fm-chat-empty fm-chat-empty-unavailable" role="status"><MessageSquare size={28} strokeWidth={1.5}/><h2>暂无可用对话模型</h2><p>{canConfigure?'当前空间暂无可用对话模型，请前往设置完成配置或开通模型权限。':'当前空间暂无可用对话模型，请联系管理员开通。'}</p>{canConfigure&&<div className="fm-chat-empty-actions">{renderConfigureAction(true)}</div>}</div>:<div className="fm-chat-empty"><MessageSquare size={28} strokeWidth={1.5}/><h2>{compact?'想怎样修改这段文字？':'从一个想法开始'}</h2><p>{compact?'回复完成后更新节点文字，可撤销。':'构思故事、打磨文案，或整理下一支视频的提示词。'}</p><div className="fm-chat-starters">{(compact?['润色这段文字','改写成视频提示词']:['帮我构思一段视频脚本','把灵感整理成拍摄提纲']).map(s=><button type="button" key={s} onClick={()=>applyPresetDraft(s)}>{s}<ArrowUp size={14}/></button>)}</div></div>):data.messages.map((m,index)=><article key={m.id} className={'fm-chat-message '+m.role}>
       {m.role==='user'?<><div className="fm-chat-author">{m.author_name||'你'}</div><div className="fm-chat-bubble">{m.content}</div>{JSON.parse(m.context||'{}').node&&<small className="fm-chat-context-tag"><FileText size={13}/>含节点文字</small>}</>:<><div className="fm-chat-author">{config?.models[m.model]?.label||({'deepseek-flash':'DeepSeek Flash','gpt-4.1':'GPT-4.1'}[m.model]||m.model)}</div>{m.content?<Markdown text={m.content}/>:m.state==='running'?<p className="fm-chat-wait" role="status"><LoaderCircle size={15} className="fm-chat-spinner"/>正在回复</p>:null}{m.state!=='running'&&m.state!=='complete'&&<p className="fm-chat-incomplete">{m.error||(m.state==='stopped'?'已停止，积分已退回':'回复中断，积分已退回')}</p>}
        <div className="fm-chat-message-actions">{m.content&&<button type="button" aria-label="复制回答" title="复制回答" onClick={()=>void copy(m)}>{copied===m.id?<Check size={16}/>:<Copy size={16}/>}</button>}{m.state==='complete'&&<>{updatedMessage===m.id&&<span className="fm-chat-written"><Check size={14}/>已更新文字</span>}{props.onApply&&<button type="button" disabled={busy||applying} onClick={()=>void adopt(m,'replace')}>替换文字</button>}<button type="button" disabled={busy} onClick={()=>void adopt(m,'new')}><Plus size={14}/>{compact?'新建文本节点':'放入画布'}</button>{applied?.message===m.id&&<a href={'/canvas/'+applied.id+'?workspace='+workspace} onClick={props.openCanvas}>打开画布<ExternalLink size={13}/></a>}</>}{index===data.messages.length-1&&['failed','stopped','interrupted'].includes(m.state)&&<button type="button" disabled={!canSend} onClick={()=>void send(m.id)}><RotateCcw size={14}/>重试</button>}</div></>}
      </article>)}
@@ -164,6 +180,7 @@ export function ChatWorkspace(props:Props){
     {picker&&<section className="fm-chat-canvas-picker" aria-label="放入画布"><header><strong>放入画布</strong><button type="button" className="fm-chat-icon" aria-label="取消放入画布" onClick={()=>setPicker(null)}><X size={16}/></button></header><select aria-label="选择画布" value={target} onChange={e=>setTarget(e.target.value)}><option value="">新建画布</option>{projects.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select>{!target&&<input aria-label="画布名称" value={canvasName} maxLength={80} onChange={e=>setCanvasName(e.target.value)}/>}<button type="button" className="fm-chat-primary" disabled={busy} onClick={()=>void confirmCanvas()}>添加文本节点</button></section>}
     {deleted&&<div className="fm-chat-notice" role="status">对话已删除<button type="button" onClick={()=>void restore()}>撤销</button><button type="button" className="fm-chat-icon" aria-label="关闭删除提示" onClick={()=>setDeleted('')}><X size={14}/></button></div>}
     {notice&&<div className="fm-chat-notice" role="status">{notice}</div>}
+    {!!data?.messages.length&&noModelBanner}
     {network&&<div className="fm-chat-notice" role="status">正在重新连接，回复会在后台继续</div>}
     {error&&<div className="fm-chat-error" role="alert"><span>{error}</span><button type="button" className="fm-chat-icon" aria-label="关闭错误提示" onClick={()=>setError('')}><X size={16}/></button></div>}
     {draftConfirmBanner}

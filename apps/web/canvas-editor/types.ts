@@ -89,6 +89,9 @@ export type Job = {
 export type Asset = {kind?:string;seconds?:number;has_audio?:boolean;name?:string; id: string; w: number; h: number; owner: number };
 export type FlowModel = {kind:string;label:string;provider?:string;family?:string;family_label?:string;hidden?:boolean;mode?:string;ratio?:string;seconds?:number;resolution?:string;min_refs?:number;max_refs?:number};
 export type Studio = {
+  studio_plugins?: boolean;
+  model_groups?: Record<string, { kind: string; label: string; models: string[] }>;
+  team_model_policies?: Record<string, { revision: number; enabled: Record<string, boolean> }>;
   canvas_nodes?: CanvasNodeEntry[];
   model_forms: Record<string, import("@fumiao/plugin-sdk/model-form").ModelForm>;
   model_catalog: Record<string,FlowModel>;

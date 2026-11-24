@@ -13,6 +13,7 @@ import {
 import Auth from "../auth/Auth";
 import { ApiError, workspaceURL } from "../canvas/api";
 import { ChatWorkspace } from "../canvas-editor/chat/ChatWorkspace";
+import { resolveChatConfigTarget } from "../canvas-editor/chat/guidance";
 import { ImageDetail, JobDetail } from "./AssetDetail";
 import {
   AssetDialog,
@@ -1687,6 +1688,25 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       key={`${state.me.id}:${state.workspace_id}:${chatVisit}`}
                       userId={state.me.id}
                       workspace={state.workspace_id}
+                      isAdmin={state.me.role === "admin"}
+                      onConfigureModels={
+                        state.me.role === "admin"
+                          ? () => {
+                              const target = resolveChatConfigTarget(state);
+                              if (target === "models") {
+                                const currentSpace = state.workspaces.find(
+                                  (space) => space.id === state.workspace_id,
+                                );
+                                modelPreferences.current.scope =
+                                  currentSpace?.kind === "team"
+                                    ? String(currentSpace.id)
+                                    : "global";
+                              }
+                              setSettingsTab(target);
+                              navigate("settings");
+                            }
+                          : undefined
+                      }
                       openCanvas={followCanvas}
                     />
                   </div>
