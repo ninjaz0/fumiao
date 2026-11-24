@@ -17,6 +17,62 @@ export type CreditAdjustmentEvaluation = {
   error: string;
 };
 
+export type CreditAdjustmentPayload = {
+  workspace: number;
+  amount: number;
+  note: string;
+  uid: string;
+};
+
+/**
+ * Keeps a single idempotency UID for one adjustment dialog so an already
+ * committed request whose HTTP response was lost cannot settle twice after
+ * intermediate edits (A -> B -> A) within the same dialog.
+ */
+export function createCreditAdjustmentSession(
+  workspace: number,
+  uid = crypto.randomUUID(),
+) {
+  return {
+    uid,
+    prepare(input: {
+      direction: CreditAdjustmentDirection;
+      rawAmount: string;
+      account: CreditAdjustmentAccount;
+      rawNote: string;
+      badInput?: boolean;
+    }):
+      | { ok: true; payload: CreditAdjustmentPayload }
+      | { ok: false; error: string } {
+      const evaluation = evaluateCreditAdjustment(
+        input.rawAmount,
+        input.direction,
+        input.account,
+        input.badInput ?? false,
+      );
+      if (evaluation.error || !evaluation.valid || evaluation.amount === null) {
+        return {
+          ok: false,
+          error: evaluation.error || "积分数量需为至少 1 的正整数",
+        };
+      }
+      const note = input.rawNote.trim();
+      if (!note) {
+        return { ok: false, error: "请填写调整原因" };
+      }
+      return {
+        ok: true,
+        payload: {
+          workspace,
+          amount: evaluation.amount * input.direction,
+          note,
+          uid,
+        },
+      };
+    },
+  };
+}
+
 export function evaluateCreditAdjustment(
   rawAmount: string,
   direction: CreditAdjustmentDirection,

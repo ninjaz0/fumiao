@@ -3,6 +3,7 @@ import { openDialogFor } from "./AssetDialog";
 import { CreditLedger } from "./SettingsCredits";
 import type { AdminOpen, AdminSave } from "./settings-admin";
 import {
+  createCreditAdjustmentSession,
   evaluateCreditAdjustment,
   MAX_CREDIT_ADJUSTMENT,
   type CreditAdjustmentDirection,
@@ -240,7 +241,9 @@ function CreditAdjustment({
   refresh,
   notify,
 }: AdminSave & { account: CreditAccount }) {
-  const idempotency = useRef({ fingerprint: "", uid: "" });
+  const [session] = useState(() =>
+    createCreditAdjustmentSession(account.workspace),
+  );
   const amountField = useRef<HTMLInputElement>(null);
   const [direction, setDirection] = useState<CreditAdjustmentDirection>(1);
   const [rawAmount, setRawAmount] = useState("");
@@ -269,29 +272,24 @@ function CreditAdjustment({
     event.preventDefault();
     if (pending.current || evaluation.error) return;
     const form = event.currentTarget;
-    if (!form.reportValidity() || evaluation.amount === null) return;
+    if (!form.reportValidity()) return;
     const values = new FormData(form);
-    const note = String(values.get("note") ?? "").trim();
-    if (!note) {
-      setMessage("请填写调整原因");
+    const prepared = session.prepare({
+      direction,
+      rawAmount,
+      account,
+      rawNote: String(values.get("note") ?? ""),
+      badInput,
+    });
+    if (!prepared.ok) {
+      setMessage(prepared.error);
       return;
     }
-    const payload = {
-      workspace: account.workspace,
-      amount: evaluation.amount * direction,
-      note,
-    };
-    const fingerprint = JSON.stringify(payload);
-    if (fingerprint !== idempotency.current.fingerprint)
-      idempotency.current = { fingerprint, uid: crypto.randomUUID() };
     pending.current = true;
     setBusy(true);
     setMessage("");
     try {
-      await request("/api/admin/credits/adjust", {
-        ...payload,
-        uid: idempotency.current.uid,
-      });
+      await request("/api/admin/credits/adjust", prepared.payload);
       openDialogFor(form)?.close();
       await refresh();
       notify("积分已调整");
