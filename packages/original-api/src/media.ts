@@ -11,12 +11,20 @@ import { modifiedSeconds } from "@fumiao/platform/storage.js";
 import { sendFile } from "./files.js";
 const extension: Record<string, string> = {
   "audio/wav": ".wav",
+  "audio/mpeg": ".mp3",
   "video/mp4": ".mp4",
   "video/webm": ".webm",
   "image/png": ".png",
   "image/jpeg": ".jpg",
   "image/webp": ".webp",
+  "application/zip": ".zip",
+  "application/xml": ".fcpxml",
 };
+function safeDownloadFilename(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const cleaned = raw.replace(/[\r\n\0"/\\]/g, "").trim();
+  return cleaned && cleaned.length <= 120 ? cleaned : undefined;
+}
 export class OriginalMedia {
   private identity: OriginalIdentity;
   constructor(readonly p: Platform) {
@@ -42,7 +50,8 @@ export class OriginalMedia {
   ) {
     const asset = await this.resource(this.p.db, user, key);
     const filename = download
-      ? "弗淼-" + key.slice(0, 8) + (extension[asset.mime] || "")
+      ? (safeDownloadFilename(asset.metadata?.filename) ??
+        "弗淼-" + key.slice(0, 8) + (extension[asset.mime] || ""))
       : undefined;
     // Keep embedded S3 media on its stable same-origin URL across refreshes.
     // Explicit downloads and API clients still receive a short-lived signed URL.

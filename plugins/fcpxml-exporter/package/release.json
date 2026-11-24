@@ -1,0 +1,31 @@
+{
+  "format": 1,
+  "id": "fcpxml-exporter",
+  "label": "专业 NLE 工程导出（FCPXML）",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": ["media"],
+    "exporters": [
+      {
+        "id": "bundle-zip",
+        "title": "FCPXML 1.11 工程包 ZIP",
+        "outputKind": "project",
+        "mime": "application/zip",
+        "fileExtension": "zip",
+        "programFile": "export-zip.js"
+      },
+      {
+        "id": "xml",
+        "title": "FCPXML 1.11 工程文件",
+        "outputKind": "project",
+        "mime": "application/xml",
+        "fileExtension": "fcpxml",
+        "programFile": "export-xml.js"
+      }
+    ],
+    "settingsPages": []
+  }
+}

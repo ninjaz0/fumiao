@@ -1,0 +1,366 @@
+{
+  "format": 1,
+  "id": "openrouter-gateway",
+  "label": "OpenRouter / New API 聚合网关",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "manifest": {
+    "id": "openrouter-gateway",
+    "label": "OpenRouter / New API 聚合网关",
+    "version": "1.0.0",
+    "contractVersion": 1,
+    "mode": "request",
+    "configSchema": {
+      "type": "object",
+      "required": [
+        "provider"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "openrouter",
+            "newapi"
+          ]
+        },
+        "apiKey": {
+          "type": "string",
+          "writeOnly": true
+        },
+        "baseUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        }
+      }
+    },
+    "models": [
+      {
+        "id": "anthropic/claude-sonnet-4",
+        "label": "Claude Sonnet 4 (OpenRouter)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 20,
+          "priceOrder": 200,
+          "descriptor": {
+            "kind": "chat",
+            "label": "Claude Sonnet 4 (OpenRouter)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "openai/gpt-4.1",
+        "label": "GPT-4.1 (OpenRouter)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 21,
+          "priceOrder": 201,
+          "descriptor": {
+            "kind": "chat",
+            "label": "GPT-4.1 (OpenRouter)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "google/gemini-2.5-pro",
+        "label": "Gemini 2.5 Pro (OpenRouter)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 22,
+          "priceOrder": 202,
+          "descriptor": {
+            "kind": "chat",
+            "label": "Gemini 2.5 Pro (OpenRouter)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "deepseek/deepseek-chat-v3-0324",
+        "label": "DeepSeek V3 (OpenRouter)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 23,
+          "priceOrder": 203,
+          "descriptor": {
+            "kind": "chat",
+            "label": "DeepSeek V3 (OpenRouter)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "qwen/qwen3-235b-a22b",
+        "label": "Qwen3 235B (OpenRouter)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 24,
+          "priceOrder": 204,
+          "descriptor": {
+            "kind": "chat",
+            "label": "Qwen3 235B (OpenRouter)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "newapi/gpt-4.1",
+        "label": "GPT-4.1 (New API)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 30,
+          "priceOrder": 210,
+          "descriptor": {
+            "kind": "chat",
+            "label": "GPT-4.1 (New API)",
+            "provider": "newapi"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "newapi/claude-sonnet-4",
+        "label": "Claude Sonnet 4 (New API)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 31,
+          "priceOrder": 211,
+          "descriptor": {
+            "kind": "chat",
+            "label": "Claude Sonnet 4 (New API)",
+            "provider": "newapi"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "newapi/gemini-2.5-pro",
+        "label": "Gemini 2.5 Pro (New API)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 32,
+          "priceOrder": 212,
+          "descriptor": {
+            "kind": "chat",
+            "label": "Gemini 2.5 Pro (New API)",
+            "provider": "newapi"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "newapi/deepseek-chat",
+        "label": "DeepSeek Chat (New API)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 33,
+          "priceOrder": 213,
+          "descriptor": {
+            "kind": "chat",
+            "label": "DeepSeek Chat (New API)",
+            "provider": "newapi"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "chat": {
+      "version": 1,
+      "providers": [
+        {
+          "id": "openrouter",
+          "label": "OpenRouter 统一网关",
+          "models": [
+            "anthropic/claude-sonnet-4",
+            "openai/gpt-4.1",
+            "google/gemini-2.5-pro",
+            "deepseek/deepseek-chat-v3-0324",
+            "qwen/qwen3-235b-a22b"
+          ],
+          "defaultConfig": {
+            "provider": "openrouter",
+            "baseUrl": "https://openrouter.ai/api/v1/",
+            "apiKey": ""
+          }
+        },
+        {
+          "id": "newapi",
+          "label": "New API / One API 中转站",
+          "models": [
+            "newapi/gpt-4.1",
+            "newapi/claude-sonnet-4",
+            "newapi/gemini-2.5-pro",
+            "newapi/deepseek-chat"
+          ],
+          "defaultConfig": {
+            "provider": "newapi",
+            "baseUrl": "https://api.openai.com/v1/",
+            "apiKey": ""
+          }
+        }
+      ],
+      "sandbox": {
+        "tools": true,
+        "origins": [
+          "https://openrouter.ai",
+          "https://api.openai.com"
+        ],
+        "allowedHeaders": [
+          "HTTP-Referer",
+          "X-Title"
+        ],
+        "program": "(()=>{\"use strict\";var policy=(()=>{var p=Object.defineProperty;var y=Object.getOwnPropertyDescriptor;var w=Object.getOwnPropertyNames;var I=Object.prototype.hasOwnProperty;var S=(e,t)=>{for(var r in t)p(e,r,{get:t[r],enumerable:!0})},_=(e,t,r,s)=>{if(t&&typeof t==\"object\"||typeof t==\"function\")for(let n of w(t))!I.call(e,n)&&n!==r&&p(e,n,{get:()=>t[n],enumerable:!(s=y(t,n))||s.enumerable});return e};var k=e=>_(p({},\"__esModule\",{value:!0}),e);var j={};S(j,{default:()=>A});function d(e,t){try{return JSON.parse(e,t)}catch{}let r=[],s=[];for(let c=0;c<e.length;)if(e.charCodeAt(c)===34){let i=c++;for(;;){if(c>=e.length)throw new Error(\"Invalid JSON string\");let l=e.charCodeAt(c++);if(l===92)c++;else if(l===34)break}r.push(JSON.parse(e.slice(i,c)))}else{let i=e.startsWith(\"-Infinity\",c)?\"-Infinity\":e.startsWith(\"Infinity\",c)?\"Infinity\":e.startsWith(\"NaN\",c)?\"NaN\":null;i?(s.push({start:c,end:c+i.length,value:i===\"NaN\"?NaN:i===\"Infinity\"?1/0:-1/0}),c+=i.length):c++}let n=\"__muse_json_constant__\";for(;r.some(c=>c.startsWith(n));)n+=\"_\";let a={},o=[],u=0;for(let[c,i]of s.entries()){let l=n+c;a[l]=i.value,o.push(e.slice(u,i.start),\"[\"+JSON.stringify(l)+\"]\"),u=i.end}return o.push(e.slice(u)),JSON.parse(o.join(\"\"),function(c,i,l={}){return Array.isArray(i)&&i.length===1&&typeof i[0]==\"string\"&&Object.hasOwn(a,i[0])&&(i=a[i[0]],l={}),t?t.call(this,c,i,l):i})}var m=\"\\\\t-\\\\r\\\\x1c-\\\\x20\\\\x85\\\\xa0\\\\u1680\\\\u2000-\\\\u200a\\\\u2028\\\\u2029\\\\u202f\\\\u205f\\\\u3000\",N=new RegExp(\"^[\"+m+\"]+|[\"+m+\"]+$\",\"g\"),g=e=>e.replace(N,\"\"),h=e=>e!=null&&e!==!1&&e!==0&&e!==\"\"&&(!Array.isArray(e)||e.length>0)&&(typeof e!=\"object\"||Array.isArray(e)||Object.keys(e).length>0);var O=\"\\u4F60\\u662F\\u5BF9\\u8BDD\\u6807\\u9898\\u751F\\u6210\\u5668\\u3002\\u6839\\u636E\\u7528\\u6237\\u7684\\u7B2C\\u4E00\\u53E5\\u63D0\\u95EE\\u548C\\u52A9\\u624B\\u56DE\\u590D\\uFF0C\\u603B\\u7ED3\\u4E00\\u4E2A\\u7B80\\u6D01\\u7684\\u4E2D\\u6587\\u6807\\u9898\\uFF08\\u4E0D\\u8D85\\u8FC7 18 \\u4E2A\\u5B57\\uFF09\\uFF0C\\u53EA\\u8FD4\\u56DE\\u6807\\u9898\\u672C\\u8EAB\\uFF0C\\u4E0D\\u52A0\\u5F15\\u53F7\\u6216\\u6807\\u70B9\\u3002\";function f(e){if(!e||typeof e!=\"object\"||Array.isArray(e))throw Error(\"Invalid object\");return e}function E(e,t){return e===\"newapi\"&&typeof t==\"string\"&&t.startsWith(\"newapi/\")?t.slice(7):t}function J(e){let t=/-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?/y,r=[],s=0;for(let n=0;n<e.length;){let a=e[n++];if(a==='\"')for(;n<e.length;){let o=e[n++];if(o===\"\\\\\")n++;else if(o==='\"')break}else if(a===\"-\"||a>=\"0\"&&a<=\"9\"){t.lastIndex=n-1;let o=t.exec(e);if(!o)continue;if(o[0].replace(/^-/,\"\").length>4300&&/^-?\\d+$/.test(o[0]))throw Error(\"Integer string limit\");r.push(e.slice(s,n-1),JSON.stringify(o[0])),s=n=t.lastIndex}}return d(r.join(\"\")+e.slice(s))}var A={request(e,t){let r=t.provider===\"openrouter\"?{\"HTTP-Referer\":\"https://fumiao.studio\",\"X-Title\":\"Fumiao Studio\"}:void 0;if(e===\"probe\")return r?{path:\"models\",headers:r}:{path:\"models\"};let s=E(t.provider,t.model),n=e===\"stream\"?{model:s,messages:t.messages,stream:!0,stream_options:{include_usage:!0},max_tokens:4096,...t.tools?.length?{tools:t.tools}:{}}:{model:s,messages:[{role:\"system\",content:O},{role:\"user\",content:`\\u63D0\\u95EE\\uFF1A${String(t.question||\"\").slice(0,600)}\n\\u56DE\\u590D\\uFF1A${String(t.answer||\"\").slice(0,600)}`}],stream:!1,max_tokens:60};return r?{path:\"chat/completions\",body:n,headers:r}:{path:\"chat/completions\",body:n}},event(e){if(!e.startsWith(\"data:\"))return{type:\"skip\"};let t=g(e.slice(5));if(t===\"[DONE]\")return{type:\"done\"};let r,s;try{r=d(t),s=J(t)}catch{return{type:\"error\",code:\"format\"}}if(f(r),h(r.error))return{type:\"error\",code:\"upstream\"};let n=h(r.choices)?r.choices:[];if(!Array.isArray(n))throw Error(\"Invalid choices\");let a=n.length?f(n[0]):{},o=f(h(a.delta)?a.delta:{}),u=f(h(r.usage)?r.usage:{}),c={};for(let l of[\"prompt_tokens\",\"completion_tokens\",\"total_tokens\",\"prompt_cache_hit_tokens\",\"prompt_cache_miss_tokens\"])typeof u[l]==\"number\"&&/^-?\\d+$/.test(s.usage[l])&&(c[l]=s.usage[l]);let i=o.content;return{type:\"chunk\",text:h(i)?typeof i==\"number\"&&!Number.isFinite(i)?!0:i:\"\",reason:a.finish_reason??null,usage:c,...o.tool_calls==null?{}:{toolCalls:o.tool_calls}}},title(e){let t=f(d(e)),r=Array.isArray(t.choices)?t.choices:[],s=r.length?f(r[0]):{},n=f(s.message||{});return g(String(n.content||\"\")).replace(/^[\"'“”「『]+|[\"'“”」』]+$/g,\"\").slice(0,60)},probe(e,t){let r=f(d(e)),s=Object.hasOwn(r,\"data\")?r.data:[];if((s===\"\"||s&&typeof s==\"object\"&&!Object.keys(s).length)&&(s=[]),!Array.isArray(s))throw Error(\"Invalid model list\");let n=s.map(o=>{if(f(o),!Object.hasOwn(o,\"id\")||o.id!==null&&typeof o.id==\"object\")throw Error(\"Invalid model ID\");return String(o.id)});return n.length?t.map(o=>o.startsWith(\"newapi/\")?o.slice(7):o).some(o=>n.includes(o))?\"ok\":\"unavailable\":\"empty\"}};return k(j);})();\n;return policy.default})()"
+      }
+    }
+  },
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "http",
+      "secrets"
+    ],
+    "http": {
+      "origins": [
+        "https://openrouter.ai",
+        "https://api.openai.com"
+      ],
+      "allowedHeaders": [
+        "HTTP-Referer",
+        "X-Title"
+      ]
+    }
+  }
+}

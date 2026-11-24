@@ -336,7 +336,18 @@ export const contributesSchema = z
       .optional(),
     exporters: z
       .array(
-        z.object({ id: slug, title: label, program: hookProgram }).strict(),
+        z
+          .object({
+            id: slug,
+            title: label,
+            outputKind: z.enum(["composition", "project"]).optional(),
+            mime: z
+              .enum(["video/mp4", "application/zip", "application/xml"])
+              .optional(),
+            fileExtension: z.enum(["mp4", "zip", "fcpxml"]).optional(),
+            program: hookProgram,
+          })
+          .strict(),
       )
       .max(12)
       .optional(),
@@ -357,6 +368,10 @@ export const contributesSchema = z
       .object({
         origins: z.array(z.string().max(200)).max(16),
         connection: z.literal(true).optional(),
+        allowedHeaders: z
+          .array(z.string().regex(/^[A-Za-z][A-Za-z0-9-]{0,63}$/))
+          .max(8)
+          .optional(),
       })
       .strict()
       .refine(
@@ -427,8 +442,38 @@ export function contributionProblems(
         "http.origins 只接受 https 源，例如 https://api.example.com：" + origin,
       );
   }
-  if (new Set(c.http?.origins).size !== (c.http?.origins.length ?? 0))
+  if (new Set(c.http?.origins ?? []).size !== (c.http?.origins?.length ?? 0))
     problems.push("http.origins 重复");
+  const forbiddenHeaders = new Set([
+    "authorization",
+    "host",
+    "cookie",
+    "content-length",
+    "content-type",
+    "accept-encoding",
+    "connection",
+    "transfer-encoding",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-forwarded-for",
+    "idempotency-key",
+  ]);
+  const seenHeaders = new Set<string>();
+  for (const header of c.http?.allowedHeaders ?? []) {
+    const lower = header.toLowerCase();
+    if (forbiddenHeaders.has(lower))
+      problems.push("http.allowedHeaders 禁止声明受保护请求头：" + header);
+    if (seenHeaders.has(lower))
+      problems.push("http.allowedHeaders 重复：" + header);
+    seenHeaders.add(lower);
+  }
+  for (const exp of c.exporters ?? []) {
+    if (
+      (exp.outputKind ?? "composition") === "project" &&
+      exp.mime === "video/mp4"
+    )
+      problems.push("工程导出器不能声明 video/mp4：" + exp.id);
+  }
   if (
     c.importers?.some((item) => item.target === "assets") &&
     !caps.has("http")

@@ -133,7 +133,14 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
     ["verify", contributions.paymentMethods],
     ["callback", contributions.paymentMethods],
     ["plan", contributions.importers],
-    ["plan", contributions.exporters],
+    [
+      "plan",
+      (contributions.exporters ?? []).filter((e) => e.outputKind !== "project"),
+    ],
+    [
+      "export",
+      (contributions.exporters ?? []).filter((e) => e.outputKind === "project"),
+    ],
     ["view", contributions.pages],
     ["run", contributions.canvasNodes],
     ["run", contributions.chatTools],

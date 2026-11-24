@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "id": "jianying-exporter",
+  "label": "剪映草稿导出",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": ["media"],
+    "exporters": [
+      {
+        "id": "draft-zip",
+        "title": "剪映草稿 ZIP",
+        "outputKind": "project",
+        "mime": "application/zip",
+        "fileExtension": "zip",
+        "programFile": "export.js"
+      }
+    ],
+    "settingsPages": []
+  }
+}

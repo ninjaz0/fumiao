@@ -175,3 +175,18 @@
 .plugin-node-outputs :is(img,video,audio) { max-width: 100%; }
 .plugin-node-form form, .plugin-node-form label { display: grid; gap: 8px; }
 .plugin-node-form form { max-height: 40vh; overflow: auto; }
+.composition-exporter-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.composition-exporter-select select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--cv-line);
+  background: var(--cv-surface);
+  color: var(--cv-text);
+  font: inherit;
+}

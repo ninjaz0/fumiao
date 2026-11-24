@@ -1,6 +1,11 @@
 import type { CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
 import { PluginNodeForm, PluginNodePorts, PluginNodeOutputs } from "./PluginNode";
-import { matches, normalizeForm } from "@fumiao/plugin-sdk/model-form";
+import {
+  evaluateFormConstraints,
+  matches,
+  normalizeForm,
+  type FormValues,
+} from "@fumiao/plugin-sdk/model-form";
 import React, {
   createContext,
   memo,
@@ -802,6 +807,28 @@ export function CanvasWorkspace({
   const flowParameters=flowModel?.family?FlowPicker.options(studio.model_catalog,selectedModel,availableModel):null;
   const form = studio.model_forms?.[selectedModel];
   const fields = form?.fields;
+  const formConstraints = useMemo(() => {
+    if (!form || !single) return undefined;
+    const vals: FormValues = {
+      ratio: single.params.ratio,
+      resolution: single.params.resolution,
+      seconds: single.params.seconds,
+      quality: single.params.quality,
+      image_quality: single.params.image_quality,
+      fast_mode: Boolean(single.params.fast_mode),
+      sampling_steps: single.params.sampling_steps,
+    };
+    return evaluateFormConstraints(form, vals);
+  }, [
+    form,
+    single?.params.ratio,
+    single?.params.resolution,
+    single?.params.seconds,
+    single?.params.quality,
+    single?.params.image_quality,
+    single?.params.fast_mode,
+    single?.params.sampling_steps,
+  ]);
   const stepsOptions = (fields?.sampling_steps?.enum ?? []).map(Number).filter(v=>v!==form?.fastSteps) as Params["sampling_steps"][];
   useEffect(()=>{
     if (!single || !['image','video'].includes(single.type) || !selectedModel) return;
@@ -2036,6 +2063,31 @@ export function CanvasWorkspace({
       if(!model)return;
       const spec=studio.model_catalog[model];
       params={...params,model,ratio:spec.ratio!,seconds:spec.seconds!,flow_source_job:spec.mode==='extend'&&spec.ratio===single.params.ratio?params.flow_source_job||null:null};
+    } else if (form) {
+      const editedKey = Object.keys(patch).find((k) => k in form.fields);
+      if (editedKey) {
+        const normalized = normalizeForm(
+          form,
+          {
+            ratio: params.ratio,
+            resolution: params.resolution,
+            seconds: params.seconds,
+            quality: params.quality,
+            image_quality: params.image_quality,
+            fast_mode: Boolean(params.fast_mode),
+            sampling_steps: params.sampling_steps,
+          },
+          editedKey,
+        );
+        params = {
+          ...params,
+          ratio: String(normalized.ratio ?? params.ratio),
+          seconds: Number(normalized.seconds ?? params.seconds),
+          resolution: (normalized.resolution ?? params.resolution) as Params["resolution"],
+          quality: (normalized.quality ?? params.quality) as Params["quality"],
+          image_quality: (normalized.image_quality ?? params.image_quality) as Params["image_quality"],
+        };
+      }
     }
     edit(single.id, {params});
   };
@@ -2695,10 +2747,13 @@ export function CanvasWorkspace({
                   {flowParameters&&flowParameters.modes.length>1&&<><span className="menu-label">生成方式</span><div className="resolution-options" role="group" aria-label="生成方式">{flowParameters.modes.map(mode=><button key={mode} className={flowModel?.mode===mode?'active':''} onClick={()=>patchParams({},mode)}>{FlowPicker.modeLabels[mode]}</button>)}</div></>}
                   <span className="menu-label">选择比例</span>
                   <div className="ratio-options">
-                    {(flowParameters?.ratios ?? fields?.ratio?.enum?.map(String) ?? []).map((r) => (
+                    {(flowParameters?.ratios ?? fields?.ratio?.enum?.map(String) ?? []).map((r) => {
+                      const ratioDisabledReason = formConstraints?.fields.ratio?.disabledOptions[JSON.stringify(r)];
+                      return (
                       <button
                         key={r}
-                        disabled={h3Frames&&referenceMedia.length>0}
+                        disabled={(h3Frames&&referenceMedia.length>0) || Boolean(ratioDisabledReason)}
+                        title={ratioDisabledReason}
                         className={single.params.ratio === r ? "active" : ""}
                         onClick={() => patchParams({ ratio: r })}
                       >
@@ -2708,14 +2763,20 @@ export function CanvasWorkspace({
                         />
                         {r}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                   {!muse && !flowModel && <><span className="menu-label">选择分辨率</span>
                   <div className="resolution-options">
                     {((single.type === "image" ? fields?.resolution : fields?.quality)?.enum ?? []).map(
-                      (v) => (
+                      (v) => {
+                        const resField = single.type === "image" ? "resolution" : "quality";
+                        const resDisabledReason = formConstraints?.fields[resField]?.disabledOptions[JSON.stringify(v)];
+                        return (
                         <button
                           key={String(v)}
+                          disabled={Boolean(resDisabledReason)}
+                          title={resDisabledReason}
                           className={
                             (single.type === "image"
                               ? single.params.resolution
@@ -2734,7 +2795,8 @@ export function CanvasWorkspace({
                           {v}
                           {single.type === "video" ? "P" : ""}
                         </button>
-                      ),
+                        );
+                      },
                     )}
                   </div></>}
                 </div>
@@ -2766,9 +2828,14 @@ export function CanvasWorkspace({
                   {(single.type === "image"
                     ? fields?.image_quality?.enum ?? []
                     : flowParameters?.seconds ?? fields?.seconds?.enum ?? []
-                  ).map((v) => (
+                  ).map((v) => {
+                    const durField = single.type === "image" ? "image_quality" : "seconds";
+                    const durDisabledReason = formConstraints?.fields[durField]?.disabledOptions[JSON.stringify(v)];
+                    return (
                     <button
                       key={String(v)}
+                      disabled={Boolean(durDisabledReason)}
+                      title={durDisabledReason}
                       onClick={() => {
                         patchParams(
                           single.type === "image"
@@ -2787,7 +2854,8 @@ export function CanvasWorkspace({
                         ? single.params.image_quality
                         : single.params.seconds) === v && <Check size={14} />}
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>}
