@@ -204,6 +204,22 @@ try {
         assert.equal(stored.title, retrySucceeds ? draftTitle : serverTitle);
         await page.goto(editPath);
         await expect(title).toHaveValue(denyStorage ? serverTitle : draftTitle);
+        if (status === 409) {
+          await expect(page.locator(".save-state")).toHaveText("保存冲突");
+          await exit.click(page);
+          await expect(dialog).toBeVisible();
+          await dialog.getByRole("button", { name: "仍要离开", exact: true }).click();
+          await expect(page).toHaveURL(`${origin}${exit.path}?workspace=${workspace}`);
+
+          await page.goto(editPath);
+          await expect(title).toHaveValue(draftTitle);
+          await expect(page.locator(".save-state")).toHaveText("保存冲突");
+          assert.equal(putCount, 1, "leaving a restored conflict must not rebase the draft or send a PUT");
+          const latest: Project = await (await context.request.get(apiPath, { headers })).json();
+          assert.equal(latest.revision, stored.revision);
+          assert.equal(latest.title, serverTitle);
+          console.log(`PASS ${scenario}: repeated leave and reopen preserved the conflict and team revision`);
+        }
         console.log(`PASS ${scenario}: guarded exit, ${retrySucceeds ? "retry saved" : denyStorage ? "export available without claiming retention" : "local draft restored"}`);
       } catch (error) {
         console.error(`FAIL ${scenario}: ${String(error)} (PUTs: ${putCount}; native beforeunload prompts: ${beforeUnload})`);

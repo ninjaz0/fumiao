@@ -12,30 +12,35 @@ export function useDocument(project: Project, userId: number) {
   const key = `fm-canvas-${userId}-${project.id}-${editorId}`;
   const initial = useRef<{
     draft: Draft;
+    revision: number;
     conflict: boolean;
     dirty: boolean;
   } | null>(null);
   if (!initial.current) {
     let draft: Draft = { title: project.title, document: project.document },
+      revision = project.revision,
       conflict = false,
       dirty = false;
     try {
-      const saved = JSON.parse(localStorage.getItem(key) || "null");
+      const saved = JSON.parse(localStorage.getItem(key) || "null") as
+        | { draft: Draft; revision: number }
+        | null;
       if (
         saved?.draft &&
         saved.draft.document.schemaVersion === 1 &&
         JSON.stringify(saved.draft) !== JSON.stringify(draft)
       ) {
         draft = saved.draft;
+        revision = saved.revision;
         dirty = true;
-        conflict = saved.revision !== project.revision;
+        conflict = revision !== project.revision;
       }
     } catch {}
-    initial.current = { draft, conflict, dirty };
+    initial.current = { draft, revision, conflict, dirty };
   }
   const [value, setValue] = useState(initial.current.draft),
     ref = useRef(value);
-  const revision = useRef(project.revision),
+  const revision = useRef(initial.current.revision),
     serial = useRef(initial.current.dirty ? 1 : 0),
     ack = useRef(0);
   const [status, setStatus] = useState(
