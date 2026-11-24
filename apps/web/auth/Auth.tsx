@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAppearance } from "../home/controls";
+import "./auth.css";
 
 type Mode = "login" | "register";
 const moon = "M20 14.4A8.4 8.4 0 019.6 4a8.5 8.5 0 1010.4 10.4z";
@@ -203,8 +204,15 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
   return (
     <>
       <div id="app">
+        <noscript>
+          <main className="loading-screen auth-noscript">
+            <h1>登录工作台</h1>
+            <p>请启用 JavaScript 后重新加载页面，以登录或注册弗淼 AIGC 工作台。</p>
+            <a href="/">返回首页</a>
+          </main>
+        </noscript>
         {!ready ? (
-          <main
+          <div
             className="loading-screen"
             role="status"
             aria-label="弗淼 AIGC 正在加载"
@@ -219,7 +227,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
             <div className="loading-track" aria-hidden="true">
               <span />
             </div>
-          </main>
+          </div>
         ) : (
           <div className="auth">
             <header className="auth-top">
