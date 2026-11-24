@@ -1068,6 +1068,31 @@
   margin-top: 7px;
   background: var(--field);
 }
+#modal #credit-adjust-form .credit-adjust-preview {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: -6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--side);
+  font-size: 13px;
+  color: var(--secondary);
+}
+#modal #credit-adjust-form .credit-adjust-preview strong {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+#modal #credit-adjust-form .credit-adjust-preview[data-invalid="true"] {
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+#modal #credit-adjust-form .credit-adjust-preview[data-invalid="true"] strong {
+  color: var(--danger);
+}
 #modal
   :is(
     #add-member-form,

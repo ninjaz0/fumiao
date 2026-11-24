@@ -2,6 +2,11 @@ import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { openDialogFor } from "./AssetDialog";
 import { CreditLedger } from "./SettingsCredits";
 import type { AdminOpen, AdminSave } from "./settings-admin";
+import {
+  evaluateCreditAdjustment,
+  MAX_CREDIT_ADJUSTMENT,
+  type CreditAdjustmentDirection,
+} from "./settings-credits-helpers";
 import type { CreditAccount, CreditEntry } from "./state";
 
 type CreditHistory = { accounts: CreditAccount[]; history: CreditEntry[] };
@@ -235,24 +240,57 @@ function CreditAdjustment({
   refresh,
   notify,
 }: AdminSave & { account: CreditAccount }) {
-  const [uid] = useState(() => crypto.randomUUID());
+  const idempotency = useRef({ fingerprint: "", uid: "" });
+  const amountField = useRef<HTMLInputElement>(null);
+  const [direction, setDirection] = useState<CreditAdjustmentDirection>(1);
+  const [rawAmount, setRawAmount] = useState("");
+  const [badInput, setBadInput] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
 
+  const evaluation = evaluateCreditAdjustment(
+    rawAmount,
+    direction,
+    account,
+    badInput,
+  );
+  const activeError = evaluation.error || message;
+  const maxInput =
+    direction === -1
+      ? Math.max(0, Math.min(account.available, MAX_CREDIT_ADJUSTMENT))
+      : MAX_CREDIT_ADJUSTMENT;
+
+  useLayoutEffect(() => {
+    amountField.current?.setCustomValidity(evaluation.error);
+  }, [evaluation.error]);
+
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending.current) return;
+    if (pending.current || evaluation.error) return;
     const form = event.currentTarget;
+    if (!form.reportValidity() || evaluation.amount === null) return;
     const values = new FormData(form);
+    const note = String(values.get("note") ?? "").trim();
+    if (!note) {
+      setMessage("请填写调整原因");
+      return;
+    }
+    const payload = {
+      workspace: account.workspace,
+      amount: evaluation.amount * direction,
+      note,
+    };
+    const fingerprint = JSON.stringify(payload);
+    if (fingerprint !== idempotency.current.fingerprint)
+      idempotency.current = { fingerprint, uid: crypto.randomUUID() };
     pending.current = true;
     setBusy(true);
+    setMessage("");
     try {
       await request("/api/admin/credits/adjust", {
-        workspace: account.workspace,
-        amount: Number(values.get("amount")) * Number(values.get("direction")),
-        note: String(values.get("note")).trim(),
-        uid,
+        ...payload,
+        uid: idempotency.current.uid,
       });
       openDialogFor(form)?.close();
       await refresh();
@@ -267,10 +305,27 @@ function CreditAdjustment({
   return (
     <form id="credit-adjust-form" onSubmit={save}>
       <h2 id="modal-heading">调整积分</h2>
-      <p>{`${account.name} · 可用 ${account.available} 积分`}</p>
+      <p>{`${account.name} · 可用 ${account.available.toLocaleString("en-US")} 积分`}</p>
       <label className="formlabel">
         操作
-        <select name="direction">
+        <select
+          name="direction"
+          value={String(direction)}
+          disabled={busy}
+          onChange={(event) => {
+            const next: CreditAdjustmentDirection =
+              event.currentTarget.value === "-1" ? -1 : 1;
+            const nextEval = evaluateCreditAdjustment(
+              rawAmount,
+              next,
+              account,
+              badInput,
+            );
+            amountField.current?.setCustomValidity(nextEval.error);
+            setDirection(next);
+            if (message) setMessage("");
+          }}
+        >
           <option value="1">发放积分</option>
           <option value="-1">扣减积分</option>
         </select>
@@ -278,22 +333,69 @@ function CreditAdjustment({
       <label className="formlabel">
         积分数量
         <input
+          ref={amountField}
           name="amount"
           type="number"
           min="1"
-          max="1000000000"
+          max={maxInput}
           step="1"
           required
+          disabled={busy}
+          aria-invalid={Boolean(evaluation.error) || undefined}
+          aria-describedby={
+            activeError
+              ? "credit-adjust-preview credit-adjust-error"
+              : "credit-adjust-preview"
+          }
+          onChange={(event) => {
+            const nextValue = event.currentTarget.value;
+            const nextBad = event.currentTarget.validity.badInput;
+            const nextEval = evaluateCreditAdjustment(
+              nextValue,
+              direction,
+              account,
+              nextBad,
+            );
+            event.currentTarget.setCustomValidity(nextEval.error);
+            setRawAmount(nextValue);
+            setBadInput(nextBad);
+            if (message) setMessage("");
+          }}
         />
       </label>
+      <div
+        id="credit-adjust-preview"
+        className="credit-adjust-preview"
+        data-invalid={evaluation.overdrawn || undefined}
+        aria-live="polite"
+      >
+        <span>调整后预计可用余额</span>
+        <strong>
+          {evaluation.projected !== null
+            ? `${evaluation.projected.toLocaleString("en-US")} 积分`
+            : "—"}
+        </strong>
+      </div>
       <label className="formlabel">
         原因
-        <input name="note" maxLength={200} required />
+        <input
+          name="note"
+          maxLength={200}
+          required
+          disabled={busy}
+          onChange={() => {
+            if (message) setMessage("");
+          }}
+        />
       </label>
-      <p className="form-message" role="alert">
-        {message}
+      <p id="credit-adjust-error" className="form-message" role="alert">
+        {activeError}
       </p>
-      <button className="primary" type="submit" disabled={busy}>
+      <button
+        className="primary"
+        type="submit"
+        disabled={busy || Boolean(evaluation.error)}
+      >
         确认调整
       </button>
     </form>
