@@ -53,15 +53,55 @@ export function requireTokenScope(
 }
 
 export type TokenRouteRule = {
-  method: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  /** Canonical Express/NestJS route template (e.g. `/api/series/:key`). */
+  template: string;
+  /** Compiled matcher derived from `template`. */
   path: RegExp;
   scope: WorkspaceTokenScope;
+  /** OpenAPI summary & tag for 1-to-1 spec generation. */
+  tag: string;
+  summary: string;
   /** True when the operation submits paid AI generation work (governed by F031 Agent policy). */
   paidAgentAction?: boolean;
 };
 
+export function routeTemplateToRegex(template: string): RegExp {
+  const escaped = template
+    .split("/")
+    .map((seg) =>
+      seg.startsWith(":")
+        ? "[^/]+"
+        : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    )
+    .join("/");
+  return new RegExp(`^${escaped}$`);
+}
+
+function tokenRule(
+  method: TokenRouteRule["method"],
+  template: string,
+  scope: WorkspaceTokenScope,
+  tag: string,
+  summary: string,
+  paidAgentAction = false,
+): TokenRouteRule {
+  return {
+    method,
+    template,
+    path: routeTemplateToRegex(template),
+    scope,
+    tag,
+    summary,
+    ...(paidAgentAction ? { paidAgentAction: true } : {}),
+  };
+}
+
 /**
  * F035: Explicit REST API allowlist for workspace-scoped Bearer Tokens (`fmk_...`).
+ * Derived from canonical NestJS route templates and verified by automated contract tests
+ * against the live NestJS controllers so routes/methods never drift.
+ *
  * Any route NOT listed here (including all `/api/admin/*`, `/api/users*`, `/api/workspaces*`,
  * `/api/tokens*`, `/api/workspace/agent-policy`, `/api/budgets*`, `/api/redeem`,
  * `/api/subscriptions/*`, `/api/me*`, `/api/settings/*`, and proposal `apply`/`reject`)
@@ -69,66 +109,67 @@ export type TokenRouteRule = {
  * the token was issued by an administrator.
  */
 export const TOKEN_REST_ALLOWLIST: readonly TokenRouteRule[] = [
-  // Workspace state & batch quote (read-only)
-  { method: "GET", path: /^\/api\/state$/, scope: "canvas:read" },
-  { method: "POST", path: /^\/api\/quotes\/batch$/, scope: "canvas:read" },
+  // Workspace state & quoting (read-only; state response is scope-projected for tokens)
+  tokenRule("GET", "/api/state", "canvas:read", "Workspace", "读取当前工作区受 scope 裁剪的状态快照"),
+  tokenRule("POST", "/api/estimate", "canvas:read", "Billing", "估算单任务耗时与积分"),
+  tokenRule("POST", "/api/quotes/batch", "canvas:read", "Billing", "只读批量积分预估（单事务无锁）"),
   // Canvases & storyboard exports
-  { method: "GET", path: /^\/api\/canvases$/, scope: "canvas:read" },
-  { method: "POST", path: /^\/api\/canvases$/, scope: "canvas:write" },
-  { method: "GET", path: /^\/api\/canvases\/[^/]+$/, scope: "canvas:read" },
-  { method: "GET", path: /^\/api\/canvases\/[^/]+\/graph$/, scope: "canvas:read" },
-  { method: "GET", path: /^\/api\/canvases\/[^/]+\/runs$/, scope: "canvas:read" },
-  { method: "GET", path: /^\/api\/canvases\/[^/]+\/exports$/, scope: "canvas:read" },
-  { method: "PUT", path: /^\/api\/canvases\/[^/]+\/document$/, scope: "canvas:write" },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/duplicate$/, scope: "canvas:write" },
-  { method: "DELETE", path: /^\/api\/canvases\/[^/]+$/, scope: "canvas:write" },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/exports$/, scope: "canvas:write" },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/shots\/download$/, scope: "canvas:read" },
-  { method: "GET", path: /^\/api\/storyboard-exports\/[^/]+\/subtitles$/, scope: "canvas:read" },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/batch-precheck$/, scope: "canvas:read" },
+  tokenRule("GET", "/api/canvases", "canvas:read", "Canvas", "列出当前工作区画布项目"),
+  tokenRule("POST", "/api/canvases", "canvas:write", "Canvas", "创建画布项目"),
+  tokenRule("GET", "/api/canvases/:key", "canvas:read", "Canvas", "读取画布完整文档、节点图与版本号"),
+  tokenRule("PUT", "/api/canvases/:key/document", "canvas:write", "Canvas", "按乐观锁版本号保存画布文档"),
+  tokenRule("POST", "/api/canvases/:key/duplicate", "canvas:write", "Canvas", "复制画布项目"),
+  tokenRule("DELETE", "/api/canvases/:key", "canvas:write", "Canvas", "删除画布项目"),
+  tokenRule("GET", "/api/canvases/:key/runs", "canvas:read", "Canvas", "查询画布关联任务列表"),
+  tokenRule("GET", "/api/canvases/:key/exports", "canvas:read", "Canvas", "查询画布成片/工程包导出记录"),
+  tokenRule("POST", "/api/canvases/:key/exports", "canvas:write", "Canvas", "提交画布成片或剪映/FCPXML/EDL 导出"),
+  tokenRule("POST", "/api/canvases/:key/shots/download", "canvas:read", "Canvas", "打包下载画布分镜成片"),
+  tokenRule("GET", "/api/storyboard-exports/:key/subtitles", "canvas:read", "Canvas", "导出画布分镜字幕 (SRT/VTT)"),
+  tokenRule("POST", "/api/canvases/:key/batch-precheck", "canvas:read", "Canvas", "工作流组或选中节点的只读 Precheck 预检与积分确认"),
   // Canvas proposals (token may read & propose, NEVER self-apply/approve!)
-  { method: "GET", path: /^\/api\/canvases\/[^/]+\/proposals$/, scope: "canvas:read" },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/proposals$/, scope: "canvas:propose" },
-  // Paid generation actions (require job:submit AND pass F031 Agent spending policy)
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/batch-runs$/, scope: "job:submit", paidAgentAction: true },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/runs$/, scope: "job:submit", paidAgentAction: true },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/candidates$/, scope: "job:submit", paidAgentAction: true },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/narration$/, scope: "job:submit", paidAgentAction: true },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/dialogue$/, scope: "job:submit", paidAgentAction: true },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/execute$/, scope: "job:submit", paidAgentAction: true },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/tail-frame$/, scope: "canvas:write" },
-  { method: "POST", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/grid-crop$/, scope: "asset:write" },
-  { method: "POST", path: /^\/api\/generate\/(image|video|audio)$/, scope: "job:submit", paidAgentAction: true },
-  // Jobs
-  { method: "GET", path: /^\/api\/jobs$/, scope: "job:read" },
-  { method: "GET", path: /^\/api\/jobs\/[^/]+$/, scope: "job:read" },
-  { method: "POST", path: /^\/api\/jobs\/[^/]+\/cancel$/, scope: "job:submit" },
-  // Assets & media
-  { method: "POST", path: /^\/api\/assets$/, scope: "asset:write" },
-  { method: "DELETE", path: /^\/api\/assets\/[^/]+$/, scope: "asset:write" },
-  { method: "GET", path: /^\/media\/[^/]+$/, scope: "asset:read" },
+  tokenRule("GET", "/api/canvases/:key/proposals", "canvas:read", "Agent", "列出画布 Agent 变更提案"),
+  tokenRule("POST", "/api/canvases/:key/proposals", "canvas:propose", "Agent", "提交提案式画布变更集（不自动改图、不自动扣费）"),
+  // Paid generation actions (require job:submit AND pass in-tx F031 Agent policy)
+  tokenRule("POST", "/api/canvases/:key/batch-runs", "job:submit", "Canvas", "按环节提交工作流组局部重跑（受 F031 策略管控）", true),
+  tokenRule("POST", "/api/canvases/:key/nodes/:node/runs", "job:submit", "Canvas", "提交画布单节点生成任务（受 F031 策略与 F015 预算管控）", true),
+  tokenRule("POST", "/api/canvases/:key/nodes/:node/candidates", "job:submit", "Canvas", "提交画布节点多候选生成任务（受 F031 策略管控）", true),
+  tokenRule("POST", "/api/canvases/:key/nodes/:node/narration", "job:submit", "Canvas", "提交画布节点旁白配音任务（受 F031 策略管控）", true),
+  tokenRule("POST", "/api/canvases/:key/nodes/:node/dialogue", "job:submit", "Canvas", "提交画布节点多角色对白任务（受 F031 策略管控）", true),
+  tokenRule("POST", "/api/canvases/:key/nodes/:node/execute", "job:submit", "Canvas", "执行画布扩展插件节点（受 F031 策略管控）", true),
+  tokenRule("POST", "/api/canvases/:key/nodes/:node/tail-frame", "canvas:write", "Canvas", "抽取分镜尾帧作为衔接素材"),
+  tokenRule("POST", "/api/canvases/:key/nodes/:node/grid-crop", "asset:write", "Canvas", "裁切宫格图单格并入库"),
+  // Direct generation & job lifecycle (matching real Nest routes)
+  tokenRule("POST", "/api/jobs", "job:submit", "Jobs", "提交视频生成任务（受 F031 策略管控）", true),
+  tokenRule("POST", "/api/image-jobs", "job:submit", "Jobs", "提交图片生成任务（受 F031 策略管控）", true),
+  tokenRule("POST", "/api/audio-jobs", "job:submit", "Jobs", "提交音频/配音生成任务（受 F031 策略管控）", true),
+  tokenRule("POST", "/api/jobs/:id/cancel", "job:submit", "Jobs", "取消排队中的生成任务"),
+  tokenRule("DELETE", "/api/jobs/:id", "job:submit", "Jobs", "删除任务记录"),
+  // Assets & private media
+  tokenRule("POST", "/api/assets", "asset:write", "Assets", "上传素材文件到当前工作区"),
+  tokenRule("DELETE", "/api/assets/:key", "asset:write", "Assets", "删除当前工作区素材"),
+  tokenRule("GET", "/media/:key", "asset:read", "Assets", "读取工作区私有媒体（支持 Range）"),
   // Asset packs
-  { method: "GET", path: /^\/api\/asset-packs$/, scope: "pack:read" },
-  { method: "POST", path: /^\/api\/asset-packs\/[^/]+\/turnaround$/, scope: "job:submit", paidAgentAction: true },
+  tokenRule("GET", "/api/asset-packs", "pack:read", "Assets", "列出当前工作区及全局只读资产包"),
+  tokenRule("POST", "/api/asset-packs/:key/turnaround", "job:submit", "Assets", "生成角色三视图/设定图（受 F031 策略管控）", true),
   // Workspace skills
-  { method: "GET", path: /^\/api\/skills$/, scope: "skill:read" },
-  { method: "POST", path: /^\/api\/skills$/, scope: "skill:write" },
-  { method: "POST", path: /^\/api\/skills\/import-zip$/, scope: "skill:write" },
-  { method: "PUT", path: /^\/api\/skills\/[^/]+$/, scope: "skill:write" },
-  { method: "DELETE", path: /^\/api\/skills\/[^/]+$/, scope: "skill:write" },
-  // Series hierarchy
-  { method: "GET", path: /^\/api\/series$/, scope: "canvas:read" },
-  { method: "GET", path: /^\/api\/series\/[^/]+$/, scope: "canvas:read" },
-  { method: "POST", path: /^\/api\/series$/, scope: "canvas:write" },
-  { method: "PATCH", path: /^\/api\/series\/[^/]+$/, scope: "canvas:write" },
-  { method: "DELETE", path: /^\/api\/series\/[^/]+$/, scope: "canvas:write" },
-  { method: "POST", path: /^\/api\/series\/[^/]+\/episodes$/, scope: "canvas:write" },
-  { method: "PATCH", path: /^\/api\/series\/[^/]+\/episodes\/[^/]+$/, scope: "canvas:write" },
-  { method: "DELETE", path: /^\/api\/series\/[^/]+\/episodes\/[^/]+$/, scope: "canvas:write" },
+  tokenRule("GET", "/api/skills", "skill:read", "Skills", "列出当前工作区 SKILL.md 技能包"),
+  tokenRule("POST", "/api/skills", "skill:write", "Skills", "创建或导入 SKILL.md 技能"),
+  tokenRule("POST", "/api/skills/import-zip", "skill:write", "Skills", "上传包含 SKILL.md 的 ZIP 技能包"),
+  tokenRule("PUT", "/api/skills/:key", "skill:write", "Skills", "更新指定工作区技能"),
+  tokenRule("DELETE", "/api/skills/:key", "skill:write", "Skills", "删除指定工作区技能"),
+  // Series -> Season -> Episode -> Scene hierarchy (matching real Nest PUT routes)
+  tokenRule("GET", "/api/series", "canvas:read", "Series", "列出当前工作区剧集/季/集/场层级结构"),
+  tokenRule("GET", "/api/series/:key", "canvas:read", "Series", "读取单个剧集详情与季/集/场树"),
+  tokenRule("POST", "/api/series", "canvas:write", "Series", "创建剧集项目"),
+  tokenRule("PUT", "/api/series/:key", "canvas:write", "Series", "更新剧集信息"),
+  tokenRule("DELETE", "/api/series/:key", "canvas:write", "Series", "删除剧集项目"),
+  tokenRule("POST", "/api/series/:key/episodes", "canvas:write", "Series", "在指定季下创建分集与绑定画布"),
+  tokenRule("PUT", "/api/series/:key/episodes/:ep", "canvas:write", "Series", "更新分集标题、季号、集号或梗概"),
+  tokenRule("DELETE", "/api/series/:key/episodes/:ep", "canvas:write", "Series", "删除分集"),
   // MCP Streamable HTTP
-  { method: "POST", path: /^\/api\/mcp$/, scope: "mcp:use" },
-  { method: "GET", path: /^\/api\/mcp$/, scope: "mcp:use" },
-  { method: "DELETE", path: /^\/api\/mcp$/, scope: "mcp:use" },
+  tokenRule("POST", "/api/mcp", "mcp:use", "MCP", "Fumiao MCP Server Streamable HTTP JSON-RPC 2.0 入口"),
+  tokenRule("GET", "/api/mcp", "mcp:use", "MCP", "Fumiao MCP Server SSE 事件通道"),
+  tokenRule("DELETE", "/api/mcp", "mcp:use", "MCP", "关闭 MCP 会话"),
 ];
 
 export function authorizeTokenHttpRequest(

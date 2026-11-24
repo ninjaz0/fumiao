@@ -18,6 +18,7 @@ import {
   Put,
   Post,
   Req,
+  RequestMethod,
   Res,
 } from "@nestjs/common";
 import express, { type Request, type Response } from "express";
@@ -1095,6 +1096,31 @@ export async function createOriginalApp(p: Platform) {
   const parseSkillZip = express.raw({ limit: "300kb", type: () => true });
   const apiTokens = new OriginalApiTokens(p);
   const agentPolicies = new OriginalAgentPolicies(p);
+  const tokenActorWithAgent = (
+    auth: NonNullable<AuthRequest["tokenAuth"]>,
+    req: AuthRequest,
+  ) => {
+    const headerPid = req.headers["x-approved-proposal-id"];
+    const bodyPid =
+      req.body &&
+      typeof req.body === "object" &&
+      !Array.isArray(req.body) &&
+      typeof (req.body as Record<string, unknown>).approved_proposal_id ===
+        "string"
+        ? String((req.body as Record<string, unknown>).approved_proposal_id)
+        : "";
+    const approvedProposalId =
+      typeof headerPid === "string" && headerPid.trim()
+        ? headerPid.trim()
+        : bodyPid.trim() || null;
+    return {
+      ...auth.actor,
+      agentAction: {
+        source: "token" as const,
+        approvedProposalId,
+      },
+    };
+  };
   const authenticate = async (req: AuthRequest, normalizedPath: string) => {
     const bearer = originalBearerToken(req);
     if (bearer) {
@@ -1109,17 +1135,26 @@ export async function createOriginalApp(p: Platform) {
         req.tokenAuth = auth;
       }
       const rule = authorizeTokenHttpRequest(auth, req.method, normalizedPath);
+      const actor = tokenActorWithAgent(auth, req);
       if (rule.paidAgentAction) {
-        const headerPid = req.headers["x-approved-proposal-id"];
-        const approvedProposalId =
-          typeof headerPid === "string" && headerPid.trim()
-            ? headerPid.trim()
-            : undefined;
-        await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId, {
-          approvedProposalId,
-        });
+        // Fast-fail on plan_only / missing-cap / missing proposal header; authoritative locked
+        // target project/node/budget check runs inside acceptTask() & runCanvasPlugin().
+        const policy = await agentPolicies.readPolicy(p.db, auth.workspaceId);
+        if (policy === "plan_only") {
+          await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId, {
+            approvedProposalId: actor.agentAction?.approvedProposalId ?? null,
+          });
+        } else if (policy === "auto_within_budget") {
+          await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId);
+        } else if (policy === "propose_and_confirm") {
+          if (!actor.agentAction?.approvedProposalId) {
+            await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId, {
+              approvedProposalId: null,
+            });
+          }
+        }
       }
-      return auth.actor;
+      return actor;
     }
     return identity.actor(token(req));
   };
@@ -1141,9 +1176,15 @@ export async function createOriginalApp(p: Platform) {
           originalBearerToken(req),
           requestedWs,
         );
-        authorizeTokenHttpRequest(auth, req.method, path);
+        const rule = authorizeTokenHttpRequest(auth, req.method, path);
         req.tokenAuth = auth;
-        req.actor = auth.actor;
+        req.actor = tokenActorWithAgent(auth, req);
+        if (rule.paidAgentAction) {
+          const policy = await agentPolicies.readPolicy(p.db, auth.workspaceId);
+          if (policy === "plan_only" || policy === "auto_within_budget") {
+            await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId);
+          }
+        }
       } catch (error) {
         failure(error, res);
         return;
@@ -1267,6 +1308,8 @@ export async function createOriginalApp(p: Platform) {
             req.body,
           );
         if (!contract.public) req.actor = await authenticate(req, req.path);
+      } else if (req.tokenAuth) {
+        req.actor = tokenActorWithAgent(req.tokenAuth, req);
       }
       next();
     } catch (error) {
@@ -1279,4 +1322,66 @@ export async function createOriginalApp(p: Platform) {
     },
   });
   return app;
+}
+
+const NEST_METHOD_NAMES: Record<number, string> = {
+  [RequestMethod.GET]: "GET",
+  [RequestMethod.POST]: "POST",
+  [RequestMethod.PUT]: "PUT",
+  [RequestMethod.DELETE]: "DELETE",
+  [RequestMethod.PATCH]: "PATCH",
+  [RequestMethod.HEAD]: "HEAD",
+  [RequestMethod.OPTIONS]: "OPTIONS",
+};
+
+/**
+ * Reflects the live NestJS controller route table so tests can verify
+ * `TOKEN_REST_ALLOWLIST` and `buildOpenApiSpec()` stay 1-to-1 with real controllers.
+ */
+export function listRegisteredOriginalRoutes(): Array<{
+  method: string;
+  template: string;
+}> {
+  const controllers = [
+    OriginalApi,
+    OriginalMcpController,
+    OriginalChatController,
+    OriginalNodesController,
+    OriginalPluginPagesController,
+    OriginalProviderController,
+    OriginalRechargeController,
+    OriginalAgentController,
+  ];
+  const out: Array<{ method: string; template: string }> = [];
+  for (const ctrl of controllers) {
+    const prefixRaw = Reflect.getMetadata("path", ctrl);
+    const prefixes = Array.isArray(prefixRaw)
+      ? prefixRaw.map(String)
+      : [typeof prefixRaw === "string" ? prefixRaw : ""];
+    for (const key of Object.getOwnPropertyNames(ctrl.prototype)) {
+      if (key === "constructor") continue;
+      const fn = (ctrl.prototype as unknown as Record<string, unknown>)[key];
+      if (typeof fn !== "function") continue;
+      const methodNum = Reflect.getMetadata("method", fn);
+      const pathRaw = Reflect.getMetadata("path", fn);
+      if (methodNum === undefined || pathRaw === undefined) continue;
+      const method = NEST_METHOD_NAMES[methodNum];
+      if (!method) continue;
+      const paths = Array.isArray(pathRaw)
+        ? pathRaw.map(String)
+        : [String(pathRaw)];
+      for (const prefix of prefixes) {
+        for (const sub of paths) {
+          const joined =
+            "/" +
+            [prefix, sub]
+              .map((s) => s.replace(/^\/+|\/+$/g, ""))
+              .filter(Boolean)
+              .join("/");
+          out.push({ method, template: joined });
+        }
+      }
+    }
+  }
+  return out;
 }

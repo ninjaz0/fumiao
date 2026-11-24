@@ -1,6 +1,7 @@
 import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
+import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
@@ -258,6 +259,14 @@ export class OriginalCanvasRuns {
       400,
       "请选择图片或视频节点",
     );
+    if (user.tokenId || user.agentAction) {
+      await enforceAgentPolicyInTx(sql, String(p.workspace_id), {
+        projectId: String(p.id),
+        nodeId: nid,
+        executionKey: `canvas-run:${p.id}:${nid}:${body.uid}`,
+        approvedProposalId: user.agentAction?.approvedProposalId ?? null,
+      });
+    }
     requireValue(
       allowBusy || !(await this.busy(sql, p.id, nid)),
       409,
@@ -382,6 +391,11 @@ export class OriginalCanvasRuns {
       draft,
       String(p.workspace_number),
       body.price_revision,
+      {
+        projectId: String(p.id),
+        nodeId: nid,
+        executionKey: `canvas-run:${p.id}:${nid}:${body.uid}`,
+      },
     );
     await this.link(sql, p, user, nid, body.uid, result.id, {
       revision: p.revision,
@@ -527,6 +541,11 @@ export class OriginalCanvasRuns {
         draft,
         String(p.workspace_number),
         body.price_revision,
+        {
+          projectId: String(p.id),
+          nodeId: nid,
+          executionKey: `canvas-narration:${p.id}:${nid}:${uid}`,
+        },
       );
       await this.link(sql, p, user, nodeName, uid, result.id, {
         text: node.narration_text,
@@ -630,6 +649,11 @@ export class OriginalCanvasRuns {
           draft,
           String(p.workspace_number),
           body.price_revision,
+          {
+            projectId: String(p.id),
+            nodeId: nid,
+            executionKey: `canvas-dialogue:${p.id}:${nid}:${line.id}:${uid}`,
+          },
         );
         await this.link(sql, p, user, nodeName, uid, submitted.id, {
           line_id: line.id,

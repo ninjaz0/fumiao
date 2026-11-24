@@ -4,6 +4,13 @@ import { one, type Sql } from "@fumiao/platform/db.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { DomainError, requireValue } from "@fumiao/platform/security.js";
+import {
+  enforceAgentPolicyInTx,
+  hasActiveWorkspaceCapBudget,
+  readAgentExecutionPolicy,
+  type AgentActionGuardOptions,
+  type AgentExecutionPolicy,
+} from "@fumiao/platform/agent-policy.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
 import { OriginalCanvases, canvasConflict } from "./canvases.js";
@@ -20,10 +27,7 @@ import {
   proposalCreateFields,
 } from "./wave4-fields.js";
 
-export type AgentExecutionPolicy =
-  | "plan_only"
-  | "propose_and_confirm"
-  | "auto_within_budget";
+export type { AgentExecutionPolicy };
 
 export { agentPolicyFields, proposalApplyFields, proposalCreateFields };
 
@@ -236,6 +240,7 @@ export function applyCanvasProposalOps(
   ops: CanvasProposalOp[];
   tempMap: Record<string, string>;
   addedNodes: CanvasNode[];
+  affectedGenNodeIds: string[];
 } {
   const ops: CanvasProposalOp[] = rawOps.map(parseProposalOp);
 
@@ -244,6 +249,7 @@ export function applyCanvasProposalOps(
   let shots = baseDoc.shots ? [...baseDoc.shots] : undefined;
   const tempMap: Record<string, string> = {};
   const addedNodes: CanvasNode[] = [];
+  const affectedGenNodeSet = new Set<string>();
 
   const resolveId = (ref: string) => tempMap[ref] ?? ref;
 
@@ -277,16 +283,23 @@ export function applyCanvasProposalOps(
       };
       nodes.push(node);
       addedNodes.push(node);
+      if (op.type === "image" || op.type === "video") {
+        affectedGenNodeSet.add(realId);
+      }
     } else if (op.op === "update_node") {
       const targetId = resolveId(op.id);
       const idx = nodes.findIndex((n) => n.id === targetId);
       requireValue(idx >= 0, 404, `提案引用的节点不存在：${op.id}`);
       nodes[idx] = { ...nodes[idx], ...op.patch };
+      if (nodes[idx].type === "image" || nodes[idx].type === "video") {
+        affectedGenNodeSet.add(targetId);
+      }
     } else if (op.op === "remove_node") {
       const targetId = resolveId(op.id);
       const idx = nodes.findIndex((n) => n.id === targetId);
       requireValue(idx >= 0, 404, `提案要删除的节点不存在：${op.id}`);
       nodes.splice(idx, 1);
+      affectedGenNodeSet.delete(targetId);
       for (let i = edges.length - 1; i >= 0; i--) {
         if (edges[i].source === targetId || edges[i].target === targetId) {
           edges.splice(i, 1);
@@ -320,7 +333,13 @@ export function applyCanvasProposalOps(
     ...(baseDoc.loudnorm !== undefined ? { loudnorm: baseDoc.loudnorm } : {}),
   });
 
-  return { document: parsedDoc, ops, tempMap, addedNodes };
+  return {
+    document: parsedDoc,
+    ops,
+    tempMap,
+    addedNodes,
+    affectedGenNodeIds: [...affectedGenNodeSet],
+  };
 }
 
 export class OriginalAgentPolicies {
@@ -329,37 +348,11 @@ export class OriginalAgentPolicies {
     this.identity = new OriginalIdentity(p);
   }
   async readPolicy(sql: Sql, workspaceId: string): Promise<AgentExecutionPolicy> {
-    const exists = await one(
-      sql,
-      "SELECT to_regclass('workspace_agent_policies') IS NOT NULL AS ok",
-    );
-    if (!exists?.ok) return "plan_only";
-    const row = await one(
-      sql,
-      "SELECT execution_policy FROM workspace_agent_policies WHERE workspace_id=$1",
-      [workspaceId],
-    );
-    return (row?.execution_policy as AgentExecutionPolicy) ?? "plan_only";
+    return readAgentExecutionPolicy(sql, workspaceId);
   }
   /** Checks whether the workspace currently has an active enabled `cap` budget policy. */
   async hasActiveCapBudget(sql: Sql, workspaceId: string): Promise<boolean> {
-    const table = await one(
-      sql,
-      "SELECT to_regclass('budget_policies') IS NOT NULL AS ok",
-    );
-    if (!table?.ok) return false;
-    const row = await one(
-      sql,
-      `SELECT 1 FROM budget_policies
-        WHERE scope_type = 'workspace'
-          AND scope_id = $1::text
-          AND enabled = TRUE
-          AND mode = 'cap'
-          AND cap_limit > 0
-        LIMIT 1`,
-      [workspaceId],
-    );
-    return Boolean(row);
+    return hasActiveWorkspaceCapBudget(sql, workspaceId);
   }
   /**
    * F031: Unified server-authoritative Agent execution policy guardrail.
@@ -369,57 +362,15 @@ export class OriginalAgentPolicies {
   async enforceForAgentAction(
     sql: Sql,
     workspaceId: string,
-    options: {
-      projectId?: string;
-      approvedProposalId?: string | null;
-    } = {},
+    options: AgentActionGuardOptions = {},
   ): Promise<void> {
-    const policy = await this.readPolicy(sql, workspaceId);
-    if (policy === "plan_only") {
-      throw new DomainError(
-        403,
-        "当前工作区处于「只建图不烧费 (plan_only)」安全模式，Agent 仅可读取上下文与提交待审批提案，禁止直接提交扣费生成任务或冻结积分",
-      );
-    }
-    if (policy === "propose_and_confirm") {
-      const pid = options.approvedProposalId?.trim();
-      if (!pid) {
-        throw new DomainError(
-          403,
-          "当前工作区处于「提案人工批准后执行 (propose_and_confirm)」模式，Agent 必须引用已由用户在画布批准落图的提案编号 (approved_proposal_id) 才能执行扣费任务",
-        );
-      }
-      const proposal = await one(
-        sql,
-        `SELECT id, project_id, workspace_id, status
-           FROM canvas_proposals
-          WHERE public_id = $1 AND workspace_id = $2`,
-        [pid, workspaceId],
-      );
-      requireValue(
-        proposal && proposal.status === "applied",
-        403,
-        "引用的画布提案不存在、不属于当前工作区或尚未获得人工批准落图",
-      );
-      if (options.projectId && proposal.project_id !== options.projectId) {
-        throw new DomainError(403, "引用的已批准提案与目标画布不匹配");
-      }
-      return;
-    }
-    // policy === "auto_within_budget"
-    const hasCap = await this.hasActiveCapBudget(sql, workspaceId);
-    if (!hasCap) {
-      throw new DomainError(
-        403,
-        "当前工作区尚未启用有效的硬上限预算策略 (mode=cap)，已暂停 Agent 在预算内自动执行扣费任务",
-      );
-    }
+    await enforceAgentPolicyInTx(sql, workspaceId, options);
   }
   /** Legacy alias kept for compatibility. */
   async assertCanSubmitPaidJob(
     sql: Sql,
     workspaceId: string,
-    options?: { projectId?: string; approvedProposalId?: string | null },
+    options?: AgentActionGuardOptions,
   ): Promise<void> {
     return this.enforceForAgentAction(sql, workspaceId, options);
   }
@@ -581,12 +532,14 @@ export class OriginalCanvasProposals {
       // Dry-run patch to guarantee structural validity before persisting proposal!
       const preview = applyCanvasProposalOps(baseDoc, body.operations);
 
-      // Estimate future render credits for newly proposed image/video nodes
+      // Estimate future render credits for newly proposed or updated image/video nodes
       const bindings = await CanvasSubmissionModels.read(sql, {
         strict: false,
       });
+      const affectedSet = new Set(preview.affectedGenNodeIds);
       let estimatedCredits = 0;
-      for (const node of preview.addedNodes) {
+      for (const node of preview.document.nodes) {
+        if (!affectedSet.has(node.id)) continue;
         if (node.type !== "image" && node.type !== "video") continue;
         let model = node.params?.model || "";
         if (!model) {
@@ -682,9 +635,12 @@ export class OriginalCanvasProposals {
       const patched = applyCanvasProposalOps(baseDoc, proposal.operations);
       return {
         proposalId: proposal.id as string,
+        projectId: String(project.id),
+        estimatedCredits: Number(proposal.estimated_credits ?? 0),
         title: canvasText(project.original_title),
         document: patched.document,
         tempMap: patched.tempMap,
+        affectedGenNodeIds: patched.affectedGenNodeIds,
       };
     });
 
@@ -695,12 +651,33 @@ export class OriginalCanvasProposals {
       document: applied.document,
     });
 
-    await this.p.db.query(
-      `UPDATE canvas_proposals
-       SET status='applied', applied_revision=$2, resolved_at=now()
-       WHERE id=$1`,
-      [applied.proposalId, savedCanvas.revision],
-    );
+    await this.p.db.transaction(async (sql) => {
+      await sql.query(
+        `UPDATE canvas_proposals
+         SET status='applied', applied_revision=$2, resolved_at=now()
+         WHERE id=$1`,
+        [applied.proposalId, savedCanvas.revision],
+      );
+      const hasScopes = await one(
+        sql,
+        "SELECT to_regclass('agent_proposal_scopes') IS NOT NULL AS ok",
+      );
+      if (hasScopes?.ok) {
+        await sql.query(
+          `INSERT INTO agent_proposal_scopes(proposal_id, project_id, allowed_node_ids, approved_credits)
+           VALUES ($1, $2, $3::text[], $4)
+           ON CONFLICT (proposal_id) DO UPDATE
+             SET allowed_node_ids = EXCLUDED.allowed_node_ids,
+                 approved_credits = EXCLUDED.approved_credits`,
+          [
+            applied.proposalId,
+            applied.projectId,
+            applied.affectedGenNodeIds,
+            applied.estimatedCredits,
+          ],
+        );
+      }
+    });
 
     const updatedProposal = await one(
       this.p.db,

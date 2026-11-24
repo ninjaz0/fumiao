@@ -275,26 +275,42 @@ export class OriginalMcpController {
           args.project_id,
           ctx.workspaceId,
         );
-        // F031: Enforce workspace agent execution policy on the real target project workspace!
+        const approvedProposalId =
+          typeof args.approved_proposal_id === "string" &&
+          args.approved_proposal_id.trim()
+            ? args.approved_proposal_id.trim()
+            : null;
+        const jobUid =
+          typeof args.uid === "string" && args.uid.trim()
+            ? args.uid.trim()
+            : randomUUID();
+        const mcpActor = {
+          ...ctx.actor,
+          agentAction: {
+            source: "mcp" as const,
+            approvedProposalId,
+          },
+        };
+        // Fast-fail F031 check on the real target project & node; authoritative atomic lock + budget check
+        // also runs inside acceptTask() within the wallets FOR UPDATE transaction.
         await this.policies.enforceForAgentAction(
           this.identity.p.db,
           target.workspace_id,
           {
             projectId: target.id,
-            approvedProposalId:
-              typeof args.approved_proposal_id === "string"
-                ? args.approved_proposal_id
-                : null,
+            nodeId: args.node_id,
+            executionKey: `canvas-run:${target.id}:${args.node_id}:${jobUid}`,
+            approvedProposalId,
           },
         );
         return this.canvasRuns.generate(
-          ctx.actor,
+          mcpActor,
           args.project_id,
           args.node_id,
           {
             expected_revision: args.expected_revision,
             price_revision: args.price_revision ?? null,
-            uid: args.uid || randomUUID(),
+            uid: jobUid,
           },
         );
       }

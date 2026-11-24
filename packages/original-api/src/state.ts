@@ -57,7 +57,21 @@ export class OriginalState {
             [user.id],
           );
           requireValue(current, 401, "请先登录");
-          const actor = current as OriginalActor,
+          const actor: OriginalActor = {
+              ...(current as OriginalActor),
+              ...(user.tokenId
+                ? {
+                    tokenId: user.tokenId,
+                    tokenWorkspaceId: user.tokenWorkspaceId,
+                    tokenWorkspacePublicId: user.tokenWorkspacePublicId,
+                    tokenScopes: user.tokenScopes,
+                  }
+                : {}),
+              ...(user.agentAction ? { agentAction: user.agentAction } : {}),
+            },
+            isToken = Boolean(actor.tokenId),
+            tokenScopes = new Set(actor.tokenScopes ?? []),
+            isBrowserAdmin = !isToken && actor.role === "admin",
             identity = new OriginalIdentity(this.p),
             catalog = new StudioCatalog(this.p.db),
             records = new OriginalStateRecords(),
@@ -91,38 +105,72 @@ export class OriginalState {
             revision: policy.revision,
             enabled: Object.fromEntries(Object.entries(policy.enabled).filter(([id]) => Object.hasOwn(models, id))),
           });
-          const nodePage = actor.role === "admin" ? await one(sql,`SELECT p.id,p.version,p.enabled,(SELECT count(*)::int FROM jobs j WHERE j.plugin_id=p.id AND j.state NOT IN ('completed','failed','cancelled')) AS pending,r.package->'settingsPage'->>'title' AS title FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+          const nodePage = isBrowserAdmin ? await one(sql,`SELECT p.id,p.version,p.enabled,(SELECT count(*)::int FROM jobs j WHERE j.plugin_id=p.id AND j.state NOT IN ('completed','failed','cancelled')) AS pending,r.package->'settingsPage'->>'title' AS title FROM studio_packages p JOIN studio_package_releases r USING(id,version)
             JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
             WHERE p.installed AND v.manifest->>'mode'='pull' AND r.package ? 'settingsPage' LIMIT 1`) : null;
           const spaces = await identity.spaces(sql, actor);
-          const pages = await new PluginPages(this.p).list(sql, actor);
+          const scopedSpaces = isToken
+            ? spaces.filter((s) => s.id === Number(workspace.public_id))
+            : spaces;
+          const pages = isToken ? [] : await new PluginPages(this.p).list(sql, actor);
+          const rawProfile = identity.profile(actor);
+          const includeJobs =
+            !isToken ||
+            tokenScopes.has("job:read") ||
+            tokenScopes.has("job:submit");
+          const includeAssets =
+            !isToken ||
+            tokenScopes.has("asset:read") ||
+            tokenScopes.has("asset:write");
           const out: Record<string, any> = {
             ...(plugins.profile ? { studio_plugins: true } : {}),
             server_time: stamp,
             workspace_id: Number(workspace.public_id),
-            legacy_workspace_id: Number(settings.public_id),
-            workspaces: spaces,
-            me: identity.profile(actor),
-            avatars: avatars.map((id, i) => ({
-              id: "builtin:" + id,
-              label: labels[i],
-              url: "/avatars/" + id + ".svg",
-            })),
-            jobs: await this.jobs(
-              sql,
-              workspace.id,
-              stamp,
-              forecast.jobs,
-              plugins.byModel,
-            ),
-            assets: await records.assets(sql, workspace.id),
-            nodes: actor.role === "admin" && await pairedPluginAvailable(sql) ? await records.nodes(sql, actor, stamp) : [],
+            ...(!isToken
+              ? { legacy_workspace_id: Number(settings.public_id) }
+              : {}),
+            workspaces: scopedSpaces,
+            me: isToken
+              ? {
+                  id: rawProfile.id,
+                  name: rawProfile.name,
+                  nickname: rawProfile.nickname,
+                  avatar: rawProfile.avatar,
+                  role: "token",
+                  scopes: [...tokenScopes],
+                }
+              : rawProfile,
+            ...(!isToken
+              ? {
+                  avatars: avatars.map((id, i) => ({
+                    id: "builtin:" + id,
+                    label: labels[i],
+                    url: "/avatars/" + id + ".svg",
+                  })),
+                }
+              : {}),
+            jobs: includeJobs
+              ? await this.jobs(
+                  sql,
+                  workspace.id,
+                  stamp,
+                  forecast.jobs,
+                  plugins.byModel,
+                )
+              : [],
+            assets: includeAssets
+              ? await records.assets(sql, workspace.id)
+              : [],
+            nodes:
+              isBrowserAdmin && (await pairedPluginAvailable(sql))
+                ? await records.nodes(sql, actor, stamp)
+                : [],
             canvas_nodes: await canvasNodeEntries(sql),
-            plugin_actions: await resourceMenus(sql, actor),
-            plugin_importers: await importersFor(sql, actor),
+            plugin_actions: isToken ? [] : await resourceMenus(sql, actor),
+            plugin_importers: isToken ? [] : await importersFor(sql, actor),
             plugin_pages: pages.filter((page) => !page.placement),
             studio_pages: pages.filter((page) => page.placement === "studio"),
-            ...(actor.role === "admin" && {
+            ...(isBrowserAdmin && {
               settings_pages: await installedSettingsPages(sql),
             }),
             gpu_node_settings: nodePage ?? null,
@@ -149,19 +197,29 @@ export class OriginalState {
             model_groups: await catalog.groups(sql),
             model_policy: listedPolicy(await catalog.policy(sql)),
             model_access: await catalog.effective(sql, workspace.id),
-            credits: await credits.wallet(sql, Number(workspace.public_id)),
-            credit_history: await credits.history(
-              sql,
-              Number(workspace.public_id),
-            ),
+            ...(!isToken
+              ? {
+                  credits: await credits.wallet(
+                    sql,
+                    Number(workspace.public_id),
+                  ),
+                  credit_history: await credits.history(
+                    sql,
+                    Number(workspace.public_id),
+                  ),
+                }
+              : {}),
             pricing: await catalog.prices(sql),
-            favorites: await new OriginalLibrary(this.p).favorites(
-              sql,
-              actor,
-              workspace.id,
-            ),
+            favorites:
+              includeJobs || includeAssets
+                ? await new OriginalLibrary(this.p).favorites(
+                    sql,
+                    actor,
+                    workspace.id,
+                  )
+                : { jobs: [], assets: [] },
           };
-          if (actor.role === "admin") {
+          if (isBrowserAdmin) {
             const capacity = await one(sql, "SELECT * FROM storage_capacity");
             let free = await this.p.storage.availableBytes?.();
             if (free === undefined) {
@@ -202,7 +260,7 @@ export class OriginalState {
               credit_accounts: await credits.accountRows(sql),
             });
           }
-          if(actor.role!=="admin")for(const job of out.jobs)job.node=null;
+          if (!isBrowserAdmin) for (const job of out.jobs) job.node = null;
           return out;
         });
       } catch (error: any) {

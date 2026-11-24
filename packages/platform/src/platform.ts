@@ -32,6 +32,10 @@ import { JobTiming } from "./timing.js";
 import { acceptTask } from "./accept.js";
 import { prepareSubmission } from "./prepare-input.js";
 import type { TimingReport } from "@fumiao/plugin-sdk/timing.js";
+export type AgentActionContext = {
+  source: "token" | "mcp" | "chat";
+  approvedProposalId?: string | null;
+};
 export type Actor = {
   id: string;
   name: string;
@@ -41,6 +45,7 @@ export type Actor = {
   tokenWorkspaceId?: string;
   tokenWorkspacePublicId?: number;
   tokenScopes?: readonly string[];
+  agentAction?: AgentActionContext;
 };
 export const uuid = z.string().uuid();
 const credentials = z.object({

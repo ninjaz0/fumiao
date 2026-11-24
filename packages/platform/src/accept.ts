@@ -5,6 +5,16 @@ import { one, type Sql } from "./db.js";
 import { requireValue } from "./security.js";
 import { capacity, JOB_RESERVE } from "./capacity.js";
 import { checkAndRecordBudget } from "./budgets.js";
+import {
+  enforceAgentPolicyInTx,
+  recordAgentProposalExecution,
+} from "./agent-policy.js";
+
+export type AcceptTaskMeta = {
+  projectId?: string | null;
+  nodeId?: string | null;
+  executionKey?: string | null;
+};
 
 /** Caller authorizes and validates the complete frozen input in this transaction. */
 export async function acceptTask(
@@ -23,6 +33,7 @@ export async function acceptTask(
   fingerprint: string,
   quote: { amount: number; key: string | null; revision: number | null },
   snapshots: unknown[] = [],
+  meta?: AcceptTaskMeta,
 ) {
   const installation =
     (await hasStudioPackages(sql)) &&
@@ -69,6 +80,26 @@ export async function acceptTask(
     409,
     "模型服务已切换",
   );
+  const projectId =
+    meta?.projectId ??
+    (typeof input.project_id === "string"
+      ? input.project_id
+      : typeof input.projectId === "string"
+        ? input.projectId
+        : null);
+  const nodeId = meta?.nodeId ?? null;
+  const executionKey = meta?.executionKey ?? input.key;
+  // F031: Authoritative in-transaction Agent execution policy check BEFORE holding wallet funds.
+  const verifiedProposal =
+    user.tokenId || user.agentAction
+      ? await enforceAgentPolicyInTx(sql, wid, {
+          projectId,
+          nodeId,
+          amount: quote.amount,
+          executionKey,
+          approvedProposalId: user.agentAction?.approvedProposalId ?? null,
+        })
+      : null;
   const heldWallet = await one(
     sql,
     "UPDATE wallets SET held=held+$2 WHERE workspace_id=$1 AND balance-held>=$2 RETURNING balance,held",
@@ -82,12 +113,6 @@ export async function acceptTask(
       : "可用积分不足",
   );
   // F015: Atomic 3-stage budget control while holding the workspace wallet lock.
-  const projectId =
-    typeof input.project_id === "string"
-      ? input.project_id
-      : typeof input.projectId === "string"
-        ? input.projectId
-        : null;
   await checkAndRecordBudget(sql, {
     workspaceId: wid,
     projectId,
@@ -124,6 +149,19 @@ export async function acceptTask(
       id,
       installation.version,
     ]);
+  if (meta?.projectId) {
+    const hasJobProjects = await one(
+      sql,
+      "SELECT to_regclass('job_projects') IS NOT NULL AS ok",
+    );
+    if (hasJobProjects?.ok) {
+      await sql.query(
+        "INSERT INTO job_projects(job_id, project_id) VALUES($1, $2) ON CONFLICT DO NOTHING",
+        [id, meta.projectId],
+      );
+    }
+  }
+  await recordAgentProposalExecution(sql, verifiedProposal, id);
   await sql.query(
     "INSERT INTO ledger(id,workspace_id,job_id,key,action,amount,actor_id,balance_snapshot,held_snapshot) VALUES($1,$2,$3,$4,'hold',$5,$6,$7,$8)",
     [
