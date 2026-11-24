@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FocusEvent, type FormEvent } from "react";
 import type { AdminSave } from "./settings-admin";
 import {
   PRICE_CREDIT_RATE_TEXT,
@@ -26,8 +26,9 @@ export function PriceSettings({
     null,
   );
   const pending = useRef(false);
+  const actions = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [saveError, setSaveError] = useState("");
   if (!visible) return null;
 
   const latest =
@@ -47,14 +48,25 @@ export function PriceSettings({
         ? { pricing, catalog, values: next }
         : null,
     );
-    setMessage("");
+    setSaveError("");
   }
 
   const summary = summarizePrices(pricing.items, catalog, values);
 
+  function revealFocusedPrice({ target }: FocusEvent<HTMLFormElement>) {
+    if (!(target instanceof HTMLInputElement)) return;
+    requestAnimationFrame(() => {
+      if (document.activeElement !== target) return;
+      const bar = actions.current?.getBoundingClientRect();
+      const input = target.getBoundingClientRect();
+      if (bar && input.top < bar.bottom && input.bottom > bar.top)
+        window.scrollBy({ top: input.bottom - bar.top + 8, behavior: "instant" });
+    });
+  }
+
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending.current) return;
+    if (pending.current || !dirty) return;
     const payload = Object.fromEntries(
       Object.entries(values).map(([key, value]) => [
         key,
@@ -64,7 +76,7 @@ export function PriceSettings({
     pending.current = true;
     setDraft({ pricing, catalog, values });
     setBusy(true);
-    setMessage("");
+    setSaveError("");
     try {
       const saved = (await request(
         "/api/settings/prices",
@@ -87,7 +99,7 @@ export function PriceSettings({
       await refresh();
       notify("价格已保存");
     } catch (error) {
-      setMessage((error as Error).message);
+      setSaveError((error as Error).message);
     } finally {
       pending.current = false;
       setBusy(false);
@@ -126,37 +138,7 @@ export function PriceSettings({
             <dd className="price-rate">{PRICE_CREDIT_RATE_TEXT}</dd>
           </div>
         </dl>
-        {dirty && (
-          <div
-            className="ledger-card"
-            role="status"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "12px",
-              flexWrap: "wrap",
-            }}
-          >
-            <span>
-              {stale
-                ? "有未保存的修改（服务端定价已更新，请核对或还原）"
-                : "有未保存的修改"}
-            </span>
-            <button
-              type="button"
-              className="quiet-button"
-              disabled={busy}
-              onClick={() => {
-                setDraft(null);
-                setMessage("");
-              }}
-            >
-              还原
-            </button>
-          </div>
-        )}
-        <form id="price-form" onSubmit={save}>
+        <form id="price-form" onSubmit={save} onFocus={revealFocusedPrice}>
           {summary.sections.map((section) => (
             <PriceSection
               key={section.key}
@@ -167,12 +149,39 @@ export function PriceSettings({
               onChange={change}
             />
           ))}
-          <p className="form-message" role="status">
-            {message}
-          </p>
-          <button className="primary" type="submit" disabled={busy}>
-            保存价格
-          </button>
+          <div className="price-form-actions" ref={actions}>
+            <div className="price-form-action-row">
+              <span className="price-form-status" role="status">
+                {dirty &&
+                  (stale
+                    ? "有未保存的修改（服务端定价已更新，请核对或还原）"
+                    : "有未保存的修改")}
+              </span>
+              <div className="price-form-buttons">
+                <button
+                  type="button"
+                  className="quiet-button"
+                  disabled={busy || !dirty}
+                  onClick={() => {
+                    setDraft(null);
+                    setSaveError("");
+                  }}
+                >
+                  还原
+                </button>
+                <button
+                  className="primary"
+                  type="submit"
+                  disabled={busy || !dirty}
+                >
+                  保存价格
+                </button>
+              </div>
+            </div>
+            <p className="form-message" role="alert">
+              {saveError}
+            </p>
+          </div>
         </form>
       </section>
     </div>

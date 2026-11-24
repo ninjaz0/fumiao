@@ -615,6 +615,82 @@ export async function studioBrowser(
     await settings(page);
     await setTab(page, "prices");
     const priceInput = page.locator('[data-price="gpt-image-2.6-sunburst|1K|medium"]');
+    const priceForm = page.locator("#price-form");
+    const savePrice = priceForm.getByRole("button", { name: "保存价格" });
+    const restorePrice = priceForm.getByRole("button", { name: "还原" });
+    const dirtyPrice = priceForm.getByText("有未保存的修改", { exact: true });
+    const firstTier = priceForm.locator("[data-price]").first();
+    const firstValue = await firstTier.inputValue();
+    const editedValue = firstValue === "23" ? "24" : "23";
+
+    await page.evaluate(() => window.scrollTo(0, window.document.body.scrollHeight));
+    await expect(savePrice).toBeInViewport({ ratio: 1 });
+    const lastCard = await priceForm.locator(".ledger-card").last().boundingBox();
+    const saveButton = await savePrice.boundingBox();
+    assert.ok(lastCard && saveButton);
+    assert.ok(
+      saveButton.y - lastCard.y - lastCard.height >= 16,
+      "Save must have at least 16px of space below the last price card",
+    );
+    await expect(savePrice).toBeDisabled();
+    await expect(priceForm.getByRole("alert")).toBeHidden();
+
+    await firstTier.scrollIntoViewIfNeeded();
+    await firstTier.fill(editedValue);
+    for (const scroll of [0, 0.5, 1]) {
+      await page.evaluate((fraction) => window.scrollTo(
+        0,
+        (window.document.documentElement.scrollHeight - window.innerHeight) * fraction,
+      ), scroll);
+      for (const action of [savePrice, restorePrice, dirtyPrice])
+        await expect(action).toBeInViewport({ ratio: 1 });
+    }
+
+    const tiers = priceForm.locator("[data-price]");
+    const nextTier = tiers.nth(24);
+    const distanceFromActions = () => nextTier.evaluate((input) => {
+      const bar = input.closest("form")!.querySelector(".price-form-actions")!;
+      return bar.getBoundingClientRect().top - input.getBoundingClientRect().bottom;
+    });
+    await nextTier.evaluate((input) => input.scrollIntoView({ block: "center" }));
+    await page.evaluate(
+      (distance) => window.scrollBy(0, -distance - 20),
+      await distanceFromActions(),
+    );
+    assert.ok(await distanceFromActions() < 0, "Next price input starts behind the bar");
+    await tiers.nth(23).focus();
+    await page.keyboard.press("Tab");
+    await expect(nextTier).toBeFocused();
+    await expect.poll(distanceFromActions).toBeGreaterThanOrEqual(0);
+
+    // Exercise the real API's conflict response without changing the fixture.
+    await page.route("**/api/settings/prices", async (route) => {
+      const draft = route.request().postDataJSON();
+      const response = await route.fetch({
+        postData: { ...draft, expected_revision: draft.expected_revision + 1 },
+      });
+      await route.fulfill({ response });
+    }, { times: 1 });
+    const conflict = await request(page, "/api/settings/prices", "PUT", () => savePrice.click());
+    assert.equal(conflict.status(), 409, await conflict.text());
+    const priceError = priceForm.getByRole("alert");
+    await expect(priceError).toHaveText("价格已更新，请刷新后重试");
+    await expect(priceError).toBeInViewport({ ratio: 1 });
+    assert.ok(await priceError.evaluate((element) => {
+      const danger = window.document.createElement("span");
+      danger.style.color = "var(--danger)";
+      element.append(danger);
+      const matches = getComputedStyle(element).color === getComputedStyle(danger).color;
+      danger.remove();
+      return matches;
+    }), "Price save errors must use the theme's danger color");
+    await expect(firstTier).toHaveValue(editedValue);
+    await restorePrice.click();
+    await expect(firstTier).toHaveValue(firstValue);
+    await expect(priceError).toBeHidden();
+    await expect(savePrice).toBeDisabled();
+    console.log("Verified spaced pricing actions, unobscured keyboard focus, conflict feedback and draft restore");
+
     // A slow save must preserve edits from the administrator's next visit.
     let releaseSave!: () => void;
     const delayedSave = new Promise<void>((resolve) => { releaseSave = resolve; });
@@ -626,7 +702,7 @@ export async function studioBrowser(
     try {
       await Promise.all([
         page.waitForRequest((r) => new URL(r.url()).pathname === "/api/settings/prices" && r.method() === "PUT"),
-        page.locator("#price-form button").click(),
+        savePrice.click(),
       ]);
       await setTab(page, "general");
       await setTab(page, "prices");
@@ -641,12 +717,13 @@ export async function studioBrowser(
     await expect(priceInput).toHaveValue("7");
     await expect(page.getByText("有未保存的修改", { exact: true })).toBeVisible();
     const pricing = await request(page, "/api/settings/prices", "PUT", () =>
-      page.locator("#price-form button").click(),
+      savePrice.click(),
     );
     assert.equal(pricing.status(), 200, await pricing.text());
     const { revision: priceRevision } = await pricing.json();
     assert.ok(Number.isSafeInteger(priceRevision));
     await expect(page.locator("#toast")).toHaveText("价格已保存");
+    await expect(savePrice).toBeDisabled();
     await nav("home");
     const composerCreation = page.locator('.composer [data-menu="creation"]');
     await composerCreation.focus();

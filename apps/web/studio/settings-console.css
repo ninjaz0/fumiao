@@ -420,6 +420,40 @@ body:has(.ledger-settings) #modal {
   color: var(--blue);
   background: var(--accent-soft);
 }
+.price-form-actions {
+  position: sticky;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 2;
+  margin-block-start: 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 8%, transparent);
+}
+.price-form-action-row,
+.price-form-buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.price-form-status {
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+}
+.price-form-buttons {
+  justify-content: flex-end;
+  margin-inline-start: auto;
+}
+.price-form-actions .form-message {
+  margin-block-start: 8px;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+.price-form-actions .form-message:empty {
+  display: none;
+}
 @container settings-content (max-width: 480px) {
   .price-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
