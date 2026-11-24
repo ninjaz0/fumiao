@@ -163,21 +163,19 @@ export function offsetToLineColumn(
   return { line, column };
 }
 
-function summarizeJsonSyntaxMessage(rawMessage: string): string {
-  const cleaned = rawMessage
-    .trim()
-    .replace(/^JSON\.parse:\s*/i, "")
-    .replace(/^JSON Parse error:\s*/i, "")
-    .replace(/\s+in JSON at position\s+\d+(?:\s*\(line\s+\d+\s+column\s+\d+\))?\.?$/i, "")
-    .replace(/\s+at position\s+\d+(?:\s*\(line\s+\d+\s+column\s+\d+\))?\.?$/i, "")
-    .replace(/\s+at line\s+\d+\s+column\s+\d+(?:\s+of the JSON data)?\.?$/i, "")
-    .trim();
+const DEFAULT_JSON_SYNTAX_SUMMARY = "请检查文件内容是否为合法 JSON";
 
-  if (!cleaned) return "请检查文件内容是否为合法 JSON";
+const V8_POSITION_SUFFIX_RE =
+  /^([A-Za-z0-9 ,':[\]{}()_-]+?)\s+(?:in|after) JSON at position (\d+)(?: \(line \d+ column \d+\))?$/;
+const FIREFOX_POSITION_SUFFIX_RE =
+  /^JSON\.parse:\s+([^"]+?)\s+at line (\d+) column (\d+) of the JSON data$/;
+
+function summarizeJsonSyntaxReason(reason: string): string {
+  if (!reason) return DEFAULT_JSON_SYNTAX_SUMMARY;
 
   const tokenMatch =
     /^unexpected token\s+('(?:[^'\\]|\\.)*'|\S+)(?:,\s*[\s\S]*\bis not valid json)?\.?$/i.exec(
-      cleaned,
+      reason,
     );
   if (tokenMatch) {
     const rawToken = tokenMatch[1];
@@ -185,69 +183,89 @@ function summarizeJsonSyntaxMessage(rawMessage: string): string {
       rawToken.length >= 2 && rawToken.startsWith("'") && rawToken.endsWith("'")
         ? rawToken.slice(1, -1)
         : rawToken;
-    if (token === "\uFEFF") return "文件开头包含不可见 BOM 字符";
-    if (token.toUpperCase() === "ILLEGAL") return "包含非法字符";
-    if (token === "]")
-      return '意外的符号 "]"（请检查是否存在多余的尾逗号或缺失的值）';
-    if (token === "}")
-      return '意外的符号 "}"（请检查是否存在缺失的属性值或多余的尾逗号）';
-    if (token === ",")
-      return '意外的符号 ","（请检查是否存在缺失的值或连续逗号）';
-    return `意外的符号 "${token}"`;
+    switch (token) {
+      case "\uFEFF":
+        return "文件开头包含不可见 BOM 字符";
+      case "]":
+        return '意外的符号 "]"（请检查是否存在多余的尾逗号或缺失的值）';
+      case "}":
+        return '意外的符号 "}"（请检查是否存在缺失的属性值或多余的尾逗号）';
+      case ",":
+        return '意外的符号 ","（请检查是否存在缺失的值或连续逗号）';
+      case ":":
+        return '意外的符号 ":"';
+      case "{":
+        return '意外的符号 "{"';
+      case "[":
+        return '意外的符号 "["';
+      case "'":
+        return "包含单引号（JSON 键名与字符串须使用双引号）";
+      case "/":
+        return "JSON 标准不支持注释（请移除注释内容）";
+      default:
+        return "包含无效的字面量或符号（键名与字符串须使用双引号）";
+    }
   }
 
-  if (/^expected double-quoted property name$/i.test(cleaned))
+  if (/^expected double-quoted property name$/i.test(reason))
     return "属性名须使用双引号（请检查是否存在多余的尾逗号）";
-  if (/^expected property name or '\}'$/i.test(cleaned))
+  if (/^expected property name or '\}'$/i.test(reason))
     return '缺少属性名或右花括号 "}"（请检查键名双引号或多余逗号）';
-  if (/^expected ':'(?: after property name)?$/i.test(cleaned))
+  if (/^expected ':'(?: after property name)?$/i.test(reason))
     return '属性名后缺少冒号 ":"';
-  if (/^expected ',' or '\}' after property value$/i.test(cleaned))
+  if (/^expected ',' or '\}'(?: after property value| in object)?$/i.test(reason))
     return '属性值后缺少逗号 "," 或右花括号 "}"';
-  if (/^expected ',' or '\]' after array element$/i.test(cleaned))
+  if (/^expected ',' or '\]'(?: after array element| in array)?$/i.test(reason))
     return '数组元素后缺少逗号 "," 或右方括号 "]"';
-  if (/^unterminated string\b/i.test(cleaned))
+  if (/^unterminated string\b/i.test(reason))
     return "字符串未闭合（缺少结尾双引号）";
   if (
     /^(?:unexpected end of json input|unexpected eof|end of data\b[\s\S]*|unterminated object\b[\s\S]*|unterminated array\b[\s\S]*)$/i.test(
-      cleaned,
+      reason,
     )
   )
     return "JSON 内容未完整闭合（意外到达文件末尾）";
-  if (/^unexpected non-whitespace character\b/i.test(cleaned))
+  if (/^unexpected non-whitespace character(?:\s+after json(?:\s+data)?)?$/i.test(reason))
     return "JSON 根结构后存在多余内容";
-  if (/^(?:unexpected number|no number after minus sign\b|expected digit\b)/i.test(cleaned))
+  if (/^(?:unexpected number|no number after minus sign\b|expected digit\b)/i.test(reason))
     return "数字格式无效";
-  if (/^unexpected string$/i.test(cleaned))
+  if (/^unexpected string$/i.test(reason))
     return "字符串位置无效（请检查上一项末尾是否缺少逗号）";
-  if (/^unexpected identifier\b/i.test(cleaned))
-    return "包含未加双引号的标识符（键名与字符串值须使用双引号）";
-  if (/^bad control character in string literal$/i.test(cleaned))
+  if (/^(?:unexpected identifier\b|unexpected character\b)/i.test(reason))
+    return "包含无效的字面量或符号（键名与字符串须使用双引号）";
+  if (/^bad control character in string literal$/i.test(reason))
     return "字符串中包含未转义的控制字符";
-  if (/^bad (?:escaped character|unicode escape)\b/i.test(cleaned))
+  if (/^bad (?:escaped character|unicode escape)\b/i.test(reason))
     return "字符串中包含无效的转义序列";
 
-  const strippedSnippet = cleaned
-    .replace(/,?\s*(?:\.\.\.)?"[\s\S]*"(?:\.\.\.)?\s+is not valid json\.?$/i, "")
-    .trim();
-  return strippedSnippet || "请检查文件内容是否为合法 JSON";
+  return DEFAULT_JSON_SYNTAX_SUMMARY;
 }
 
 export function formatPluginJsonError(source: string, error: unknown): string {
   if (!source.trim()) {
     return "插件文件 JSON 格式错误：文件内容为空";
   }
-  const rawMessage = error instanceof Error ? error.message : String(error ?? "");
-  const posMatch = /\bat position\s+(\d+)\b/i.exec(rawMessage);
-  const lineColMatch = posMatch
+  const rawMessage = (
+    error instanceof Error ? error.message : String(error ?? "")
+  ).trim();
+  const v8Match = V8_POSITION_SUFFIX_RE.exec(rawMessage);
+  const firefoxMatch = v8Match
     ? null
-    : /\bline\s+(\d+)\s+column\s+(\d+)\b/i.exec(rawMessage);
-  const location = posMatch
-    ? offsetToLineColumn(source, Number(posMatch[1]))
-    : lineColMatch
-      ? { line: Number(lineColMatch[1]), column: Number(lineColMatch[2]) }
+    : FIREFOX_POSITION_SUFFIX_RE.exec(rawMessage);
+  const location = v8Match
+    ? offsetToLineColumn(source, Number(v8Match[2]))
+    : firefoxMatch
+      ? { line: Number(firefoxMatch[2]), column: Number(firefoxMatch[3]) }
       : null;
-  const summary = summarizeJsonSyntaxMessage(rawMessage);
+  const reason = v8Match
+    ? v8Match[1].trim()
+    : firefoxMatch
+      ? firefoxMatch[1].trim()
+      : rawMessage
+          .replace(/^JSON\.parse:\s*/i, "")
+          .replace(/^JSON Parse error:\s*/i, "")
+          .trim();
+  const summary = summarizeJsonSyntaxReason(reason);
   const prefix = location
     ? `插件文件 JSON 格式错误（第 ${location.line} 行第 ${location.column} 列）`
     : "插件文件 JSON 格式错误";
@@ -279,20 +297,25 @@ export async function readPluginFile(file: {
   return parsePluginFileJson(source);
 }
 
-export function buildUpdateSourcePayload({
-  url,
-  token = "",
-  clearToken = false,
-}: {
-  url: string;
-  token?: string;
-  clearToken?: boolean;
-}): { url: string | null; token?: string } {
-  const normalizedUrl = url.trim() || null;
-  if (clearToken) {
-    return { url: normalizedUrl, token: "" };
+export function buildUpdateSourcePayload(
+  input:
+    | {
+        url: string;
+        token?: string;
+        clearToken?: false;
+      }
+    | {
+        savedUrl: string | null;
+        url?: string;
+        token?: string;
+        clearToken: true;
+      },
+): { url: string | null; token?: string } {
+  if (input.clearToken) {
+    return { url: input.savedUrl?.trim() || null, token: "" };
   }
-  const normalizedToken = token.trim();
+  const normalizedUrl = input.url.trim() || null;
+  const normalizedToken = (input.token ?? "").trim();
   return {
     url: normalizedUrl,
     ...(normalizedToken ? { token: normalizedToken } : {}),

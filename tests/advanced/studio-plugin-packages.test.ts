@@ -225,10 +225,14 @@ test("plugin settings helpers integrate with connection concurrency and update t
     assert.equal(pkg.updateUrl, updateUrl);
     assert.equal(pkg.hasUpdateToken, true);
 
-    // Explicit clearToken clears update_auth while keeping update_url intact
+    // Explicit clearToken clears update_auth while keeping saved update_url intact even if draft URL was edited
     await updates.configure(actor, file.id, {
       revision: pkg.revision,
-      ...buildUpdateSourcePayload({ url: updateUrl, clearToken: true }),
+      ...buildUpdateSourcePayload({
+        savedUrl: pkg.updateUrl,
+        url: "",
+        clearToken: true,
+      }),
     });
     pkg = await findPkg();
     assert.equal(pkg.updateUrl, updateUrl);

@@ -7,15 +7,22 @@ import { request, setTab } from "./studio-settings-browser.js";
 export async function verifyPublisherRotation(page: Page) {
   await setTab(page, "plugins");
   await page.getByLabel("选择插件文件").setInputFiles({
+    name: "snippet-position.fmplugin.json",
+    mimeType: "application/json",
+    buffer: Buffer.from("at position 8"),
+  });
+  const pluginAlert = page.locator(".studio-plugins").getByRole("alert");
+  await expect(pluginAlert).toContainText("插件文件 JSON 格式错误：");
+  await expect(pluginAlert).not.toContainText("第 1 行");
+  await expect(pluginAlert).not.toContainText("at position 8");
+  await page.getByLabel("选择插件文件").setInputFiles({
     name: "invalid.fmplugin.json",
     mimeType: "application/json",
     buffer: Buffer.from('{\n  "id": "broken",\n}'),
   });
-  await expect(
-    page.getByRole("alert").filter({
-      hasText: /插件文件 JSON 格式错误（第 3 行第 1 列）/,
-    }),
-  ).toBeVisible();
+  await expect(pluginAlert).toContainText(
+    "插件文件 JSON 格式错误（第 3 行第 1 列）",
+  );
   const example = JSON.parse(
     await readFile(
       "plugins/example-reading-time/example-reading-time.fmplugin.json",
@@ -63,12 +70,18 @@ export async function verifyPublisherRotation(page: Page) {
     () => drawer.getByRole("button", { name: "保存更新设置" }).click(),
   );
   await expect(clearTokenBtn).toBeVisible();
-  await request(
+  // Uncommitted invalid/edited URL draft must not block clearing or overwrite saved updateUrl
+  await updateUrlInput.fill("not-a-valid-url");
+  const clearedRes = await request(
     page,
     "/api/admin/plugins/example-publisher/source",
     "POST",
     () => clearTokenBtn.click(),
   );
+  expect(JSON.parse(clearedRes.request().postData() ?? "{}")).toMatchObject({
+    url: "https://updates.example.com/update.json",
+    token: "",
+  });
   await expect(clearTokenBtn).toBeHidden();
   await expect(updateUrlInput).toHaveValue(
     "https://updates.example.com/update.json",

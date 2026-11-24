@@ -1720,18 +1720,11 @@ export function PluginSettings({
                                 <button
                                   type="button"
                                   className="plugin-btn-danger"
-                                  onClick={(e) => {
-                                    const form = e.currentTarget.form;
-                                    if (form && !form.reportValidity()) return;
-                                    const rawUrl = form
-                                      ? String(
-                                          new FormData(form).get("url") ?? "",
-                                        )
-                                      : (p.updateUrl ?? "");
+                                  onClick={() => {
                                     void action(
                                       "source",
                                       buildUpdateSourcePayload({
-                                        url: rawUrl,
+                                        savedUrl: p.updateUrl,
                                         clearToken: true,
                                       }),
                                       "已清除已保存的只读令牌",

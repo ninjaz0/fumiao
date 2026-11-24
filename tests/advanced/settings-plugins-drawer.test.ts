@@ -217,14 +217,72 @@ test("offsetToLineColumn and formatPluginJsonError handle LF/CRLF offsets, Firef
     ),
   );
   assert.doesNotMatch(secretLeakAttempt, /sk-secret-value/);
-  assert.match(secretLeakAttempt, /插件文件 JSON 格式错误：意外的符号 "A"/);
+  assert.equal(
+    secretLeakAttempt,
+    "插件文件 JSON 格式错误：包含无效的字面量或符号（键名与字符串须使用双引号）",
+  );
+
+  // Regression: V8 snippet containing "at position 8" or "at line 2 column 5" must NOT be mistaken for engine position
+  assert.throws(
+    () => parsePluginFileJson("at position 8"),
+    (err: unknown) => {
+      assert(err instanceof Error);
+      assert.equal(
+        err.message,
+        "插件文件 JSON 格式错误：包含无效的字面量或符号（键名与字符串须使用双引号）",
+      );
+      assert.doesNotMatch(err.message, /第\s*\d+\s*行/);
+      assert.doesNotMatch(err.message, /at position 8/);
+      return true;
+    },
+  );
+
+  assert.throws(
+    () => parsePluginFileJson("at line 2 column 5 of the JSON data"),
+    (err: unknown) => {
+      assert(err instanceof Error);
+      assert.doesNotMatch(err.message, /第\s*\d+\s*行/);
+      assert.doesNotMatch(err.message, /line 2 column 5/);
+      return true;
+    },
+  );
+
+  // Trailing non-whitespace after valid JSON uses V8 "after JSON at position N" suffix
+  assert.throws(
+    () => parsePluginFileJson('{"id": "muse"} trailing'),
+    /插件文件 JSON 格式错误（第 1 行第 16 列）：JSON 根结构后存在多余内容/,
+  );
+
+  // Unknown syntax messages fall back to fixed copy and never echo parser snippets
+  const unknownParserMsg = formatPluginJsonError(
+    '{"id": "muse"}',
+    new SyntaxError('Custom parser failed near "secret_snippet" at position 4'),
+  );
+  assert.equal(
+    unknownParserMsg,
+    "插件文件 JSON 格式错误：请检查文件内容是否为合法 JSON",
+  );
+
+  const unknownWithV8Suffix = formatPluginJsonError(
+    '{\n  "id": "muse"\n}',
+    new SyntaxError(
+      "Future V8 reason in JSON at position 4 (line 2 column 3)",
+    ),
+  );
+  assert.equal(
+    unknownWithV8Suffix,
+    "插件文件 JSON 格式错误（第 2 行第 3 列）：请检查文件内容是否为合法 JSON",
+  );
 
   const safariLeakAttempt = formatPluginJsonError(
     '{"apiKey": superSecretToken}',
     new SyntaxError('JSON Parse error: Unexpected identifier "superSecretToken"'),
   );
   assert.doesNotMatch(safariLeakAttempt, /superSecretToken/);
-  assert.match(safariLeakAttempt, /未加双引号的标识符/);
+  assert.equal(
+    safariLeakAttempt,
+    "插件文件 JSON 格式错误：包含无效的字面量或符号（键名与字符串须使用双引号）",
+  );
 
   assert.throws(
     () => parsePluginFileJson('["not-an-object"]'),
@@ -233,7 +291,7 @@ test("offsetToLineColumn and formatPluginJsonError handle LF/CRLF offsets, Firef
   assert.deepEqual(parsePluginFileJson('{"id":"muse"}'), { id: "muse" });
 });
 
-test("buildUpdateSourcePayload retains saved token when blank and clears token only on explicit clear (#70)", () => {
+test("buildUpdateSourcePayload retains saved token when blank and uses savedUrl on explicit clear (#70)", () => {
   const retained = buildUpdateSourcePayload({
     url: " https://updates.example.com/update.json ",
     token: "",
@@ -258,15 +316,22 @@ test("buildUpdateSourcePayload retains saved token when blank and clears token o
     },
   );
 
-  assert.deepEqual(
-    buildUpdateSourcePayload({
-      url: "https://updates.example.com/update.json",
-      token: "ignored-draft",
-      clearToken: true,
-    }),
-    {
-      url: "https://updates.example.com/update.json",
-      token: "",
-    },
-  );
+  for (const uncommittedDraftUrl of [
+    "",
+    "not-a-valid-url",
+    "https://uncommitted.example.com/other.json",
+  ]) {
+    assert.deepEqual(
+      buildUpdateSourcePayload({
+        savedUrl: "https://updates.example.com/update.json",
+        url: uncommittedDraftUrl,
+        token: "ignored-draft",
+        clearToken: true,
+      }),
+      {
+        url: "https://updates.example.com/update.json",
+        token: "",
+      },
+    );
+  }
 });
