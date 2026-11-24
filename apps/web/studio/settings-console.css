@@ -75,8 +75,7 @@ body:has(.ledger-settings) #modal {
   border-radius: 7px;
 }
 .console-search kbd,
-.plugin-card-head code,
-.plugin-checklist summary small {
+.plugin-card-head code {
   color: var(--secondary);
   font: 11px/1.6 var(--ledger-mono);
   border: 1px solid var(--line);

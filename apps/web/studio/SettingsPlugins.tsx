@@ -10,9 +10,7 @@ import {
 import {
   ArrowUpRight,
   Boxes,
-  Check,
   ChevronDown,
-  Circle,
   Plus,
   X,
 } from "lucide-react";
@@ -398,15 +396,11 @@ export function PluginSettings({
   refresh,
   navigate,
   gpuTab,
-  nodesPaired,
-  hasPricing,
 }: {
   workspace: number;
   refresh: () => Promise<void>;
   navigate: (tab: SettingsTab) => void;
   gpuTab?: SettingsTab;
-  nodesPaired: boolean;
-  hasPricing: boolean;
 }) {
   const [plugins, setPlugins] = useState<Plugin[]>();
   const [services, setServices] = useState<Service[]>();
@@ -557,32 +551,6 @@ export function PluginSettings({
     expandedPlugin && expandedPlugin.mode !== "pull",
   );
   const enabled = plugins?.filter((p) => p.enabled).length ?? 0;
-  const steps = [
-    {
-      label: "导入插件包",
-      done: !!plugins?.length,
-      act: () => picker.current?.click(),
-    },
-    {
-      label: "启用生成服务",
-      done: enabled > 0,
-      act: () => {
-        const plugin = plugins?.find((p) => !p.enabled) ?? plugins?.[0];
-        if (plugin) openDrawer(plugin.id);
-        else picker.current?.click();
-      },
-    },
-    ...(gpuTab
-      ? [
-          {
-            label: "配对 GPU 节点",
-            done: nodesPaired,
-            act: () => navigate(gpuTab),
-          },
-        ]
-      : []),
-    { label: "查看生成定价", done: hasPricing, act: () => navigate("prices") },
-  ];
   return (
     <section className="settings-section studio-plugins">
       <fieldset disabled={busy}>
@@ -645,35 +613,6 @@ export function PluginSettings({
             )}
           </div>
         </header>
-        {plugins && (
-          <details className="plugin-checklist" open>
-            <summary>
-              <strong>平台部署清单</strong>
-              <small>
-                {steps.filter((step) => step.done).length} / {steps.length}{" "}
-                已就绪
-              </small>
-              <ChevronDown size={15} />
-            </summary>
-            <progress
-              aria-label="部署进度"
-              value={steps.filter((step) => step.done).length}
-              max={steps.length}
-            />
-            <div>
-              {steps.map((step) => (
-                <button type="button" key={step.label} onClick={step.act}>
-                  {step.done ? (
-                    <Check size={15} className="check-done" />
-                  ) : (
-                    <Circle size={14} />
-                  )}{" "}
-                  {step.label}
-                </button>
-              ))}
-            </div>
-          </details>
-        )}
         {pending && (
           <form
             className="ledger-card plugin-overview plugin-form"
