@@ -12,6 +12,14 @@ import {
 import { api, workspaceURL, type Studio } from "./api";
 
 import { PluginImport } from "../studio/PluginImport";
+import { VideoThumb } from "../canvas-editor/VideoThumb";
+
+const COVER_VIDEO_PLACEHOLDER_STYLE = {
+  display: "block",
+  width: "100%",
+  height: "100%",
+  background: "#111",
+} as const;
 
 type Project = {
   id: string;
@@ -225,11 +233,10 @@ export default function ProjectList({ studio }: { studio: Studio }) {
                       <div className={"cover-grid count-" + p.covers.length}>
                         {p.covers.map((c) =>
                           c.type === "video" ? (
-                            <video
+                            <VideoThumb
                               key={c.id}
-                              src={"/media/" + c.id + "#t=0.05"}
-                              muted
-                              preload="metadata"
+                              mediaId={c.id}
+                              placeholderStyle={COVER_VIDEO_PLACEHOLDER_STYLE}
                             />
                           ) : (
                             <img
@@ -237,6 +244,7 @@ export default function ProjectList({ studio }: { studio: Studio }) {
                               src={"/media/" + c.id}
                               alt=""
                               loading="lazy"
+                              decoding="async"
                             />
                           ),
                         )}

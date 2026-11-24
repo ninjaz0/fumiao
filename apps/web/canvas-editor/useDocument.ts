@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api";
+import { draftEquals } from "./performance";
 import type { Draft, Project } from "./types";
 const clone = <T>(v: T): T => structuredClone(v);
 export function useDocument(project: Project, userId: number) {
@@ -51,10 +52,18 @@ export function useDocument(project: Project, userId: number) {
     redo = useRef<Draft[]>([]),
     [historyTick, setHistoryTick] = useState(0);
   const [error, setError] = useState(""),
-    alive = useRef(true);
-  const remember = () => {
+    alive = useRef(true),
+    rememberTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remember = useCallback(() => {
+    if (rememberTimer.current !== null) {
+      clearTimeout(rememberTimer.current);
+      rememberTimer.current = null;
+    }
     try {
-      if (serial.current === ack.current) { localStorage.removeItem(key); return; }
+      if (serial.current === ack.current) {
+        localStorage.removeItem(key);
+        return;
+      }
       localStorage.setItem(
         key,
         JSON.stringify({ revision: revision.current, draft: ref.current }),
@@ -62,21 +71,36 @@ export function useDocument(project: Project, userId: number) {
     } catch {
       setError("浏览器无法保留本地草稿，请保持页面打开并保存");
     }
-  };
-  const apply = useCallback((next: Draft, history = true) => {
-    if (JSON.stringify(ref.current) === JSON.stringify(next)) return;
-    if (history) {
-      undo.current.push(clone(ref.current));
-      undo.current = undo.current.slice(-80);
-      redo.current = [];
-      setHistoryTick((n) => n + 1);
+  }, [key]);
+  const scheduleRemember = useCallback(() => {
+    if (!gesture.current) {
+      remember();
+      return;
     }
-    ref.current = next;
-    serial.current++;
-    setValue(next);
-    if (!blocked.current) setStatus("dirty");
-    remember();
-  }, []);
+    if (rememberTimer.current !== null) return;
+    rememberTimer.current = setTimeout(() => {
+      rememberTimer.current = null;
+      remember();
+    }, 300);
+  }, [remember]);
+  const apply = useCallback(
+    (next: Draft, history = true) => {
+      if (draftEquals(ref.current, next)) return;
+      if (history) {
+        undo.current.push(clone(ref.current));
+        undo.current = undo.current.slice(-80);
+        redo.current = [];
+        setHistoryTick((n) => n + 1);
+      }
+      ref.current = next;
+      serial.current++;
+      setValue(next);
+      if (!blocked.current) setStatus("dirty");
+      if (history) remember();
+      else scheduleRemember();
+    },
+    [remember, scheduleRemember],
+  );
   const change = useCallback(
     (fn: (v: Draft) => Draft, history = true) =>
       apply(fn(ref.current), history),
@@ -86,17 +110,15 @@ export function useDocument(project: Project, userId: number) {
     if (!gesture.current) gesture.current = clone(ref.current);
   }, []);
   const end = useCallback(() => {
-    if (
-      gesture.current &&
-      JSON.stringify(gesture.current) !== JSON.stringify(ref.current)
-    ) {
+    if (gesture.current && !draftEquals(gesture.current, ref.current)) {
       undo.current.push(gesture.current);
       undo.current = undo.current.slice(-80);
       redo.current = [];
       setHistoryTick((n) => n + 1);
     }
     gesture.current = null;
-  }, []);
+    if (rememberTimer.current !== null) remember();
+  }, [remember]);
   const travel = useCallback(
     (forward = false) => {
       end();
@@ -131,8 +153,14 @@ export function useDocument(project: Project, userId: number) {
         ack.current = seq;
         if (alive.current) {
           if (serial.current === seq) {
-            ref.current = { title: result.title, document: result.document };
-            setValue(ref.current);
+            const serverDraft = {
+              title: result.title,
+              document: result.document,
+            };
+            if (!draftEquals(ref.current, serverDraft)) {
+              ref.current = serverDraft;
+              setValue(ref.current);
+            }
           }
           setStatus(serial.current === seq ? "saved" : "dirty");
           remember();
@@ -156,7 +184,7 @@ export function useDocument(project: Project, userId: number) {
     await work;
     if (serial.current !== ack.current) return flush();
     return revision.current;
-  }, [project.id]);
+  }, [project.id, remember]);
   useEffect(() => {
     if (status !== "dirty") return;
     const timer = setTimeout(() => {
@@ -166,6 +194,9 @@ export function useDocument(project: Project, userId: number) {
   }, [value, status, historyTick, flush]);
   useEffect(() => {
     alive.current = true;
+    const persistPending = () => {
+      if (serial.current !== ack.current) remember();
+    };
     const before = (event: BeforeUnloadEvent) => {
       if (serial.current !== ack.current) {
         remember();
@@ -173,12 +204,23 @@ export function useDocument(project: Project, userId: number) {
         event.returnValue = "";
       }
     };
+    const onVisibility = () => {
+      if (document.hidden) persistPending();
+    };
     window.addEventListener("beforeunload", before);
+    window.addEventListener("pagehide", persistPending);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       alive.current = false;
+      if (rememberTimer.current !== null) {
+        clearTimeout(rememberTimer.current);
+        rememberTimer.current = null;
+      }
       window.removeEventListener("beforeunload", before);
+      window.removeEventListener("pagehide", persistPending);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, []);
+  }, [remember]);
   const acceptRemote = (result: Project, expectedDraft: string, operation = "采用回答") => {
     if (JSON.stringify(ref.current) !== expectedDraft) {
       blocked.current = true; setStatus("conflict");

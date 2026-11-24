@@ -40,10 +40,26 @@ export function PluginNodeOutputs({
         if (p.kind === "text") return <p key={p.id}>{value}</p>;
         const src = "/media/" + value;
         if (p.kind === "image")
-          return <img key={p.id} src={src} alt={p.title} />;
+          return (
+            <img
+              key={p.id}
+              src={src}
+              alt={p.title}
+              loading="lazy"
+              decoding="async"
+            />
+          );
         if (p.kind === "audio")
           return <audio key={p.id} src={src} controls aria-label={p.title} />;
-        return <video key={p.id} src={src} controls aria-label={p.title} />;
+        return (
+          <video
+            key={p.id}
+            src={src}
+            preload="metadata"
+            controls
+            aria-label={p.title}
+          />
+        );
       })}
     </div>
   );
