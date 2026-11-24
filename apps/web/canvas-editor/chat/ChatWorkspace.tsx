@@ -111,7 +111,7 @@ export function ChatWorkspace(props:Props){
  });
  const latest=data?.messages.at(-1);
  const inlineFailure=latest&&['failed','stopped','interrupted'].includes(latest.state)?latest.error||(latest.state==='stopped'?'已停止，积分已退回':'生成中断，积分已退回'):'';
- const draftLimit=(draft.length>=DRAFT_WARN||clipped>0)&&<p className="fm-chat-balance fm-chat-limit">{draft.length}/{DRAFT_LIMIT} 字{clipped>0&&<span role="alert">，已达上限，粘贴内容末尾 {clipped} 字未保留</span>}</p>;
+ const draftLimit=draft.length>=DRAFT_WARN&&<p className="fm-chat-balance fm-chat-limit">{draft.length}/{DRAFT_LIMIT} 字{clipped>0&&<span role="alert">，已达上限，粘贴内容末尾 {clipped} 字未保留</span>}</p>;
  const draftConfirmBanner=pendingDraft!==null&&(
   <div
    className="fm-chat-notice fm-chat-draft-confirm"
