@@ -246,6 +246,8 @@ export function Library({
     library;
   const surface = useRef<HTMLDivElement>(null);
   const floating = useRef<HTMLDivElement>(null);
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const browseScroll = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
     const node = surface.current!;
     const holder = floating.current!;
@@ -253,7 +255,7 @@ export function Library({
     if (holder.hidden) {
       holder.hidden = false;
       const height = Math.ceil(
-        holder.firstElementChild!.getBoundingClientRect().height,
+        holder.lastElementChild!.getBoundingClientRect().height,
       );
       node
         .closest<HTMLElement>(".shell")
@@ -261,6 +263,14 @@ export function Library({
       holder.hidden = true;
     }
   }, [filter, library.redraw]);
+  useLayoutEffect(() => {
+    if (composerExpanded) {
+      floating.current?.scrollIntoView({ block: "end", behavior: "instant" });
+    } else if (browseScroll.current !== undefined) {
+      scrollTo({ top: browseScroll.current, behavior: "instant" });
+      browseScroll.current = undefined;
+    }
+  }, [composerExpanded]);
   const images = filter.tab === "images";
   const groups = groupHistoryJobs(
     referencePicking
@@ -483,11 +493,26 @@ export function Library({
       </div>
       <div
         id="asset-composer"
-        className="floating-composer"
+        className={`floating-composer${referencePicking ? "" : " mobile-asset-composer"}`}
+        data-expanded={composerExpanded}
         hidden={selecting}
         ref={floating}
       >
-        {composer}
+        {!referencePicking && (
+          <button
+            type="button"
+            className="quiet-button asset-composer-toggle"
+            aria-controls="asset-composer-panel"
+            aria-expanded={composerExpanded}
+            onClick={() => {
+              if (!composerExpanded) browseScroll.current = scrollY;
+              setComposerExpanded(!composerExpanded);
+            }}
+          >
+            {composerExpanded ? "收起创作框" : "展开创作框"}
+          </button>
+        )}
+        <div id="asset-composer-panel">{composer}</div>
       </div>
     </>
   );
