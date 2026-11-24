@@ -999,6 +999,16 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             : "请先选择 MiniMax H3 全能参考模式",
         );
       let next = session;
+      if (
+        referencePicking &&
+        type === "Picture" &&
+        !frames(session.draft) &&
+        session.refs.includes(id) &&
+        !session.draft.packs?.some((pack) => pack.media.includes(id))
+      ) {
+        changeRefs(session.refs.filter((ref) => ref !== id), id);
+        return;
+      }
       if (type === "Picture") next = addImages(space, session, [id]);
       else if (!isH3(session.draft))
         throw new Error("请先选择 MiniMax H3 全能参考模式");
