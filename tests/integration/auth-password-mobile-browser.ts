@@ -122,6 +122,37 @@ after(async () => {
   }
 });
 
+test("guest Studio without JavaScript still renders noscript help on /studio and /studio#register", async () => {
+  const context = await browser!.newContext({
+    baseURL,
+    javaScriptEnabled: false,
+    viewport: { width: 375, height: 667 },
+  });
+  try {
+    for (const path of ["/studio", "/studio#register"]) {
+      const page = await context.newPage();
+      try {
+        const response = await page.goto(path);
+        assert.equal(response?.status(), 200);
+        await expect(page.getByText(/请启用 JavaScript/)).toBeVisible();
+        await expect(
+          page.getByRole("link", { name: "返回首页" }),
+        ).toHaveAttribute("href", "/");
+        await expect(
+          page.getByRole("status", { name: "弗淼 AIGC 正在加载" }),
+        ).toBeHidden();
+        await expect(
+          page.getByRole("button", { name: "登录", exact: true }),
+        ).toBeHidden();
+      } finally {
+        await page.close();
+      }
+    }
+  } finally {
+    await context.close();
+  }
+});
+
 test("login and registration password fields support accessible show/hide toggle and reset on mode changes", async () => {
   const context = await browser!.newContext({
     baseURL,
@@ -136,6 +167,7 @@ test("login and registration password fields support accessible show/hide toggle
     await expect(
       page.getByRole("heading", { name: "登录工作台" }),
     ).toBeVisible();
+    await expect(page.getByText(/请启用 JavaScript/)).toBeHidden();
 
     const pwInput = page.getByLabel("密码", { exact: true });
     const toggle = page.locator('[data-act="toggle-password"]');
@@ -214,6 +246,7 @@ test("login and registration password fields support accessible show/hide toggle
     await page.locator("#auth-switch").click();
     await expect(page).toHaveURL(/#register$/);
     await expect(page.getByRole("heading", { name: "注册账户" })).toBeVisible();
+    await expect(page.getByText(/请启用 JavaScript/)).toBeHidden();
     await expect(pwInput).toHaveAttribute("type", "password");
     await expect(toggle).toHaveAttribute("aria-label", "显示密码");
     await expect(toggle).toHaveAttribute("aria-pressed", "false");
