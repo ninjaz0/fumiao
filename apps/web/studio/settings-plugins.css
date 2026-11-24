@@ -39,7 +39,12 @@
   align-items: start;
 }
 .studio-plugins .plugin-connections .plugin-connection {
+  min-width: 0;
   margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
   overflow-wrap: anywhere;
 }
 .plugin-publisher code {
@@ -120,7 +125,9 @@
   flex-wrap: wrap;
 }
 .plugin-heading p {
-  margin-bottom: 0;
+  margin: 5px 0 0;
+  color: var(--secondary);
+  font-size: 13px;
 }
 .studio-plugins .console-primary {
   display: inline-flex;
@@ -140,7 +147,6 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .ledger-settings .studio-plugins .plugin-connection {
-  padding: 0;
   grid-column: auto;
 }
 .plugin-card-head {
@@ -289,7 +295,6 @@
   height: 34px;
   font-size: 13px;
 }
-.ledger-settings .plugin-drawer .plugin-drawer-head h3,
 .plugin-drawer .plugin-drawer-head h3 {
   margin: 0;
   font-size: 16px;
