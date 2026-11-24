@@ -40,12 +40,17 @@ import {
 } from "./settings-tabs";
 import { PluginSettingsPage } from "./PluginSettingsPage";
 import { SettingsApiTokens } from "./SettingsApiTokens";
+import { SettingsObservability } from "./SettingsObservability";
+import { SettingsBudgets } from "./SettingsBudgets";
+import { SettingsRedeem } from "./SettingsRedeem";
 
 const adminTabs = [
+  ["observability", "运营大盘", "sliders", "billing"],
   ["plugins", "插件", "link", "services"],
   ["models", "模型管理", "model", "services"],
   ["prices", "生成定价", "sliders", "billing"],
   ["creditAdmin", "积分管理", "drive", "billing"],
+  ["redeemAdmin", "兑换码", "drive", "billing"],
   ["openai", "OpenAI", "picture", "services"],
   ["chatService", "对话服务", "chat", "services"],
   ["workspaces", "团队空间", "library", "organization"],
@@ -231,6 +236,7 @@ export function Settings({
     ["profile", "个人资料", "account", "account"],
     ["general", "常规", "settings", "account"],
     ["credits", "积分", "drive", "account"],
+    ["budgets", "预算与风控", "sliders", "account"],
     ["apiTokens", "API 与 MCP", "link", "account"],
     ...(!pages && legacyPanel && state.gpu_node_settings
       ? [["gpu", state.gpu_node_settings.title, "gpu", "account"] as const]
@@ -355,8 +361,12 @@ export function Settings({
             state={creditState}
             recharge={(button) => void openRecharge("recharge", button)}
             history={(button) => void openRecharge("history", button)}
+            refresh={refresh}
             notify={notify}
           />
+        )}
+        {tab === "budgets" && (
+          <SettingsBudgets key={workspace} workspace={workspace} notify={notify} />
         )}
         {tab === "apiTokens" && (
           <SettingsApiTokens
@@ -388,6 +398,10 @@ export function Settings({
             notify={notify}
           />
         )}
+        {admin && tab === "observability" && (
+          <SettingsObservability notify={notify} />
+        )}
+        {admin && tab === "redeemAdmin" && <SettingsRedeem notify={notify} />}
         {admin && tab === "plugins" && (
           <PluginSettings
             key={workspace}

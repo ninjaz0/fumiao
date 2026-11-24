@@ -4,6 +4,7 @@ import type { Platform, Actor } from "./platform.js";
 import { one, type Sql } from "./db.js";
 import { requireValue } from "./security.js";
 import { capacity, JOB_RESERVE } from "./capacity.js";
+import { checkAndRecordBudget } from "./budgets.js";
 
 /** Caller authorizes and validates the complete frozen input in this transaction. */
 export async function acceptTask(
@@ -80,6 +81,18 @@ export async function acceptTask(
       ? `当前空间积分不足，需要 ${quote.amount} 积分`
       : "可用积分不足",
   );
+  // F015: Atomic 3-stage budget control while holding the workspace wallet lock.
+  const projectId =
+    typeof input.project_id === "string"
+      ? input.project_id
+      : typeof input.projectId === "string"
+        ? input.projectId
+        : null;
+  await checkAndRecordBudget(sql, {
+    workspaceId: wid,
+    projectId,
+    amount: quote.amount,
+  });
   const id = randomUUID();
   if (model.kind !== "chat") await capacity(sql, p.storage, JOB_RESERVE);
   await sql.query(

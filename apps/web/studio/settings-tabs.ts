@@ -1,10 +1,12 @@
 import type { PluginPageEntry } from "@fumiao/plugin-sdk/contributions.js";
 
 export const adminSettingsTabs = [
+  "observability",
   "plugins",
   "models",
   "prices",
   "creditAdmin",
+  "redeemAdmin",
   "openai",
   "chatService",
   "workspaces",
@@ -17,6 +19,7 @@ const settingsTabs = [
   "profile",
   "general",
   "credits",
+  "budgets",
   "apiTokens",
   "gpu",
   ...adminSettingsTabs,

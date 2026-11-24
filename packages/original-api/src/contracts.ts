@@ -42,6 +42,15 @@ import {
   comfyAnalyzeFields,
   comfyPublishFields,
 } from "./wave5-fields.js";
+import {
+  budgetUpsertFields,
+  moderationSettingsFields,
+  reconcileJobFields,
+  redeemApplyFields,
+  redeemBatchCreateFields,
+  subscriptionPlanCreateFields,
+  subscriptionSubscribeFields,
+} from "./wave6-fields.js";
 export const identityBodies: Record<string, Fields> = {
   canvasNew: canvasNewFields,
   canvasSave: canvasSaveFields,
@@ -65,6 +74,13 @@ export const identityBodies: Record<string, Fields> = {
   proposalApply: proposalApplyFields,
   comfyAnalyze: comfyAnalyzeFields,
   comfyPublish: comfyPublishFields,
+  budgetUpsert: budgetUpsertFields,
+  moderationSettings: moderationSettingsFields,
+  reconcileJob: reconcileJobFields,
+  redeemBatchCreate: redeemBatchCreateFields,
+  redeemApply: redeemApplyFields,
+  subscriptionPlanCreate: subscriptionPlanCreateFields,
+  subscriptionSubscribe: subscriptionSubscribeFields,
   canvasShotsDownload: canvasExactRevisionFields,
   storyboardExport: storyboardExportFields,
   estimate: estimateFields,
@@ -431,6 +447,53 @@ export const identityContracts: Contract[] = [
     path: /^\/api\/admin\/comfy\/publish$/,
     body: "comfyPublish",
   },
+  {
+    method: "GET",
+    path: /^\/api\/admin\/observability\/summary$/,
+    query: ["days"],
+  },
+  {
+    method: "GET",
+    path: /^\/api\/admin\/observability\/uncertain$/,
+  },
+  {
+    method: "POST",
+    path: /^\/api\/admin\/observability\/jobs\/([^/]+)\/reconcile$/,
+    body: "reconcileJob",
+  },
+  { method: "GET", path: /^\/api\/budgets$/ },
+  { method: "PUT", path: /^\/api\/budgets$/, body: "budgetUpsert" },
+  {
+    method: "PUT",
+    path: /^\/api\/budgets\/moderation$/,
+    body: "moderationSettings",
+  },
+  { method: "GET", path: /^\/api\/admin\/redeem-codes$/ },
+  {
+    method: "POST",
+    path: /^\/api\/admin\/redeem-codes\/batch$/,
+    body: "redeemBatchCreate",
+  },
+  { method: "POST", path: /^\/api\/admin\/redeem-codes\/([^/]+)\/disable$/ },
+  { method: "POST", path: /^\/api\/redeem$/, body: "redeemApply" },
+  { method: "GET", path: /^\/api\/invites\/rewards$/ },
+  { method: "POST", path: /^\/api\/invites\/rewards\/claim$/ },
+  { method: "GET", path: /^\/api\/subscriptions\/plans$/ },
+  {
+    method: "POST",
+    path: /^\/api\/admin\/subscriptions\/plans$/,
+    body: "subscriptionPlanCreate",
+  },
+  {
+    method: "POST",
+    path: /^\/api\/subscriptions\/subscribe$/,
+    body: "subscriptionSubscribe",
+  },
+  {
+    method: "GET",
+    path: /^\/api\/credits\/statement$/,
+    literalQuery: { format: { choices: ["csv", "pdf"], default: "csv" } },
+  },
 ];
 /** FastAPI validates the request before running endpoint authentication. */
 export function validateIdentityRequest(
@@ -483,6 +546,13 @@ export function validateIdentityRequest(
           "proposalApply",
           "comfyAnalyze",
           "comfyPublish",
+          "budgetUpsert",
+          "moderationSettings",
+          "reconcileJob",
+          "redeemBatchCreate",
+          "redeemApply",
+          "subscriptionPlanCreate",
+          "subscriptionSubscribe",
           "canvasCandidates",
           "canvasShotsDownload",
         ].includes(contract.body!),

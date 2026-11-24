@@ -25,6 +25,7 @@ import type { QueueHealth, QueueJob } from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
 import { hasTailChainTable, wakeTailFrameChildren } from "./tail-frame.js";
 import { ensureDerivativeQueued } from "./derivatives.js";
+import { tryModerationRewrite } from "./moderation-rewrite.js";
 class ReferenceUnavailable extends Error {}
 
 export class Executor {
@@ -729,6 +730,12 @@ export class Executor {
         [job.id, outcome.note, outcome.delaySeconds],
       );
     } else {
+      // F024: Moderation-blocked rejected/non-billable jobs may neutralize & retry
+      // reusing the exact same hold:<job.id> reservation (zero double-billing).
+      if (await tryModerationRewrite(sql, job, outcome)) {
+        await timing.end(sql, job, "interrupted");
+        return;
+      }
       if (outcome.interrupted) await timing.end(sql, job, "interrupted");
       if (outcome.uncertain)
         await sql.query("UPDATE jobs SET request_uncertain=true WHERE id=$1", [

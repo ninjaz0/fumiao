@@ -61,6 +61,9 @@ import {
   OriginalAgentPolicies,
   OriginalCanvasProposals,
 } from "@fumiao/original-api/proposals.js";
+import { OriginalObservability } from "@fumiao/original-api/admin-observability.js";
+import { OriginalBudgets } from "@fumiao/original-api/budgets-api.js";
+import { OriginalBillingExtras } from "@fumiao/original-api/billing-extras.js";
 import { buildOpenApiSpec } from "@fumiao/original-api/openapi.js";
 import { readCanvasBody } from "@fumiao/original-api/canvas-http.js";
 import type { OriginalDraft } from "@fumiao/plugin-sdk/original.js";
@@ -488,6 +491,9 @@ class OriginalApi {
   private proposals: OriginalCanvasProposals;
   private agentPolicies: OriginalAgentPolicies;
   private comfyCompiler: ComfyMicroAppCompiler;
+  private observability: OriginalObservability;
+  private budgets: OriginalBudgets;
+  private billingExtras: OriginalBillingExtras;
   constructor(@Inject(OriginalIdentity) private identity: OriginalIdentity) {
     this.packs = new OriginalPacks(identity.p);
     this.uploads = new OriginalUploads(identity.p);
@@ -505,6 +511,9 @@ class OriginalApi {
     this.proposals = new OriginalCanvasProposals(identity.p);
     this.agentPolicies = new OriginalAgentPolicies(identity.p);
     this.comfyCompiler = new ComfyMicroAppCompiler(identity.p);
+    this.observability = new OriginalObservability(identity.p);
+    this.budgets = new OriginalBudgets(identity.p, identity);
+    this.billingExtras = new OriginalBillingExtras(identity.p, identity);
   }
   @Get("api/v1/openapi.json")
   openApiSpec(@Req() req: Request) {
@@ -825,6 +834,96 @@ class OriginalApi {
       dryRun: Boolean(body?.dry_run),
       autoEnable: Boolean(body?.auto_enable),
     });
+  }
+  @Get("api/admin/observability/summary")
+  observabilitySummary(@Req() req: AuthRequest) {
+    const query = new URL(req.originalUrl, "http://localhost").searchParams;
+    const days = queryId(query.getAll("days").at(-1), "days");
+    return this.observability.summary(req.actor, days);
+  }
+  @Get("api/admin/observability/uncertain")
+  observabilityUncertain(@Req() req: AuthRequest) {
+    return this.observability.uncertainJobs(req.actor);
+  }
+  @Post("api/admin/observability/jobs/:id/reconcile")
+  @HttpCode(200)
+  reconcileJob(
+    @Req() req: AuthRequest,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.observability.reconcileJob(req.actor, id, body);
+  }
+  @Get("api/budgets")
+  listBudgets(@Req() req: AuthRequest) {
+    return this.budgets.list(req.actor, this.selected(req));
+  }
+  @Put("api/budgets")
+  upsertBudget(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.budgets.upsertPolicy(req.actor, body, this.selected(req));
+  }
+  @Put("api/budgets/moderation")
+  updateModeration(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.budgets.updateModeration(req.actor, body, this.selected(req));
+  }
+  @Get("api/admin/redeem-codes")
+  listRedeemCodes(@Req() req: AuthRequest) {
+    return this.billingExtras.listRedeemCodes(req.actor);
+  }
+  @Post("api/admin/redeem-codes/batch")
+  @HttpCode(200)
+  createRedeemBatch(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.billingExtras.createRedeemBatch(req.actor, body);
+  }
+  @Post("api/admin/redeem-codes/:id/disable")
+  @HttpCode(200)
+  disableRedeemCode(@Req() req: AuthRequest, @Param("id") id: string) {
+    return this.billingExtras.disableRedeemCode(req.actor, id);
+  }
+  @Post("api/redeem")
+  @HttpCode(200)
+  applyRedeemCode(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.billingExtras.redeem(req.actor, body, this.selected(req));
+  }
+  @Get("api/invites/rewards")
+  listInviteRewards(@Req() req: AuthRequest) {
+    return this.billingExtras.inviteRewards(req.actor);
+  }
+  @Post("api/invites/rewards/claim")
+  @HttpCode(200)
+  claimInviteRewards(@Req() req: AuthRequest) {
+    return this.billingExtras.claimInviteRewards(req.actor, this.selected(req));
+  }
+  @Get("api/subscriptions/plans")
+  listSubscriptionPlans(@Req() req: AuthRequest) {
+    return this.billingExtras.listPlans(req.actor, this.selected(req));
+  }
+  @Post("api/admin/subscriptions/plans")
+  @HttpCode(200)
+  createSubscriptionPlan(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.billingExtras.createPlan(req.actor, body);
+  }
+  @Post("api/subscriptions/subscribe")
+  @HttpCode(200)
+  subscribePlan(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.billingExtras.subscribe(req.actor, body, this.selected(req));
+  }
+  @Get("api/credits/statement")
+  async creditStatement(@Req() req: AuthRequest, @Res() res: Response) {
+    const query = new URL(req.originalUrl, "http://localhost").searchParams;
+    const format = query.getAll("format").at(-1) === "pdf" ? "pdf" : "csv";
+    const result = await this.billingExtras.exportStatement(
+      req.actor,
+      format,
+      this.selected(req),
+    );
+    res.setHeader("Content-Type", result.mime);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${result.filename}"`,
+    );
+    res.setHeader("Content-Length", result.bytes.length);
+    res.end(result.bytes);
   }
   @Get("health") health() {
     return { service: "fumiao", ok: true };
