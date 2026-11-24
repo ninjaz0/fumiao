@@ -344,7 +344,7 @@ export class OriginalCanvases {
         [
           project,
           shots.map((node) => node.id),
-          shots.map((node) => node.active_job),
+          shots.map((node) => (node.use_media ? null : node.active_job)),
           shots.map((node) => node.media_id),
           shots.map((node) => node.use_media),
         ],
@@ -375,7 +375,17 @@ export class OriginalCanvases {
       requireValue(document.shots?.length, 400, "请先添加镜头");
       const nodes = new Map(document.nodes.map((node) => [node.id, node]));
       const shots = document.shots.map((id) => nodes.get(id)!);
-      const videos = shots.length > 1 && shots.every(Boolean)
+      // Legacy job IDs outside the safe integer range must be looked up in shot order.
+      const canBatch =
+        shots.length > 1 &&
+        shots.every(
+          (shot) =>
+            shot &&
+            (shot.use_media ||
+              shot.active_job === null ||
+              Number.isSafeInteger(shot.active_job)),
+        );
+      const videos = canBatch
         ? await this.lockShotVideos(sql, project.id, shots)
         : undefined;
       const access = videos

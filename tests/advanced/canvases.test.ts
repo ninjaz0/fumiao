@@ -138,6 +138,54 @@ test("Shot pack export bounds SQL reads and preserves the ordered private archiv
     await f.cleanup();
   }
 });
+test("Shot pack export preserves legacy active-job handling", async (t) => {
+  const f = await canvasesFixture();
+  try {
+    const canvas = await f.canvases.create(f.admin, { title: "Legacy shots" });
+    const asset = await f.asset("1".repeat(32), "video");
+    const legacyJob = 2 ** 63;
+    const body = { expected_revision: canvas.revision };
+    const installDocument = (firstMedia: string | null, use_media: boolean) =>
+      f.db.query(
+        `UPDATE canvas_documents c SET document=$2
+        FROM documents d WHERE c.project_id=d.id AND d.public_id=$1`,
+        [
+          canvas.id,
+          canvasDocumentBytes(
+            parseCanvasDocument({
+              nodes: [
+                node("first", "video", { media_id: firstMedia }),
+                node("legacy", "video", {
+                  active_job: legacyJob,
+                  media_id: asset.public_id,
+                  use_media,
+                }),
+              ],
+              shots: ["first", "legacy"],
+            }),
+          ),
+        ],
+      );
+    await t.test("ignores the unused job ID on a pinned shot", async () => {
+      await installDocument(asset.public_id, true);
+      const result = await f.canvases.downloadShots(f.admin, canvas.id, body);
+      assert.equal(result.filename, "弗淼-镜头-2项.zip");
+    });
+    await t.test("does not let a later job lookup mask an earlier missing video", async () => {
+      await installDocument(null, false);
+      await assert.rejects(f.canvases.downloadShots(f.admin, canvas.id, body), {
+        status: 409,
+        message: "镜头 01 还没有可导出的视频",
+      });
+      await installDocument(asset.public_id, false);
+      await assert.rejects(f.canvases.downloadShots(f.admin, canvas.id, body), {
+        code: "22003",
+      });
+    });
+  } finally {
+    await f.cleanup();
+  }
+});
 test(
   "Shot pack export keeps first errors and rechecks membership after an asset lock wait",
   { skip: !process.env.TEST_DATABASE_URL },
