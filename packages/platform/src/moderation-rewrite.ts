@@ -1,5 +1,20 @@
+import { randomUUID } from "node:crypto";
 import type { RequestDisposition } from "@fumiao/plugin-sdk/lifecycle.js";
 import { one, type Sql } from "./db.js";
+import type { Platform } from "./platform.js";
+
+export function isModerationRejectionMessage(message: string): boolean {
+  const lower = String(message || "").toLowerCase();
+  return (
+    lower.includes("content_policy_violation") ||
+    lower.includes("moderation_blocked") ||
+    lower.includes("safety_blocked") ||
+    lower.includes("content_filter") ||
+    lower.includes("安全审核") ||
+    lower.includes("敏感内容") ||
+    lower.includes("内容违规")
+  );
+}
 
 const SENSITIVE_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\b(blood|bloody|gore|gory|behead|dismember|slaughter|massacre|corpse)\b/gi, "dramatic crimson shadow silhouette"],
@@ -160,4 +175,272 @@ export async function tryModerationRewrite(
   );
 
   return true;
+}
+
+/**
+ * F024: Equivalent-model intelligent fallback after moderation prompt rewrites are exhausted.
+ * Triggers ONLY on explicitly rejected, non-billable moderation blocks before upstream acceptance,
+ * selecting an enabled equivalent same-kind model at <= original price (refunding any positive
+ * delta atomically without creating a second hold or double-billing).
+ */
+export async function tryModerationEquivalentFallback(
+  sql: Sql,
+  job: {
+    id: string;
+    workspace_id: string;
+    owner_id: string;
+    kind: string;
+    catalog_id?: string | null;
+    provider_model?: string | null;
+    price?: number | string | null;
+    remote_id?: string | null;
+    receipt?: unknown;
+    input?: Record<string, unknown> | null;
+  },
+  outcome: RequestDisposition,
+  preferredFallbackModel?: string,
+): Promise<boolean> {
+  if (
+    outcome.action !== "fail" ||
+    outcome.reason !== "moderation_blocked" ||
+    outcome.certainty !== "rejected" ||
+    outcome.billable !== false ||
+    job.remote_id ||
+    job.receipt
+  ) {
+    return false;
+  }
+  const inputObj =
+    job.input && typeof job.input === "object" ? { ...job.input } : {};
+  const existingParams =
+    inputObj.params && typeof inputObj.params === "object"
+      ? (inputObj.params as Record<string, unknown>)
+      : {};
+  if (existingParams._moderation_fallback_from) return false;
+  if (!(await hasModerationTables(sql))) return false;
+
+  const settings = await one(
+    sql,
+    "SELECT auto_rewrite, max_attempts FROM workspace_moderation_settings WHERE workspace_id=$1",
+    [job.workspace_id],
+  );
+  if (!settings?.auto_rewrite) return false;
+
+  const currentCatalogId = String(job.catalog_id || job.provider_model || "");
+  const originalPrice = Number(job.price ?? 0);
+
+  // Candidate enabled same-kind models excluding current model, prioritizing explicit fallbackModel
+  const candidateRows = (
+    await sql.query(
+      `SELECT m.id, m.connection_id, m.catalog_id, m.provider_model,
+              c.plugin_id, c.plugin_version, c.config,
+              COALESCE(
+                (SELECT MIN(sp.amount) FROM studio_prices sp WHERE sp.model_id = m.catalog_id),
+                $3
+              )::bigint AS min_price
+         FROM models m
+         JOIN connections c ON c.id = m.connection_id
+        WHERE m.kind = $1
+          AND m.enabled = TRUE
+          AND c.enabled = TRUE
+          AND NOT c.removed
+          AND COALESCE(m.catalog_id, m.provider_model) <> $2
+        ORDER BY CASE WHEN m.catalog_id = $4 OR m.provider_model = $4 THEN 0 ELSE 1 END,
+                 min_price ASC, m.id ASC
+        LIMIT 10`,
+      [job.kind, currentCatalogId, originalPrice, preferredFallbackModel || ""],
+    )
+  ).rows;
+
+  let chosen: (typeof candidateRows)[number] | null = null;
+  for (const cand of candidateRows) {
+    const candCatalog = String(cand.catalog_id || cand.provider_model);
+    const candPrice = Number(cand.min_price ?? originalPrice);
+    if (candPrice > originalPrice) continue;
+    const allowed = await one(
+      sql,
+      "SELECT studio_model_allowed($1, $2) AS ok",
+      [candCatalog, job.workspace_id],
+    );
+    if (allowed?.ok === false) continue;
+    chosen = cand;
+    break;
+  }
+  if (!chosen) return false;
+
+  const nextPrice = Math.min(originalPrice, Number(chosen.min_price ?? originalPrice));
+  const deltaRefund = originalPrice - nextPrice;
+  if (deltaRefund > 0) {
+    const released = await one(
+      sql,
+      "UPDATE wallets SET held = held - $2 WHERE workspace_id = $1 AND held >= $2 RETURNING balance, held",
+      [job.workspace_id, deltaRefund],
+    );
+    if (!released) return false;
+    await sql.query(
+      `INSERT INTO ledger(id, workspace_id, job_id, key, action, amount, actor_id, balance_snapshot, held_snapshot, note)
+       VALUES ($1,$2,$3,$4,'refund',$5,$6,$7,$8,$9)
+       ON CONFLICT (key) DO NOTHING`,
+      [
+        randomUUID(),
+        job.workspace_id,
+        job.id,
+        `refund-mod-fallback:${job.id}`,
+        deltaRefund,
+        job.owner_id,
+        released.balance,
+        released.held,
+        `内容审核降级至等价模型 ${chosen.catalog_id || chosen.provider_model} 退回差价`,
+      ],
+    );
+  }
+
+  const nextInput = {
+    ...inputObj,
+    modelId: chosen.id,
+    params: {
+      ...existingParams,
+      _moderation_fallback_from: currentCatalogId,
+    },
+  };
+  await sql.query(
+    `UPDATE jobs
+        SET model_id = $2,
+            connection_id = $3,
+            plugin_id = $4,
+            plugin_version = $5,
+            config_snapshot = $6,
+            provider_model = $7,
+            catalog_id = $8,
+            price = $9,
+            input = $10::jsonb,
+            state = 'queued',
+            request_note = $11,
+            request_retry_at = now() + interval '1 second',
+            error = NULL,
+            lease_token = NULL,
+            lease_until = NULL,
+            updated_at = now()
+      WHERE id = $1`,
+    [
+      job.id,
+      chosen.id,
+      chosen.connection_id,
+      chosen.plugin_id,
+      chosen.plugin_version,
+      chosen.config,
+      chosen.provider_model,
+      chosen.catalog_id,
+      nextPrice,
+      JSON.stringify(nextInput),
+      `内容审核改写重试达上限，已智能降级至等价模型 ${chosen.catalog_id || chosen.provider_model}（复用原冻结积分）`,
+    ],
+  );
+  await sql.query(
+    `INSERT INTO outbox(job_id, available_at, sent_at)
+     VALUES ($1, now() + interval '1 second', NULL)
+     ON CONFLICT (job_id) DO UPDATE SET available_at = now() + interval '1 second', sent_at = NULL`,
+    [job.id],
+  );
+  await sql.query(
+    "INSERT INTO job_events(job_id, state, detail) VALUES ($1, 'moderation_fallback', $2)",
+    [
+      job.id,
+      JSON.stringify({
+        from: currentCatalogId,
+        to: chosen.catalog_id || chosen.provider_model,
+        price_before: originalPrice,
+        price_after: nextPrice,
+      }),
+    ],
+  );
+  return true;
+}
+
+/**
+ * F005 (#17): Persist REAL upstream cost in `job_audit_meta.upstream_cost_fen` when
+ * known from receipt usage, connection/model cost config, or built-in free Edge TTS.
+ * Leaves `upstream_cost_fen` NULL when no real cost source is configured (never faking ¥0).
+ */
+export async function recordCompletedJobCost(
+  sql: Sql,
+  p: Platform,
+  job: {
+    id: string;
+    plugin_id?: string | null;
+    provider_model?: string | null;
+    catalog_id?: string | null;
+    config_snapshot?: string | null;
+    input?: Record<string, unknown> | null;
+  },
+  result?: unknown,
+): Promise<number | null> {
+  const hasAudit = Boolean(
+    (await one(sql, "SELECT to_regclass('job_audit_meta') IS NOT NULL AS ok"))?.ok,
+  );
+  if (!hasAudit) return null;
+
+  let costFen: number | null = null;
+  const usage =
+    result && typeof result === "object" && "usage" in result
+      ? (result as { usage?: Record<string, unknown> }).usage
+      : undefined;
+  if (
+    usage &&
+    typeof usage.cost_fen === "number" &&
+    Number.isFinite(usage.cost_fen) &&
+    usage.cost_fen >= 0
+  ) {
+    costFen = Math.round(usage.cost_fen);
+  }
+
+  if (costFen === null && job.config_snapshot) {
+    try {
+      const cfg = p.vault.open(job.config_snapshot) as Record<string, unknown>;
+      const modelCosts =
+        cfg?.modelCosts && typeof cfg.modelCosts === "object"
+          ? (cfg.modelCosts as Record<string, unknown>)
+          : undefined;
+      const byModel =
+        (job.catalog_id && modelCosts?.[job.catalog_id]) ??
+        (job.provider_model && modelCosts?.[job.provider_model]);
+      if (typeof byModel === "number" && Number.isFinite(byModel) && byModel >= 0) {
+        costFen = Math.round(byModel);
+      } else if (
+        typeof cfg?.upstreamCostFen === "number" &&
+        Number.isFinite(cfg.upstreamCostFen) &&
+        cfg.upstreamCostFen >= 0
+      ) {
+        costFen = Math.round(cfg.upstreamCostFen);
+      } else if (
+        typeof cfg?.upstreamCostFenPerSecond === "number" &&
+        Number.isFinite(cfg.upstreamCostFenPerSecond) &&
+        cfg.upstreamCostFenPerSecond >= 0
+      ) {
+        const secs = Number(
+          (job.input?.params as Record<string, unknown> | undefined)?.seconds ?? 5,
+        );
+        costFen = Math.round(cfg.upstreamCostFenPerSecond * Math.max(1, secs));
+      }
+    } catch {
+      // Ignore unreadable config snapshots; keep cost unknown (NULL).
+    }
+  }
+
+  // Built-in free Edge TTS is genuinely 0 upstream cost.
+  if (costFen === null && job.plugin_id === "edge-tts") {
+    costFen = 0;
+  }
+
+  if (costFen === null) return null;
+
+  await sql.query(
+    `INSERT INTO job_audit_meta(job_id, upstream_cost_fen, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (job_id) DO UPDATE
+       SET upstream_cost_fen = EXCLUDED.upstream_cost_fen,
+           updated_at = now()`,
+    [job.id, costFen],
+  );
+  return costFen;
 }

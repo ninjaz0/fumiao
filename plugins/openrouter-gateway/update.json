@@ -1,7 +1,7 @@
 {
   "id": "openrouter-gateway",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "notes": "首次发布",
   "package": "openrouter-gateway.fmplugin.json",
-  "sha256": "452121d704ebd56dde78e3249a09895b05522d726abf1588fa5d1aecfec70161"
+  "sha256": "9e2779bd85b035ca09a4e69e73ddba48fbaa4247e992badc371246908e3160ec"
 }

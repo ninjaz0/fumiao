@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, Film, Music, Package } from "lucide-react";
+import { Download, Film, Music, Package, Sparkles } from "lucide-react";
 import { api, ApiError } from "./api";
 import type { CanvasBgm } from "./types";
 
@@ -40,6 +40,10 @@ export function Composition({
   audioAssets,
   bgm,
   loudnorm,
+  defaultBgmPrompt = "",
+  bgmModels = [],
+  bgmGenerating = false,
+  onGenerateBgm,
   onMixChange,
 }: {
   project: string;
@@ -49,6 +53,10 @@ export function Composition({
   audioAssets?: { id: string; label: string }[];
   bgm?: CanvasBgm | null;
   loudnorm?: boolean;
+  defaultBgmPrompt?: string;
+  bgmModels?: { id: string; label: string }[];
+  bgmGenerating?: boolean;
+  onGenerateBgm?: (opts: { prompt: string; model?: string }) => Promise<void>;
   onMixChange?: (patch: { bgm?: CanvasBgm | null; loudnorm?: boolean }) => void;
 }) {
   const [results, setResults] = useState<Result[]>([]),
@@ -56,6 +64,16 @@ export function Composition({
     [error, setError] = useState(""),
     [pollError, setPollError] = useState(""),
     [preview, setPreview] = useState<string | null>(null);
+  const [bgmPrompt, setBgmPrompt] = useState(defaultBgmPrompt);
+  const [bgmModel, setBgmModel] = useState(bgmModels[0]?.id ?? "");
+  const [bgmBusy, setBgmBusy] = useState(false);
+  const [bgmNotice, setBgmNotice] = useState("");
+  useEffect(() => {
+    if (!bgmPrompt && defaultBgmPrompt) setBgmPrompt(defaultBgmPrompt);
+  }, [defaultBgmPrompt]);
+  useEffect(() => {
+    if (!bgmModel && bgmModels.length) setBgmModel(bgmModels[0].id);
+  }, [bgmModels]);
   const [exporters, setExporters] = useState<Exporter[] | undefined>(),
     [selected, select] = useState("");
   const reload = useRef<(() => Promise<void>) | null>(null);
@@ -187,6 +205,59 @@ export function Composition({
               ))}
             </select>
           </label>
+          {onGenerateBgm && (
+            <div className="composition-bgm-gen" aria-label="AI 视频驱动配乐生成">
+              <input
+                type="text"
+                aria-label="AI 配乐风格与情绪描述"
+                maxLength={300}
+                value={bgmPrompt}
+                placeholder="输入配乐风格、乐器与情绪（默认结合当前分镜生成）"
+                onChange={(e) => setBgmPrompt(e.target.value)}
+              />
+              {bgmModels.length > 0 && (
+                <select
+                  aria-label="AI 配乐引擎"
+                  value={bgmModel}
+                  onChange={(e) => setBgmModel(e.target.value)}
+                >
+                  {bgmModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                type="button"
+                className="secondary"
+                disabled={bgmBusy || bgmGenerating || !bgmPrompt.trim() || !bgmModels.length}
+                onClick={async () => {
+                  setBgmBusy(true);
+                  setError("");
+                  setBgmNotice("");
+                  try {
+                    await onGenerateBgm({
+                      prompt: bgmPrompt.trim(),
+                      ...(bgmModel ? { model: bgmModel } : {}),
+                    });
+                    setBgmNotice("已提交 AI 配乐生成，完成后将自动挂载到背景音乐轨");
+                  } catch (e) {
+                    setError((e as Error).message);
+                  } finally {
+                    setBgmBusy(false);
+                  }
+                }}
+              >
+                <Sparkles size={14} />
+                {bgmBusy || bgmGenerating ? "配乐生成中…" : "AI 生成配乐并挂载"}
+              </button>
+              {!bgmModels.length && (
+                <small>请管理员在「设置 → 插件」启用 BGM 配乐插件（如 bgm-generator）后使用。</small>
+              )}
+              {bgmNotice && <small role="status">{bgmNotice}</small>}
+            </div>
+          )}
           {bgm?.asset_id && (
             <>
               <label>

@@ -771,6 +771,7 @@ export function CanvasWorkspace({
     layout: "2x2" | "3x3";
   } | null>(null);
   const [showCinePanel, setShowCinePanel] = useState(false);
+  const [pendingBgmJobId, setPendingBgmJobId] = useState<number | null>(null);
   const [agentDock, setAgentDock] = useState(false);
   const [skillsModal, setSkillsModal] = useState(false);
   const [aiStoryboard, setAiStoryboard] = useState(false);
@@ -936,6 +937,28 @@ export function CanvasWorkspace({
   const flowParameters=flowModel?.family?FlowPicker.options(studio.model_catalog,selectedModel,availableModel):null;
   const form = studio.model_forms?.[selectedModel];
   const fields = form?.fields;
+  const BUILTIN_CANVAS_PARAM_KEYS = useMemo(
+    () =>
+      new Set([
+        "ratio",
+        "resolution",
+        "seconds",
+        "quality",
+        "image_quality",
+        "seed",
+        "sampling_steps",
+        "fast_mode",
+        "flow_source_job",
+      ]),
+    [],
+  );
+  const customFormFields = useMemo(
+    () =>
+      Object.entries(fields ?? {}).filter(
+        ([k]) => !BUILTIN_CANVAS_PARAM_KEYS.has(k),
+      ),
+    [fields, BUILTIN_CANVAS_PARAM_KEYS],
+  );
   const formConstraints = useMemo(() => {
     if (!form || !single) return undefined;
     const vals: FormValues = {
@@ -947,9 +970,23 @@ export function CanvasWorkspace({
       fast_mode: Boolean(single.params.fast_mode),
       sampling_steps: single.params.sampling_steps,
     };
+    for (const [k, field] of Object.entries(form.fields)) {
+      if (BUILTIN_CANVAS_PARAM_KEYS.has(k)) continue;
+      const raw = single.extra_params?.[k];
+      if (
+        typeof raw === "string" ||
+        typeof raw === "number" ||
+        typeof raw === "boolean"
+      ) {
+        vals[k] = raw;
+      } else if (field.default !== undefined) {
+        vals[k] = field.default;
+      }
+    }
     return evaluateFormConstraints(form, vals);
   }, [
     form,
+    BUILTIN_CANVAS_PARAM_KEYS,
     single?.params.ratio,
     single?.params.resolution,
     single?.params.seconds,
@@ -957,6 +994,7 @@ export function CanvasWorkspace({
     single?.params.image_quality,
     single?.params.fast_mode,
     single?.params.sampling_steps,
+    single?.extra_params,
   ]);
   const stepsOptions = (fields?.sampling_steps?.enum ?? []).map(Number).filter(v=>v!==form?.fastSteps) as Params["sampling_steps"][];
   useEffect(()=>{
@@ -2424,9 +2462,65 @@ export function CanvasWorkspace({
             ),
         )
       : [];
+  useEffect(() => {
+    if (!pendingBgmJobId) return;
+    const job = studio.jobs.find((j) => j.id === pendingBgmJobId);
+    if (!job) return;
+    if (job.status === "done" && job.result) {
+      doc.change((d) => ({
+        ...d,
+        document: {
+          ...d.document,
+          bgm: {
+            asset_id: job.result!,
+            volume: d.document.bgm?.volume ?? 0.35,
+            ducking: d.document.bgm?.ducking ?? true,
+            loop: d.document.bgm?.loop ?? true,
+          },
+        },
+      }));
+      setPendingBgmJobId(null);
+      notify("AI 配乐已生成并自动挂载至背景音乐轨");
+    } else if (["failed", "cancelled"].includes(job.status)) {
+      setPendingBgmJobId(null);
+      notify(job.note || "AI 配乐生成失败，请重试");
+    }
+  }, [pendingBgmJobId, studio.jobs]);
+
   const availableAudioModels = Object.entries(studio.model_catalog)
     .filter(([id, spec]) => spec.kind === "audio" && availableModel(id))
     .map(([id, spec]) => ({ id, label: spec.label || id }));
+  const bgmModels = [
+    ...availableAudioModels.filter((m) =>
+      ["suno-v4", "udio-v1.5", "musicgen-large"].includes(m.id) ||
+      studio.model_catalog[m.id]?.provider === "bgm-generator",
+    ),
+    ...availableAudioModels.filter(
+      (m) =>
+        !["suno-v4", "udio-v1.5", "musicgen-large"].includes(m.id) &&
+        studio.model_catalog[m.id]?.provider !== "bgm-generator",
+    ),
+  ];
+  const defaultBgmPrompt = shots.length
+    ? `为以下分镜创作背景配乐：${shots
+        .slice(0, 4)
+        .map((s) => s.title || s.prompt.slice(0, 20))
+        .filter(Boolean)
+        .join(" / ")}，电影感器乐配乐`
+    : "电影感器乐背景配乐，情绪层次丰富";
+  const handleGenerateBgm = async (opts: { prompt: string; model?: string }) => {
+    const model = opts.model || bgmModels[0]?.id;
+    if (!model) throw new Error("暂无可用的 AI 配乐模型");
+    const res = await api<{ id: number }>("/api/audio-jobs", {
+      uid: crypto.randomUUID(),
+      model,
+      prompt: opts.prompt.slice(0, 300),
+      instruction: "background music soundtrack",
+      price_revision: studio.pricing.revision,
+    });
+    setPendingBgmJobId(res.id);
+    await fetchRuns();
+  };
   const compositionAudioAssets = [
     ...studio.assets
       .filter((a) => a.kind === "audio" || a.kind === "ref_audio")
@@ -3386,6 +3480,106 @@ export function CanvasWorkspace({
           />}
           {flowModel?.mode==='extend'&&<label className="cv-flow-source">来源视频<select aria-label="画布续写来源视频" value={single.params.flow_source_job||''} onChange={e=>patchParams({flow_source_job:Number(e.target.value)||null})}><option value="">请选择已完成的 Flow 视频</option>{flowSources.map(j=><option key={j.id} value={j.id}>#{j.id} · {j.prompt.slice(0,42)}</option>)}</select></label>}
           {flowInputError&&<p className="cv-flow-hint" role="status">{flowInputError}</p>}
+          {(customFormFields.length > 0 || formConstraints?.references.reason) && (
+            <div className="fm-dynamic-form-fields" role="group" aria-label="模型专属参数">
+              {customFormFields.map(([key, field]) => {
+                const state = formConstraints?.fields[key];
+                if (state && !state.visible) return null;
+                const currentVal = single.extra_params?.[key] ?? field.default ?? "";
+                const updateExtra = (nextVal: string | number | boolean) =>
+                  edit(single.id, {
+                    extra_params: { ...(single.extra_params ?? {}), [key]: nextVal },
+                  });
+                const fieldTitle = field.title || key;
+                if (field.type === "boolean") {
+                  return (
+                    <label key={key} className="fm-dynamic-field-check" title={state?.disabledReason}>
+                      <input
+                        type="checkbox"
+                        aria-label={fieldTitle}
+                        disabled={Boolean(state?.disabled)}
+                        checked={Boolean(currentVal)}
+                        onChange={(e) => updateExtra(e.target.checked)}
+                      />
+                      <span>{fieldTitle}</span>
+                    </label>
+                  );
+                }
+                if (field.enum?.length) {
+                  return (
+                    <label key={key} className="fm-dynamic-field" title={state?.disabledReason}>
+                      <span>{fieldTitle}</span>
+                      <select
+                        aria-label={fieldTitle}
+                        disabled={Boolean(state?.disabled)}
+                        value={String(currentVal)}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const matched = field.enum!.find((opt) => String(opt) === raw);
+                          updateExtra(matched !== undefined ? matched : raw);
+                        }}
+                      >
+                        {field.enum.map((opt) => {
+                          const optReason =
+                            state?.disabledOptions[JSON.stringify(opt)] ??
+                            state?.incompatibleOptions[JSON.stringify(opt)];
+                          return (
+                            <option
+                              key={String(opt)}
+                              value={String(opt)}
+                              disabled={Boolean(optReason)}
+                            >
+                              {field.optionLabels?.[String(opt)] ?? String(opt)}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </label>
+                  );
+                }
+                if (field.type === "number" || field.type === "integer") {
+                  return (
+                    <label key={key} className="fm-dynamic-field" title={state?.disabledReason}>
+                      <span>{fieldTitle}</span>
+                      <input
+                        type="number"
+                        aria-label={fieldTitle}
+                        disabled={Boolean(state?.disabled)}
+                        min={field.minimum}
+                        max={field.maximum}
+                        step={field.type === "integer" ? 1 : 0.1}
+                        value={currentVal === "" ? "" : Number(currentVal)}
+                        onChange={(e) => {
+                          const num = Number(e.target.value);
+                          if (Number.isFinite(num)) {
+                            updateExtra(field.type === "integer" ? Math.round(num) : num);
+                          }
+                        }}
+                      />
+                    </label>
+                  );
+                }
+                return (
+                  <label key={key} className="fm-dynamic-field" title={state?.disabledReason}>
+                    <span>{fieldTitle}</span>
+                    <input
+                      type="text"
+                      aria-label={fieldTitle}
+                      disabled={Boolean(state?.disabled)}
+                      maxLength={field.maxLength}
+                      value={String(currentVal)}
+                      onChange={(e) => updateExtra(e.target.value)}
+                    />
+                  </label>
+                );
+              })}
+              {formConstraints?.references.reason && (
+                <small className="fm-dynamic-ref-hint" role="status">
+                  参考图槽位 ({formConstraints.references.min}–{formConstraints.references.max})：{formConstraints.references.reason}
+                </small>
+              )}
+            </div>
+          )}
           <div className="composer-bottom">
             <div className="parameter-wrap menu-trigger" onKeyDown={modelKeys}>
               <button ref={modelButtonRef} className={"parameter" + (!availableModel(selectedModel) ? " model-unavailable" : "")} disabled={!selectedModel} aria-label="选择模型" aria-haspopup="listbox" aria-controls="canvas-model-options" aria-expanded={menu === "model"} onClick={() => menu === "model" ? closeModelMenu() : setMenu("model")}>
@@ -4241,6 +4435,10 @@ export function CanvasWorkspace({
                 audioAssets={compositionAudioAssets}
                 bgm={doc.value.document.bgm ?? null}
                 loudnorm={doc.value.document.loudnorm}
+                defaultBgmPrompt={defaultBgmPrompt}
+                bgmModels={bgmModels}
+                bgmGenerating={Boolean(pendingBgmJobId)}
+                onGenerateBgm={handleGenerateBgm}
                 onMixChange={(patch) =>
                   doc.change((d) => ({
                     ...d,
@@ -4413,6 +4611,10 @@ export function CanvasWorkspace({
                 audioAssets={compositionAudioAssets}
                 bgm={doc.value.document.bgm ?? null}
                 loudnorm={doc.value.document.loudnorm}
+                defaultBgmPrompt={defaultBgmPrompt}
+                bgmModels={bgmModels}
+                bgmGenerating={Boolean(pendingBgmJobId)}
+                onGenerateBgm={handleGenerateBgm}
                 onMixChange={(patch) =>
                   doc.change((d) => ({
                     ...d,

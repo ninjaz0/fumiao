@@ -69,11 +69,42 @@
 }
 
 @media (max-width: 760px) {
+  /* Prevent header global-tools / view-switch from ever overlapping the top-left Studio logo on narrow viewports (e.g. 320x568). */
+  .canvas-header {
+    height: auto;
+    min-height: 52px;
+    flex-wrap: wrap;
+    row-gap: 6px;
+    align-items: center;
+  }
+  .canvas-header .project-heading {
+    position: relative;
+    z-index: 2;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .canvas-header .project-heading input {
+    width: auto;
+    flex: 1 1 84px;
+    min-width: 60px;
+    max-width: 150px;
+  }
+  .canvas-header .global-tools {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-left: auto;
+  }
+  .canvas-header .fm-view-switch button {
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+
   /* #110: Move left insert toolbar to the top safe area when the bottom composer is open. */
   .canvas-workspace[data-composer-open="true"] .insert-toolbar {
-    top: 64px;
+    top: 96px;
     transform: none;
-    max-height: calc(100dvh - 46dvh - 140px);
+    max-height: calc(100dvh - 46dvh - 156px);
     overflow-y: auto;
   }
 
@@ -873,4 +904,62 @@
   color: var(--chat-text);
   font-weight: 500;
   white-space: nowrap;
+}
+@media (max-width: 520px) {
+  .canvas-header .project-heading {
+    flex: 1 0 100%;
+  }
+  .canvas-header .cv-brand,
+  .canvas-header .save-state {
+    flex: none;
+  }
+  .canvas-header .global-tools {
+    margin-left: 0;
+  }
+  .save-banner {
+    top: 96px;
+  }
+}
+.fm-dynamic-form-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 6px 8px;
+  margin-top: 6px;
+  border-radius: 8px;
+  background: var(--cv-hover);
+  font-size: 12px;
+}
+.fm-dynamic-field,
+.fm-dynamic-field-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fm-dynamic-field select,
+.fm-dynamic-field input {
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--cv-line);
+  background: var(--cv-surface);
+  color: var(--cv-text);
+  font-size: 12px;
+}
+.fm-dynamic-ref-hint {
+  flex: 1 0 100%;
+  color: var(--cv-muted);
+}
+.composition-bgm-gen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--cv-line);
+}
+.composition-bgm-gen input[type="text"] {
+  flex: 1 1 200px;
+  min-width: 0;
 }

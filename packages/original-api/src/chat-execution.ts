@@ -22,8 +22,9 @@ export class ChatExecution {
     return this.p.db.transaction(async (sql) => {
       let turn = await one(sql, "SELECT * FROM chat_turns WHERE id=$1", [id]);
       if (!turn) return null;
-      await sql.query(
-        "SELECT id FROM chat_conversations WHERE id=$1 FOR UPDATE",
+      const conv = await one(
+        sql,
+        "SELECT id, workspace_id FROM chat_conversations WHERE id=$1 FOR UPDATE",
         [turn.conversation_id],
       );
       turn = await one(sql, "SELECT * FROM chat_turns WHERE id=$1 FOR UPDATE", [
@@ -56,8 +57,11 @@ export class ChatExecution {
         );
         if (existingSnap?.snapshots) {
           skills = existingSnap.snapshots as ActiveSkillSnapshot[];
-        } else {
-          skills = await loadActiveWorkspaceSkills(sql, turn.workspace_id);
+        } else if (conv?.workspace_id) {
+          skills = await loadActiveWorkspaceSkills(
+            sql,
+            String(conv.workspace_id),
+          );
           await snapshotTurnSkills(sql, id, skills);
         }
       }

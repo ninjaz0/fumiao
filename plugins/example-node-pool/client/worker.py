@@ -11,7 +11,7 @@ import time
 import uuid
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -119,7 +119,13 @@ class ComfyWorkerController:
         return str(parsed.get("name") or filename)
 
     def _fetch_job_asset(self, job_id: str, ticket: str, asset_key: str) -> bytes:
-        url = f"{self.site}/jobs/{job_id}/assets/{asset_key}"
+        if asset_key.startswith("http://") or asset_key.startswith("https://"):
+            url = asset_key
+        elif asset_key.startswith("/"):
+            parsed = urlparse(self.site)
+            url = f"{parsed.scheme}://{parsed.netloc}{asset_key}"
+        else:
+            url = f"{self.site}/jobs/{job_id}/ref/{asset_key}"
         req = Request(
             url,
             headers={
@@ -150,7 +156,8 @@ class ComfyWorkerController:
                 continue
             raw_bytes = self._fetch_job_asset(str(job["id"]), job["ticket"], str(asset_key))
             ext = ".mp4" if upload.get("kind") == "video" else ".wav" if upload.get("kind") == "audio" else ".png"
-            uploaded_name = self._upload_media_to_comfy(f"{asset_key}{ext}", raw_bytes)
+            safe_stem = Path(str(asset_key).rstrip("/")).name or "input"
+            uploaded_name = self._upload_media_to_comfy(f"{safe_stem}{ext}", raw_bytes)
             graph[node_id]["inputs"][input_key] = uploaded_name
         return graph, (str(target_key) if target_key else None)
 

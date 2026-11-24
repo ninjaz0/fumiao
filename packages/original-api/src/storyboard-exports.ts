@@ -852,7 +852,7 @@ export class OriginalStoryboardExports {
               : Buffer.from(single.content, "utf8"),
             { mode: 0o600 },
           );
-          outputMime = "application/xml";
+          outputMime = pinnedExporter.mime || "application/xml";
         } else {
           await writeProjectZipFile(
             outputPath,

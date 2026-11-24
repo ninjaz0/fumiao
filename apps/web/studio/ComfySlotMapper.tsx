@@ -108,7 +108,7 @@ export function ComfySlotMapper({
       return;
     }
     const obj = parsed as Record<string, unknown>;
-    // Support pasting a full F037 `app.json` spec directly
+    // Support pasting/uploading a full F037 `app.json` spec directly (preserving declared slots verbatim!)
     if (obj.schemaVersion === 1 && obj.workflowApiJson && Array.isArray(obj.inputs)) {
       setWorkflowObj(obj.workflowApiJson as Record<string, unknown>);
       if (typeof obj.slug === "string") setSlug(obj.slug);
@@ -121,6 +121,13 @@ export function ComfySlotMapper({
       if (typeof obj.modelKey === "string") setModelKey(obj.modelKey);
       if (typeof obj.peakVramGb === "number") setPeakVramGb(obj.peakVramGb);
       if (typeof obj.credits === "number") setCredits(obj.credits);
+      if (
+        obj.smokeTestCase &&
+        typeof obj.smokeTestCase === "object" &&
+        typeof (obj.smokeTestCase as { prompt?: unknown }).prompt === "string"
+      ) {
+        setSmokePrompt((obj.smokeTestCase as { prompt: string }).prompt);
+      }
       setInputs(obj.inputs as MicroAppInput[]);
       setDeps(
         Array.isArray(obj.modelDependencies)
@@ -128,7 +135,9 @@ export function ComfySlotMapper({
           : [],
       );
       setWarnings([]);
-      setStatus("已加载声明式 app.json 微应用配置，可直接试跑或发布。");
+      setStatus(
+        `已按 app.json 声明绑定 ${obj.inputs.length} 个槽位（${String(obj.slug || "")}@${String(obj.version || "1.0.0")}），可直接试跑或发布。`,
+      );
       return;
     }
 
@@ -280,18 +289,48 @@ export function ComfySlotMapper({
                 fontSize: 12,
               }}
             >
-              选择 JSON 文件
+              选择 JSON 文件（支持同时选 app.json + workflow.json）
               <input
                 type="file"
                 accept=".json,application/json"
+                multiple
                 hidden
                 onChange={async (e) => {
-                  const file = e.target.files?.[0];
+                  const files = Array.from(e.target.files ?? []);
                   e.target.value = "";
-                  if (!file) return;
-                  const text = await file.text();
-                  setRawJson(text);
-                  analyzeText(text);
+                  if (!files.length) return;
+                  if (files.length === 1) {
+                    const text = await files[0].text();
+                    setRawJson(text);
+                    analyzeText(text);
+                    return;
+                  }
+                  const parsedFiles = await Promise.all(
+                    files.map(async (f) => ({
+                      name: f.name.toLowerCase(),
+                      text: await f.text(),
+                    })),
+                  );
+                  const appEntry = parsedFiles.find((f) => f.name.includes("app"));
+                  const wfEntry = parsedFiles.find((f) => f !== appEntry);
+                  if (appEntry && wfEntry) {
+                    try {
+                      const appObj = JSON.parse(appEntry.text) as Record<string, unknown>;
+                      const wfObj = JSON.parse(wfEntry.text) as Record<string, unknown>;
+                      const merged = JSON.stringify(
+                        { ...appObj, workflowApiJson: wfObj },
+                        null,
+                        2,
+                      );
+                      setRawJson(merged);
+                      analyzeText(merged);
+                      return;
+                    } catch {
+                      // Fall through to normal error reporting
+                    }
+                  }
+                  setRawJson(parsedFiles[0].text);
+                  analyzeText(parsedFiles[0].text);
                 }}
               />
             </label>

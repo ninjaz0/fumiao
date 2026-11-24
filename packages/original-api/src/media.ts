@@ -26,6 +26,7 @@ const extension: Record<string, string> = {
   "image/webp": ".webp",
   "application/zip": ".zip",
   "application/xml": ".fcpxml",
+  "text/plain": ".edl",
 };
 function safeDownloadFilename(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;

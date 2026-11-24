@@ -191,17 +191,23 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
       400,
       "宿主成品验收需要 media 能力",
     );
+  const studio = manifest.originalSubmission?.version === 4;
+  const request = manifest.originalSubmission?.version === 5;
+  const unified = Boolean(
+    manifest.chat?.sandbox && request && file.studioProgram,
+  );
   if (manifest.chat?.sandbox || (file.manifest?.chat && !file.program)) {
     const sandbox = manifest.chat?.sandbox;
     requireValue(
       file.manifest &&
         sandbox &&
         !file.program &&
-        !file.studioProgram &&
-        !manifest.originalSubmission &&
+        (unified ||
+          (!file.studioProgram &&
+            !manifest.originalSubmission &&
+            manifest.models.every((m) => m.kind === "chat"))) &&
         manifest.mode === "request" &&
-        manifest.models.length &&
-        manifest.models.every((m) => m.kind === "chat") &&
+        manifest.models.some((m) => m.kind === "chat") &&
         contributions.hostCapabilities.includes("secrets") &&
         contributions.http &&
         canonical([...sandbox.origins].sort()) ===
@@ -210,8 +216,6 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
       "沙箱对话需要声明 HTTP 目标和连接密钥注入",
     );
   }
-  const studio = manifest.originalSubmission?.version === 4;
-  const request = manifest.originalSubmission?.version === 5;
   if (manifest.originalSubmission?.version === 5)
     requireValue(
       (manifest.originalSubmission.artifactOrigins ?? []).every(origin =>
@@ -225,7 +229,7 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
         file.manifest &&
         !file.program &&
         !file.nodeClient &&
-        !manifest.chat &&
+        (unified || !manifest.chat) &&
         manifest.mode === "request" &&
         manifest.artifactDownload &&
         manifest.artifactValidation?.version === 3 &&
@@ -290,13 +294,15 @@ async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
     ? undefined
     : file.remote
       ? remotePlugin(manifest, file.remote.endpoint)
-      : manifest.chat?.sandbox
-        ? await registry.chatAdapter(manifest)
-        : request && file.studioProgram
-          ? await registry.requestAdapter(manifest, file.studioProgram)
-          : file.studioProgram
-            ? await nodeStudioPlugin(manifest, file.studioProgram)
-            : portablePlugin(manifest);
+      : unified
+        ? await registry.unifiedAdapter(manifest, file.studioProgram!)
+        : manifest.chat?.sandbox
+          ? await registry.chatAdapter(manifest)
+          : request && file.studioProgram
+            ? await registry.requestAdapter(manifest, file.studioProgram)
+            : file.studioProgram
+              ? await nodeStudioPlugin(manifest, file.studioProgram)
+              : portablePlugin(manifest);
   return { adapter, manifest, contributions };
 }
 

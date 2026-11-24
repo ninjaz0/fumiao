@@ -701,3 +701,220 @@ test("#19 F026: 4-level Series -> Season -> Episode -> Scene hierarchy supports 
   const openedSceneCanvas = await f.canvases.get(f.admin, s1e1sc1.canvas_id!);
   assert.ok(openedSceneCanvas.document.nodes.some((n: { type?: string }) => n.type === "sticky"));
 });
+
+test("#9 F010 concurrent retry & crash recovery: in-flight retry waits for full 2-item receipt (never seals 1-item half-receipt), survives revision bump, and stale crash recovery resumes remaining items idempotently", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+
+  const precheck = new OriginalBatchPrecheck(f.p);
+  const wsPublicId = String(f.workspace.public_id);
+
+  // Canvas with two image nodes
+  const projectKey = await f.project(
+    [
+      {
+        id: "img1",
+        type: "image",
+        title: "图一",
+        x: 0,
+        y: 0,
+        width: 280,
+        height: 200,
+        prompt: "first concurrent batch image",
+        params: { ratio: "16:9", resolution: "1K" },
+      },
+      {
+        id: "img2",
+        type: "image",
+        title: "图二",
+        x: 340,
+        y: 0,
+        width: 280,
+        height: 200,
+        prompt: "second concurrent batch image",
+        params: { ratio: "16:9", resolution: "1K" },
+      },
+    ],
+    [],
+    wsPublicId,
+    f.admin,
+  );
+  const docBefore = await f.canvases.get(f.admin, projectKey);
+  assert.equal(docBefore.revision, 2);
+
+  const pre = await precheck.precheckCanvas(f.admin, projectKey, {
+    expected_revision: 2,
+    node_ids: ["img1", "img2"],
+    stages: ["image"],
+  });
+  assert.equal(pre.executable_keys.length, 2);
+  const expectedTotalCredits = pre.summary.total_credits;
+  assert.ok(expectedTotalCredits > 0);
+
+  // Intercept `f.runs.generate` so img1 finishes immediately, signals us, and img2 pauses 350ms
+  let notifyImg1Done!: () => void;
+  const img1Done = new Promise<void>((resolve) => {
+    notifyImg1Done = resolve;
+  });
+  const origGenerate = f.runs.generate.bind(f.runs);
+  let delayImg2Once = true;
+  (f.runs as any).generate = async (
+    user: any,
+    proj: string,
+    nodeId: string,
+    value: any,
+  ) => {
+    if (nodeId === "img2" && delayImg2Once) {
+      delayImg2Once = false;
+      notifyImg1Done();
+      await new Promise((r) => setTimeout(r, 350));
+    }
+    return origGenerate(user, proj, nodeId, value);
+  };
+
+  const batchUid = randomUUID();
+  const payload = {
+    uid: batchUid,
+    expected_revision: 2,
+    node_ids: ["img1", "img2"],
+    stages: ["image"],
+    precheck_token: pre.precheck_token,
+    expected_total_credits: expectedTotalCredits,
+  };
+
+  // Start Request 1
+  const req1Promise = f.runs.batchRun(f.admin, projectKey, payload);
+  // Wait until img1 is ALREADY accepted in DB & img2 is mid-delay!
+  await img1Done;
+
+  // Verify DB currently has status='in_progress' and exactly 1 linked job so far
+  const midRow = (
+    await f.p.db.query(
+      `SELECT status FROM canvas_batch_runs WHERE uid = $1`,
+      [batchUid],
+    )
+  ).rows[0];
+  assert.equal(midRow?.status, "in_progress");
+
+  // Launch concurrent Request 2 with the EXACT SAME UID right in the middle of Request 1!
+  const req2Promise = f.runs.batchRun(f.admin, projectKey, payload);
+
+  const [res1, res2] = await Promise.all([req1Promise, req2Promise]);
+  // Restore generate
+  (f.runs as any).generate = origGenerate;
+
+  // BOTH callers must receive the COMPLETE 2-item / full-credit receipt (never a 1-item half-receipt!)
+  assert.equal(res1.submitted.length, 2);
+  assert.equal(res2.submitted.length, 2);
+  assert.deepEqual(res2, res1);
+  assert.equal(res1.total_credits, expectedTotalCredits);
+  assert.equal(res2.total_credits, expectedTotalCredits);
+
+  // Another tab renames canvas (revision 2 -> 3); subsequent retry with SAME UID still gets full 2-item receipt!
+  await f.canvases.save(f.admin, projectKey, {
+    title: "并发批次后重命名",
+    expected_revision: 2,
+    document: docBefore.document,
+  });
+  const res3 = await f.runs.batchRun(f.admin, projectKey, {
+    uid: batchUid,
+    expected_revision: 2,
+    node_ids: ["img1", "img2"],
+    stages: ["image"],
+  });
+  assert.equal(res3.submitted.length, 2);
+  assert.deepEqual(res3, res1);
+
+  // Settle first batch's queued image jobs so the user's concurrent active image quota (3) doesn't cap the next subtest
+  await f.p.db.query(
+    `UPDATE jobs SET state = 'completed' WHERE public_id = ANY($1::bigint[])`,
+    [res1.submitted.map((s) => s.job_id)],
+  );
+
+  // Crash recovery check: simulate a real process crash after item 1 was dispatched & row went stale (> 60s)
+  const crashProjKey = await f.project(
+    [
+      {
+        id: "c_img1",
+        type: "image",
+        title: "崩溃恢复图一",
+        x: 0,
+        y: 0,
+        width: 280,
+        height: 200,
+        prompt: "crash recovery image 1",
+        params: { ratio: "16:9", resolution: "1K" },
+      },
+      {
+        id: "c_img2",
+        type: "image",
+        title: "崩溃恢复图二",
+        x: 340,
+        y: 0,
+        width: 280,
+        height: 200,
+        prompt: "crash recovery image 2",
+        params: { ratio: "16:9", resolution: "1K" },
+      },
+    ],
+    [],
+    wsPublicId,
+    f.admin,
+  );
+  const crashPre = await precheck.precheckCanvas(f.admin, crashProjKey, {
+    expected_revision: 2,
+    node_ids: ["c_img1", "c_img2"],
+    stages: ["image"],
+  });
+  const crashUid = randomUUID();
+  const { uuid5 } = await import("@fumiao/platform/uuid.js");
+  const { hash } = await import("@fumiao/platform/security.js");
+  const firstJob = await f.runs.generate(f.admin, crashProjKey, "c_img1", {
+    expected_revision: 2,
+    uid: uuid5(crashUid, `batch:${crashProjKey}:c_img1:image`),
+  });
+  const projUuidRow = (
+    await f.p.db.query("SELECT id FROM documents WHERE public_id = $1", [
+      crashProjKey,
+    ])
+  ).rows[0];
+  const crashReqHash = hash(
+    JSON.stringify({
+      node_ids: ["c_img1", "c_img2"],
+      stages: ["image"],
+    }),
+  );
+  await f.p.db.query(
+    `INSERT INTO canvas_batch_runs(owner_id, project_id, uid, request_hash, status, expected_revision, allowed_keys, response, updated_at)
+     VALUES ($1, $2, $3, $4, 'in_progress', 2, $5::text[], '{}'::jsonb, now() - interval '2 minutes')`,
+    [
+      f.admin.id,
+      projUuidRow.id,
+      crashUid,
+      crashReqHash,
+      crashPre.executable_keys,
+    ],
+  );
+
+  // Retry with the same crashUid -> reclaims stale in_progress, keeps c_img1 idempotently, submits c_img2, marks completed!
+  const recovered = await f.runs.batchRun(f.admin, crashProjKey, {
+    uid: crashUid,
+    expected_revision: 2,
+    node_ids: ["c_img1", "c_img2"],
+    stages: ["image"],
+  });
+  assert.equal(recovered.submitted.length, 2, JSON.stringify(recovered));
+  assert.equal(
+    recovered.submitted.find((s) => s.node === "c_img1")?.job_id,
+    firstJob.id,
+    "Crash recovery must reuse c_img1's original idempotent job_id",
+  );
+  assert.ok(recovered.submitted.find((s) => s.node === "c_img2")?.job_id);
+  assert.equal(recovered.total_credits, crashPre.summary.total_credits);
+  const finalStatus = (
+    await f.p.db.query("SELECT status FROM canvas_batch_runs WHERE uid = $1", [
+      crashUid,
+    ])
+  ).rows[0];
+  assert.equal(finalStatus?.status, "completed");
+});

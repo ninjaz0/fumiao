@@ -72,6 +72,24 @@ export const SESSION_ONLY_OPENAPI_ROUTES: readonly SessionOnlyRouteDoc[] = [
     tag: "Billing",
     summary: "更新内容安全改写重试策略（仅工作区负责人/管理员浏览器会话）",
   },
+  {
+    method: "GET",
+    template: "/api/admin/observability/summary",
+    tag: "Admin",
+    summary: "读取全站模型渠道健康度、延迟、成本与毛利汇总（仅管理员浏览器会话）",
+  },
+  {
+    method: "GET",
+    template: "/api/admin/observability/uncertain",
+    tag: "Admin",
+    summary: "列出待人工核对的 uncertain 任务列表，返回任务 UUID（id）与公开任务号（public_id）（仅管理员浏览器会话）",
+  },
+  {
+    method: "POST",
+    template: "/api/admin/observability/jobs/:id/reconcile",
+    tag: "Admin",
+    summary: "核对 uncertain 任务（退款或恢复）；路径参数 id 支持运营大盘返回的任务 UUID 或正整数公开任务号，格式非法返回 400、不存在返回 404（仅管理员浏览器会话）",
+  },
 ];
 
 function templateToOpenApiPath(template: string): {

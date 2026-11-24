@@ -1,9 +1,9 @@
 {
   "format": 1,
   "id": "fcpxml-exporter",
-  "label": "专业 NLE 工程导出（FCPXML）",
-  "version": "1.1.0",
-  "adapterVersion": "1.1.0",
+  "label": "专业 NLE 工程导出（FCPXML / EDL）",
+  "version": "1.2.0",
+  "adapterVersion": "1.2.0",
   "extensionOnly": true,
   "contributes": {
     "version": 1,
@@ -24,6 +24,14 @@
         "mime": "application/xml",
         "fileExtension": "fcpxml",
         "programFile": "export-xml.js"
+      },
+      {
+        "id": "edl",
+        "title": "CMX 3600 EDL 剪辑表",
+        "outputKind": "project",
+        "mime": "text/plain",
+        "fileExtension": "edl",
+        "programFile": "export-edl.js"
       }
     ],
     "settingsPages": []

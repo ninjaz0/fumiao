@@ -25,7 +25,12 @@ import type { QueueHealth, QueueJob } from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
 import { hasTailChainTable, wakeTailFrameChildren } from "./tail-frame.js";
 import { ensureDerivativeQueued } from "./derivatives.js";
-import { tryModerationRewrite } from "./moderation-rewrite.js";
+import {
+  isModerationRejectionMessage,
+  recordCompletedJobCost,
+  tryModerationEquivalentFallback,
+  tryModerationRewrite,
+} from "./moderation-rewrite.js";
 class ReferenceUnavailable extends Error {}
 
 export class Executor {
@@ -705,16 +710,48 @@ export class Executor {
         !job.remote_id &&
         !job.receipt
       ) {
-        const fellBack = await p.db.transaction(async (sql) => {
+        const recovered = await p.db.transaction(async (sql) => {
           const current = await one(
             sql,
             "SELECT * FROM jobs WHERE id=$1 AND lease_token=$2 FOR UPDATE",
             [id, job.lease_token],
           );
           if (!current) return false;
-          return this.tryAudioFallbackToEdgeTts(sql, current, error.message);
+          if (await this.tryAudioFallbackToEdgeTts(sql, current, error.message)) {
+            return true;
+          }
+          if (isModerationRejectionMessage(error.message)) {
+            const modOutcome: RequestDisposition = {
+              action: "fail",
+              reason: "moderation_blocked",
+              certainty: "rejected",
+              billable: false,
+              note: error.message,
+            };
+            if (await tryModerationRewrite(sql, current as any, modOutcome)) {
+              await new JobTiming(p).end(sql, current, "interrupted");
+              return true;
+            }
+            let preferredFallback: string | undefined;
+            try {
+              const cfg = p.vault.open(current.config_snapshot) as Record<string, unknown>;
+              if (typeof cfg?.fallbackModel === "string") preferredFallback = cfg.fallbackModel;
+            } catch {}
+            if (
+              await tryModerationEquivalentFallback(
+                sql,
+                current as any,
+                modOutcome,
+                preferredFallback,
+              )
+            ) {
+              await new JobTiming(p).end(sql, current, "interrupted");
+              return true;
+            }
+          }
+          return false;
         });
-        if (!fellBack) await this.finish(job, "failed", undefined, error.message);
+        if (!recovered) await this.finish(job, "failed", undefined, error.message);
       } else
         await p.db.transaction(async (sql) => {
           const current = await one(
@@ -899,8 +936,34 @@ export class Executor {
         return false;
       }
       // F024: Moderation-blocked rejected/non-billable jobs may neutralize & retry
-      // reusing the exact same hold:<job.id> reservation (zero double-billing).
-      if (await tryModerationRewrite(sql, job, outcome)) {
+      // reusing the exact same hold:<job.id> reservation (zero double-billing),
+      // and fall back to an equivalent model once rewrites are exhausted.
+      const effectiveOutcome: RequestDisposition =
+        outcome.reason !== "moderation_blocked" &&
+        !outcome.uncertain &&
+        !outcome.interrupted &&
+        outcome.certainty === "rejected" &&
+        outcome.billable === false &&
+        isModerationRejectionMessage(outcome.note)
+          ? { ...outcome, reason: "moderation_blocked" }
+          : outcome;
+      if (await tryModerationRewrite(sql, job, effectiveOutcome)) {
+        await timing.end(sql, job, "interrupted");
+        return false;
+      }
+      let preferredFallback: string | undefined;
+      try {
+        const cfg = this.platform.vault.open(job.config_snapshot) as Record<string, unknown>;
+        if (typeof cfg?.fallbackModel === "string") preferredFallback = cfg.fallbackModel;
+      } catch {}
+      if (
+        await tryModerationEquivalentFallback(
+          sql,
+          job,
+          effectiveOutcome,
+          preferredFallback,
+        )
+      ) {
         await timing.end(sql, job, "interrupted");
         return false;
       }
@@ -1114,7 +1177,11 @@ export class Executor {
             [job.id, id],
           );
           await ensureDerivativeQueued(sql, id, metadata.mime);
-          if (atomic) await p.settle(sql, current, "completed", result([id]));
+          if (atomic) {
+            const finalRes = result([id]);
+            await p.settle(sql, current, "completed", finalRes);
+            await recordCompletedJobCost(sql, p, current as any, finalRes);
+          }
           return id;
         });
         if (saved !== id) await p.storage.remove(key);
@@ -1138,8 +1205,12 @@ export class Executor {
         "SELECT * FROM jobs WHERE id=$1 AND lease_token=$2 FOR UPDATE",
         [job.id, job.lease_token],
       );
-      if (current)
+      if (current) {
         await this.platform.settle(sql, current, state, result, error);
+        if (state === "completed") {
+          await recordCompletedJobCost(sql, this.platform, current as any, result);
+        }
+      }
     });
     const firstAsset =
       result &&

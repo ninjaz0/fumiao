@@ -124,6 +124,110 @@ export type ComfyPublishResult = {
 };
 
 /**
+ * F037: One-folder-one-microapp packager.
+ * Reads `<dir>/app.json` (+ optional sibling `workflow.json` or `workflowFile`),
+ * preserves all declared slots (falling back to slot inference only when omitted),
+ * compiles to a versioned `.fmplugin.json` PackageFile, and runs QuickJS smoke checks.
+ */
+export async function packComfyMicroAppDirectory(dirPath: string): Promise<{
+  spec: MicroAppSpec;
+  package_file: PackageFile;
+  model_key: string;
+  smoke_dispatch: Record<string, unknown>;
+}> {
+  const root = resolve(dirPath);
+  const appJsonPath = resolve(root, "app.json");
+  requireValue(existsSync(appJsonPath), 400, `未找到微应用声明文件：${appJsonPath}`);
+  const rawApp = JSON.parse(readFileSync(appJsonPath, "utf8")) as Record<string, unknown>;
+  requireValue(
+    rawApp && typeof rawApp === "object" && !Array.isArray(rawApp),
+    400,
+    "app.json 顶层必须是 JSON 对象",
+  );
+
+  let workflowApiJson = rawApp.workflowApiJson;
+  const workflowFileRef =
+    typeof rawApp.workflowFile === "string"
+      ? rawApp.workflowFile
+      : typeof workflowApiJson === "string"
+        ? workflowApiJson
+        : "workflow.json";
+  if (!workflowApiJson || typeof workflowApiJson === "string") {
+    const wfPath = resolve(root, workflowFileRef);
+    requireValue(existsSync(wfPath), 400, `未找到工作流文件：${wfPath}`);
+    workflowApiJson = JSON.parse(readFileSync(wfPath, "utf8"));
+  }
+
+  const candidate: Record<string, unknown> = { ...rawApp, workflowApiJson };
+  delete candidate.workflowFile;
+
+  if (!Array.isArray(candidate.inputs) || candidate.inputs.length === 0) {
+    const inferred = inferComfyWorkflowSlots(workflowApiJson);
+    candidate.inputs = inferred.inputs;
+    if (!candidate.kind) candidate.kind = inferred.outputKind;
+    if (!candidate.modelKey) candidate.modelKey = inferred.suggestedModelKey;
+    if (!Array.isArray(candidate.modelDependencies)) {
+      candidate.modelDependencies = inferred.modelDependencies;
+    }
+  }
+
+  const parsed = microAppSpecSchema.safeParse(candidate);
+  requireValue(
+    parsed.success,
+    400,
+    parsed.success
+      ? ""
+      : "微应用 app.json 校验失败：" +
+          parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("；"),
+  );
+  const spec = parsed.data;
+  const pluginId = spec.slug.startsWith("comfy-") ? spec.slug : `comfy-${spec.slug}`;
+  const smokePrompt = spec.smokeTestCase?.prompt || "A cinematic test frame";
+  const smoke = applyMicroAppInputs(spec, {
+    prompt: smokePrompt,
+    params: spec.smokeTestCase?.params ?? {},
+  });
+  const compiled = packageFile.parse(
+    buildMicroAppPackageFile(spec, buildComfyNodeClient(pluginId)),
+  );
+  const invoke = await loadProgram(compiled.program!);
+  const caps = invoke("capabilities", {
+    ready: true,
+    loaded_model_key: smoke.modelKey,
+  }) as { ready_models?: string[] };
+  requireValue(
+    Array.isArray(caps?.ready_models) && caps.ready_models.includes(spec.slug),
+    400,
+    "微应用编译后 capabilities 试跑失败",
+  );
+  const smokeDispatch = invoke("dispatch", {
+    kind: spec.kind,
+    model: spec.slug,
+    view: {},
+    attempts: 1,
+    assets: {},
+    input: {
+      prompt: smokePrompt,
+      params: spec.smokeTestCase?.params ?? {},
+      references: [],
+    },
+  }) as Record<string, unknown>;
+  requireValue(
+    smokeDispatch &&
+      typeof smokeDispatch.workflow === "object" &&
+      smokeDispatch.modelKey === smoke.modelKey,
+    400,
+    "微应用编译后 dispatch 试跑失败",
+  );
+  return {
+    spec,
+    package_file: compiled,
+    model_key: smoke.modelKey,
+    smoke_dispatch: smokeDispatch,
+  };
+}
+
+/**
  * F008 + F037 + Q4: Server-side ComfyUI slot analyzer, QuickJS sandbox smoke-tester,
  * and standard versioned `.fmplugin.json` publisher routed through StudioPackages.
  */

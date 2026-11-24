@@ -12,8 +12,12 @@ import { subtitleCues } from "./subtitles.js";
 const exec = promisify(execFile);
 
 export type ExporterOutputKind = "composition" | "project";
-export type ExporterMime = "video/mp4" | "application/zip" | "application/xml";
-export type ExporterExtension = "mp4" | "zip" | "fcpxml";
+export type ExporterMime =
+  | "video/mp4"
+  | "application/zip"
+  | "application/xml"
+  | "text/plain";
+export type ExporterExtension = "mp4" | "zip" | "fcpxml" | "edl";
 
 export function exporterOutputKind(decl: {
   outputKind?: ExporterOutputKind;
@@ -39,6 +43,7 @@ export function exporterFileExtension(decl: {
   if (decl.fileExtension) return decl.fileExtension;
   const mime = exporterMime(decl);
   if (mime === "application/xml") return "fcpxml";
+  if (mime === "text/plain") return "edl";
   if (mime === "application/zip") return "zip";
   return "mp4";
 }
@@ -130,7 +135,7 @@ const projectBundleSchema = z
       .string()
       .min(1)
       .max(120)
-      .regex(/^[A-Za-z0-9._\u4e00-\u9fff-]+\.(?:zip|fcpxml)$/),
+      .regex(/^[A-Za-z0-9._\u4e00-\u9fff-]+\.(?:zip|fcpxml|edl)$/),
     format: z.enum(["zip", "text"]),
     directories: z.array(safeArchivePath).max(32).optional(),
     files: z

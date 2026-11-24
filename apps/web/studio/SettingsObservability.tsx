@@ -15,8 +15,12 @@ type ChannelMetric = {
   p95_seconds: number;
   credits_revenue: number;
   revenue_fen: number;
-  upstream_cost_fen: number;
-  gross_margin_fen: number;
+  upstream_cost_fen: number | null;
+  gross_margin_fen: number | null;
+  cost_status?: "known" | "partial" | "unknown";
+  cost_known_jobs?: number;
+  cost_unknown_jobs?: number;
+  cost_coverage_pct?: number;
   rewritten_count: number;
 };
 
@@ -30,8 +34,12 @@ type SummaryResponse = {
     overall_success_rate: number;
     credits_revenue: number;
     revenue_fen: number;
-    upstream_cost_fen: number;
-    gross_margin_fen: number;
+    upstream_cost_fen: number | null;
+    gross_margin_fen: number | null;
+    cost_status?: "known" | "partial" | "unknown";
+    cost_known_jobs?: number;
+    cost_unknown_jobs?: number;
+    cost_coverage_pct?: number;
     rewritten_jobs: number;
     total_gpu_nodes: number;
     online_gpu_nodes: number;
@@ -53,7 +61,8 @@ type UncertainJob = {
   created_at: string;
 };
 
-function yuan(fen: number): string {
+function yuan(fen: number | null | undefined, emptyLabel = "未配置"): string {
+  if (fen === null || fen === undefined) return emptyLabel;
   return `¥${(fen / 100).toFixed(2)}`;
 }
 
@@ -183,11 +192,24 @@ export function SettingsObservability({
               <small>{summary.totals.credits_revenue} 积分</small>
             </div>
             <div className="ledger-card">
-              <small>毛利（营收 - 成本）</small>
+              <small>
+                毛利（
+                {summary.totals.cost_status === "unknown"
+                  ? "未提供上游成本"
+                  : summary.totals.cost_status === "partial"
+                    ? `部分估算 · 覆盖 ${summary.totals.cost_coverage_pct ?? 0}%`
+                    : "已计入成本"}
+                ）
+              </small>
               <div style={{ fontSize: 22, fontWeight: 700 }}>
-                {yuan(summary.totals.gross_margin_fen)}
+                {yuan(summary.totals.gross_margin_fen, "未提供")}
               </div>
-              <small>上游成本 {yuan(summary.totals.upstream_cost_fen)}</small>
+              <small>
+                上游成本 {yuan(summary.totals.upstream_cost_fen, "未配置")}
+                {summary.totals.cost_unknown_jobs
+                  ? ` · 缺成本 ${summary.totals.cost_unknown_jobs} 单`
+                  : ""}
+              </small>
             </div>
             <div className="ledger-card">
               <small>安全改写 / 在线 GPU</small>
@@ -247,10 +269,15 @@ export function SettingsObservability({
                           {yuan(ch.revenue_fen)}
                         </td>
                         <td style={{ padding: "8px 6px" }}>
-                          {yuan(ch.upstream_cost_fen)}
+                          {yuan(ch.upstream_cost_fen, "未配置")}
+                          {ch.cost_status === "partial" ? (
+                            <small style={{ display: "block", opacity: 0.75 }}>
+                              覆盖 {ch.cost_coverage_pct ?? 0}%
+                            </small>
+                          ) : null}
                         </td>
                         <td style={{ padding: "8px 6px", fontWeight: 600 }}>
-                          {yuan(ch.gross_margin_fen)}
+                          {yuan(ch.gross_margin_fen, "未提供")}
                         </td>
                       </tr>
                     ))}

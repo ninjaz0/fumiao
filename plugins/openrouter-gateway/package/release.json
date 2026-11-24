@@ -1,7 +1,7 @@
 {
   "format": 1,
   "id": "openrouter-gateway",
-  "label": "OpenRouter / New API 聚合网关",
-  "version": "1.0.0",
-  "adapterVersion": "1.0.0"
+  "label": "OpenRouter / New API 多模态聚合网关",
+  "version": "1.1.0",
+  "adapterVersion": "1.1.0"
 }

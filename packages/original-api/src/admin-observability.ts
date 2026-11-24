@@ -1,6 +1,7 @@
 import { one } from "@fumiao/platform/db.js";
 import { Operations } from "@fumiao/platform/operations.js";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { requireValue } from "@fumiao/platform/security.js";
 import { parseBody } from "./validation.js";
 import { reconcileJobFields } from "./wave6-fields.js";
 
@@ -30,7 +31,16 @@ export class OriginalObservability {
         ? "LEFT JOIN job_audit_meta am ON am.job_id = j.id"
         : "";
       const costExpr = hasAudit
-        ? "COALESCE(SUM(am.upstream_cost_fen), 0)"
+        ? "COALESCE(SUM(CASE WHEN j.state = 'completed' AND am.upstream_cost_fen IS NOT NULL THEN am.upstream_cost_fen ELSE 0 END), 0)"
+        : "0";
+      const costKnownExpr = hasAudit
+        ? "COUNT(*) FILTER (WHERE j.state = 'completed' AND am.upstream_cost_fen IS NOT NULL)"
+        : "0";
+      const costUnknownExpr = hasAudit
+        ? "COUNT(*) FILTER (WHERE j.state = 'completed' AND am.upstream_cost_fen IS NULL)"
+        : "COUNT(*) FILTER (WHERE j.state = 'completed')";
+      const knownRevenueCreditsExpr = hasAudit
+        ? "COALESCE(SUM(CASE WHEN j.state = 'completed' AND am.upstream_cost_fen IS NOT NULL THEN j.price ELSE 0 END), 0)"
         : "0";
       const rewriteExpr = hasAudit
         ? "COUNT(*) FILTER (WHERE COALESCE(am.rewrite_attempts, 0) > 0)"
@@ -49,6 +59,9 @@ export class OriginalObservability {
               COUNT(*) FILTER (WHERE j.state = 'cancelled')::int AS cancelled,
               COALESCE(SUM(CASE WHEN j.state = 'completed' THEN j.price ELSE 0 END), 0)::bigint AS credits_revenue,
               ${costExpr}::bigint AS upstream_cost_fen,
+              ${costKnownExpr}::int AS cost_known_jobs,
+              ${costUnknownExpr}::int AS cost_unknown_jobs,
+              ${knownRevenueCreditsExpr}::bigint AS known_cost_revenue_credits,
               ${rewriteExpr}::int AS rewritten_count,
               COALESCE(
                 percentile_cont(0.5) WITHIN GROUP (
@@ -84,6 +97,9 @@ export class OriginalObservability {
       let uncertainJobs = 0;
       let totalCreditsRevenue = 0;
       let totalUpstreamCostFen = 0;
+      let totalKnownCostRevenueFen = 0;
+      let totalCostKnownJobs = 0;
+      let totalCostUnknownJobs = 0;
       let totalRewritten = 0;
 
       const channels = channelRows.map((row) => {
@@ -95,8 +111,25 @@ export class OriginalObservability {
         const creditsRevenue = Number(row.credits_revenue);
         // Studio billing baseline: 1 yuan = 10 credits => 1 credit = 10 fen
         const revenueFen = creditsRevenue * 10;
-        const upstreamCostFen = Number(row.upstream_cost_fen);
-        const grossMarginFen = revenueFen - upstreamCostFen;
+        const costKnown = Number(row.cost_known_jobs ?? 0);
+        const costUnknown = Number(row.cost_unknown_jobs ?? 0);
+        const rawCostFen = Number(row.upstream_cost_fen ?? 0);
+        const knownRevenueFen = Number(row.known_cost_revenue_credits ?? 0) * 10;
+        const costStatus: "known" | "partial" | "unknown" =
+          completed === 0
+            ? "known"
+            : costKnown === 0
+              ? "unknown"
+              : costUnknown === 0
+                ? "known"
+                : "partial";
+        const costCoveragePct =
+          completed > 0 ? Math.round((costKnown / completed) * 1000) / 10 : 100;
+        // Never treat unknown/NULL upstream cost as ¥0 (100% margin): report null when unknown,
+        // and compute gross margin strictly over cost-known completed jobs.
+        const upstreamCostFen = costKnown > 0 ? rawCostFen : null;
+        const grossMarginFen =
+          costKnown > 0 ? knownRevenueFen - rawCostFen : null;
         const terminal = completed + failed + uncertain;
         const successRate =
           terminal > 0 ? Math.round((completed / terminal) * 1000) / 10 : 100;
@@ -106,7 +139,10 @@ export class OriginalObservability {
         failedJobs += failed;
         uncertainJobs += uncertain;
         totalCreditsRevenue += creditsRevenue;
-        totalUpstreamCostFen += upstreamCostFen;
+        totalUpstreamCostFen += rawCostFen;
+        totalKnownCostRevenueFen += knownRevenueFen;
+        totalCostKnownJobs += costKnown;
+        totalCostUnknownJobs += costUnknown;
         totalRewritten += Number(row.rewritten_count ?? 0);
 
         return {
@@ -125,6 +161,10 @@ export class OriginalObservability {
           revenue_fen: revenueFen,
           upstream_cost_fen: upstreamCostFen,
           gross_margin_fen: grossMarginFen,
+          cost_status: costStatus,
+          cost_known_jobs: costKnown,
+          cost_unknown_jobs: costUnknown,
+          cost_coverage_pct: costCoveragePct,
           rewritten_count: Number(row.rewritten_count ?? 0),
         };
       });
@@ -139,6 +179,18 @@ export class OriginalObservability {
 
       const totalRevenueFen = totalCreditsRevenue * 10;
       const terminalAll = completedJobs + failedJobs + uncertainJobs;
+      const totalCostStatus: "known" | "partial" | "unknown" =
+        completedJobs === 0
+          ? "known"
+          : totalCostKnownJobs === 0
+            ? "unknown"
+            : totalCostUnknownJobs === 0
+              ? "known"
+              : "partial";
+      const totalCostCoveragePct =
+        completedJobs > 0
+          ? Math.round((totalCostKnownJobs / completedJobs) * 1000) / 10
+          : 100;
       return {
         window_days: days,
         totals: {
@@ -152,8 +204,16 @@ export class OriginalObservability {
               : 100,
           credits_revenue: totalCreditsRevenue,
           revenue_fen: totalRevenueFen,
-          upstream_cost_fen: totalUpstreamCostFen,
-          gross_margin_fen: totalRevenueFen - totalUpstreamCostFen,
+          upstream_cost_fen:
+            totalCostKnownJobs > 0 ? totalUpstreamCostFen : null,
+          gross_margin_fen:
+            totalCostKnownJobs > 0
+              ? totalKnownCostRevenueFen - totalUpstreamCostFen
+              : null,
+          cost_status: totalCostStatus,
+          cost_known_jobs: totalCostKnownJobs,
+          cost_unknown_jobs: totalCostUnknownJobs,
+          cost_coverage_pct: totalCostCoveragePct,
           rewritten_jobs: totalRewritten,
           total_gpu_nodes: Number(nodeStats?.total_nodes ?? 0),
           online_gpu_nodes: Number(nodeStats?.online_nodes ?? 0),
@@ -197,7 +257,35 @@ export class OriginalObservability {
   async reconcileJob(actor: Actor, jobId: string, body: unknown) {
     this.p.admin(actor);
     const input = parseBody(body, reconcileJobFields);
-    return this.ops.resolve(actor, jobId, {
+    const trimmed = String(jobId ?? "").trim();
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        trimmed,
+      );
+    const isNumeric = /^[1-9]\d{0,17}$/.test(trimmed);
+    requireValue(
+      isUuid || isNumeric,
+      400,
+      "任务 ID 无效：请传入运营大盘返回的任务 UUID 或正整数公开任务号",
+    );
+    let targetUuid = trimmed;
+    if (isNumeric) {
+      const row = await one(
+        this.p.db,
+        "SELECT id FROM jobs WHERE public_id = $1 AND deleted_at IS NULL",
+        [Number(trimmed)],
+      );
+      requireValue(row, 404, `未找到编号为 #${trimmed} 的任务`);
+      targetUuid = String(row.id);
+    } else {
+      const row = await one(
+        this.p.db,
+        "SELECT id FROM jobs WHERE id = $1 AND deleted_at IS NULL",
+        [trimmed],
+      );
+      requireValue(row, 404, "未找到对应的任务");
+    }
+    return this.ops.resolve(actor, targetUuid, {
       action: input.action,
       reason: input.reason,
       ...(input.remoteId ? { remoteId: input.remoteId } : {}),

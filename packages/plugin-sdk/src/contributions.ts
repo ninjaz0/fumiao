@@ -342,9 +342,9 @@ export const contributesSchema = z
             title: label,
             outputKind: z.enum(["composition", "project"]).optional(),
             mime: z
-              .enum(["video/mp4", "application/zip", "application/xml"])
+              .enum(["video/mp4", "application/zip", "application/xml", "text/plain"])
               .optional(),
-            fileExtension: z.enum(["mp4", "zip", "fcpxml"]).optional(),
+            fileExtension: z.enum(["mp4", "zip", "fcpxml", "edl"]).optional(),
             program: hookProgram,
           })
           .strict(),
