@@ -2,6 +2,10 @@ import {useEffect,useRef,useState} from 'react';
 import {ModelSelect} from './chat/ModelSelect';
 import {chatRequest} from './chat/ChatWorkspace';
 export type SuggestedShot={title:string;prompt:string;narration:string;seconds:5|10|15};
+function restoreStoryboard(text:string):{message:number|null;shots:SuggestedShot[]}{
+ try{const data=JSON.parse(text),rows=Array.isArray(data)?data:data?.shots;if(Array.isArray(rows)&&rows.length<=12&&rows.every(r=>r&&typeof r.title==='string'&&typeof r.prompt==='string'&&typeof r.narration==='string'&&[5,10,15].includes(r.seconds)))return {message:Array.isArray(data)||data.message===null?null:Number.isSafeInteger(data.message)&&data.message>0?data.message:0,shots:rows}}catch{}
+ return {message:0,shots:[]};
+}
 export function parseStoryboard(text:string):SuggestedShot[]{
  const raw=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
  const data=JSON.parse(raw);const rows=Array.isArray(data)?data:data.shots;
@@ -13,8 +17,9 @@ export function parseStoryboard(text:string):SuggestedShot[]{
 }
 export function AiStoryboard({workspace,userId,project,onApply}:{workspace:number;userId:number;project:string;onApply:(shots:SuggestedShot[])=>Promise<void>}){
  const key=`fm-storyboard-${userId}-${workspace}-${project}`;
- const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(()=>{try{return parseStoryboard(localStorage.getItem(key+'-proposal')||'[]')}catch{return []}}),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
- const lastMessage=useRef(0);const pending=useRef<any>(null);
+ const [draft,setDraft]=useState(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]'));
+ const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(draft.shots),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
+ const lastMessage=useRef(draft.message);const pending=useRef<any>(null);
  const req=(path:string,body?:unknown)=>chatRequest(workspace,path,body);
  const updateConfig=(c:any)=>{setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')};
  useEffect(()=>{let active=true;const refresh=()=>req('/api/chat/config').then(c=>{if(active)updateConfig(c)}).catch(e=>{if(active)setError(e.message)});void refresh();const timer=setInterval(()=>void refresh(),10000);try{pending.current=JSON.parse(localStorage.getItem(key+'-pending')||'null')}catch{}return()=>{active=false;clearInterval(timer)}},[workspace]);
@@ -24,6 +29,11 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
    if(closed)return;setRunning(!!s.conversation.active_turn);
    const m=[...s.messages].reverse().find((m:any)=>m.role==='assistant');
    if(!m)return;
+   if(lastMessage.current===null&&draft.shots.length){
+    const p=pending.current,boundary=s.messages.find((r:any)=>r.role==='assistant'&&(r.state==='running'||r.turn===s.conversation.active_turn))||(p?.cid===cid&&s.conversation.revision>p.body.expected_revision?[...s.messages].reverse().find((r:any)=>r.role==='user'&&r.content===p.body.text):null);
+    const rows=boundary?s.messages.slice(0,s.messages.indexOf(boundary)):s.messages,previous=[...rows].reverse().find((r:any)=>r.role==='assistant'&&r.state!=='running');
+    lastMessage.current=previous?.id||0;setDraft(d=>({...d,message:lastMessage.current}));
+   }
    if(m.state==='running')return;
    pending.current=null;localStorage.removeItem(key+'-pending');
    if(lastMessage.current===m.id)return;lastMessage.current=m.id;
@@ -34,7 +44,7 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
   const events=new EventSource('/api/chats/'+cid+'/events?workspace='+workspace);events.onmessage=e=>accept(JSON.parse(e.data));
   return()=>{closed=true;events.close()};
  },[cid,workspace]);
- useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify(shots))},[shots,key]);
+ useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:lastMessage.current,shots}))},[shots,key,draft.message]);
  const price=config?.pricing.items.find((p:any)=>p.key===model+'|reply')?.amount;
  const send=async()=>{
   setBusy(true);setError('');
@@ -45,7 +55,7 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
     pending.current={cid:chat,body:{uid:crypto.randomUUID(),model,text,expected_revision:c.conversation.revision,price_revision:config.pricing.revision}};
     localStorage.setItem(key+'-pending',JSON.stringify(pending.current));
    }
-   const p=pending.current;setCid(p.cid);setComplete(false);const snapshot=await req('/api/chats/'+p.cid+'/messages',p.body);setRunning(!!snapshot.conversation.active_turn);const reply=[...snapshot.messages].reverse().find((m:any)=>m.role==='assistant');if(reply?.state==='complete'){setComplete(true);try{setShots(parseStoryboard(reply.content))}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}}
+   const p=pending.current;setCid(p.cid);setComplete(false);const snapshot=await req('/api/chats/'+p.cid+'/messages',p.body);setRunning(!!snapshot.conversation.active_turn);const reply=[...snapshot.messages].reverse().find((m:any)=>m.role==='assistant');if(reply?.state==='complete'){lastMessage.current=reply.id;setComplete(true);try{setShots(parseStoryboard(reply.content))}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}}
   }catch(e){if((e as any).status && (e as any).status<500){pending.current=null;localStorage.removeItem(key+'-pending');void req('/api/chat/config').then(updateConfig);}setError((e as Error).message)}finally{setBusy(false)}
  };
  return <div className="ai-storyboard">
