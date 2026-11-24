@@ -21,6 +21,7 @@ import { mediaURL, type Asset, type Job, type StudioState } from "./state";
 import { MAX_ASSET_SELECTION } from "@fumiao/original-api/asset-limits";
 import { groupHistoryJobs } from "./library-history";
 import { allAssetsSelected, selectAllAssets } from "./library-selection";
+import { formatCardDuration } from "./media-metadata";
 
 export type LibraryTab = "videos" | "images" | "audio";
 export type LibraryScope = "history" | "favorites";
@@ -215,8 +216,9 @@ type LibraryActions = {
   edit: (id: number) => void;
   job: (id: number) => void;
   image: (id: string) => void;
-  preview: (id: string, button: HTMLButtonElement) => void;
+  preview: (id: string, button: HTMLButtonElement, manage?: boolean) => void;
   use: (id: string) => void;
+  remove: (id: string, button: HTMLButtonElement) => void;
   batchFavorite: () => void;
   batchDownload: () => void;
   batchDelete: () => void;
@@ -570,7 +572,7 @@ function UploadCard({
         onClick={(event) => {
           if (referencePicking) actions.use(asset.id);
           else if (selecting) library.toggle(key);
-          else if (!images) actions.preview(asset.id, event.currentTarget);
+          else if (!images) actions.preview(asset.id, event.currentTarget, true);
           else actions.image(asset.id);
         }}
         onMouseEnter={selecting ? undefined : playPreview}
@@ -579,7 +581,12 @@ function UploadCard({
         {images ? (
           <img loading="lazy" src={mediaURL(asset.id)} alt="参考图片" />
         ) : (
-          <ReferenceMedia id={asset.id} kind={asset.kind} />
+          <>
+            <ReferenceMedia id={asset.id} kind={asset.kind} />
+            <span className="asset-duration">
+              {formatCardDuration(asset.seconds)}
+            </span>
+          </>
         )}
       </button>
       <div
@@ -596,7 +603,9 @@ function UploadCard({
             title="预览"
             aria-label="预览参考素材"
             style={selecting ? { display: "grid" } : undefined}
-            onClick={(event) => actions.preview(asset.id, event.currentTarget)}
+            onClick={(event) =>
+              actions.preview(asset.id, event.currentTarget, !selecting)
+            }
           >
             <Icon name="play" />
           </button>
@@ -613,6 +622,20 @@ function UploadCard({
             </button>
             <Download id={asset.id} />
             <Favorite id={key} saved={saved} change={actions.favorite} />
+            {!images && isOwner(state, asset) && (
+              <button
+                type="button"
+                data-act="delete-asset"
+                data-key={asset.id}
+                title="删除"
+                aria-label="删除"
+                onClick={(event) =>
+                  actions.remove(asset.id, event.currentTarget)
+                }
+              >
+                <Icon name="trash" />
+              </button>
+            )}
           </>
         )}
       </div>

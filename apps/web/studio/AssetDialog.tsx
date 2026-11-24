@@ -6,8 +6,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ReferenceMedia } from "./AssetMedia";
+import { Download, Favorite, ReferenceMedia } from "./AssetMedia";
 import { Icon } from "./Icon";
+import { isOwner } from "./Library";
+import { PREVIEW_LABELS, assetMetadataItems } from "./media-metadata";
 import type { SettingsDialogPresentation } from "./settings-admin";
 import "./asset-packs.css";
 import { AssetPacks } from "../canvas-editor/AssetPacks";
@@ -18,12 +20,6 @@ import {
   type Pack,
   type StudioState,
 } from "./state";
-
-const PREVIEW_LABELS: Record<NonNullable<Asset["kind"]>, string> = {
-  ref: "图片预览",
-  ref_video: "视频预览",
-  ref_audio: "音频预览",
-};
 
 export type DialogContent =
   | {
@@ -38,7 +34,12 @@ export type DialogContent =
       entry: MenuEntry;
       run: (values: Record<string, string>) => Promise<void>;
     }
-  | { kind: "preview"; id: string; mediaKind: Asset["kind"] }
+  | {
+      kind: "preview";
+      id: string;
+      mediaKind: Asset["kind"];
+      manage?: boolean;
+    }
   | {
       kind: "settings";
       body: ReactNode;
@@ -50,6 +51,7 @@ export type DialogContent =
       title: string;
       summary: string;
       run: () => Promise<void>;
+      onCancel?: () => void;
     };
 export type AssetDialogState = {
   content: DialogContent;
@@ -102,6 +104,9 @@ export function AssetDialog({
   notify,
   state,
   session,
+  onFavorite,
+  onUse,
+  onDelete,
 }: {
   dialog: AssetDialogState | null;
   admin: boolean;
@@ -109,18 +114,27 @@ export function AssetDialog({
   notify: (message: string) => void;
   state: StudioState | null;
   session: DraftSession | null;
+  onFavorite?: (key: string, saved: boolean) => void;
+  onUse?: (id: string) => string | null | undefined;
+  onDelete?: (id: string, button: HTMLButtonElement) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const closeFrame = useRef(0);
   const shownDialog = useRef(dialog);
   const confirmationPending = useRef(false);
+  const restoreOpenerFocus = useRef(true);
   const [previous, setPrevious] = useState<AssetDialogState | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [dialogError, setDialogError] = useState("");
   const retained = dialog || previous;
   const content = retained?.adminOnly && !admin ? undefined : retained?.content;
+  const previewAsset =
+    content?.kind === "preview"
+      ? state?.assets.find((item) => item.id === content.id)
+      : undefined;
   const previewLabel =
     content?.kind === "preview"
-      ? PREVIEW_LABELS[content.mediaKind ?? "ref"]
+      ? PREVIEW_LABELS[previewAsset?.kind ?? content.mediaKind ?? "ref"]
       : undefined;
 
   useLayoutEffect(() => {
@@ -134,7 +148,15 @@ export function AssetDialog({
     if (dialog) {
       setPrevious(dialog);
       setConfirming(false);
+      setDialogError("");
       if (!element!.open) element!.showModal();
+      else if (!element!.contains(document.activeElement)) {
+        element!
+          .querySelector<HTMLElement>(
+            'button:not(:disabled), input:not(:disabled), [href], [tabindex="0"]',
+          )
+          ?.focus({ preventScroll: true });
+      }
     } else {
       stopDialogMedia(element);
       if (element!.open) element!.close();
@@ -160,6 +182,7 @@ export function AssetDialog({
       return;
     confirmationPending.current = true;
     setConfirming(true);
+    setDialogError("");
     try {
       await content.run(values);
       if (shownDialog.current === dialog) {
@@ -167,10 +190,12 @@ export function AssetDialog({
         closeDialog();
       }
     } catch (error) {
-      notify((error as Error).message);
+      const message = (error as Error).message;
+      notify(message);
       if (shownDialog.current === dialog) {
         confirmationPending.current = false;
         setConfirming(false);
+        if (content.kind === "confirm") setDialogError(message);
       }
     }
   }
@@ -188,7 +213,9 @@ export function AssetDialog({
           : content?.kind === "settings" &&
               content.presentation === "account-sheet"
             ? "console-account-sheet"
-            : undefined
+            : content?.kind === "preview"
+              ? "asset-preview-modal"
+              : undefined
       }
       ref={ref}
       onCancel={(event) => {
@@ -197,13 +224,17 @@ export function AssetDialog({
       }}
       onClose={() => {
         stopDialogMedia(ref.current);
+        const shouldRestoreFocus = restoreOpenerFocus.current;
+        restoreOpenerFocus.current = true;
         closeFrame.current = requestAnimationFrame(() => {
-          const opener = dialog?.opener;
-          const target =
-            opener?.isConnected && opener.getClientRects().length
-              ? opener
-              : document.querySelector<HTMLElement>(".workspace-switch");
-          target?.focus({ preventScroll: true });
+          if (shouldRestoreFocus) {
+            const opener = dialog?.opener;
+            const target =
+              opener?.isConnected && opener.getClientRects().length
+                ? opener
+                : document.querySelector<HTMLElement>(".workspace-switch");
+            target?.focus({ preventScroll: true });
+          }
           onClose();
         });
       }}
@@ -243,22 +274,96 @@ export function AssetDialog({
             </div>
           </>
         )}
-        {dialog?.content.kind === "preview" && (
-          <>
-            <PreviewMedia
-              key={dialog.content.id}
-              id={dialog.content.id}
-              mediaKind={dialog.content.mediaKind}
-            />
-            <button
-              className="quiet-button"
-              data-act="close"
-              onClick={closeDialog}
-            >
-              关闭
-            </button>
-          </>
-        )}
+        {dialog?.content.kind === "preview" &&
+          (() => {
+            const { id, mediaKind, manage } = dialog.content;
+            const asset = state?.assets.find((item) => item.id === id);
+            const effectiveKind = asset?.kind ?? mediaKind;
+            const meta = assetMetadataItems(asset, effectiveKind);
+            const key = "asset:" + id;
+            const saved = !!state?.favorites.includes(key);
+            const canManage = !!(manage && state && asset);
+            const canDelete = !!(canManage && isOwner(state, asset));
+            return (
+              <div className={`preview-dialog${canManage ? " is-managed" : ""}`}>
+                {(canManage || meta.length > 0) && (
+                  <div className="preview-dialog-head">
+                    <strong className="preview-dialog-title">
+                      {PREVIEW_LABELS[effectiveKind ?? "ref"]}
+                    </strong>
+                    {meta.length > 0 && (
+                      <div className="metadata preview-dialog-meta">
+                        {meta.map((item) => (
+                          <span key={item}>{item}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <PreviewMedia key={id} id={id} mediaKind={effectiveKind} />
+                {dialogError && (
+                  <p role="alert" className="dialog-error danger">
+                    {dialogError}
+                  </p>
+                )}
+                <div className="preview-dialog-actions">
+                  {canManage && (
+                    <>
+                      {onUse && (
+                        <button
+                          type="button"
+                          className="primary preview-use-button"
+                          data-act="use"
+                          data-key={id}
+                          onClick={() => {
+                            const result = onUse(id);
+                            if (result === null) {
+                              restoreOpenerFocus.current = false;
+                              closeDialog();
+                            } else if (result) {
+                              setDialogError(result);
+                            }
+                          }}
+                        >
+                          <Icon name="plus" />
+                          用作参考
+                        </button>
+                      )}
+                      {onFavorite && (
+                        <Favorite
+                          id={key}
+                          saved={saved}
+                          change={onFavorite}
+                          detail
+                        />
+                      )}
+                      <Download id={id} detail />
+                      {canDelete && onDelete && (
+                        <button
+                          type="button"
+                          className="quiet-button danger preview-delete-button"
+                          data-act="delete-asset"
+                          data-key={id}
+                          onClick={(event) => onDelete(id, event.currentTarget)}
+                        >
+                          <Icon name="trash" />
+                          删除
+                        </button>
+                      )}
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="quiet-button preview-close-button"
+                    data-act="close"
+                    onClick={closeDialog}
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         {content?.kind === "plugin-action" && (
           <form
             key={content.entry.plugin + "/" + content.entry.id}
@@ -306,6 +411,11 @@ export function AssetDialog({
           <>
             <h2 id="modal-heading">{content.title}</h2>
             <p>{content.summary}</p>
+            {dialogError && (
+              <p role="alert" className="dialog-error danger">
+                {dialogError}
+              </p>
+            )}
             <div className="buttons">
               <button
                 id="confirm"
@@ -319,7 +429,14 @@ export function AssetDialog({
                 id="back"
                 className="ghost"
                 disabled={confirming}
-                onClick={closeDialog}
+                onClick={() => {
+                  if (content.onCancel) {
+                    setDialogError("");
+                    content.onCancel();
+                  } else {
+                    closeDialog();
+                  }
+                }}
               >
                 取消
               </button>

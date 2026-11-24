@@ -22,6 +22,7 @@ import {
   setTab,
 } from "./studio-settings-browser.js";
 import { checkStorageScope } from "./studio-storage-browser.js";
+import { checkUploadedMediaPreview } from "./studio-uploaded-media-browser.js";
 
 const imagePrompt = "隔离工作台生成图片";
 const draft = "重启后恢复创作草稿";
@@ -1183,6 +1184,7 @@ export async function studioBrowser(
     await checkDeletedH3Frame(await context.newPage(), studio, before);
     await checkH3ImageUploadLimit(await context.newPage(), studio, bytes);
     await checkStorageScope(await context.newPage(), web, await state());
+    await checkUploadedMediaPreview(browser, web, user);
     const jobEntries = before.credit_history.filter(
       (entry) => entry.job === jobId,
     );

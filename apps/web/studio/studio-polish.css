@@ -149,6 +149,151 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 上传音视频卡片与预览弹窗 */
+.asset-preview .asset-duration {
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.asset-preview:has(.h3-audio-thumb) {
+  background: var(--surface, var(--pop));
+}
+.asset-preview:has(.h3-audio-thumb) .asset-duration {
+  color: var(--secondary);
+  text-shadow: none;
+}
+.asset-actions [data-act="delete-asset"]:hover {
+  background: rgba(180, 75, 68, 0.88);
+  color: #fff;
+}
+#modal.asset-preview-modal:has(video) {
+  width: min(560px, calc(100vw - 32px));
+}
+#modal.asset-preview-modal:has(audio) {
+  width: min(480px, calc(100vw - 32px));
+}
+#modal.asset-preview-modal:has(img) {
+  width: min(520px, calc(100vw - 32px));
+}
+.preview-dialog {
+  display: grid;
+  gap: 14px;
+}
+.preview-dialog-head {
+  display: grid;
+  gap: 4px;
+  padding-right: 36px;
+}
+.preview-dialog-title {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.preview-dialog-meta {
+  gap: 8px;
+}
+.preview-dialog-meta > span + span::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--muted);
+}
+.preview-dialog .h3-media-preview {
+  margin-bottom: 0;
+}
+.preview-dialog .h3-media-preview:has(video) {
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0b0b0b;
+}
+.preview-dialog .h3-media-preview video {
+  display: block;
+  width: 100%;
+  max-height: min(56dvh, 420px);
+}
+.preview-dialog .h3-media-preview:has(audio) {
+  padding: 18px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--hover);
+}
+.preview-dialog .h3-media-preview audio {
+  display: block;
+  width: 100%;
+}
+.preview-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.preview-use-button {
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+.preview-dialog-actions
+  :is(
+    .detail-favorite,
+    .download-action,
+    .preview-delete-button,
+    .preview-close-button
+  ) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.preview-dialog-actions .download-action {
+  color: var(--secondary);
+}
+.preview-dialog-actions .download-action:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.preview-dialog-actions .preview-delete-button {
+  color: var(--danger);
+}
+.preview-dialog-actions .preview-delete-button:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+.preview-dialog-actions
+  :is(.detail-favorite, .download-action, .preview-delete-button)
+  .icon {
+  width: 16px;
+  height: 16px;
+}
+.preview-close-button {
+  margin-left: auto;
+}
+#modal p.dialog-error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+@media (max-width: 760px) {
+  #modal.asset-preview-modal {
+    padding: 20px;
+  }
+  .preview-dialog .h3-media-preview video {
+    max-height: min(44dvh, 340px);
+  }
+}
+@media (max-width: 560px) {
+  .asset-actions {
+    right: 6px;
+    gap: 3px;
+  }
+  .asset-actions button,
+  .asset-actions a {
+    width: 26px;
+    height: 26px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .side nav button,
   .composer,
