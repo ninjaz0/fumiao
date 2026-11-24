@@ -136,42 +136,147 @@
 }
 .plugin-table {
   overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
 }
 .plugin-table table {
   width: 100%;
   border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
 }
-.plugin-table :is(caption, th, td) {
-  padding: 8px 10px;
+.plugin-table caption {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
   text-align: start;
 }
 .plugin-table :is(th, td) {
-  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+  text-align: start;
 }
-.plugin-table caption {
+.plugin-table th {
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--line) 28%, transparent);
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.plugin-table tbody tr + tr td {
+  border-top: 1px solid var(--line);
+}
+.plugin-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--line) 22%, transparent);
+}
+.plugin-progress {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.plugin-progress-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  color: var(--secondary);
+  font-size: 13px;
+}
+.plugin-progress-count {
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+}
+.plugin-progress-count strong {
+  color: var(--text);
+  font-size: 18px;
   font-weight: 600;
 }
-.plugin-tabs [role="tablist"],
-.plugin-progress {
+.plugin-progress-count small {
+  margin-inline-start: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(
+    --accent-soft,
+    color-mix(in srgb, var(--blue) 12%, transparent)
+  );
+  color: var(--blue);
+  font-size: 12px;
+}
+.plugin-progress progress {
+  width: 100%;
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  appearance: none;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+}
+.plugin-progress progress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+}
+.plugin-progress progress::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--blue);
+  transition: inline-size 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.plugin-progress progress::-moz-progress-bar {
+  border-radius: 999px;
+  background: var(--blue);
+}
+.plugin-tabs [role="tablist"] {
   display: flex;
-  align-items: center;
-  gap: 8px;
   flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
 }
 .plugin-tabs [role="tab"] {
-  padding: 6px 10px;
+  min-height: 36px;
+  margin-bottom: -1px;
+  padding: 8px 14px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
-  color: inherit;
+  color: var(--secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition:
+    color 150ms ease-out,
+    border-color 150ms ease-out;
+}
+.plugin-tabs [role="tab"]:hover {
+  color: var(--text);
 }
 .plugin-tabs [aria-selected="true"] {
   border-color: var(--blue);
+  color: var(--text);
+  font-weight: 600;
+}
+.plugin-tabs [role="tab"]:focus-visible,
+.plugin-tabs [role="tabpanel"]:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 .plugin-tabs [role="tabpanel"]:not([hidden]) {
   display: grid;
   gap: 12px;
-  margin-top: 12px;
+  margin-top: 14px;
+}
+.plugin-tabs [role="tabpanel"] > .plugin-text:only-child,
+#view > .plugin-page > .page-heading + .plugin-text:last-child {
+  margin: 0;
+  padding: 36px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  text-align: center;
 }
 .plugin-media {
   margin: 0;
@@ -189,5 +294,26 @@
   overflow-y: auto;
 }
 #view > .plugin-page {
-  padding: clamp(16px, 4vw, 40px);
+  width: 100%;
+  max-width: 960px;
+  margin-inline: auto;
+  padding: clamp(16px, 3vw, 32px) clamp(16px, 4vw, 40px) 48px;
+  gap: 20px;
+  align-content: start;
+}
+#view > .plugin-page > .page-heading {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+#view > .plugin-page > .page-heading h2 {
+  flex: 1 1 auto;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+@media (prefers-reduced-motion: reduce) {
+  .plugin-tabs [role="tab"],
+  .plugin-progress progress::-webkit-progress-value {
+    transition: none;
+  }
 }

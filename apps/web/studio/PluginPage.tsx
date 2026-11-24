@@ -623,16 +623,28 @@ export function PluginPage({
             </table>
           </div>
         );
-      case "progress":
+      case "progress": {
+        const percent =
+          block.max > 0
+            ? Math.min(100, Math.round((block.value / block.max) * 100))
+            : 0;
         return (
-          <label className="plugin-progress">
-            {block.label}
-            <progress value={block.value} max={block.max} />
-            <span>
-              {block.value} / {block.max}
-            </span>
-          </label>
+          <div className="plugin-progress" data-complete={percent >= 100}>
+            <div className="plugin-progress-head">
+              <span>{block.label}</span>
+              <span className="plugin-progress-count">
+                <strong>{block.value}</strong> / {block.max}
+                <small>{percent}%</small>
+              </span>
+            </div>
+            <progress
+              value={block.value}
+              max={block.max}
+              aria-label={block.label}
+            />
+          </div>
         );
+      }
       case "media": {
         const url = mediaURL(block.asset);
         return (

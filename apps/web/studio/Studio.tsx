@@ -92,6 +92,7 @@ import {
   type Space,
   type StudioState,
 } from "./state";
+import "./studio-polish.css";
 
 type Page = Exclude<Destination, "canvas"> | "settings";
 type Detail = { job: number } | { image: string };
@@ -218,6 +219,16 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         : undefined,
     [workspace, plugin, pluginPage],
   );
+  const settingsPage = page === "settings";
+  const enteredSettings = useRef(false);
+  useEffect(() => {
+    if (narrowScreen || settingsPage === enteredSettings.current) return;
+    enteredSettings.current = settingsPage;
+    setCollapsed(
+      settingsPage || localStorage.getItem("fm-sidebar") === "collapsed",
+    );
+    setSidebarChanged(true);
+  }, [settingsPage, narrowScreen]);
   const ready = !!state && !!session;
   const mobileDrawerOpen = narrowScreen && !collapsed;
   const sidebarPopoverOpen =

@@ -383,8 +383,6 @@ export function Settings({
             key={workspace}
             workspace={workspace}
             gpuTab={legacy ? pluginTab(legacy) : !pages && legacyPanel ? "gpu" : undefined}
-            nodesPaired={state.nodes.length > 0}
-            hasPricing={state.pricing.items.length > 0}
             refresh={refresh}
             navigate={navigate}
           />

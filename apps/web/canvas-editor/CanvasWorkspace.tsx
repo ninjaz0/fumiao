@@ -7,6 +7,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -24,6 +25,7 @@ import {
   useReactFlow,
   useViewport,
   SelectionMode,
+  type Edge as FlowEdge,
   type Node as FlowNode,
   type NodeProps,
   type NodeChange,
@@ -110,6 +112,18 @@ import { Narration } from "./Narration";
 import { Composition } from "./Composition";
 import { AssetPacks, type Pack } from "./AssetPacks";
 import { captureFrame } from "./videoFrame";
+import { VideoThumb } from "./VideoThumb";
+import { canvasVideoThumbnails } from "./videoThumbnails";
+import {
+  buildNodeHandles,
+  computeGridGap,
+  computeOverlayPositions,
+  indexRunsByNode,
+  reconcileRuns,
+  resolveNodeFromIndex,
+  shouldVirtualizeCanvas,
+  studioFingerprint,
+} from "./performance";
 
 const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/heic,image/heif,image/heic-sequence,image/heif-sequence,image/avif,image/tiff,image/bmp,image/gif,.jpg,.jpeg,.png,.webp,.heic,.heif,.avif,.tif,.tiff,.bmp,.gif";
 const imageFile = (file: File) => /\.(jpe?g|png|webp|heic|heif|avif|tiff?|bmp|gif)$/i.test(file.name) || ["image/jpeg","image/png","image/webp","image/heic","image/heif","image/heic-sequence","image/heif-sequence","image/avif","image/tiff","image/bmp","image/x-ms-bmp","image/gif"].includes(file.type);
@@ -282,6 +296,120 @@ function useTheme() {
   return theme === "dark" ? "dark" : "light";
 }
 
+const EDGE_STYLE = { stroke: "var(--cv-edge)", strokeWidth: 1.4 } as const;
+const FLOW_GRID_STYLE: React.CSSProperties = {
+  backgroundImage: "radial-gradient(circle, var(--cv-dot) 1px, transparent 1px)",
+  backgroundSize: "var(--cv-grid-gap, 24px) var(--cv-grid-gap, 24px)",
+  backgroundPosition: "var(--cv-grid-x, 200px) var(--cv-grid-y, 140px)",
+};
+const TOOLBAR_POSITION_STYLE: React.CSSProperties = {
+  left: "var(--cv-toolbar-left, 76px)",
+  top: "var(--cv-toolbar-top, 100px)",
+};
+const COMPOSER_POSITION_STYLE: React.CSSProperties = {
+  left: "var(--cv-composer-left, 76px)",
+  top: "var(--cv-composer-top, 100px)",
+};
+const DOWNSTREAM_POSITION_STYLE: React.CSSProperties = {
+  left: "var(--cv-downstream-left, 135px)",
+  top: "var(--cv-downstream-top, 150px)",
+};
+const ARIA_LABEL_CONFIG = {
+  "node.a11yDescription.default":
+    "按 Enter 选中节点，方向键移动，Delete 删除。",
+  "edge.a11yDescription.default": "按 Enter 选中连线，Delete 移除引用。",
+  "controls.zoomIn.ariaLabel": "放大",
+  "controls.zoomOut.ariaLabel": "缩小",
+};
+
+const CanvasViewportEffects = memo(function CanvasViewportEffects({
+  workspaceRef,
+  anchorNode,
+  hasDownstream,
+  panelHeight,
+  windowSize,
+}: {
+  workspaceRef: React.RefObject<HTMLDivElement | null>;
+  anchorNode: Pick<CanvasNode, "x" | "y" | "width" | "height" | "type"> | null;
+  hasDownstream: boolean;
+  panelHeight: number;
+  windowSize: { w: number; h: number };
+}) {
+  const viewport = useViewport();
+  const lastZoomRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = workspaceRef.current;
+    if (!el) return;
+    if (lastZoomRef.current !== viewport.zoom) {
+      lastZoomRef.current = viewport.zoom;
+      el.style.setProperty("--zoom", String(viewport.zoom));
+      el.style.setProperty(
+        "--cv-grid-gap",
+        `${computeGridGap(viewport.zoom)}px`,
+      );
+    }
+    el.style.setProperty("--cv-grid-x", `${viewport.x}px`);
+    el.style.setProperty("--cv-grid-y", `${viewport.y}px`);
+    if (anchorNode || hasDownstream) {
+      const positions = computeOverlayPositions({
+        viewport,
+        windowSize,
+        node: anchorNode,
+        panelHeight,
+      });
+      if (positions.toolbar) {
+        el.style.setProperty("--cv-toolbar-left", `${positions.toolbar.left}px`);
+        el.style.setProperty("--cv-toolbar-top", `${positions.toolbar.top}px`);
+      }
+      if (positions.composer) {
+        el.style.setProperty(
+          "--cv-composer-left",
+          `${positions.composer.left}px`,
+        );
+        el.style.setProperty(
+          "--cv-composer-top",
+          `${positions.composer.top}px`,
+        );
+      }
+      if (hasDownstream) {
+        el.style.setProperty(
+          "--cv-downstream-left",
+          `${positions.downstream.left}px`,
+        );
+        el.style.setProperty(
+          "--cv-downstream-top",
+          `${positions.downstream.top}px`,
+        );
+      }
+    }
+  }, [
+    workspaceRef,
+    viewport.x,
+    viewport.y,
+    viewport.zoom,
+    anchorNode?.x,
+    anchorNode?.y,
+    anchorNode?.width,
+    anchorNode?.height,
+    anchorNode?.type,
+    hasDownstream,
+    panelHeight,
+    windowSize.w,
+    windowSize.h,
+  ]);
+  return null;
+});
+
+const ZoomPercent = memo(function ZoomPercent() {
+  const { zoom } = useViewport();
+  return <>{Math.round(zoom * 100)}%</>;
+});
+
+const ZoomCheck = memo(function ZoomCheck({ target }: { target: number }) {
+  const { zoom } = useViewport();
+  return Math.abs(zoom - target) < 0.01 ? <Check size={14} /> : null;
+});
+
 type ContextValue = {
   edit: (id: string, patch: Partial<CanvasNode>, history?: boolean) => void;
   begin: () => void;
@@ -289,22 +417,25 @@ type ContextValue = {
   downstream: (id: string) => void;
   selectMedia: (id: string) => void;
   preview: (node: CanvasNode) => void;
-  zoom: number;
-  editing: string | null;
   setEditing: (id: string | null) => void;
 };
 const NodeContext = createContext<ContextValue>(null!);
-type NodeData = { videoPort:boolean; item: CanvasNode; media: string | null; run?: Job };
+type NodeData = {
+  videoPort: boolean;
+  editing: boolean;
+  item: CanvasNode;
+  media: string | null;
+  run?: Job;
+};
 type RFNode = FlowNode<NodeData, "content">;
 const ContentNode = memo(function ContentNode({
   data,
   selected,
 }: NodeProps<RFNode>) {
-  const { item: n, media, run } = data,
+  const { item: n, media, run, editing } = data,
     ctx = useContext(NodeContext),
     Icon = icons[n.type],
-    isText = n.type === "text" || n.type === "sticky",
-    editing = ctx.editing === n.id;
+    isText = n.type === "text" || n.type === "sticky";
   return (
     <div
       className={
@@ -314,7 +445,6 @@ const ContentNode = memo(function ContentNode({
         " tag-" +
         n.color
       }
-      style={{ "--zoom": ctx.zoom } as React.CSSProperties}
     >
       <NodeResizer
         isVisible={selected && isText && !editing}
@@ -383,15 +513,11 @@ const ContentNode = memo(function ContentNode({
               alt={n.title}
               draggable={false}
               loading="lazy"
+              decoding="async"
             />
           ) : (
             <div className="node-video">
-              <video
-                src={mediaURL(media) + "#t=0.05"}
-                preload="metadata"
-                muted
-                playsInline
-              />
+              <VideoThumb mediaId={media} alt={n.title} />
               <button
                 className="node-play nodrag"
                 aria-label={"播放 " + n.title}
@@ -540,56 +666,132 @@ export function CanvasWorkspace({
     [assetSelection, setAssetSelection] = useState<Set<string>>(new Set()),
     [windowSize, setWindowSize] = useState({ w: innerWidth, h: innerHeight });
   const flow = useReactFlow<RFNode>(),
-    viewport = useViewport(),
     theme = useTheme(),
+    workspaceRef = useRef<HTMLDivElement | null>(null),
+    runsRef = useRef(runs),
+    studioRef = useRef(studio),
+    lastPolledStudioRef = useRef<{ fp: string; value: Studio } | null>(null),
+    rfNodeCacheRef = useRef(new Map<string, RFNode>()),
+    rfEdgeCacheRef = useRef(new Map<string, FlowEdge>()),
+    moveResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null),
     fileRef = useRef<HTMLInputElement>(null),
     modelButtonRef = useRef<HTMLButtonElement>(null),
     modelMenuRef = useRef<HTMLDivElement>(null),
     fileTarget = useRef<string | null>(null),
     clipboard = useRef<CanvasClipboard | null>(null),
     dragging = useRef(false);
+  runsRef.current = runs;
+  studioRef.current = studio;
   useEffect(() => {
     const input = fileRef.current;
     const cancel = () => { fileTarget.current = null; };
     input?.addEventListener("cancel", cancel);
     return () => input?.removeEventListener("cancel", cancel);
   }, []);
+  useEffect(() => {
+    if (preview?.node.type === "video") {
+      canvasVideoThumbnails.pause("preview-open");
+      return () => canvasVideoThumbnails.resume("preview-open");
+    }
+  }, [preview?.node.type]);
+  useEffect(
+    () => () => {
+      if (moveResumeTimerRef.current !== null) {
+        clearTimeout(moveResumeTimerRef.current);
+        moveResumeTimerRef.current = null;
+      }
+      canvasVideoThumbnails.resume("viewport-move");
+      canvasVideoThumbnails.resume("preview-open");
+    },
+    [],
+  );
+  const runsByNode = useMemo(() => indexRunsByNode(runs), [runs]);
+  const runById = useMemo(
+    () => new Map(runs.map((job) => [job.id, job])),
+    [runs],
+  );
+  const nodeById = useMemo(
+    () => new Map(doc.value.document.nodes.map((node) => [node.id, node])),
+    [doc.value.document.nodes],
+  );
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
   const selectedNodes = useMemo(
-    () => doc.value.document.nodes.filter((n) => selected.includes(n.id)),
-    [doc.value.document.nodes, selected],
+    () => doc.value.document.nodes.filter((n) => selectedSet.has(n.id)),
+    [doc.value.document.nodes, selectedSet],
   );
   const canDownloadSelected = useMemo(
     () => hasDownloadableNodes(selectedNodes, runs),
     [selectedNodes, runs],
   );
-  const active = doc.value.document.nodes.find((n) => n.id === selected[0]),
+  const active = selected[0] ? nodeById.get(selected[0]) : undefined,
     single = selected.length === 1 && active ? active : null;
-  const current = single ? resolveNode(single, runs) : null;
+  const current = single ? resolveNodeFromIndex(single, runsByNode) : null;
   const completedVersions = current?.list.filter((job) => job.status === "done" && job.result) ?? [];
   const shotIds = doc.value.document.shots ?? [];
-  const shots = shotIds.flatMap((id) => {
-    const node = doc.value.document.nodes.find((item) => item.id === id);
-    if (!node) return [];
-    const { run, media } = resolveNode(node, runs);
-    const source = run ?? (media ? studio.jobs.find((job) => job.result === media) : undefined);
-    return [{
-      id, title: node.title, media, adopted: node.active_job,
-      seconds: Math.max(videoSeconds(source)||node.params.seconds, runs.find(j=>j.id===node.narration_job && j.status==='done')?.actual?.duration||0),
-      status: run ? labels[run.status] || "待生成" : "待生成",
-    }];
-  });
-  const compositionIssue=shots.reduce((sum,shot)=>sum+shot.seconds,0)>300?'成片最多 5 分钟，请减少镜头或缩短旁白':shotIds.map((id,index)=>{
-    const node=doc.value.document.nodes.find(n=>n.id===id)!;
-    if(!resolveNode(node,runs).media)return `镜头 ${index+1} 的视频尚未就绪`;
-    const pending=runs.find(j=>j.id===node.narration_pending);
-    if(pending&&['queued','running'].includes(pending.status))return `镜头 ${index+1} 的旁白仍在生成`;
-    const voice=runs.find(j=>j.id===node.narration_job);
-    if(node.narration_text?.trim()&&(!voice?.result||voice.status!=='done'))return `请先生成镜头 ${index+1} 的旁白`;
-    if(voice&&voice.prompt.trim()!==(node.narration_text||'').trim())return `镜头 ${index+1} 的文稿已修改，请更新旁白`;
-    return '';
-  }).find(Boolean)||'';
-  const compared = doc.value.document.nodes.find((node) => node.id === compareNode);
-  const comparisonRuns = compared ? resolveNode(compared, runs).list.filter((job) => job.status === "done" && job.result) : [];
+  const studioJobByResult = useMemo(() => {
+    const map = new Map<string, Job>();
+    for (const job of studio.jobs) {
+      if (job.result && !map.has(job.result)) map.set(job.result, job);
+    }
+    return map;
+  }, [studio.jobs]);
+  const shots = useMemo(
+    () =>
+      shotIds.flatMap((id) => {
+        const node = nodeById.get(id);
+        if (!node) return [];
+        const { run, media } = resolveNodeFromIndex(node, runsByNode);
+        const source = run ?? (media ? studioJobByResult.get(media) : undefined);
+        const voice = node.narration_job
+          ? runById.get(node.narration_job)
+          : undefined;
+        return [
+          {
+            id,
+            title: node.title,
+            media,
+            adopted: node.active_job,
+            seconds: Math.max(
+              videoSeconds(source) || node.params.seconds,
+              voice?.status === "done" ? voice.actual?.duration || 0 : 0,
+            ),
+            status: run ? labels[run.status] || "待生成" : "待生成",
+          },
+        ];
+      }),
+    [shotIds, nodeById, runsByNode, runById, studioJobByResult],
+  );
+  const compositionIssue = useMemo(() => {
+    if (!shotList) return "";
+    if (shots.reduce((sum, shot) => sum + shot.seconds, 0) > 300) {
+      return "成片最多 5 分钟，请减少镜头或缩短旁白";
+    }
+    for (let index = 0; index < shotIds.length; index++) {
+      const node = nodeById.get(shotIds[index]);
+      if (!node) continue;
+      if (!resolveNodeFromIndex(node, runsByNode).media) {
+        return `镜头 ${index + 1} 的视频尚未就绪`;
+      }
+      const pending = node.narration_pending
+        ? runById.get(node.narration_pending)
+        : undefined;
+      if (pending && ["queued", "running"].includes(pending.status)) {
+        return `镜头 ${index + 1} 的旁白仍在生成`;
+      }
+      const voice = node.narration_job
+        ? runById.get(node.narration_job)
+        : undefined;
+      if (node.narration_text?.trim() && (!voice?.result || voice.status !== "done")) {
+        return `请先生成镜头 ${index + 1} 的旁白`;
+      }
+      if (voice && voice.prompt.trim() !== (node.narration_text || "").trim()) {
+        return `镜头 ${index + 1} 的文稿已修改，请更新旁白`;
+      }
+    }
+    return "";
+  }, [shotList, shots, shotIds, nodeById, runsByNode, runById]);
+  const compared = compareNode ? nodeById.get(compareNode) : undefined;
+  const comparisonRuns = compared ? resolveNodeFromIndex(compared, runsByNode).list.filter((job) => job.status === "done" && job.result) : [];
   const availableModel = (model:string) => !!studio.model_forms?.[model]?.canvas && (studio.model_access || studio.model_policy?.enabled)?.[model] === true && (model !== 'gpt-image-2.6-sunburst' || studio.images.configured) && (studio.model_catalog?.[model]?.provider!=='flow' || Boolean(studio.flow?.configured));
   const imagesEnabled = Object.keys(studio.images.models || {}).some(availableModel);
   const rawModelChoices = Object.entries(single?.type==='image' ? studio.images.models || {} : studio.video_models || {}).filter(([model])=>availableModel(model));
@@ -657,8 +859,16 @@ export function CanvasWorkspace({
         ]);
         if (!aliveRef.current || seq !== runsReqSeqRef.current) return data.runs;
         runsLoadedRef.current = true;
-        setRuns(data.runs);
-        setStudio(state);
+        setRuns((prev) => reconcileRuns(prev, data.runs));
+        const nextFp = studioFingerprint(state);
+        if (
+          !lastPolledStudioRef.current ||
+          lastPolledStudioRef.current.fp !== nextFp ||
+          studioRef.current !== lastPolledStudioRef.current.value
+        ) {
+          lastPolledStudioRef.current = { fp: nextFp, value: state };
+          setStudio(state);
+        }
         setRunsLoaded(true);
         setRunsError("");
         return data.runs;
@@ -689,6 +899,10 @@ export function CanvasWorkspace({
     aliveRef.current = true;
     runsLoadedRef.current = false;
     runsInFlightRef.current = false;
+    lastPolledStudioRef.current = {
+      fp: studioFingerprint(studioRef.current),
+      value: studioRef.current,
+    };
     const update = () => {
       if (runsInFlightRef.current) return;
       void loadRuns({ showLoading: !runsLoadedRef.current, silent: true });
@@ -744,12 +958,13 @@ export function CanvasWorkspace({
     if(doc.status==='conflict')return;
     const updates=new Map<string,number>();
     for(const node of doc.value.document.nodes){
-      const job=runs.find(j=>j.id===node.narration_pending);
+      if(!node.narration_pending)continue;
+      const job=runById.get(node.narration_pending);
       if(job?.status==='done'&&job.result&&job.prompt.trim()===(node.narration_text||'').trim()&&
          (job.inputs?.instruction||'').trim()===(node.narration_instruction||'').trim())updates.set(node.id,job.id);
     }
     if(updates.size)doc.change(d=>({...d,document:{...d.document,nodes:d.document.nodes.map(n=>updates.has(n.id)?{...n,narration_job:updates.get(n.id)!,narration_pending:null}:n)}}));
-  },[runs,doc.value.document.nodes,doc.status]);
+  },[runById,doc.value.document.nodes,doc.status]);
   const contextValue = useMemo(
     () => ({
       edit,
@@ -762,54 +977,110 @@ export function CanvasWorkspace({
         setPanel("assets");
       },
       preview: (node: CanvasNode) => {
-        const { media, run } = resolveNode(node, runs);
+        const { media, run } = resolveNode(node, runsRef.current);
         if (media) {
           setFrameError("");
           setPreview({ node, media, run });
         }
       },
-      zoom: viewport.zoom,
-      editing,
       setEditing,
     }),
-    [edit, doc.begin, doc.end, viewport.zoom, editing, runs],
+    [edit, doc.begin, doc.end],
   );
-  const videoPort =
-    !!studio.canvas_nodes?.some((n) =>
-      n.inputs.some((p) => p.kind === "video"),
-    ) ||
-    doc.value.document.nodes.some((n) =>
-      n.extension?.definition.inputs.some((p) => p.kind === "video"),
-    );
-  const nodes = useMemo(
+  const videoPort = useMemo(
     () =>
-      doc.value.document.nodes.map((n) => ({
+      !!studio.canvas_nodes?.some((n) =>
+        n.inputs.some((p) => p.kind === "video"),
+      ) ||
+      doc.value.document.nodes.some((n) =>
+        n.extension?.definition.inputs.some((p) => p.kind === "video"),
+      ),
+    [studio.canvas_nodes, doc.value.document.nodes],
+  );
+  const { nodes, hasLoadedImage } = useMemo(() => {
+    const prevCache = rfNodeCacheRef.current;
+    const nextCache = new Map<string, RFNode>();
+    let loadedImage = false;
+    const list = doc.value.document.nodes.map((n) => {
+      const resolved = resolveNodeFromIndex(n, runsByNode);
+      if (n.type === "image" && resolved.media) loadedImage = true;
+      const isSelected = selectedSet.has(n.id);
+      const isEditing = editing === n.id;
+      const prev = prevCache.get(n.id);
+      if (
+        prev &&
+        prev.data.item === n &&
+        prev.data.media === resolved.media &&
+        prev.data.run === resolved.run &&
+        prev.data.videoPort === videoPort &&
+        prev.data.editing === isEditing &&
+        prev.selected === isSelected
+      ) {
+        nextCache.set(n.id, prev);
+        return prev;
+      }
+      const next: RFNode = {
         id: n.id,
         type: "content" as const,
         position: { x: n.x, y: n.y },
-        data: { item: n, videoPort, ...resolveNode(n, runs) },
+        data: {
+          item: n,
+          videoPort,
+          editing: isEditing,
+          media: resolved.media,
+          run: resolved.run,
+        },
+        handles: buildNodeHandles(n, videoPort),
+        measured: { width: n.width, height: n.height },
         width: n.width,
         height: n.height,
         style: { width: n.width, height: n.height },
-        selected: selected.includes(n.id),
+        selected: isSelected,
         ariaLabel: names[n.type] + "节点 " + n.title,
-      })),
-    [doc.value.document.nodes, runs, selected, videoPort],
-  );
-  const edges = useMemo(
-    () =>
-      doc.value.document.edges.map((e) => ({
+      };
+      nextCache.set(n.id, next);
+      return next;
+    });
+    rfNodeCacheRef.current = nextCache;
+    return { nodes: list, hasLoadedImage: loadedImage };
+  }, [doc.value.document.nodes, runsByNode, selectedSet, videoPort, editing]);
+  const selectedEdgeSet = useMemo(() => new Set(selectedEdges), [selectedEdges]);
+  const edges = useMemo(() => {
+    const prevCache = rfEdgeCacheRef.current;
+    const nextCache = new Map<string, FlowEdge>();
+    const list = doc.value.document.edges.map((e) => {
+      const isSelected = selectedEdgeSet.has(e.id);
+      const hidden = !showEdges;
+      const prev = prevCache.get(e.id);
+      if (
+        prev &&
+        prev.source === e.source &&
+        prev.target === e.target &&
+        prev.sourceHandle === e.sourcePort &&
+        prev.targetHandle === e.targetPort &&
+        prev.selected === isSelected &&
+        prev.hidden === hidden
+      ) {
+        nextCache.set(e.id, prev);
+        return prev;
+      }
+      const next: FlowEdge = {
         ...e,
-        sourceHandle: e.sourcePort, targetHandle:e.targetPort,
+        sourceHandle: e.sourcePort,
+        targetHandle: e.targetPort,
         type: "default",
-        selected: selectedEdges.includes(e.id),
-        hidden: !showEdges,
-        style: { stroke: "var(--cv-edge)", strokeWidth: 1.4 },
+        selected: isSelected,
+        hidden,
+        style: EDGE_STYLE,
         interactionWidth: 20,
         ariaLabel: "参考连线",
-      })),
-    [doc.value.document.edges, showEdges, selectedEdges],
-  );
+      };
+      nextCache.set(e.id, next);
+      return next;
+    });
+    rfEdgeCacheRef.current = nextCache;
+    return list;
+  }, [doc.value.document.edges, showEdges, selectedEdgeSet]);
   const onNodesChange = useCallback(
     (changes: NodeChange<RFNode>[]) => {
       const select = changes.filter((c) => c.type === "select");
@@ -822,10 +1093,18 @@ export function CanvasWorkspace({
               else next.delete(c.id);
             }
           }
+          if (
+            next.size === current.length &&
+            current.every((id) => next.has(id))
+          ) {
+            return current;
+          }
           return [...next];
         });
       const mutations = changes.filter(
-        (c) => c.type === "position" || (c.type === "dimensions" && c.resizing),
+        (c) =>
+          (c.type === "position" && Boolean(c.position)) ||
+          (c.type === "dimensions" && Boolean(c.resizing && c.dimensions)),
       );
       const keyboardMove =
         mutations.some((c) => c.type === "position" && c.dragging === false) &&
@@ -833,32 +1112,45 @@ export function CanvasWorkspace({
       if (keyboardMove) doc.begin();
       if (mutations.length)
         doc.change(
-          (d) => ({
-            ...d,
-            document: {
-              ...d.document,
-              nodes: d.document.nodes.map((n) => {
-                let v = n;
-                for (const c of mutations) {
-                  if (!("id" in c) || c.id !== n.id) continue;
-                  if (c.type === "position" && c.position)
-                    v = { ...v, x: c.position.x, y: c.position.y };
-                  if (c.type === "dimensions" && c.dimensions)
-                    v = {
-                      ...v,
-                      width: c.dimensions.width,
-                      height: c.dimensions.height,
-                    };
+          (d) => {
+            let changed = false;
+            const nextNodes = d.document.nodes.map((n) => {
+              let v = n;
+              for (const c of mutations) {
+                if (!("id" in c) || c.id !== n.id) continue;
+                if (
+                  c.type === "position" &&
+                  c.position &&
+                  (v.x !== c.position.x || v.y !== c.position.y)
+                ) {
+                  v = { ...v, x: c.position.x, y: c.position.y };
+                  changed = true;
                 }
-                return v;
-              }),
-            },
-          }),
+                if (
+                  c.type === "dimensions" &&
+                  c.dimensions &&
+                  (v.width !== c.dimensions.width ||
+                    v.height !== c.dimensions.height)
+                ) {
+                  v = {
+                    ...v,
+                    width: c.dimensions.width,
+                    height: c.dimensions.height,
+                  };
+                  changed = true;
+                }
+              }
+              return v;
+            });
+            return changed
+              ? { ...d, document: { ...d.document, nodes: nextNodes } }
+              : d;
+          },
           false,
         );
       if (keyboardMove) doc.end();
     },
-    [doc.change],
+    [doc.change, doc.begin, doc.end],
   );
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     setSelectedEdges((current) => {
@@ -868,6 +1160,12 @@ export function CanvasWorkspace({
           if (c.selected) next.add(c.id);
           else next.delete(c.id);
         }
+      if (
+        next.size === current.length &&
+        current.every((id) => next.has(id))
+      ) {
+        return current;
+      }
       return [...next];
     });
   }, []);
@@ -906,10 +1204,11 @@ export function CanvasWorkspace({
   );
   const revealText = (n:CanvasNode,force=false) => {
     if(windowSize.w<=760)return;
-    const top=n.y*viewport.zoom+viewport.y;
-    if(!force&&top>=150&&top+n.height*viewport.zoom+20+textPanelHeight<=windowSize.h-80)return;
-    const zoom=Math.max(0.15,Math.min(viewport.zoom,1,(windowSize.w-112)/n.width,Math.max(32,windowSize.h-250-textPanelHeight)/n.height));
-    const center=force?windowSize.w*0.55:(n.x+n.width/2)*viewport.zoom+viewport.x;
+    const vp=flow.getViewport();
+    const top=n.y*vp.zoom+vp.y;
+    if(!force&&top>=150&&top+n.height*vp.zoom+20+textPanelHeight<=windowSize.h-80)return;
+    const zoom=Math.max(0.15,Math.min(vp.zoom,1,(windowSize.w-112)/n.width,Math.max(32,windowSize.h-250-textPanelHeight)/n.height));
+    const center=force?windowSize.w*0.55:(n.x+n.width/2)*vp.zoom+vp.x;
     const centerX=Math.max(76+n.width*zoom/2,Math.min(center,windowSize.w-24-n.width*zoom/2));
     const nextTop=Math.max(150,Math.min(top,windowSize.h-100-textPanelHeight-n.height*zoom));
     void flow.setViewport({zoom,x:centerX-(n.x+n.width/2)*zoom,y:nextTop-n.y*zoom},{duration:matchMedia('(prefers-reduced-motion: reduce)').matches?0:180});
@@ -927,10 +1226,11 @@ export function CanvasWorkspace({
     measure();const observer=new ResizeObserver(measure);observer.observe(element);return()=>observer.disconnect();
   },[single?.id,editing,single?.type]);
   const reveal = (n: CanvasNode) => {
+    const vp = flow.getViewport();
     const zoom = Math.max(
       0.25,
       Math.min(
-        viewport.zoom,
+        vp.zoom,
         1,
         (windowSize.w - 112) / n.width,
         (windowSize.h - 350) / n.height,
@@ -1660,14 +1960,6 @@ export function CanvasWorkspace({
       notify((e as Error).message);
     }
   };
-  const nodeRect = single
-    ? {
-        x: single.x * viewport.zoom + viewport.x,
-        y: single.y * viewport.zoom + viewport.y,
-        w: single.width * viewport.zoom,
-        h: single.height * viewport.zoom,
-      }
-    : null;
   const showComposer =
     single && ["image", "video"].includes(single.type) && !editing;
   const composerOpen = isCanvasComposerOpen(single, editing);
@@ -1684,32 +1976,57 @@ export function CanvasWorkspace({
     [runs, runsLoading, runsLoaded, runsError],
   );
   const panelHeight = single?.type === "text" ? textPanelHeight : mediaPanelHeight;
-  const toolbarBelow = Boolean(nodeRect && nodeRect.y < 150);
-  const gridGap = 24 * viewport.zoom * 2 ** Math.max(0, Math.ceil(Math.log2(16 / (24 * viewport.zoom))));
-  const composerPosition = nodeRect
-    ? {
-        left: Math.max(
-          76,
-          Math.min(nodeRect.x + nodeRect.w / 2 - 260, windowSize.w - 544),
-        ),
-        top: Math.max(
-          100,
-          Math.min(
-            nodeRect.y + nodeRect.h + (toolbarBelow ? 70 : 20),
-            windowSize.h - panelHeight - (single?.type === "text" ? 80 : 20),
-          ),
-        ),
+  const defaultViewport = useMemo(() => {
+    try {
+      return (
+        JSON.parse(
+          localStorage.getItem("fm-canvas-view-" + project.id) || "null",
+        ) || { x: 200, y: 140, zoom: 1 }
+      );
+    } catch {
+      return { x: 200, y: 140, zoom: 1 };
+    }
+  }, [project.id]);
+  const isValidConnection = useCallback(
+    (c: FlowEdge | Connection) =>
+      !connectionError(
+        doc.ref.current.document,
+        c.source,
+        c.target,
+        c.sourceHandle,
+        c.targetHandle,
+      ),
+    [doc.ref],
+  );
+  const onMoveStart = useCallback(() => {
+    if (moveResumeTimerRef.current !== null) {
+      clearTimeout(moveResumeTimerRef.current);
+      moveResumeTimerRef.current = null;
+    }
+    canvasVideoThumbnails.pause("viewport-move");
+  }, []);
+  const onMoveEnd = useCallback(
+    (_: unknown, vp: { x: number; y: number; zoom: number }) => {
+      try {
+        localStorage.setItem(
+          "fm-canvas-view-" + project.id,
+          JSON.stringify(vp),
+        );
+      } catch {}
+      if (moveResumeTimerRef.current !== null) {
+        clearTimeout(moveResumeTimerRef.current);
       }
-    : {};
-  const toolbarPosition = nodeRect
-    ? {
-        left: Math.max(
-          76,
-          Math.min(nodeRect.x + nodeRect.w / 2 - 170, windowSize.w - 370),
-        ),
-        top: toolbarBelow ? Math.max(68, nodeRect.y + nodeRect.h + 14) : nodeRect.y - 82,
-      }
-    : {};
+      moveResumeTimerRef.current = setTimeout(() => {
+        moveResumeTimerRef.current = null;
+        canvasVideoThumbnails.resume("viewport-move");
+      }, 180);
+    },
+    [project.id],
+  );
+  const virtualizeElements = shouldVirtualizeCanvas(
+    doc.value.document.nodes.length,
+    hasLoadedImage,
+  );
   const patchParams = (patch: Partial<CanvasNode["params"]>, flowMode?:string) => {
     if (!single)return;
     let params={...single.params,...patch};
@@ -1755,18 +2072,20 @@ export function CanvasWorkspace({
       patchParams({h3:h3Ids.length===1?{mode:'frames',first_frame:h3Ids[0],last_frame:null,video_audio:[]}:{mode:'reference',video_audio:[]}});
     }
   },[single?.id,h3Native]);
-  const referenceCandidates = single
-    ? doc.value.document.nodes.filter(
-        (n) =>
-          n.id !== single.id &&
-          ["image", "text"].includes(n.type) &&
-          !doc.value.document.edges.some(
-            (e) => e.source === n.id && e.target === single.id,
-          ),
-      )
-    : [];
+  const referenceCandidates =
+    panel === "references" && single
+      ? doc.value.document.nodes.filter(
+          (n) =>
+            n.id !== single.id &&
+            ["image", "text"].includes(n.type) &&
+            !doc.value.document.edges.some(
+              (e) => e.source === n.id && e.target === single.id,
+            ),
+        )
+      : [];
   return (
     <div
+      ref={workspaceRef}
       className="canvas-workspace"
       data-composer-open={composerOpen ? "true" : "false"}
       data-selection-toolbar={selectionToolbarOpen ? "true" : "false"}
@@ -1801,6 +2120,13 @@ export function CanvasWorkspace({
         }
       }}
     >
+      <CanvasViewportEffects
+        workspaceRef={workspaceRef}
+        anchorNode={single}
+        hasDownstream={Boolean(downstream)}
+        panelHeight={panelHeight}
+        windowSize={windowSize}
+      />
       <NodeContext.Provider value={contextValue}>
         <ReactFlow<RFNode>
           nodes={nodes}
@@ -1809,9 +2135,7 @@ export function CanvasWorkspace({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={connect}
-          isValidConnection={(c) =>
-            !connectionError(doc.ref.current.document, c.source, c.target,c.sourceHandle,c.targetHandle)
-          }
+          isValidConnection={isValidConnection}
           onNodeDragStart={() => {
             dragging.current = true;
             doc.begin();
@@ -1851,26 +2175,9 @@ export function CanvasWorkspace({
             e.preventDefault();
             setContext({ x: e.clientX, y: e.clientY });
           }}
-          onMoveEnd={(_, vp) => {
-            try {
-              localStorage.setItem(
-                "fm-canvas-view-" + project.id,
-                JSON.stringify(vp),
-              );
-            } catch {}
-          }}
-          defaultViewport={(() => {
-            try {
-              return (
-                JSON.parse(
-                  localStorage.getItem("fm-canvas-view-" + project.id) ||
-                    "null",
-                ) || { x: 200, y: 140, zoom: 1 }
-              );
-            } catch {
-              return { x: 200, y: 140, zoom: 1 };
-            }
-          })()}
+          onMoveStart={onMoveStart}
+          onMoveEnd={onMoveEnd}
+          defaultViewport={defaultViewport}
           onDrop={(e) => {
             e.preventDefault();
             void uploadFiles([...e.dataTransfer.files]);
@@ -1879,7 +2186,7 @@ export function CanvasWorkspace({
             e.preventDefault();
             e.dataTransfer.dropEffect = "copy";
           }}
-          style={{backgroundImage:'radial-gradient(circle, var(--cv-dot) 1px, transparent 1px)', backgroundSize:`${gridGap}px ${gridGap}px`, backgroundPosition:`${viewport.x}px ${viewport.y}px`}}
+          style={FLOW_GRID_STYLE}
           minZoom={0.15}
           maxZoom={2.5}
           panOnDrag={hand ? true : [1, 2]}
@@ -1892,22 +2199,12 @@ export function CanvasWorkspace({
           panActivationKeyCode="Space"
           deleteKeyCode={null}
           colorMode={theme}
-          // Keep loaded images mounted when dragging auto-pans the viewport.
-          onlyRenderVisibleElements={
-            !nodes.some(({ data }) => data.item.type === "image" && data.media)
-          }
+          onlyRenderVisibleElements={virtualizeElements}
           preventScrolling
           fitView={false}
           nodesDraggable={!hand && !editing}
           elementsSelectable={!hand}
-          ariaLabelConfig={{
-            "node.a11yDescription.default":
-              "按 Enter 选中节点，方向键移动，Delete 删除。",
-            "edge.a11yDescription.default":
-              "按 Enter 选中连线，Delete 移除引用。",
-            "controls.zoomIn.ariaLabel": "放大",
-            "controls.zoomOut.ariaLabel": "缩小",
-          }}
+          ariaLabelConfig={ARIA_LABEL_CONFIG}
         >
           {minimap && (
             <MiniMap
@@ -2129,7 +2426,7 @@ export function CanvasWorkspace({
         </div>
       )}
       {single && !editing && (
-        <div className="selection-toolbar" style={toolbarPosition}>
+        <div className="selection-toolbar" style={TOOLBAR_POSITION_STYLE}>
           <IconButton
             icon={Copy}
             label="复制副本"
@@ -2262,7 +2559,7 @@ export function CanvasWorkspace({
         </div>
       )}
       {single?.extension && (
-        <section className="node-composer plugin-node-form" style={composerPosition} aria-label={single.title + "参数"}>
+        <section className="node-composer plugin-node-form" style={COMPOSER_POSITION_STYLE} aria-label={single.title + "参数"}>
           <PluginNodeForm extension={single.extension}
             available={!!studio.canvas_nodes?.some(n => n.id === single.extension!.definition.id && n.plugin === single.extension!.definition.plugin && n.version === single.extension!.definition.version)}
             busy={!!submitting}
@@ -2274,7 +2571,7 @@ export function CanvasWorkspace({
         <section
           className="node-composer"
           ref={mediaPanelRef}
-          style={composerPosition}
+          style={COMPOSER_POSITION_STYLE}
           aria-label={single.type === "image" ? "图片生成器" : "视频生成器"}
         >
           {incoming.length > 0 && !h3Native && (
@@ -2640,7 +2937,7 @@ export function CanvasWorkspace({
             aria-label="缩放菜单"
             onClick={() => setMenu(menu === "zoom" ? null : "zoom")}
           >
-            {Math.round(viewport.zoom * 100)}%<ChevronDown size={12} />
+            <ZoomPercent /><ChevronDown size={12} />
           </button>
         </span>
         <span className="dock-divider" />
@@ -2685,7 +2982,7 @@ export function CanvasWorkspace({
                 }}
               >
                 {z * 100}%
-                {Math.abs(viewport.zoom - z) < 0.01 && <Check size={14} />}
+                <ZoomCheck target={z} />
               </button>
             ))}
           </div>
@@ -2694,16 +2991,7 @@ export function CanvasWorkspace({
       {downstream && (
         <div
           className="cv-menu downstream-menu"
-          style={{
-            left: Math.min(
-              windowSize.w - 190,
-              Math.max(80, (nodeRect?.x || 100) + (nodeRect?.w || 200) + 35),
-            ),
-            top: Math.min(
-              windowSize.h - 160,
-              Math.max(80, (nodeRect?.y || 100) + (nodeRect?.h || 100) / 2),
-            ),
-          }}
+          style={DOWNSTREAM_POSITION_STYLE}
         >
           <span className="menu-label">新建连接</span>
           <button
@@ -2824,7 +3112,7 @@ export function CanvasWorkspace({
         const textNode=doc.value.document.nodes.find(n=>n.id===id&&n.type==='text');
         if(!textNode)return null;
         const visible=single?.id===id&&!editing;
-        return <section key={id} ref={visible?textPanelRef:undefined} className="node-composer text-node-composer" style={{...composerPosition,display:visible?undefined:'none'}} hidden={!visible} aria-label="文本生成器" onKeyDown={e=>e.stopPropagation()}>
+        return <section key={id} ref={visible?textPanelRef:undefined} className="node-composer text-node-composer" style={{...COMPOSER_POSITION_STYLE,display:visible?undefined:'none'}} hidden={!visible} aria-label="文本生成器" onKeyDown={e=>e.stopPropagation()}>
           <ChatWorkspace inline compact workspace={project.workspace} userId={initial.me.id} project={project.id} node={id} nodeTitle={textNode.title}
             onActivityChange={active=>setActiveTextNodes(ids=>active?(ids.includes(id)?ids:[...ids,id]):(ids.includes(id)?ids.filter(n=>n!==id):ids))}
             getContext={async()=>({project:project.id,node:id,expected_revision:await doc.flush(),writeback:true})}
@@ -2904,13 +3192,14 @@ export function CanvasWorkspace({
                   }
                 >
                   {a.kind === "image" ? (
-                    <img src={mediaURL(a.id)} alt={a.title} loading="lazy" />
-                  ) : (
-                    <video
-                      src={mediaURL(a.id) + "#t=0.05"}
-                      preload="metadata"
-                      muted
+                    <img
+                      src={mediaURL(a.id)}
+                      alt={a.title}
+                      loading="lazy"
+                      decoding="async"
                     />
+                  ) : (
+                    <VideoThumb mediaId={a.id} alt={a.title} />
                   )}
                   <span>{a.title}</span>
                   {assetSelection.has(a.id) && (
@@ -3082,13 +3371,14 @@ export function CanvasWorkspace({
                   >
                     {j.result ? (
                       j.kind === "image" ? (
-                        <img src={mediaURL(j.result)} alt="" />
-                      ) : (
-                        <video
-                          src={mediaURL(j.result) + "#t=0.05"}
-                          preload="metadata"
-                          muted
+                        <img
+                          src={mediaURL(j.result)}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
                         />
+                      ) : (
+                        <VideoThumb mediaId={j.result} />
                       )
                     ) : (
                       React.createElement(
