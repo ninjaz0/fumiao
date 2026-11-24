@@ -8,6 +8,7 @@ import {
 } from "react";
 import { useAppearance } from "../home/controls";
 import "./auth.css";
+import styles from "./Auth.module.css";
 
 type Mode = "login" | "register";
 const registrationUsernamePattern = String.raw`\s*[\p{L}\p{N}_.\-]{2,32}\s*`;
@@ -400,11 +401,12 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                         : "登录"}
                   </button>
                   {"\n      "}
-                  <p className="auth-switch">
+                  <p className={`auth-switch ${styles.switchRow}`}>
                     {registering ? "已有账户？" : "还没有账户？"}
                     <a
                       href={registering ? "#login" : "#register"}
                       id="auth-switch"
+                      className={styles.switchLink}
                       onClick={switchMode}
                     >
                       {registering ? "登录" : "注册"}
