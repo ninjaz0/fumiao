@@ -40,6 +40,13 @@ const selectNodeJob = `SELECT j.state,a.public_id AS result FROM canvas_job_link
   JOIN jobs j ON j.id=l.job_id AND j.deleted_at IS NULL
   LEFT JOIN LATERAL (SELECT a.public_id FROM job_assets r JOIN assets a ON a.id=r.asset_id
     WHERE r.job_id=j.id AND r.role='output' ORDER BY a.created_at,a.public_id LIMIT 1) a ON true`;
+type ShotVideo = {
+  id: string;
+  public_id: string;
+  workspace_id: string;
+  mime: string;
+  size: string | number;
+};
 
 /** Original canvas authority. All mutations share document locks and PostgreSQL relations. */
 export class OriginalCanvases {
@@ -309,17 +316,49 @@ export class OriginalCanvases {
   }
   async videoForShot(sql: Sql, project: string, node: CanvasNode) {
     const key = await this.mediaForNode(sql, project, node);
-    const { rows } = await sql.query<{
-      id: string;
-      public_id: string;
-      workspace_id: string;
-      mime: string;
-      size: string | number;
-    }>(
+    const { rows } = await sql.query<ShotVideo>(
       "SELECT id,public_id,workspace_id,mime,size FROM assets WHERE public_id=$1 AND original_kind='video' AND state='ready' FOR SHARE",
       [key],
     );
     return rows[0];
+  }
+  private async lockShotVideos(sql: Sql, project: string, shots: CanvasNode[]) {
+    await sql.query("SAVEPOINT shot_videos");
+    let rows: (ShotVideo & { position: number })[];
+    try {
+      ({ rows } = await sql.query<ShotVideo & { position: number }>(
+        `SELECT n.position::int,a.id,a.public_id,a.workspace_id,a.mime,a.size
+        FROM unnest($2::text[],$3::bigint[],$4::text[],$5::boolean[])
+          WITH ORDINALITY AS n(node,active_job,media_id,use_media,position)
+        LEFT JOIN LATERAL (
+          ${selectNodeJob}
+          WHERE NOT n.use_media AND l.project_id=$1 AND l.node=n.node
+            AND (n.active_job IS NULL OR j.public_id=n.active_job)
+          ORDER BY l.id DESC LIMIT 1
+        ) j ON true
+        JOIN assets a ON a.public_id=CASE
+          WHEN n.use_media OR j.state IS NULL THEN n.media_id
+          WHEN j.state='completed' THEN j.result
+        END AND a.original_kind='video' AND a.state='ready'
+        ORDER BY n.position FOR SHARE OF a NOWAIT`,
+        [
+          project,
+          shots.map((node) => node.id),
+          shots.map((node) => node.active_job),
+          shots.map((node) => node.media_id),
+          shots.map((node) => node.use_media),
+        ],
+      ));
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "55P03"))
+        throw error;
+      // A later asset must not block a request that fails on an earlier shot.
+      await sql.query("ROLLBACK TO SAVEPOINT shot_videos");
+      await sql.query("RELEASE SAVEPOINT shot_videos");
+      return undefined;
+    }
+    await sql.query("RELEASE SAVEPOINT shot_videos");
+    return new Map(rows.map((row) => [row.position - 1, row]));
   }
   async downloadShots(user: Actor, key: string, value: unknown) {
     const body = parseBody(value, canvasExactRevisionFields, true);
@@ -335,21 +374,26 @@ export class OriginalCanvases {
       );
       requireValue(document.shots?.length, 400, "请先添加镜头");
       const nodes = new Map(document.nodes.map((node) => [node.id, node]));
+      const shots = document.shots.map((id) => nodes.get(id)!);
+      const videos = shots.length > 1 && shots.every(Boolean)
+        ? await this.lockShotVideos(sql, project.id, shots)
+        : undefined;
+      const access = videos
+        ? this.library.bulkAccess(sql, user, project.workspace_id)
+        : (item: { kind: "asset"; row: ShotVideo }) =>
+            this.library.access(sql, user, item, project.workspace_id);
       const manifest = [];
-      for (const [index, id] of document.shots.entries()) {
-        const media = await this.videoForShot(sql, project.id, nodes.get(id)!);
+      for (const [index, shot] of shots.entries()) {
+        const media = videos
+          ? videos.get(index)
+          : await this.videoForShot(sql, project.id, shot);
         const number = String(index + 1);
         requireValue(
           media,
           409,
           `镜头 ${number.padStart(2, "0")} 还没有可导出的视频`,
         );
-        await this.library.access(
-          sql,
-          user,
-          { kind: "asset", row: media },
-          project.workspace_id,
-        );
+        await access({ kind: "asset", row: media });
         manifest.push(archiveEntry(media, `镜头-${number.padStart(3, "0")}`));
       }
       return this.library.archiveTicket(sql, user, manifest);

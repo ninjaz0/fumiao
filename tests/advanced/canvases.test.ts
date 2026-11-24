@@ -13,6 +13,7 @@ import {
 import { parseCanvasDocument } from "@fumiao/original-api/canvas-draft.js";
 import { museLifecycle } from "@fumiao/plugin-muse/lifecycle.js";
 import { databaseFixture } from "../helpers/database.js";
+import { hash } from "@fumiao/platform/security.js";
 import {
   OriginalIdentity,
   type OriginalActor,
@@ -24,6 +25,223 @@ const node = (id: string, type = "text", other: any = {}) => ({
   y: 0,
   ...other,
 });
+test("Shot pack export bounds SQL reads and preserves the ordered private archive", async () => {
+  const f = await canvasesFixture();
+  try {
+    const canvas = await f.canvases.create(
+      f.member,
+      { title: "Shots" },
+      String(f.team.public_id),
+    );
+    const pinned = await f.asset("1".repeat(32), "video", f.team, f.member);
+    const first = await f.asset("2".repeat(32), "video", f.team, f.member);
+    const latest = await f.asset("3".repeat(32), "video", f.team, f.member);
+    await f.db.query("UPDATE assets SET mime='video/webm' WHERE id=$1", [
+      latest.id,
+    ]);
+    await f.job(1001, "video", "completed", first.id, f.team, f.member);
+    await f.job(1002, "video", "completed", latest.id, f.team, f.member);
+    await f.job(1003, "video", "running", undefined, f.team, f.member);
+    await f.link(canvas.id, "chosen", 1001, "{}", f.member);
+    await f.link(canvas.id, "chosen", 1002, "{}", f.member);
+    await f.link(canvas.id, "latest", 1001, "{}", f.member);
+    await f.link(canvas.id, "latest", 1002, "{}", f.member);
+    await f.link(canvas.id, "pinned", 1003, "{}", f.member);
+    const pin = { media_id: pinned.public_id, use_media: true };
+    const nodes = [
+      node("pinned", "video", pin),
+      node("chosen", "video", { active_job: 1001 }),
+      node("latest", "video"),
+      node("fallback", "video", { media_id: pinned.public_id }),
+      ...Array.from({ length: 20 }, (_, i) => node(`reuse-${i}`, "video", pin)),
+    ];
+    const shots = [
+      "latest",
+      "fallback",
+      "chosen",
+      "pinned",
+      ...nodes.slice(4).map(({ id }) => id),
+    ];
+    const saved = await f.canvases.save(f.member, canvas.id, {
+      expected_revision: canvas.revision,
+      title: canvas.title,
+      document: { nodes, shots },
+    });
+    const transaction = f.db.transaction;
+    let statements = 0;
+    f.db.transaction = (run) =>
+      transaction((sql) =>
+        run({
+          query: (statement, params) => {
+            statements++;
+            return sql.query(statement, params);
+          },
+        }),
+      );
+    const body = { expected_revision: saved.revision };
+    const ticket = await f.canvases.downloadShots(f.member, canvas.id, body);
+    const row = await one(
+      f.db,
+      "SELECT owner_id,manifest FROM download_tickets WHERE key_hash=$1",
+      [hash(ticket.url.split("/").at(-1)!)],
+    );
+    assert.equal(row.owner_id, f.member.id);
+    assert.equal(ticket.filename, "弗淼-镜头-24项.zip");
+    assert.deepEqual(
+      row.manifest,
+      [
+        latest.public_id,
+        pinned.public_id,
+        first.public_id,
+        ...Array(21).fill(pinned.public_id),
+      ].map((key, i) => ({
+        key,
+        name: `镜头-${String(i + 1).padStart(3, "0")}.${i === 0 ? "webm" : "mp4"}`,
+        size: 0,
+      })),
+    );
+    const successfulStatements = statements;
+    await assert.rejects(
+      f.canvases.downloadShots(f.member, canvas.id, { expected_revision: 1 }),
+      { status: 409 },
+    );
+    await f.db.query("UPDATE assets SET mime='image/avif' WHERE id=$1", [
+      latest.id,
+    ]);
+    await f.db.query("UPDATE assets SET original_kind='ref' WHERE id=$1", [
+      pinned.id,
+    ]);
+    await assert.rejects(
+      f.canvases.downloadShots(f.member, canvas.id, body),
+      { status: 400, message: "不支持下载此文件类型" },
+    );
+    await f.db.query("UPDATE assets SET mime='video/webm' WHERE id=$1", [
+      latest.id,
+    ]);
+    await assert.rejects(
+      f.canvases.downloadShots(f.member, canvas.id, body),
+      { status: 409, message: "镜头 02 还没有可导出的视频" },
+    );
+    await f.db.query("UPDATE assets SET workspace_id=$1 WHERE id=$2", [
+      f.memberSpace.id,
+      latest.id,
+    ]);
+    await assert.rejects(
+      f.canvases.downloadShots(f.member, canvas.id, body),
+      { status: 404, message: "内容不存在或无权访问" },
+    );
+    assert(
+      successfulStatements <= 10,
+      `Expected at most 10 SQL statements, got ${successfulStatements}`,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+test(
+  "Shot pack export keeps first errors and rechecks membership after an asset lock wait",
+  { skip: !process.env.TEST_DATABASE_URL },
+  async () => {
+    const f = await canvasesFixture();
+    const transaction = f.db.transaction;
+    let locked!: () => void, release!: () => void;
+    const held = new Promise<void>((resolve) => (locked = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let writer: Promise<void> | undefined;
+    let exporting: ReturnType<typeof f.canvases.downloadShots> | undefined;
+    try {
+      const canvas = await f.canvases.create(
+        f.member,
+        { title: "Shots" },
+        String(f.team.public_id),
+      );
+      const first = await f.asset("1".repeat(32), "video", f.team, f.member);
+      const second = await f.asset("2".repeat(32), "video", f.team, f.member);
+      const saved = await f.canvases.save(f.member, canvas.id, {
+        expected_revision: canvas.revision,
+        title: canvas.title,
+        document: {
+          nodes: [first, second].map(({ public_id }, i) =>
+            node(`shot-${i}`, "video", { media_id: public_id, use_media: true }),
+          ),
+          shots: ["shot-0", "shot-1"],
+        },
+      });
+      await f.db.query("UPDATE assets SET mime='video/quicktime' WHERE id=$1", [
+        first.id,
+      ]);
+      writer = transaction(async (sql) => {
+        await sql.query("SELECT id FROM assets WHERE id=$1 FOR UPDATE", [second.id]);
+        locked();
+        await gate;
+      });
+      await Promise.race([held, writer]);
+      const body = { expected_revision: saved.revision };
+      let readerPid: number;
+      f.db.transaction = (fn) =>
+        transaction(async (sql) => {
+          await sql.query("SET LOCAL statement_timeout='3s'");
+          readerPid = (await one(sql, "SELECT pg_backend_pid() AS pid")).pid;
+          return fn(sql);
+        });
+      const waitForAssetLock = async (request: NonNullable<typeof exporting>) => {
+        let finished = false;
+        const finish = () => {
+          finished = true;
+        };
+        void request.then(finish, finish);
+        for (let i = 0; i < 100 && !finished; i++) {
+          const state = await one(
+            f.db,
+            "SELECT wait_event_type,query FROM pg_stat_activity WHERE pid=$1",
+            [readerPid!],
+          );
+          if (
+            state?.wait_event_type === "Lock" &&
+            state.query.includes("FOR SHARE")
+          )
+            return true;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        return false;
+      };
+      const revokeAndUnlock = async () => {
+        await f.db.query(
+          "DELETE FROM members WHERE workspace_id=$1 AND user_id=$2",
+          [f.team.id, f.member.id],
+        );
+        release();
+        await writer;
+      };
+      exporting = f.canvases.downloadShots(f.member, canvas.id, body);
+      // If the later row blocks us, membership may change before the first error is checked.
+      if (await waitForAssetLock(exporting)) await revokeAndUnlock();
+      await assert.rejects(exporting, {
+        status: 400,
+        message: "不支持下载此文件类型",
+      });
+      await f.db.query("UPDATE assets SET mime='video/mp4' WHERE id=$1", [
+        first.id,
+      ]);
+      exporting = f.canvases.downloadShots(f.member, canvas.id, body);
+      assert.ok(
+        await waitForAssetLock(exporting),
+        "export really waited for the asset row lock",
+      );
+      await revokeAndUnlock();
+      await assert.rejects(exporting, {
+        status: 404,
+        message: "内容不存在或无权访问",
+      });
+      const tickets = await one(f.db, "SELECT count(*)::int AS n FROM download_tickets");
+      assert.equal(tickets.n, 0);
+    } finally {
+      release();
+      await Promise.allSettled([writer, exporting]);
+      await f.cleanup();
+    }
+  },
+);
 test("Copied voice IDs retain the original two-value set order, including hash collisions", () => {
   assert.deepEqual(canvasVoiceIds(5, 3), [3, 5]);
   assert.deepEqual(canvasVoiceIds(7, 15), [7, 15]);
