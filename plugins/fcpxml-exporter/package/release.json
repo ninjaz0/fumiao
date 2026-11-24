@@ -2,8 +2,8 @@
   "format": 1,
   "id": "fcpxml-exporter",
   "label": "专业 NLE 工程导出（FCPXML）",
-  "version": "1.0.0",
-  "adapterVersion": "1.0.0",
+  "version": "1.1.0",
+  "adapterVersion": "1.1.0",
   "extensionOnly": true,
   "contributes": {
     "version": 1,

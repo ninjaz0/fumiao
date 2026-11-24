@@ -21,6 +21,7 @@ import { capacity, EXPORT_RESERVE } from "@fumiao/platform/capacity.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import {
   originalStoryboard,
+  type CompositionOptions,
   type CompositionPlugin,
   type Shot,
 } from "@fumiao/platform/composition/renderer.js";
@@ -40,6 +41,8 @@ const mimeExt: Record<string, string> = {
   "video/webm": ".webm",
   "audio/wav": ".wav",
   "audio/mpeg": ".mp3",
+  "audio/flac": ".flac",
+  "audio/ogg": ".ogg",
 };
 
 const cleanupBatchSize = 16;
@@ -216,63 +219,177 @@ export class OriginalStoryboardExports {
           video: media.public_id,
           voice: null,
           text: "",
+          ...(n.audio_strategy ? { audioStrategy: n.audio_strategy } : {}),
+          ...(n.original_audio_gain !== undefined
+            ? { originalGain: n.original_audio_gain }
+            : {}),
+          ...(n.tail_inherited ? { tailInherited: true } : {}),
         };
-        if (n.narration_pending) {
-          const pending = await one(
-            sql,
-            "SELECT state FROM jobs WHERE public_id=$1 AND deleted_at IS NULL FOR SHARE",
-            [n.narration_pending],
-          );
-          requireValue(
-            !pending ||
-              ![
-                "queued",
-                "dispatching",
-                "running",
-                "finalizing",
-                "uncertain",
-              ].includes(pending.state),
-            409,
-            `镜头 ${i + 1} 的新旁白仍在生成，请完成后合成`,
-          );
+        if (n.dialogue_lines && n.dialogue_lines.length > 0) {
+          const dialogue: NonNullable<Shot["dialogue"]> = [];
+          for (const [dIdx, line] of n.dialogue_lines.entries()) {
+            if (!pythonStrip(line.text) && !line.audio_job) continue;
+            if (line.audio_pending) {
+              const pending = await one(
+                sql,
+                "SELECT state FROM jobs WHERE public_id=$1 AND deleted_at IS NULL FOR SHARE",
+                [line.audio_pending],
+              );
+              requireValue(
+                !pending ||
+                  ![
+                    "queued",
+                    "dispatching",
+                    "running",
+                    "finalizing",
+                    "uncertain",
+                  ].includes(pending.state),
+                409,
+                `镜头 ${i + 1} 的第 ${dIdx + 1} 句对白仍在生成，请完成后合成`,
+              );
+            }
+            requireValue(
+              line.audio_job,
+              409,
+              `镜头 ${i + 1} 的第 ${dIdx + 1} 句对白尚未生成语音`,
+            );
+            const job = await one(
+              sql,
+              "SELECT * FROM jobs WHERE public_id=$1 AND kind='audio' AND deleted_at IS NULL FOR SHARE",
+              [line.audio_job],
+            );
+            const voice = job && (await this.canvases.library.result(sql, job));
+            requireValue(
+              job?.state === "completed" && voice,
+              409,
+              `镜头 ${i + 1} 的第 ${dIdx + 1} 句对白尚未就绪`,
+            );
+            await this.canvases.library.access(
+              sql,
+              user,
+              { kind: "job", row: job },
+              project.workspace_id,
+            );
+            requireValue(
+              pythonStrip(job.input.prompt) === pythonStrip(line.text),
+              409,
+              `镜头 ${i + 1} 的第 ${dIdx + 1} 句对白台词已修改，请重新生成语音`,
+            );
+            await sql.query("SELECT id FROM assets WHERE id=$1 FOR SHARE", [
+              voice.id,
+            ]);
+            dialogue.push({
+              voice: voice.public_id,
+              speaker: line.speaker || "",
+              text: job.input.prompt,
+            });
+            assets.set(voice.public_id, voice);
+          }
+          if (dialogue.length) shot.dialogue = dialogue;
+        } else {
+          if (n.narration_pending) {
+            const pending = await one(
+              sql,
+              "SELECT state FROM jobs WHERE public_id=$1 AND deleted_at IS NULL FOR SHARE",
+              [n.narration_pending],
+            );
+            requireValue(
+              !pending ||
+                ![
+                  "queued",
+                  "dispatching",
+                  "running",
+                  "finalizing",
+                  "uncertain",
+                ].includes(pending.state),
+              409,
+              `镜头 ${i + 1} 的新旁白仍在生成，请完成后合成`,
+            );
+          }
+          if (n.narration_job) {
+            const job = await one(
+              sql,
+              "SELECT * FROM jobs WHERE public_id=$1 AND kind='audio' AND deleted_at IS NULL FOR SHARE",
+              [n.narration_job],
+            );
+            const voice = job && (await this.canvases.library.result(sql, job));
+            requireValue(
+              job?.state === "completed" && voice,
+              409,
+              `镜头 ${i + 1} 的旁白尚未就绪`,
+            );
+            await this.canvases.library.access(
+              sql,
+              user,
+              { kind: "job", row: job },
+              project.workspace_id,
+            );
+            requireValue(
+              pythonStrip(job.input.prompt) === pythonStrip(n.narration_text),
+              409,
+              `镜头 ${i + 1} 的旁白文字已修改，请重新生成旁白或移除音轨`,
+            );
+            await sql.query("SELECT id FROM assets WHERE id=$1 FOR SHARE", [
+              voice.id,
+            ]);
+            shot.voice = voice.public_id;
+            shot.text = job.input.prompt;
+            assets.set(voice.public_id, voice);
+          } else
+            requireValue(
+              !pythonStrip(n.narration_text),
+              409,
+              `镜头 ${i + 1} 已填写旁白，请先生成语音或清空旁白`,
+            );
         }
-        if (n.narration_job) {
-          const job = await one(
-            sql,
-            "SELECT * FROM jobs WHERE public_id=$1 AND kind='audio' AND deleted_at IS NULL FOR SHARE",
-            [n.narration_job],
-          );
-          const voice = job && (await this.canvases.library.result(sql, job));
-          requireValue(
-            job?.state === "completed" && voice,
-            409,
-            `镜头 ${i + 1} 的旁白尚未就绪`,
-          );
-          await this.canvases.library.access(
-            sql,
-            user,
-            { kind: "job", row: job },
-            project.workspace_id,
-          );
-          requireValue(
-            pythonStrip(job.input.prompt) === pythonStrip(n.narration_text),
-            409,
-            `镜头 ${i + 1} 的旁白文字已修改，请重新生成旁白或移除音轨`,
-          );
-          await sql.query("SELECT id FROM assets WHERE id=$1 FOR SHARE", [
-            voice.id,
-          ]);
-          shot.voice = voice.public_id;
-          shot.text = job.input.prompt;
-          assets.set(voice.public_id, voice);
-        } else
-          requireValue(
-            !pythonStrip(n.narration_text),
-            409,
-            `镜头 ${i + 1} 已填写旁白，请先生成语音或清空旁白`,
-          );
         shots.push(shot);
       }
+
+      // Resolve optional BGM & mastering options (F014 / F033)
+      const bgmKey =
+        body.bgm_asset !== undefined
+          ? (body.bgm_asset as string | null)
+          : (doc.bgm?.asset_id ?? null);
+      let mixOptions: CompositionOptions | null = null;
+      if (bgmKey) {
+        const bgmAsset = await one(
+          sql,
+          "SELECT * FROM assets WHERE public_id=$1 AND workspace_id=$2 AND original_kind IN ('audio','ref_audio') AND state='ready' FOR SHARE",
+          [bgmKey, project.workspace_id],
+        );
+        requireValue(bgmAsset, 404, "背景音乐素材不存在或无权访问");
+        await this.canvases.library.access(
+          sql,
+          user,
+          { kind: "asset", row: bgmAsset },
+          project.workspace_id,
+        );
+        assets.set(bgmAsset.public_id, bgmAsset);
+        mixOptions = {
+          bgm: {
+            asset: bgmAsset.public_id,
+            volume:
+              typeof body.bgm_volume === "number"
+                ? body.bgm_volume
+                : (doc.bgm?.volume ?? 0.35),
+            ducking:
+              typeof body.bgm_ducking === "boolean"
+                ? body.bgm_ducking
+                : (doc.bgm?.ducking ?? true),
+            loop: doc.bgm?.loop ?? true,
+          },
+          loudnorm:
+            typeof body.loudnorm === "boolean"
+              ? body.loudnorm
+              : (doc.loudnorm ?? true),
+        };
+      } else if (
+        body.loudnorm === true ||
+        (body.loudnorm === undefined && doc.loudnorm === true)
+      ) {
+        mixOptions = { loudnorm: true };
+      }
+
       const isProject = exporter.outputKind === "project";
       const projectTitle =
         (project.original_title ? canvasText(project.original_title) : "") ||
@@ -285,6 +402,7 @@ export class OriginalStoryboardExports {
             exporterId: exporter.id,
             projectTitle,
             shots,
+            bgm: mixOptions?.bgm ?? null,
           })
         : null;
       if (isProject && basisHash) {
@@ -355,8 +473,8 @@ export class OriginalStoryboardExports {
         : JSON.stringify(await planComposition(exporter.program, shots));
       const row = await one(
         sql,
-        `INSERT INTO storyboard_exports(id,public_id,uid,owner_id,workspace_id,project_id,revision,snapshot,state,subtitles,error,created,updated,exporter_plugin,exporter_version,exporter_id,output_kind,output_mime,basis_hash)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$9,$10,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+        `INSERT INTO storyboard_exports(id,public_id,uid,owner_id,workspace_id,project_id,revision,snapshot,state,subtitles,error,created,updated,exporter_plugin,exporter_version,exporter_id,output_kind,output_mime,basis_hash,mix_options)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$9,$10,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
         [
           id,
           publicId,
@@ -374,6 +492,7 @@ export class OriginalStoryboardExports {
           exporter.outputKind,
           exporter.mime,
           basisHash,
+          mixOptions ? JSON.stringify(mixOptions) : null,
         ],
       );
       for (const asset of assets.values())
@@ -582,7 +701,17 @@ export class OriginalStoryboardExports {
           projectTitle: string;
           shots: Shot[];
         };
+        const mixOptions = (row.mix_options ?? null) as CompositionOptions | null;
         const materialized = new Map<string, { path: string; mime: string }>();
+        const ensureMat = async (assetKey: string | null | undefined) => {
+          if (!assetKey) return undefined;
+          if (!materialized.has(assetKey)) {
+            const localPath = join(stageFolder, `source-${materialized.size}`);
+            const mime = await materializeAsset(assetKey, localPath);
+            materialized.set(assetKey, { path: localPath, mime });
+          }
+          return materialized.get(assetKey)!;
+        };
         const probedShots: ProjectExportShotInput[] = [];
         let timelineMs = 0;
         let projectWidth = 1920;
@@ -590,14 +719,7 @@ export class OriginalStoryboardExports {
         let projectFps = 30;
         for (const [index, shot] of snap.shots.entries()) {
           abort.signal.throwIfAborted();
-          for (const assetKey of [shot.video, shot.voice]) {
-            if (assetKey && !materialized.has(assetKey)) {
-              const localPath = join(stageFolder, `source-${materialized.size}`);
-              const mime = await materializeAsset(assetKey, localPath);
-              materialized.set(assetKey, { path: localPath, mime });
-            }
-          }
-          const videoRec = materialized.get(shot.video)!;
+          const videoRec = (await ensureMat(shot.video))!;
           const videoMeta = await probeProjectMedia(
             videoRec.path,
             "video",
@@ -608,17 +730,56 @@ export class OriginalStoryboardExports {
             projectHeight = videoMeta.height;
             projectFps = videoMeta.fps || 30;
           }
-          const voiceRec = shot.voice ? materialized.get(shot.voice) : undefined;
+          const voiceRec = await ensureMat(shot.voice);
           const voiceMeta = voiceRec
             ? await probeProjectMedia(voiceRec.path, "audio", abort.signal)
             : undefined;
+          let dialogueProbed: ProjectExportShotInput["dialogue"];
+          let dialogueTotalMs = 0;
+          const subtitles: { startMs: number; endMs: number; text: string }[] =
+            [];
+          if (shot.dialogue && shot.dialogue.length > 0) {
+            dialogueProbed = [];
+            let dlgCursorMs = timelineMs;
+            for (const [dIdx, seg] of shot.dialogue.entries()) {
+              const segRec = (await ensureMat(seg.voice))!;
+              const segMeta = await probeProjectMedia(
+                segRec.path,
+                "audio",
+                abort.signal,
+              );
+              dialogueProbed.push({
+                voice: seg.voice,
+                speaker: seg.speaker,
+                text: seg.text,
+                durationMs: segMeta.durationMs,
+                ext: mimeExt[segRec.mime] ?? ".wav",
+              });
+              const labeled = seg.speaker.trim()
+                ? `${seg.speaker.trim()}：${seg.text}`
+                : seg.text;
+              subtitles.push(
+                ...buildShotSubtitleSpans(labeled, dlgCursorMs, segMeta.durationMs),
+              );
+              dlgCursorMs += segMeta.durationMs;
+              dialogueTotalMs += segMeta.durationMs;
+              if (dIdx < shot.dialogue.length - 1) {
+                dlgCursorMs += 150;
+                dialogueTotalMs += 150;
+              }
+            }
+          } else if (voiceMeta) {
+            subtitles.push(
+              ...buildShotSubtitleSpans(shot.text, timelineMs, voiceMeta.durationMs),
+            );
+          }
+          const voiceTotalMs = dialogueProbed
+            ? dialogueTotalMs
+            : (voiceMeta?.durationMs ?? 0);
           const slotMs = Math.max(
             videoMeta.durationMs,
-            voiceMeta?.durationMs ?? 0,
+            shot.audioStrategy === "keep_original" ? 0 : voiceTotalMs,
           );
-          const subtitles = voiceMeta
-            ? buildShotSubtitleSpans(shot.text, timelineMs, voiceMeta.durationMs)
-            : [];
           timelineMs += slotMs;
           probedShots.push({
             index,
@@ -632,11 +793,40 @@ export class OriginalStoryboardExports {
             videoHasAudio: videoMeta.hasAudio,
             videoExt: mimeExt[videoRec.mime] ?? ".mp4",
             voice: shot.voice,
-            voiceDurationMs: voiceMeta?.durationMs ?? 0,
+            voiceDurationMs: voiceTotalMs,
             voiceExt: voiceRec ? (mimeExt[voiceRec.mime] ?? ".wav") : ".wav",
             text: shot.text,
+            ...(shot.audioStrategy ? { audioStrategy: shot.audioStrategy } : {}),
+            ...(shot.originalGain !== undefined
+              ? { originalGain: shot.originalGain }
+              : {}),
+            ...(dialogueProbed ? { dialogue: dialogueProbed } : {}),
             subtitles,
           });
+        }
+        let bgmInput:
+          | {
+              asset: string;
+              durationMs: number;
+              ext: string;
+              volume: number;
+              loop: boolean;
+            }
+          | null = null;
+        if (mixOptions?.bgm?.asset) {
+          const bgmRec = (await ensureMat(mixOptions.bgm.asset))!;
+          const bgmMeta = await probeProjectMedia(
+            bgmRec.path,
+            "audio",
+            abort.signal,
+          );
+          bgmInput = {
+            asset: mixOptions.bgm.asset,
+            durationMs: bgmMeta.durationMs,
+            ext: mimeExt[bgmRec.mime] ?? ".mp3",
+            volume: mixOptions.bgm.volume ?? 0.35,
+            loop: mixOptions.bgm.loop !== false,
+          };
         }
         const bundle = await planProjectExport(pinnedExporter.program, {
           project: {
@@ -648,6 +838,7 @@ export class OriginalStoryboardExports {
             height: projectHeight,
           },
           shots: probedShots,
+          ...(bgmInput ? { bgm: bgmInput } : {}),
         });
         outputPath = join(stageFolder, "result-project");
         outputFilename = bundle.filename;
@@ -696,6 +887,7 @@ export class OriginalStoryboardExports {
             await materializeAsset(key, path);
           },
           abort.signal,
+          (row.mix_options as CompositionOptions | null) ?? undefined,
         );
         outputPath = result.path;
         outputSubtitles = result.subtitles;

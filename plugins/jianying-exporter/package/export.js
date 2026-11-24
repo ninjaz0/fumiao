@@ -1,5 +1,5 @@
 export default {
-  export({ project, shots }) {
+  export({ project, shots, bgm }) {
     const PLACEHOLDER =
       "##_draftpath_placeholder_0E685133-18CE-45ED-8CB8-2904A212EC80_##";
     // 1x1 black JPEG fallback cover (base64)
@@ -247,13 +247,8 @@ export default {
         track_render_index: 0,
       });
 
-      if (shot.voice && aUs > 0) {
-        const aRel = registerAsset(
-          shot.voice,
-          "assets/audio",
-          `${stem}_voice`,
-          shot.voiceExt || ".wav",
-        );
+      const pushAudioClip = (assetId, fileStem, ext, segStartUs, segDurUs, volume, targetArr) => {
+        const aRel = registerAsset(assetId, "assets/audio", fileStem, ext || ".wav");
         const audioMatId = hex32("amat");
         const aSpeedId = hex32("aspd");
         const aFadeId = hex32("afade");
@@ -263,7 +258,7 @@ export default {
           type: "extract_music",
           name: aRel.split("/").pop(),
           path: `${PLACEHOLDER}/${aRel}`,
-          duration: aUs,
+          duration: segDurUs,
           category_name: "local",
           check_flag: 1,
           source_platform: 0,
@@ -290,19 +285,49 @@ export default {
           loudness_param: null,
           target_loudness: 0.0,
         });
-        audioSegments.push({
+        targetArr.push({
           id: hex32("aseg"),
           material_id: audioMatId,
           extra_material_refs: [aSpeedId, aFadeId, aLoudId],
-          source_timerange: { start: 0, duration: aUs },
-          target_timerange: { start: cursorUs, duration: aUs },
+          source_timerange: { start: 0, duration: segDurUs },
+          target_timerange: { start: segStartUs, duration: segDurUs },
           speed: 1.0,
-          volume: 1.0,
+          volume,
           visible: true,
           render_index: 0,
           track_attribute: 0,
           track_render_index: 0,
         });
+      };
+
+      if (shot.audioStrategy !== "keep_original") {
+        if (shot.dialogue && shot.dialogue.length > 0) {
+          let dlgCursorUs = cursorUs;
+          for (let d = 0; d < shot.dialogue.length; d++) {
+            const seg = shot.dialogue[d];
+            const dUs = Math.max(50, Math.floor(seg.durationMs || 0)) * 1000;
+            pushAudioClip(
+              seg.voice,
+              `${stem}_dlg_${String(d + 1).padStart(2, "0")}`,
+              seg.ext || ".wav",
+              dlgCursorUs,
+              dUs,
+              1.0,
+              audioSegments,
+            );
+            dlgCursorUs += dUs + 150000;
+          }
+        } else if (shot.voice && aUs > 0) {
+          pushAudioClip(
+            shot.voice,
+            `${stem}_voice`,
+            shot.voiceExt || ".wav",
+            cursorUs,
+            aUs,
+            1.0,
+            audioSegments,
+          );
+        }
       }
 
       for (const cue of shot.subtitles || []) {
@@ -386,6 +411,77 @@ export default {
         is_default_name: true,
         name: "",
         segments: audioSegments,
+      });
+    }
+    if (bgm && bgm.asset && cursorUs > 0) {
+      const bgmDurUs = Math.min(
+        cursorUs,
+        Math.max(50, Math.floor(bgm.durationMs || 0)) * 1000 || cursorUs,
+      );
+      const bgmRel = registerAsset(
+        bgm.asset,
+        "assets/audio",
+        "bgm_track",
+        bgm.ext || ".mp3",
+      );
+      const bgmMatId = hex32("bmat");
+      const bSpeedId = hex32("bspd");
+      const bFadeId = hex32("bfade");
+      const bLoudId = hex32("bloud");
+      materials.audios.push({
+        id: bgmMatId,
+        type: "music",
+        name: bgmRel.split("/").pop(),
+        path: `${PLACEHOLDER}/${bgmRel}`,
+        duration: bgmDurUs,
+        category_name: "local",
+        check_flag: 1,
+        source_platform: 0,
+      });
+      materials.speeds.push({
+        id: bSpeedId,
+        type: "speed",
+        mode: 0,
+        speed: 1.0,
+        curve_speed: null,
+      });
+      materials.audio_fades.push({
+        id: bFadeId,
+        type: "audio_fade",
+        fade_in_duration: 0,
+        fade_out_duration: 0,
+        fade_type: 0,
+      });
+      materials.loudnesses.push({
+        id: bLoudId,
+        type: "loudness",
+        enable: false,
+        file_id: "",
+        loudness_param: null,
+        target_loudness: 0.0,
+      });
+      tracks.push({
+        id: hex32("btrk"),
+        type: "audio",
+        attribute: 0,
+        flag: 0,
+        is_default_name: false,
+        name: "BGM",
+        segments: [
+          {
+            id: hex32("bseg"),
+            material_id: bgmMatId,
+            extra_material_refs: [bSpeedId, bFadeId, bLoudId],
+            source_timerange: { start: 0, duration: bgmDurUs },
+            target_timerange: { start: 0, duration: bgmDurUs },
+            speed: 1.0,
+            volume: Math.max(0.02, Math.min(1.0, Number(bgm.volume ?? 0.35))),
+            visible: true,
+            render_index: 1,
+            track_attribute: 0,
+            track_render_index: 0,
+          },
+        ],
       });
     }
     if (textSegments.length) {

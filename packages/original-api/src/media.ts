@@ -12,6 +12,8 @@ import { sendFile } from "./files.js";
 const extension: Record<string, string> = {
   "audio/wav": ".wav",
   "audio/mpeg": ".mp3",
+  "audio/flac": ".flac",
+  "audio/ogg": ".ogg",
   "video/mp4": ".mp4",
   "video/webm": ".webm",
   "image/png": ".png",

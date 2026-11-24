@@ -276,6 +276,25 @@ class OriginalApi {
   ) {
     return this.canvasRuns.narrate(req.actor, key, node, body);
   }
+  @Post("api/canvases/:key/nodes/:node/dialogue")
+  @HttpCode(200)
+  generateCanvasDialogue(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("node") node: string,
+    @Body() body: unknown,
+  ) {
+    return this.canvasRuns.narrateDialogue(req.actor, key, node, body);
+  }
+  @Post("api/canvases/:key/nodes/:node/tail-frame")
+  @HttpCode(200)
+  extractCanvasTailFrame(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("node") node: string,
+  ) {
+    return this.canvases.extractTailFrame(req.actor, key, node);
+  }
   @Get("api/chat/config") chatConfig(@Req() req: AuthRequest) {
     return new OriginalChatSettings(this.identity.p).config(
       req.actor,

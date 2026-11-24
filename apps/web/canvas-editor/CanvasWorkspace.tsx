@@ -3495,19 +3495,118 @@ export function CanvasWorkspace({
       {shotList && (
         <Modal title="镜头列表" wide onClose={() => setShotList(false)}>
           <ShotList shots={shots} onMove={moveShot} onExport={exportShots}
-            composition={<Composition project={project.id} getRevision={doc.flush} ready={shots.length > 0 && !compositionIssue} waitingReason={compositionIssue} />}
+            onInheritTailFrame={async (shotId) => {
+              const source = doc.ref.current.document.nodes.find((n) => n.id === shotId);
+              if (!source) return;
+              await doc.flush();
+              const res = await api<{ asset_id: string; width: number; height: number }>(
+                `/api/canvases/${project.id}/nodes/${shotId}/tail-frame`,
+                {},
+              );
+              const nextIdx = doc.ref.current.document.nodes.length + 1;
+              const imgNode = newNode("image", source.x + source.width + 64, source.y, nextIdx);
+              imgNode.title = `${source.title || "镜头"} · 尾帧`;
+              imgNode.media_id = res.asset_id;
+              imgNode.use_media = true;
+              const vidNode = newNode("video", imgNode.x + imgNode.width + 64, source.y, nextIdx + 1);
+              vidNode.title = `${source.title || "镜头"} 续镜`;
+              vidNode.tail_inherited = true;
+              vidNode.params = {
+                ...source.params,
+                h3: {
+                  mode: "frames",
+                  first_frame: res.asset_id,
+                  last_frame: null,
+                  video_audio: [],
+                },
+              };
+              doc.change((d) => ({
+                ...d,
+                document: {
+                  ...d.document,
+                  nodes: [...d.document.nodes, imgNode, vidNode],
+                  edges: [
+                    ...d.document.edges,
+                    { id: crypto.randomUUID(), source: imgNode.id, target: vidNode.id },
+                  ],
+                  shots: [...(d.document.shots ?? []), vidNode.id],
+                },
+              }));
+              notify("已抽取尾帧并创建续接镜头");
+              setShotList(false);
+              selectOne(vidNode.id);
+              focusNodes([vidNode.id]);
+            }}
+            composition={
+              <Composition
+                project={project.id}
+                getRevision={doc.flush}
+                ready={shots.length > 0 && !compositionIssue}
+                waitingReason={compositionIssue}
+                audioAssets={[
+                  ...studio.assets
+                    .filter((a) => a.kind === "audio" || a.kind === "ref_audio")
+                    .map((a) => ({
+                      id: a.id,
+                      label: a.name || `音频 ${a.id.slice(0, 6)}`,
+                    })),
+                  ...studio.jobs
+                    .filter((j) => j.kind === "audio" && j.status === "done" && j.result)
+                    .map((j) => ({
+                      id: j.result!,
+                      label: `${j.model || "配乐"} · ${(j.prompt || "").slice(0, 18) || "#" + j.id}`,
+                    })),
+                ].filter((item, idx, arr) => arr.findIndex((x) => x.id === item.id) === idx)}
+                bgm={doc.value.document.bgm ?? null}
+                loudnorm={doc.value.document.loudnorm}
+                onMixChange={(patch) =>
+                  doc.change((d) => ({
+                    ...d,
+                    document: {
+                      ...d.document,
+                      ...("bgm" in patch ? { bgm: patch.bgm } : {}),
+                      ...("loudnorm" in patch ? { loudnorm: patch.loudnorm } : {}),
+                    },
+                  }))
+                }
+              />
+            }
             renderNarration={shot=>{
               const node=doc.value.document.nodes.find(n=>n.id===shot.id)!;
-              const price=studio.pricing.items.find(p=>p.key==='breeze-tts-2|standard')?.amount??null;
-              return <Narration node={node} runs={runs} cost={price} unavailableReason={!availableModel('breeze-tts-2')?'当前空间未开放语音模型':price===null?'语音生成尚未定价':studio.credits.available<price?'当前空间积分不足':''}
+              const audioCandidates=['breeze-tts-2','edge-tts','tts-1','gpt-4o-mini-tts','local-tts-compat'];
+              const activeAudio=audioCandidates.find((m)=>availableModel(m))??'breeze-tts-2';
+              const priceItem=studio.pricing.items.find((p)=>p.key.startsWith(activeAudio+'|'));
+              const price=priceItem?.amount??(activeAudio==='edge-tts'?0:null);
+              return <Narration node={node} runs={runs} cost={price} unavailableReason={!availableModel(activeAudio)?'当前空间未开放语音模型':price===null?'语音生成尚未定价':studio.credits.available<price?'当前空间积分不足':''}
                 onEditStart={doc.begin}
                 onEditEnd={doc.end}
-                onChange={(patch,history)=>edit(shot.id,patch,history)} onGenerate={async()=>{
+                onChange={(patch,history)=>edit(shot.id,patch,history)}
+                onGenerate={async()=>{
                   const rev=await doc.flush();const key=`fm-canvas-voice-${studio.me.id}-${project.id}-${shot.id}`;
                   let pending;try{pending=JSON.parse(localStorage.getItem(key)||'null')}catch{}
                   if(!pending){pending={uid:crypto.randomUUID(),expected_revision:rev,price_revision:studio.pricing.revision};localStorage.setItem(key,JSON.stringify(pending));}
                   try{const result=await api(`/api/canvases/${project.id}/nodes/${shot.id}/narration`,pending);edit(shot.id,{narration_pending:result.id});await doc.flush();localStorage.removeItem(key);await fetchRuns();}
                   catch(e){if(e instanceof ApiError&&e.status<500)localStorage.removeItem(key);throw e}
+                }}
+                onGenerateDialogue={async(lineId)=>{
+                  const rev=await doc.flush();
+                  const result=await api<{items:{line_id:string;id:number}[]}>(`/api/canvases/${project.id}/nodes/${shot.id}/dialogue`,{
+                    uid:crypto.randomUUID(),
+                    expected_revision:rev,
+                    price_revision:studio.pricing.revision,
+                    ...(lineId?{line_id:lineId}:{}),
+                  });
+                  const idMap=new Map(result.items.map((it)=>[it.line_id,it.id]));
+                  const current=doc.ref.current.document.nodes.find((n)=>n.id===shot.id);
+                  if(current?.dialogue_lines?.length){
+                    edit(shot.id,{
+                      dialogue_lines:current.dialogue_lines.map((l)=>
+                        idMap.has(l.id)?{...l,audio_pending:idMap.get(l.id)!,audio_job:idMap.get(l.id)!}:l
+                      ),
+                    });
+                    await doc.flush();
+                  }
+                  await fetchRuns();
                 }}/>
             }}
             onRemove={(id) => updateShots((ids) => ids.filter((item) => item !== id))}

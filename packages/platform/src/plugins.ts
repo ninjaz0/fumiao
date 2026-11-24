@@ -481,10 +481,11 @@ export class PluginRegistry {
           !endpoint &&
           manifest.mode === "request" &&
           manifest.models.every(
-            (m) => m.kind === "image" || m.kind === "video",
+            (m) =>
+              m.kind === "image" || m.kind === "video" || m.kind === "audio",
           ),
         400,
-        "宿主成品验收需要沙箱图片或视频提供方",
+        "宿主成品验收需要沙箱图片、视频或音频提供方",
       );
     } else if (manifest.artifactValidation)
       requireValue(
@@ -652,6 +653,10 @@ export class PluginRegistry {
       }
       if ((row.manifest.originalSubmission?.version ?? 0) >= 2)
         return portablePlugin(row.manifest);
+      if (id === "edge-tts" && version === "1.0.0") {
+        const { edgeTtsPlugin } = await import("./tts/edge-plugin.js");
+        return edgeTtsPlugin;
+      }
       await this.historical(id);
       const prior = this.builtins.get(id + "@" + version);
       if (prior) return prior;

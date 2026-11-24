@@ -23,12 +23,16 @@ import { JobTiming } from "./timing.js";
 import { FrozenQueueHealth } from "./queue-health.js";
 import type { QueueHealth, QueueJob } from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
+import { hasTailChainTable, wakeTailFrameChildren } from "./tail-frame.js";
 class ReferenceUnavailable extends Error {}
 
 export class Executor {
   private readonly frozenHealth = new FrozenQueueHealth();
   constructor(private platform: Platform) {}
   async queueReady() {
+    const tailGuard = (await hasTailChainTable(this.platform.db))
+      ? "AND NOT EXISTS (SELECT 1 FROM job_tail_chains tc WHERE tc.child_job_id=j.id)"
+      : "";
     return (
       await this.platform.db
         .query(`SELECT j.id FROM jobs j LEFT JOIN outbox o ON o.job_id=j.id
@@ -40,6 +44,7 @@ export class Executor {
       AND NOT c.fmworker_resource_driver AND NOT (v.manifest ? 'fmworkerResources')
       AND ${executableJob}
       AND j.lease_token IS NULL AND (o.available_at IS NULL OR o.available_at<=now())
+      ${tailGuard}
       AND (j.request_retry_at IS NULL OR j.request_retry_at<=now())
       AND NOT (j.state='queued' AND j.kind='image' AND COALESCE((v.manifest->'requestLifecycle'->>'honorImageEnabled')::boolean,false) AND NOT (SELECT image_enabled FROM original_state_settings))
       ORDER BY COALESCE(o.available_at,j.created_at),j.id LIMIT 100`)
@@ -260,6 +265,15 @@ export class Executor {
       }
       let referenceAssets;
       if (job.state === "queued") {
+        if (
+          (await hasTailChainTable(sql)) &&
+          (await one(
+            sql,
+            "SELECT 1 FROM job_tail_chains WHERE child_job_id=$1",
+            [job.id],
+          ))
+        )
+          return;
         if (!connection.enabled) return;
         if (
           policy?.version === 3 &&
@@ -786,7 +800,21 @@ export class Executor {
         continue;
       }
       let bytes: Buffer;
-      if (version?.manifest.artifactDownload) {
+      if (item.url.startsWith("data:")) {
+        requireValue(
+          /^data:(image\/(png|jpeg|webp)|video\/mp4|audio\/(wav|mpeg));base64,[a-zA-Z0-9+/=]+$/.test(
+            item.url,
+          ),
+          400,
+          "插件内联媒体无效",
+        );
+        bytes = Buffer.from(item.url.split(",")[1], "base64");
+        requireValue(
+          bytes.length <= (job.kind === "image" ? 32 : 128) * 1024 * 1024,
+          413,
+          "图片过大",
+        );
+      } else if (version?.manifest.artifactDownload) {
         const plugin = await p.registry.resolve(
           p.db,
           job.plugin_id,
@@ -802,20 +830,6 @@ export class Executor {
             },
             signal,
           ),
-        );
-      } else if (item.url.startsWith("data:")) {
-        requireValue(
-          /^data:(image\/(png|jpeg|webp)|video\/mp4|audio\/(wav|mpeg));base64,[a-zA-Z0-9+/=]+$/.test(
-            item.url,
-          ),
-          400,
-          "插件内联媒体无效",
-        );
-        bytes = Buffer.from(item.url.split(",")[1], "base64");
-        requireValue(
-          bytes.length <= (job.kind === "image" ? 32 : 128) * 1024 * 1024,
-          413,
-          "图片过大",
         );
       } else {
         const config = p.vault.open(job.config_snapshot);
@@ -949,5 +963,18 @@ export class Executor {
       if (current)
         await this.platform.settle(sql, current, state, result, error);
     });
+    const firstAsset =
+      result &&
+      typeof result === "object" &&
+      Array.isArray((result as { assets?: unknown }).assets)
+        ? String((result as { assets: unknown[] }).assets[0] ?? "")
+        : undefined;
+    await wakeTailFrameChildren(
+      this.platform,
+      job,
+      state,
+      firstAsset || undefined,
+      AbortSignal.timeout(45_000),
+    ).catch(() => {});
   }
 }

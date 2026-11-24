@@ -11,9 +11,11 @@ import { parseBody } from "./validation.js";
 import { parseDraft } from "./drafts.js";
 import {
   canvasCandidatesFields,
+  canvasDialogueRunFields,
   canvasRunFields,
   parseCanvasDocument,
 } from "./canvas-draft.js";
+import { resolveSpeakerVoice } from "./dialogue.js";
 import {
   canvasBytes,
   canvasDocumentJson,
@@ -448,7 +450,7 @@ export class OriginalCanvasRuns {
         "audio",
         {
           uid: uuid5(body.uid, `voice:${p.public_id}:${nid}`),
-          model: bindings.default("audio"),
+          model: bindings.resolveAudio(),
           prompt: node.narration_text,
           instruction: node.narration_instruction,
           price_revision:
@@ -471,6 +473,121 @@ export class OriginalCanvasRuns {
         revision: p.revision,
       });
       return result;
+    });
+  }
+  async narrateDialogue(
+    user: OriginalActor,
+    project: string,
+    nid: string,
+    value: unknown,
+  ) {
+    const body = parseBody(value, canvasDialogueRunFields, true) as Run & {
+      line_id?: string;
+    };
+    return this.p.db.transaction(async (sql) => {
+      const p = await this.canvases.project(sql, user, project, true);
+      await this.ownerLock(sql, user);
+      requireValue(p.revision === body.expected_revision, 409, canvasConflict);
+      const doc = parseCanvasDocument(canvasDocumentJson(p.document)),
+        node = doc.nodes.find((n) => n.id === nid && n.type === "video");
+      requireValue(
+        node && node.dialogue_lines && node.dialogue_lines.length > 0,
+        400,
+        "请先添加至少一句角色对白",
+      );
+      const targets = body.line_id
+        ? node.dialogue_lines.filter((l) => l.id === body.line_id)
+        : node.dialogue_lines.filter((l) => pythonStrip(l.text));
+      requireValue(targets.length > 0, 400, "未找到可合成的对白台词");
+      const bindings = await CanvasSubmissionModels.read(sql);
+      const catalog = await new StudioCatalog(this.p.db).catalog(sql);
+      const items: {
+        line_id: string;
+        id: number;
+        speaker: string;
+        model: string;
+        voice_id: string | null;
+      }[] = [];
+
+      for (const line of targets) {
+        const cleanText = pythonStrip(line.text);
+        requireValue(cleanText, 400, "对白台词不能为空");
+        const nodeName = `dialogue:${nid}:${line.id}`;
+        const uid = uuid5(body.uid, `dialogue:${p.public_id}:${nid}:${line.id}`);
+        const old = await this.previous(sql, user, uid);
+        const resolved = await resolveSpeakerVoice(sql, p.workspace_id, line);
+        const model = bindings.resolveAudio(resolved.model);
+        if (old) {
+          requireValue(
+            old.project_id === p.id &&
+              old.node === nodeName &&
+              old.job !== null,
+            409,
+            "这次提交已处理，请刷新后重试",
+          );
+          items.push({
+            line_id: line.id,
+            id: Number(old.job),
+            speaker: line.speaker,
+            model,
+            voice_id: resolved.voiceId ?? null,
+          });
+          continue;
+        }
+        requireValue(
+          !(await this.busy(sql, p.id, nodeName)),
+          409,
+          `对白「${line.speaker || line.id}」仍在生成`,
+        );
+        const extraParams: Record<string, unknown> = {};
+        if (resolved.voiceId) extraParams.voice = resolved.voiceId;
+        if (resolved.rate) extraParams.rate = resolved.rate;
+        if (resolved.pitch) extraParams.pitch = resolved.pitch;
+        if (resolved.instruction) extraParams.instruction = resolved.instruction;
+
+        const draft = parseDraft(
+          "audio",
+          {
+            uid: uuid5(
+              body.uid,
+              `dialogue-job:${p.public_id}:${nid}:${line.id}`,
+            ),
+            model,
+            prompt: cleanText,
+            instruction: resolved.instruction,
+            ...(Object.keys(extraParams).length ? { params: extraParams } : {}),
+            price_revision:
+              typeof body.price_revision === "number"
+                ? body.price_revision
+                : null,
+          },
+          catalog,
+        );
+        const submitted = await this.generation.submitOn(
+          sql,
+          user,
+          draft,
+          String(p.workspace_number),
+          body.price_revision,
+        );
+        await this.link(sql, p, user, nodeName, uid, submitted.id, {
+          line_id: line.id,
+          speaker: line.speaker,
+          pack_id: resolved.packId,
+          voice_id: resolved.voiceId ?? null,
+          text: cleanText,
+          instruction: resolved.instruction,
+          revision: p.revision,
+        });
+        items.push({
+          line_id: line.id,
+          id: submitted.id,
+          speaker: line.speaker,
+          model,
+          voice_id: resolved.voiceId ?? null,
+        });
+      }
+      return { items };
     });
   }
 }

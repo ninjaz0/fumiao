@@ -1,5 +1,5 @@
 export default {
-  export({ project, shots }) {
+  export({ project, shots, bgm }) {
     function stripXml10(str) {
       let out = "";
       const s = String(str ?? "");
@@ -101,17 +101,60 @@ export default {
         shot.videoHasAudio,
       );
       const children = [];
-      if (shot.voice && aFrames > 0) {
-        const aAsset = ensureAsset(
-          shot.voice,
+      let shotAudioFrames = aFrames;
+      if (shot.audioStrategy !== "keep_original") {
+        if (shot.dialogue && shot.dialogue.length > 0) {
+          let dlgOffsetFrames = 0;
+          const gapFrames = Math.max(1, Math.round(fpsInt * 0.15));
+          for (let d = 0; d < shot.dialogue.length; d++) {
+            const seg = shot.dialogue[d];
+            const segFrames = msToFrames(seg.durationMs || 0);
+            const aAsset = ensureAsset(
+              seg.voice,
+              "audio",
+              `${stem}_dlg_${String(d + 1).padStart(2, "0")}`,
+              seg.ext || ".wav",
+              segFrames,
+              true,
+            );
+            children.push(
+              `            <asset-clip name="${escAttr(seg.speaker ? seg.speaker + "_" + aAsset.name : aAsset.name)}" ref="${aAsset.resId}" lane="-1" offset="${rational(dlgOffsetFrames)}" duration="${rational(segFrames)}" start="0s" role="dialogue"/>`,
+            );
+            dlgOffsetFrames += segFrames + (d < shot.dialogue.length - 1 ? gapFrames : 0);
+          }
+          shotAudioFrames = dlgOffsetFrames;
+        } else if (shot.voice && aFrames > 0) {
+          const aAsset = ensureAsset(
+            shot.voice,
+            "audio",
+            `${stem}_voice`,
+            shot.voiceExt || ".wav",
+            aFrames,
+            true,
+          );
+          children.push(
+            `            <asset-clip name="${escAttr(aAsset.name)}" ref="${aAsset.resId}" lane="-1" offset="0s" duration="${rational(aFrames)}" start="0s" role="dialogue"/>`,
+          );
+        }
+      }
+      if (i === 0 && bgm && bgm.asset) {
+        const totalEstMs = shots.reduce(
+          (acc, s) => acc + Math.max(s.videoDurationMs || 0, s.voiceDurationMs || 0),
+          0,
+        );
+        const bgmFrames = msToFrames(
+          Math.min(bgm.durationMs || totalEstMs, totalEstMs || bgm.durationMs || 1000),
+        );
+        const bgmAsset = ensureAsset(
+          bgm.asset,
           "audio",
-          `${stem}_voice`,
-          shot.voiceExt || ".wav",
-          aFrames,
+          "bgm_track",
+          bgm.ext || ".mp3",
+          bgmFrames,
           true,
         );
         children.push(
-          `            <asset-clip name="${escAttr(aAsset.name)}" ref="${aAsset.resId}" lane="-1" offset="0s" duration="${rational(aFrames)}" start="0s" role="dialogue"/>`,
+          `            <asset-clip name="${escAttr(bgmAsset.name)}" ref="${bgmAsset.resId}" lane="-2" offset="0s" duration="${rational(bgmFrames)}" start="0s" role="music"/>`,
         );
       }
       for (const cue of shot.subtitles || []) {
@@ -133,7 +176,7 @@ export default {
       } else {
         spineClips.push(`          <asset-clip ${clipAttrs}/>`);
       }
-      offsetFrames += Math.max(vFrames, aFrames);
+      offsetFrames += Math.max(vFrames, shotAudioFrames);
     }
 
     const projTitle = safeStem(project.title, "fumiao-project");

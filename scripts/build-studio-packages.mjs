@@ -45,6 +45,8 @@ const releases = [
   { id: "jianying-exporter" },
   { id: "fcpxml-exporter" },
   { id: "openrouter-gateway", sandboxBuild: "package/build.mjs" },
+  { id: "tts-commercial", sandboxBuild: "package/build.mjs" },
+  { id: "bgm-generator", sandboxBuild: "package/build.mjs" },
   { id: "payments" },
   { id: "example-extension" },
   { id: "example-asset-tags" },

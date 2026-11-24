@@ -14,6 +14,7 @@ import {
 import { estimateFields } from "./estimate-draft.js";
 import {
   canvasCandidatesFields,
+  canvasDialogueRunFields,
   canvasExactRevisionFields,
   canvasPluginRunFields,
   canvasNewFields,
@@ -25,6 +26,7 @@ export const identityBodies: Record<string, Fields> = {
   canvasNew: canvasNewFields,
   canvasSave: canvasSaveFields,
   canvasRun: canvasRunFields,
+  canvasDialogueRun: canvasDialogueRunFields,
   canvasPluginRun: canvasPluginRunFields,
   canvasCandidates: canvasCandidatesFields,
   canvasShotsDownload: canvasExactRevisionFields,
@@ -43,6 +45,11 @@ export const identityBodies: Record<string, Fields> = {
       nullable: true,
       default: null,
       min: 1,
+    },
+    voice_profile: {
+      kind: "dictionary",
+      nullable: true,
+      optional: true,
     },
   },
   assetKeys: { keys: { kind: "strings", min: 1, max: MAX_ASSET_SELECTION } },
@@ -155,6 +162,16 @@ export const canvasContracts: Contract[] = [
     path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/candidates$/,
     body: "canvasCandidates",
     exactIntegers: true,
+  },
+  {
+    method: "POST",
+    path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/dialogue$/,
+    body: "canvasDialogueRun",
+    exactIntegers: true,
+  },
+  {
+    method: "POST",
+    path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/tail-frame$/,
   },
 ];
 export const identityContracts: Contract[] = [
@@ -276,6 +293,7 @@ export function validateIdentityRequest(
           "canvasNew",
           "canvasSave",
           "canvasRun",
+          "canvasDialogueRun",
           "canvasCandidates",
           "canvasShotsDownload",
         ].includes(contract.body!),

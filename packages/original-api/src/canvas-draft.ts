@@ -67,11 +67,35 @@ export const canvasParamsFields: Fields = {
   resolution: literal(["1K", "2K", "4K"], "1K"),
   image_quality: literal(["low", "medium", "high"], "medium"),
 };
+export const dialogueLineFields: Fields = {
+  id: identifier,
+  speaker: text(40, ""),
+  text: text(300, ""),
+  pack_id: { ...media, nullable: true, optional: true },
+  voice_id: { ...text(120), optional: true },
+  model: { ...text(180), optional: true },
+  instruction: { ...text(300), optional: true },
+  audio_job: { ...positive, optional: true },
+  audio_pending: { ...positive, optional: true },
+};
+export const canvasBgmFields: Fields = {
+  asset_id: { ...media, nullable: true, default: null },
+  volume: { kind: "float", min: 0.02, max: 1, default: 0.35 },
+  ducking: { kind: "boolean", strict: false, default: true },
+  loop: { kind: "boolean", strict: false, default: true },
+};
 export const canvasNodeFields: Fields = {
   narration_text: text(300, ""),
   narration_instruction: text(300, ""),
   narration_job: positive,
   narration_pending: positive,
+  audio_strategy: {
+    ...literal(["replace", "keep_original", "mix"]),
+    optional: true,
+  },
+  original_audio_gain: { kind: "float", min: 0, max: 1, optional: true },
+  tail_inherited: { kind: "boolean", strict: false, optional: true },
+  dialogue_lines: { ...list(object(dialogueLineFields), 20), optional: true },
   asset_packs: list(
     object({ id: media, revision: { ...integer(), min: 1 } }),
     9,
@@ -112,6 +136,8 @@ export const canvasDocumentFields: Fields = {
     600,
   ),
   shots: { ...list({ kind: "string" }, 200), nullable: true, default: null },
+  bgm: { ...object(canvasBgmFields), nullable: true, optional: true },
+  loudnorm: { kind: "boolean", strict: false, optional: true },
 };
 export const canvasNewFields: Fields = {
   title: { ...text(80, "未命名画布"), min: 1 },
@@ -142,7 +168,22 @@ export const canvasPluginRunFields: Fields = {
 export const storyboardExportFields: Fields = {
   exporter: text(120, "storyboard/mp4"),
   uid: { kind: "uuid" },
+  bgm_asset: { ...media, nullable: true, optional: true },
+  bgm_volume: { kind: "float", min: 0.02, max: 1, optional: true },
+  bgm_ducking: { kind: "boolean", strict: false, optional: true },
+  loudnorm: { kind: "boolean", strict: false, optional: true },
   ...canvasExactRevisionFields,
+};
+export const canvasDialogueRunFields: Fields = {
+  ...canvasExactRevisionFields,
+  price_revision: {
+    ...integer(null),
+    nullable: true,
+    min: 1,
+    exactInteger: true,
+  },
+  uid: { kind: "uuid" },
+  line_id: { ...identifier, optional: true },
 };
 export const canvasRunFields: Fields = {
   ...canvasExactRevisionFields,
@@ -177,11 +218,32 @@ export type CanvasParams = {
   resolution: string;
   image_quality: string;
 };
+export type DialogueLine = {
+  id: string;
+  speaker: string;
+  text: string;
+  pack_id?: string | null;
+  voice_id?: string;
+  model?: string;
+  instruction?: string;
+  audio_job?: number | null;
+  audio_pending?: number | null;
+};
+export type CanvasBgm = {
+  asset_id: string | null;
+  volume: number;
+  ducking: boolean;
+  loop: boolean;
+};
 export type CanvasNode = {
   narration_text: string;
   narration_instruction: string;
   narration_job: number | null;
   narration_pending: number | null;
+  audio_strategy?: "replace" | "keep_original" | "mix";
+  original_audio_gain?: number;
+  tail_inherited?: boolean;
+  dialogue_lines?: DialogueLine[];
   asset_packs: { id: string; revision: number }[];
   id: string;
   type: "text" | "image" | "video" | "sticky" | "plugin";
@@ -210,6 +272,8 @@ export type CanvasDocument = {
     targetPort?: string;
   }[];
   shots?: string[];
+  bgm?: CanvasBgm | null;
+  loudnorm?: boolean;
 };
 /** Pydantic excludes shots only when None; an explicit empty list stays visible. */
 export function canvasDocumentValue(

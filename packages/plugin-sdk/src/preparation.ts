@@ -44,6 +44,7 @@ export const providerMediaPolicySchema = z
         imageFormat: outputMessage,
         imageDecode: outputMessage,
         video: outputMessage,
+        audio: outputMessage.optional(),
         failed: outputMessage,
         recovering: outputMessage.optional(),
       })

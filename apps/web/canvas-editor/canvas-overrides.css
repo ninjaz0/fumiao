@@ -190,3 +190,107 @@
   color: var(--cv-text);
   font: inherit;
 }
+.composition-mix-box {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--cv-line);
+  border-radius: 8px;
+  background: var(--cv-hover);
+  font-size: 13px;
+}
+.composition-mix-box > label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.composition-mix-box select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--cv-line);
+  background: var(--cv-surface);
+  color: var(--cv-text);
+  font: inherit;
+  max-width: 100%;
+}
+.composition-mix-check,
+.narration-tail-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--cv-muted);
+}
+.narration-mix-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--cv-line);
+  border-radius: 8px;
+  background: var(--cv-hover);
+  font-size: 12px;
+}
+.narration-mix-bar select {
+  margin-left: 6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--cv-line);
+  background: var(--cv-surface);
+  color: var(--cv-text);
+  font: inherit;
+}
+.narration-mode-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.narration-mode-tabs button[aria-selected="true"] {
+  border-color: var(--cv-accent, var(--cv-text));
+  font-weight: 600;
+}
+.dialogue-editor {
+  display: grid;
+  gap: 8px;
+}
+.dialogue-row {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--cv-line);
+  border-radius: 8px;
+  background: var(--cv-surface);
+}
+.dialogue-row-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.dialogue-row-head input {
+  flex: 1;
+  min-width: 0;
+}
+.dialogue-quick-import {
+  display: grid;
+  gap: 6px;
+}
+.fm-pack-voice {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--cv-line);
+  border-radius: 8px;
+}
+.fm-pack-voice select {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--cv-line);
+  background: var(--cv-surface);
+  color: var(--cv-text);
+  font: inherit;
+}

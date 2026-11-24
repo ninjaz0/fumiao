@@ -1,0 +1,204 @@
+{
+  "format": 1,
+  "id": "tts-commercial",
+  "label": "多引擎 TTS 配音路由（OpenAI / CosyVoice / Piper）",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "manifest": {
+    "id": "tts-commercial",
+    "label": "多引擎 TTS 配音路由（OpenAI / CosyVoice / Piper）",
+    "version": "1.0.0",
+    "contractVersion": 1,
+    "mode": "request",
+    "configSchema": {
+      "type": "object",
+      "required": [
+        "baseUrl",
+        "apiKey"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "type": "string",
+          "pattern": "^https://",
+          "title": "TTS 网关地址（OpenAI 兼容）"
+        },
+        "apiKey": {
+          "type": "string",
+          "writeOnly": true,
+          "title": "API 密钥"
+        }
+      }
+    },
+    "models": [
+      {
+        "id": "tts-1",
+        "label": "OpenAI TTS-1（标准语音）",
+        "kind": "audio",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {}
+        },
+        "studio": {
+          "order": 70,
+          "priceOrder": 700,
+          "descriptor": {
+            "kind": "audio",
+            "label": "OpenAI TTS-1",
+            "provider": "tts-commercial"
+          },
+          "prices": [
+            {
+              "tier": "standard",
+              "label": "单段配音合成",
+              "amount": 2,
+              "match": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "gpt-4o-mini-tts",
+        "label": "GPT-4o Mini TTS（情绪可控）",
+        "kind": "audio",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {}
+        },
+        "studio": {
+          "order": 71,
+          "priceOrder": 701,
+          "descriptor": {
+            "kind": "audio",
+            "label": "GPT-4o Mini TTS",
+            "provider": "tts-commercial"
+          },
+          "prices": [
+            {
+              "tier": "expressive",
+              "label": "情绪可控配音",
+              "amount": 3,
+              "match": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "local-tts-compat",
+        "label": "本地/自建 TTS（Piper / CosyVoice）",
+        "kind": "audio",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {}
+        },
+        "studio": {
+          "order": 72,
+          "priceOrder": 702,
+          "descriptor": {
+            "kind": "audio",
+            "label": "本地 TTS（Piper / CosyVoice）",
+            "provider": "tts-commercial"
+          },
+          "prices": [
+            {
+              "tier": "local",
+              "label": "自建节点配音",
+              "amount": 0,
+              "match": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "canvasSubmission": {
+      "version": 1,
+      "models": [
+        {
+          "model": "tts-1",
+          "kind": "audio",
+          "defaultForKind": false
+        },
+        {
+          "model": "gpt-4o-mini-tts",
+          "kind": "audio",
+          "defaultForKind": false
+        },
+        {
+          "model": "local-tts-compat",
+          "kind": "audio",
+          "defaultForKind": false
+        }
+      ]
+    },
+    "artifactDownload": {
+      "version": 1
+    },
+    "artifactValidation": {
+      "version": 3,
+      "errors": {
+        "imageFormat": "TTS 服务返回格式无效",
+        "imageDecode": "TTS 服务返回格式无效",
+        "video": "TTS 服务返回格式无效",
+        "audio": "TTS 返回的音频无法解码或时长超出限制",
+        "failed": "TTS 配音保存失败，请重试"
+      }
+    },
+    "requestLifecycle": {
+      "version": 3,
+      "honorImageEnabled": false,
+      "cancelDisabled": true,
+      "referenceKinds": [
+        "ref"
+      ],
+      "queueOrder": "fifo",
+      "progressUpdatesHealth": false,
+      "recordCancelledRun": false,
+      "preferFinalizing": false,
+      "requireConfigured": true,
+      "atomicReferences": false,
+      "resumeAccepted": false,
+      "cancelOnlyWhenAvailable": false,
+      "executionDeadlineMs": 120000,
+      "notes": {
+        "submitting": "正在合成语音",
+        "unavailable": "等待 TTS 服务就绪",
+        "inputUnavailable": "输入不可用",
+        "inputFailed": "输入准备失败",
+        "saveFailed": "语音保存失败",
+        "recoverySaveFailed": "语音恢复保存失败",
+        "submitFailed": "语音合成提交失败",
+        "unknownSubmission": "语音合成状态未确认",
+        "disabled": "账号已停用"
+      }
+    },
+    "originalSubmission": {
+      "version": 5,
+      "studioDigest": "f832ce67d520d3902bdf1d8db1bb6d03837db7da4b63aacbe561d7059ebbec01"
+    }
+  },
+  "studioProgram": "(()=>{\"use strict\";var policy=(()=>{var s=Object.defineProperty;var m=Object.getOwnPropertyDescriptor;var p=Object.getOwnPropertyNames;var c=Object.prototype.hasOwnProperty;var d=(e,r)=>{for(var t in r)s(e,t,{get:r[t],enumerable:!0})},y=(e,r,t,i)=>{if(r&&typeof r==\"object\"||typeof r==\"function\")for(let n of p(r))!c.call(e,n)&&n!==t&&s(e,n,{get:()=>r[n],enumerable:!(i=m(r,n))||i.enumerable});return e};var g=e=>y(s({},\"__esModule\",{value:!0}),e);var v={};d(v,{default:()=>N});var a={\"tts-1\":{parameterObject:!0,fields:{voice:{type:\"string\",title:\"\\u97F3\\u8272\",enum:[\"alloy\",\"ash\",\"coral\",\"echo\",\"nova\",\"onyx\",\"sage\",\"shimmer\",\"zh-CN-XiaoxiaoNeural\",\"zh-CN-YunxiNeural\"],default:\"nova\",optionLabels:{alloy:\"Alloy\\uFF08\\u4E2D\\u6027\\u81EA\\u7136\\uFF09\",ash:\"Ash\\uFF08\\u6C89\\u7A33\\u7537\\u58F0\\uFF09\",coral:\"Coral\\uFF08\\u6E29\\u6696\\u5973\\u58F0\\uFF09\",echo:\"Echo\\uFF08\\u53D9\\u4E8B\\u7537\\u58F0\\uFF09\",nova:\"Nova\\uFF08\\u660E\\u5FEB\\u5973\\u58F0\\uFF09\",onyx:\"Onyx\\uFF08\\u4F4E\\u6C89\\u78C1\\u6027\\uFF09\",sage:\"Sage\\uFF08\\u77E5\\u6027\\u67D4\\u548C\\uFF09\",shimmer:\"Shimmer\\uFF08\\u6E05\\u6F88\\u5973\\u58F0\\uFF09\",\"zh-CN-XiaoxiaoNeural\":\"\\u6653\\u6653\\uFF08\\u4E2D\\u6587\\u5973\\u58F0\\uFF09\",\"zh-CN-YunxiNeural\":\"\\u4E91\\u5E0C\\uFF08\\u4E2D\\u6587\\u7537\\u58F0\\uFF09\"}},speed:{type:\"number\",title:\"\\u8BED\\u901F\\u500D\\u7387\",minimum:.5,maximum:2,default:1,uiHint:\"slider\"},response_format:{type:\"string\",title:\"\\u8F93\\u51FA\\u683C\\u5F0F\",enum:[\"mp3\",\"wav\"],default:\"mp3\"},instruction:{type:\"string\",title:\"\\u98CE\\u683C\\u5907\\u6CE8\",maxLength:300}},tiers:[{tier:\"standard\",when:{}}],references:{min:0,max:0}},\"gpt-4o-mini-tts\":{parameterObject:!0,fields:{voice:{type:\"string\",title:\"\\u97F3\\u8272\",enum:[\"alloy\",\"ash\",\"coral\",\"echo\",\"nova\",\"onyx\",\"sage\",\"shimmer\",\"zh-CN-XiaoxiaoNeural\",\"zh-CN-YunxiNeural\"],default:\"coral\",optionLabels:{alloy:\"Alloy\\uFF08\\u4E2D\\u6027\\u81EA\\u7136\\uFF09\",ash:\"Ash\\uFF08\\u6C89\\u7A33\\u7537\\u58F0\\uFF09\",coral:\"Coral\\uFF08\\u6E29\\u6696\\u5973\\u58F0\\uFF09\",echo:\"Echo\\uFF08\\u53D9\\u4E8B\\u7537\\u58F0\\uFF09\",nova:\"Nova\\uFF08\\u660E\\u5FEB\\u5973\\u58F0\\uFF09\",onyx:\"Onyx\\uFF08\\u4F4E\\u6C89\\u78C1\\u6027\\uFF09\",sage:\"Sage\\uFF08\\u77E5\\u6027\\u67D4\\u548C\\uFF09\",shimmer:\"Shimmer\\uFF08\\u6E05\\u6F88\\u5973\\u58F0\\uFF09\",\"zh-CN-XiaoxiaoNeural\":\"\\u6653\\u6653\\uFF08\\u4E2D\\u6587\\u5973\\u58F0\\uFF09\",\"zh-CN-YunxiNeural\":\"\\u4E91\\u5E0C\\uFF08\\u4E2D\\u6587\\u7537\\u58F0\\uFF09\"}},speed:{type:\"number\",title:\"\\u8BED\\u901F\\u500D\\u7387\",minimum:.5,maximum:2,default:1,uiHint:\"slider\"},response_format:{type:\"string\",title:\"\\u8F93\\u51FA\\u683C\\u5F0F\",enum:[\"mp3\",\"wav\"],default:\"mp3\"},instruction:{type:\"string\",title:\"\\u60C5\\u7EEA\\u4E0E\\u8BED\\u6C14\\u6307\\u4EE4\",maxLength:300,uiHint:\"textarea\"}},tiers:[{tier:\"expressive\",when:{}}],references:{min:0,max:0}},\"local-tts-compat\":{parameterObject:!0,fields:{voice:{type:\"string\",title:\"\\u672C\\u5730\\u97F3\\u8272 ID\\uFF08Piper / CosyVoice\\uFF09\",enum:[\"alloy\",\"ash\",\"coral\",\"echo\",\"nova\",\"onyx\",\"sage\",\"shimmer\",\"zh-CN-XiaoxiaoNeural\",\"zh-CN-YunxiNeural\"],default:\"zh-CN-XiaoxiaoNeural\",optionLabels:{alloy:\"Alloy\\uFF08\\u4E2D\\u6027\\u81EA\\u7136\\uFF09\",ash:\"Ash\\uFF08\\u6C89\\u7A33\\u7537\\u58F0\\uFF09\",coral:\"Coral\\uFF08\\u6E29\\u6696\\u5973\\u58F0\\uFF09\",echo:\"Echo\\uFF08\\u53D9\\u4E8B\\u7537\\u58F0\\uFF09\",nova:\"Nova\\uFF08\\u660E\\u5FEB\\u5973\\u58F0\\uFF09\",onyx:\"Onyx\\uFF08\\u4F4E\\u6C89\\u78C1\\u6027\\uFF09\",sage:\"Sage\\uFF08\\u77E5\\u6027\\u67D4\\u548C\\uFF09\",shimmer:\"Shimmer\\uFF08\\u6E05\\u6F88\\u5973\\u58F0\\uFF09\",\"zh-CN-XiaoxiaoNeural\":\"\\u6653\\u6653\\uFF08\\u4E2D\\u6587\\u5973\\u58F0\\uFF09\",\"zh-CN-YunxiNeural\":\"\\u4E91\\u5E0C\\uFF08\\u4E2D\\u6587\\u7537\\u58F0\\uFF09\"}},speed:{type:\"number\",title:\"\\u8BED\\u901F\\u500D\\u7387\",minimum:.5,maximum:2,default:1,uiHint:\"slider\"},response_format:{type:\"string\",title:\"\\u8F93\\u51FA\\u683C\\u5F0F\",enum:[\"wav\",\"mp3\"],default:\"wav\"},instruction:{type:\"string\",title:\"\\u8BED\\u6C14\\u6307\\u4EE4\",maxLength:300}},tiers:[{tier:\"local\",when:{}}],references:{min:0,max:0}}};var u=\"\\\\t-\\\\r\\\\x1c-\\\\x20\\\\x85\\\\xa0\\\\u1680\\\\u2000-\\\\u200a\\\\u2028\\\\u2029\\\\u202f\\\\u205f\\\\u3000\",f=new RegExp(\"^[\"+u+\"]+|[\"+u+\"]+$\",\"g\"),o=e=>e.replace(f,\"\");var l=()=>({source:\"none\",samples:0,confidence:\"none\",version:4});var x=Object.keys(a),N={modelForm(e){return a[e.id]||a[\"tts-1\"]},namespace(e){return\"-tts-commercial-\"+e.kind},validate(e){return o(e.prompt||\"\")?[...String(e.prompt||\"\")].length>2e3?\"\\u5355\\u6BB5\\u53F0\\u8BCD\\u6700\\u591A 2000 \\u5B57\":\"\":\"\\u8BF7\\u8F93\\u5165\\u8981\\u5408\\u6210\\u7684\\u914D\\u97F3\\u53F0\\u8BCD\"},plan(e){return{refs:[],params:{voice:e.voice||e.params?.voice||\"nova\",speed:Number(e.speed||e.params?.speed||1),response_format:e.response_format||e.params?.response_format||\"mp3\",instruction:o(e.instruction||e.params?.instruction||\"\")},requireConfigured:\"TTS \\u670D\\u52A1\\u5C1A\\u672A\\u914D\\u7F6E\\uFF0C\\u8BF7\\u8054\\u7CFB\\u7BA1\\u7406\\u5458\",admission:{models:x,owner:12,global:60,message:\"\\u5F53\\u524D\\u914D\\u97F3\\u4EFB\\u52A1\\u8F83\\u591A\\uFF0C\\u8BF7\\u7A0D\\u540E\\u518D\\u8BD5\"}}},async prepare(e,r,t){return await t.task.admit(),{params:e.params??{},references:[]}},async estimate(){return{tier:\"standard\",params:{}}},configuration({connection:e}){return{configured:!!e?.configured,ready:!!e?.configured}},project(e){return{note:e.request_note||\"\"}},timingFeatures(e){return{kind:e.kind,model:e.model,length:\"short\"}},requestCapacity(){return null},queuePlan(){return{wait:l(),queue:[]}},request({model:e,prompt:r,params:t}){let i={model:e===\"local-tts-compat\"?\"tts-1\":e,input:String(r||\"\"),voice:String(t?.voice||\"nova\"),speed:Math.max(.5,Math.min(2,Number(t?.speed||1))),response_format:t?.response_format===\"wav\"?\"wav\":\"mp3\"};return t?.instruction&&(i.instructions=String(t.instruction)),{path:\"/v1/audio/speech\",body:i,responseFormat:\"binary\",timeoutMs:6e4}},result(e){return[429,502,503,504].includes(e.status)?{disposition:{action:\"retry\",note:\"TTS \\u670D\\u52A1\\u9650\\u6D41\\u6216\\u7E41\\u5FD9\\uFF0C\\u7A0D\\u540E\\u81EA\\u52A8\\u91CD\\u8BD5\",delaySeconds:15}}:[400,401,403,422].includes(e.status)?{disposition:{action:\"fail\",note:\"TTS \\u7F51\\u5173\\u62D2\\u7EDD\\u4E86\\u5408\\u6210\\u8BF7\\u6C42\\uFF0C\\u8BF7\\u68C0\\u67E5\\u5BC6\\u94A5\\u6216\\u97F3\\u8272\\u914D\\u7F6E\"}}:{disposition:{action:\"fail\",note:\"TTS \\u8BED\\u97F3\\u5408\\u6210\\u5931\\u8D25\\uFF0C\\u8BF7\\u91CD\\u8BD5\"}}},async serviceProbe(e){let r=await e.service.read(\"/v1/models\");return{ready:r.status>=200&&r.status<300}},async queueHealth(){return{ready:!0,checked:Math.floor(Date.now()/1e3)}},artifact(){return{error:\"TTS \\u97F3\\u9891\\u4E3A\\u76F4\\u51FA\\u4EA7\\u7269\\uFF0C\\u65E0\\u9700\\u5916\\u94FE\\u4E0B\\u8F7D\"}},downloadError(){return{note:\"TTS \\u97F3\\u9891\\u4E0B\\u8F7D\\u5931\\u8D25\",disposition:\"failed\"}}};return g(v);})();\n;return policy.default})()",
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "http",
+      "secrets",
+      "media"
+    ],
+    "http": {
+      "origins": [],
+      "connection": true
+    }
+  }
+}

@@ -1,8 +1,27 @@
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import type { Actor } from "./platform.js";
 import { one, type Database, type Sql } from "./db.js";
 import { requireValue } from "./security.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
+
+export const packVoiceProfileSchema = z
+  .object({
+    model: z.string().min(1).max(120).optional(),
+    voice_id: z.string().min(1).max(120).optional(),
+    instruction: z.string().max(300).optional(),
+    emotion: z.string().max(40).optional(),
+    rate: z.string().regex(/^[+-]?\d{1,3}%$/).optional(),
+    pitch: z.string().regex(/^[+-]?\d{1,3}Hz$/).optional(),
+    ref_audio_asset_id: z
+      .string()
+      .regex(/^[0-9a-f]{32}$/)
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+export type PackVoiceProfile = z.infer<typeof packVoiceProfileSchema>;
 
 export const packPurposes = {
   subject: "人物外观",
@@ -18,6 +37,7 @@ export type PackDraft = {
   description: string;
   media: string[];
   expected_revision: number | null;
+  voice_profile?: PackVoiceProfile | null;
 };
 export type PackSelection = { id: string; revision: number };
 
@@ -31,6 +51,7 @@ type PackViewRow = {
   title: string;
   body: { assets?: string[]; description?: string; purpose?: string };
   pack_text?: { name: string; description: string } | null;
+  voice_profile?: PackVoiceProfile | null;
   revision: number;
   updated_at: Date | string;
 };
@@ -80,6 +101,7 @@ function packView(row: PackViewRow, keys: ReadonlyMap<string, string>) {
     revision: row.revision,
     updated: Math.floor(new Date(row.updated_at).getTime() / 1000),
     media,
+    ...(row.voice_profile ? { voice_profile: row.voice_profile } : {}),
   };
 }
 
@@ -97,8 +119,9 @@ export class ReferencePacks {
   ) {
     const row = await one(
       sql,
-      `SELECT d.*,w.public_id AS workspace_public,u.public_id AS owner_public
+      `SELECT d.*,m.voice_profile,w.public_id AS workspace_public,u.public_id AS owner_public
       FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
+      LEFT JOIN asset_pack_meta m ON m.pack_id=d.id
       WHERE ${publicKey ? "d.public_id" : "d.id::text"}=$1 AND d.kind='pack' AND NOT d.deleted
       AND ($4::uuid IS NULL OR w.id=$4) AND ${packWorkspaceAccess}
       ${lock ? `FOR ${lock === "share" ? "SHARE" : "UPDATE"} OF d` : ""}`,
@@ -114,10 +137,11 @@ export class ReferencePacks {
     return this.db.transaction(async (sql) => {
       await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
       const { rows } = await sql.query<PackViewRow & { can_access: boolean }>(
-        `SELECT d.public_id,d.title,d.body,d.pack_text,d.revision,d.updated_at,
+        `SELECT d.public_id,d.title,d.body,d.pack_text,m.voice_profile,d.revision,d.updated_at,
                 w.public_id AS workspace_public,u.public_id AS owner_public,
                 ${packWorkspaceAccess} AS can_access
         FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
+        LEFT JOIN asset_pack_meta m ON m.pack_id=d.id
         WHERE d.workspace_id=$1 AND d.kind='pack' AND NOT d.deleted
         ORDER BY d.updated_at DESC,d.public_id`,
         [wid, user.id, user.role],
@@ -220,6 +244,31 @@ export class ReferencePacks {
         "INSERT INTO document_assets(document_id,asset_id) VALUES($1,$2)",
         [id, asset],
       );
+    if (draft.voice_profile !== undefined) {
+      if (draft.voice_profile === null) {
+        await sql.query(
+          "UPDATE asset_pack_meta SET voice_profile=NULL WHERE pack_id=$1",
+          [id],
+        );
+      } else {
+        const parsedVoice = packVoiceProfileSchema.safeParse(draft.voice_profile);
+        requireValue(parsedVoice.success, 400, "角色声线配置无效");
+        const vp = parsedVoice.data;
+        if (vp.ref_audio_asset_id) {
+          const refAudio = await one(
+            sql,
+            "SELECT id FROM assets WHERE public_id=$1 AND workspace_id=$2 AND original_kind IN ('audio','ref_audio') AND state='ready'",
+            [vp.ref_audio_asset_id, wid],
+          );
+          requireValue(refAudio, 404, "参考音频不存在或无权访问");
+        }
+        await sql.query(
+          `INSERT INTO asset_pack_meta(pack_id,voice_profile) VALUES($1,$2)
+           ON CONFLICT (pack_id) DO UPDATE SET voice_profile=excluded.voice_profile`,
+          [id, JSON.stringify(vp)],
+        );
+      }
+    }
     return this.get(sql, user, id, wid, false);
   }
   async remove(

@@ -6,6 +6,7 @@ import { requireValue } from "@fumiao/platform/security.js";
 import { CanvasModels } from "@fumiao/platform/canvas-models.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { ReferencePacks } from "@fumiao/platform/packs.js";
+import { createTailFrameAsset } from "@fumiao/platform/tail-frame.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { OriginalIdentity } from "./identity.js";
 import { archiveEntry, OriginalLibrary } from "./library.js";
@@ -652,6 +653,46 @@ export class OriginalCanvases {
       await this.references(sql, user, row, document);
       await this.nodes(sql, row.id, document);
       return this.publicProject(row, user);
+    });
+  }
+  async extractTailFrame(user: Actor, key: string, nodeId: string) {
+    return this.p.db.transaction(async (sql) => {
+      const row = await this.project(sql, user, key);
+      const doc = parseCanvasDocument(canvasDocumentJson(row.document));
+      const node = doc.nodes.find((n) => n.id === nodeId && n.type === "video");
+      requireValue(node, 404, "未找到对应的视频节点");
+      const video = await this.videoForShot(sql, row.id, node);
+      requireValue(video, 409, "该视频节点尚未生成完成");
+      await this.library.access(
+        sql,
+        user,
+        { kind: "asset", row: video },
+        row.workspace_id,
+      );
+      const stored = await one(
+        sql,
+        "SELECT id,public_id,object_key FROM assets WHERE id=$1 AND state='ready'",
+        [video.id],
+      );
+      requireValue(stored, 404, "视频文件不存在");
+      const tail = await createTailFrameAsset(
+        this.p,
+        sql,
+        user.id,
+        row.workspace_id,
+        {
+          id: String(stored.id),
+          public_id: String(stored.public_id),
+          object_key: String(stored.object_key),
+        },
+        AbortSignal.timeout(45_000),
+      );
+      return {
+        asset_id: tail.public_id,
+        width: tail.width,
+        height: tail.height,
+        source_video: video.public_id as string,
+      };
     });
   }
   async remove(user: Actor, key: string) {

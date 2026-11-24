@@ -1,7 +1,7 @@
 {
   "id": "fcpxml-exporter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "notes": "首次发布",
   "package": "fcpxml-exporter.fmplugin.json",
-  "sha256": "0d50fee0390efc13d462786295c378042408b9d4d3cbe04cd3e3ba71c42088f3"
+  "sha256": "925e16f4a3dcff80eded1014a14997e374c46d8c98823b59ae1d761e88640521"
 }

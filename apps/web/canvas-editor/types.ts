@@ -16,11 +16,32 @@ export type Params = {
   resolution: "1K" | "2K" | "4K";
   image_quality: "low" | "medium" | "high";
 };
+export type DialogueLine = {
+  id: string;
+  speaker: string;
+  text: string;
+  pack_id?: string | null;
+  voice_id?: string;
+  model?: string;
+  instruction?: string;
+  audio_job?: number | null;
+  audio_pending?: number | null;
+};
+export type CanvasBgm = {
+  asset_id: string | null;
+  volume: number;
+  ducking: boolean;
+  loop: boolean;
+};
 export type CanvasNode = {
   narration_text?:string;
   narration_instruction?:string;
   narration_job?:number|null;
   narration_pending?:number|null;
+  audio_strategy?: "replace" | "keep_original" | "mix";
+  original_audio_gain?: number;
+  tail_inherited?: boolean;
+  dialogue_lines?: DialogueLine[];
   asset_packs?: {id:string;revision:number;name?:string}[];
   id: string;
   type: Kind;
@@ -44,6 +65,8 @@ export type Doc = {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
   shots?: string[];
+  bgm?: CanvasBgm | null;
+  loudnorm?: boolean;
 };
 export type Draft = { title: string; document: Doc };
 export type Project = Draft & {

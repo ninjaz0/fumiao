@@ -36,4 +36,19 @@ export class CanvasSubmissionModels {
     );
     return candidates[0].model;
   }
+  resolveAudio(preferredModel?: string) {
+    if (preferredModel) {
+      const explicit = this.rules.get(preferredModel);
+      if (explicit && explicit.kind === "audio") return explicit.model;
+    }
+    const defaults = [...this.rules.values()].filter(
+      (r) => r.kind === "audio" && r.defaultForKind,
+    );
+    if (defaults.length === 1) return defaults[0].model;
+    const edge = this.rules.get("edge-tts");
+    if (edge && edge.kind === "audio") return edge.model;
+    const anyAudio = [...this.rules.values()].find((r) => r.kind === "audio");
+    requireValue(anyAudio, 503, "音频配音服务尚未配置");
+    return anyAudio.model;
+  }
 }

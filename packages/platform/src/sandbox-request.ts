@@ -43,6 +43,7 @@ const instruction = z
     body: z.record(z.string(), z.unknown()).optional(),
     idempotency: z.enum(["compact", "standard"]).optional(),
     publicAlias: z.string().max(2048).optional(),
+    responseFormat: z.enum(["json", "binary"]).optional(),
     timeoutMs: z.number().int().min(100).max(600000),
   })
   .strict();
@@ -311,28 +312,100 @@ export async function sandboxRequest(
       "插件请求与执行阶段不匹配",
     );
     const body = expandReferences(plan.body, e);
-    const result =
-      policy?.version === 5 && policy.stream && !remoteId
-        ? await stream(e, plan, body)
-        : outcome.parse(
+    let result: z.infer<typeof outcome>;
+    if (policy?.version === 5 && policy.stream && !remoteId) {
+      result = await stream(e, plan, body);
+    } else if (plan.responseFormat === "binary" && !remoteId) {
+      let response;
+      try {
+        response = await open(
+          e.config,
+          plan.path,
+          e.signal,
+          plan.timeoutMs,
+          64 * 1024 ** 2,
+          body,
+          plan.idempotency === "compact"
+            ? e.idempotencyKey.replaceAll("-", "")
+            : plan.idempotency === "standard"
+              ? e.idempotencyKey
+              : undefined,
+        );
+        const status = response.status;
+        const chunks: Buffer[] = [];
+        for await (const chunk of response.body) chunks.push(Buffer.from(chunk));
+        const raw = Buffer.concat(chunks);
+        if (status >= 200 && status < 300) {
+          const ct = String(response.headers["content-type"] || "")
+            .split(";")[0]
+            .trim()
+            .toLowerCase();
+          const mime =
+            ct === "audio/wav" || ct === "audio/x-wav"
+              ? "audio/wav"
+              : ct === "audio/mpeg" || ct === "audio/mp3"
+                ? "audio/mpeg"
+                : e.kind === "audio"
+                  ? "audio/mpeg"
+                  : ct || "application/octet-stream";
+          result = outcome.parse({
+            receipt: {
+              state: "completed",
+              artifacts: [
+                {
+                  mime,
+                  url: `data:${mime};base64,${raw.toString("base64")}`,
+                },
+              ],
+            },
+          });
+        } else {
+          result = outcome.parse(
             sync(
               "result",
-              await read(
-                e.config,
-                plan.path,
-                e.signal,
-                plan.timeoutMs,
-                2 * 1024 ** 2,
-                body,
-                plan.idempotency === "compact"
-                  ? e.idempotencyKey.replaceAll("-", "")
-                  : plan.idempotency === "standard"
-                    ? e.idempotencyKey
-                    : undefined,
-              ),
-              remoteId ?? null,
+              { status, text: raw.subarray(0, 65536).toString("utf8") },
+              null,
             ),
           );
+        }
+      } catch (error) {
+        result = outcome.parse(
+          sync(
+            "result",
+            {
+              status:
+                error instanceof ProviderBodyTooLarge && response
+                  ? response.status
+                  : 0,
+              text: null,
+            },
+            null,
+          ),
+        );
+      } finally {
+        response?.close();
+      }
+    } else {
+      result = outcome.parse(
+        sync(
+          "result",
+          await read(
+            e.config,
+            plan.path,
+            e.signal,
+            plan.timeoutMs,
+            2 * 1024 ** 2,
+            body,
+            plan.idempotency === "compact"
+              ? e.idempotencyKey.replaceAll("-", "")
+              : plan.idempotency === "standard"
+                ? e.idempotencyKey
+                : undefined,
+          ),
+          remoteId ?? null,
+        ),
+      );
+    }
     if (result.note && !remoteId) await e.reportProviderNote?.(result.note);
     if (result.clock) await e.reportProviderClock?.(result.clock);
     if (result.timing) await e.reportTiming?.(result.timing);

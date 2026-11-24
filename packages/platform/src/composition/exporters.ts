@@ -90,16 +90,21 @@ const segments = z
 
 export async function planComposition(program: string, shots: Shot[]) {
   const run = await loadProgram(program);
-  const plan = segments.safeParse(run("plan", { shots }));
+  const shotsForPlan = shots.map((s) =>
+    s.voice || !s.dialogue?.length ? s : { ...s, voice: s.dialogue[0].voice },
+  );
+  const plan = segments.safeParse(run("plan", { shots: shotsForPlan }));
   requireValue(plan.success, 400, "导出器返回了无效的分镜计划");
   return plan.data.map(({ index, narration, subtitles }) => {
     const shot = shots[index];
     requireValue(shot, 400, "导出器引用了当前画布之外的镜头");
-    return {
+    const mapped: Shot = {
       ...shot,
       voice: narration ? shot.voice : null,
       text: narration && subtitles ? shot.text : "",
     };
+    if (!narration && mapped.dialogue) delete mapped.dialogue;
+    return mapped;
   });
 }
 
@@ -172,6 +177,15 @@ export interface ProjectExportShotInput {
   voiceDurationMs: number;
   voiceExt: string;
   text: string;
+  audioStrategy?: "replace" | "keep_original" | "mix";
+  originalGain?: number;
+  dialogue?: {
+    voice: string;
+    speaker: string;
+    text: string;
+    durationMs: number;
+    ext: string;
+  }[];
   subtitles: { startMs: number; endMs: number; text: string }[];
 }
 
@@ -185,6 +199,13 @@ export interface ProjectExportInput {
     height: number;
   };
   shots: ProjectExportShotInput[];
+  bgm?: {
+    asset: string;
+    durationMs: number;
+    ext: string;
+    volume: number;
+    loop: boolean;
+  } | null;
 }
 
 function parseFrameRate(raw: unknown): number {
@@ -289,18 +310,32 @@ export function computeExportBasisHash(input: {
   exporterId: string;
   projectTitle: string;
   shots: Shot[];
+  bgm?: { asset: string; volume?: number; loop?: boolean } | null;
 }): string {
   const canonical = {
     kind: "fumiao-project-export",
     v: 1,
     exporter: `${input.exporterPlugin}@${input.exporterVersion}/${input.exporterId}`,
     title: input.projectTitle,
+    ...(input.bgm?.asset
+      ? {
+          bgm: {
+            asset: input.bgm.asset,
+            volume: input.bgm.volume ?? 0.35,
+            loop: input.bgm.loop !== false,
+          },
+        }
+      : {}),
     shots: input.shots.map((s) => ({
       node: s.node,
       title: s.title,
       video: s.video,
       voice: s.voice,
       text: s.text,
+      ...(s.audioStrategy && s.audioStrategy !== "replace"
+        ? { audioStrategy: s.audioStrategy, originalGain: s.originalGain ?? 0.35 }
+        : {}),
+      ...(s.dialogue?.length ? { dialogue: s.dialogue } : {}),
     })),
   };
   return createHash("sha256")
@@ -320,7 +355,9 @@ export async function planProjectExport(
   for (const shot of input.shots) {
     admittedAssets.add(shot.video);
     if (shot.voice) admittedAssets.add(shot.voice);
+    for (const seg of shot.dialogue ?? []) admittedAssets.add(seg.voice);
   }
+  if (input.bgm?.asset) admittedAssets.add(input.bgm.asset);
   const seenArchivePaths = new Set<string>();
   let totalInlineBytes = 0;
   for (const file of plan.files) {

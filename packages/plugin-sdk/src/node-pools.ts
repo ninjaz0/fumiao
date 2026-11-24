@@ -37,6 +37,7 @@ export const artifactRulesSchema = z
       "image/webp",
       "video/mp4",
       "audio/wav",
+      "audio/mpeg",
     ]),
     maxBytes: z
       .number()
@@ -46,7 +47,7 @@ export const artifactRulesSchema = z
     width: z.number().int().positive().max(16384).optional(),
     height: z.number().int().positive().max(16384).optional(),
     videoCodec: z.enum(["h264", "hevc", "av1"]).optional(),
-    audioCodec: z.enum(["aac", "pcm_s16le"]).optional(),
+    audioCodec: z.enum(["aac", "pcm_s16le", "mp3"]).optional(),
     fps: z.number().positive().max(240).optional(),
     frames: z.number().int().positive().optional(),
     channels: z.number().int().positive().max(8).optional(),

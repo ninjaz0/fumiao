@@ -1,7 +1,16 @@
 import {useEffect,useRef,useState} from 'react';
 import {Check,Plus,Pencil,Trash2,ArrowLeft,Upload,ChevronRight} from 'lucide-react';
 import {mergeAssetPackAssets} from '../studio/state';
-export type Pack = {id:string;name:string;purpose:string;description:string;media:string[];revision:number;owner:number};
+export type PackVoiceProfile = {
+  model?: string;
+  voice_id?: string;
+  instruction?: string;
+  emotion?: string;
+  rate?: string;
+  pitch?: string;
+  ref_audio_asset_id?: string | null;
+};
+export type Pack = {id:string;name:string;purpose:string;description:string;media:string[];revision:number;owner:number;voice_profile?:PackVoiceProfile|null};
 type Ref = {id:string;revision:number};
 export type AssetPacksProps = {
  workspace:number;userId:number;admin?:boolean;selected?:Ref[];imageRefs?:string[];
@@ -11,7 +20,19 @@ export type AssetPacksProps = {
  onDeletePack?:(id:string)=>void|Promise<void>;
 };
 const purposes:Record<string,string>={subject:'人物外观',outfit:'服装',scene:'场景',style:'风格',product:'产品细节'};
-const blank=()=>({name:'',purpose:'subject',description:'',media:[] as string[]});
+const voicePresets:{id:string;label:string}[]=[
+ {id:'',label:'跟随默认音色'},
+ {id:'zh-CN-XiaoxiaoNeural',label:'晓晓（女·自然温暖）'},
+ {id:'zh-CN-YunxiNeural',label:'云希（男·清亮叙事）'},
+ {id:'zh-CN-YunjianNeural',label:'云健（男·沉稳解说）'},
+ {id:'zh-CN-XiaoyiNeural',label:'晓伊（女·灵动少女）'},
+ {id:'zh-CN-YunyangNeural',label:'云扬（男·新闻播音）'},
+ {id:'zh-TW-HsiaoChenNeural',label:'曉臻（女·台湾温柔）'},
+ {id:'zh-HK-HiuMaanNeural',label:'曉曼（女·粤语）'},
+ {id:'nova',label:'Nova（OpenAI 明快女声）'},
+ {id:'onyx',label:'Onyx（OpenAI 低沉男声）'},
+];
+const blank=()=>({name:'',purpose:'subject',description:'',media:[] as string[],voice_profile:null as PackVoiceProfile|null});
 export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[],onImportImages,onImportPack,onRemovePack,onDeletePack}:AssetPacksProps){
  const [packs,setPacks]=useState<Pack[]>([]),[assets,setAssets]=useState<{id:string}[]>([]),[opened,setOpened]=useState<string|null>(null),[chosen,setChosen]=useState<string[]>([]),[editing,setEditing]=useState<Pack|null|undefined>(),[draft,setDraft]=useState(blank),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[removing,setRemoving]=useState<string|null>(null);
  const mountedRef=useRef(true);
@@ -48,7 +69,12 @@ export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[
  useEffect(()=>{const controller=new AbortController();recentUploadsRef.current=[];setOpened(null);setChosen([]);setEditing(undefined);setRemoving(null);void load(controller.signal);return()=>{++loadSeqRef.current;controller.abort()}},[workspace]);
  const save=async()=>{
   setBusy(true);setError('');try{
-   await request('/api/asset-packs'+(editing?'/'+editing.id:''),{...draft,expected_revision:editing?.revision},editing?'PUT':'POST');
+   const vp=draft.purpose==='subject'&&draft.voice_profile?Object.fromEntries(Object.entries(draft.voice_profile).filter(([,v])=>v!==undefined&&v!==''&&v!==null)):null;
+   const hasVp=vp&&Object.keys(vp).length>0;
+   const payload:Record<string,unknown>={name:draft.name,purpose:draft.purpose,description:draft.description,media:draft.media,expected_revision:editing?.revision};
+   if(hasVp)payload.voice_profile=vp;
+   else if(editing?.voice_profile)payload.voice_profile=null;
+   await request('/api/asset-packs'+(editing?'/'+editing.id:''),payload,editing?'PUT':'POST');
    if(!mountedRef.current)return;
    setEditing(undefined);await load();
   }catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}
@@ -77,13 +103,21 @@ export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[
     <label>名称<input value={draft.name} maxLength={60} placeholder="例如：主角 A、展台场景" onChange={e=>setDraft({...draft,name:e.target.value})}/></label>
     <fieldset><legend>用途</legend><div className="fm-pack-purpose">{Object.entries(purposes).map(([key,label])=><button key={key} aria-pressed={draft.purpose===key} onClick={()=>setDraft({...draft,purpose:key})}>{label}</button>)}</div></fieldset>
     <label>说明<textarea value={draft.description} maxLength={2000} rows={3} placeholder="人物特征、服装或场景中需要保留的细节" onChange={e=>setDraft({...draft,description:e.target.value})}/></label>
+    {draft.purpose==='subject'&&<fieldset className="fm-pack-voice">
+     <legend>角色专属声线（对白自动匹配）</legend>
+     <label>预设音色<select value={draft.voice_profile?.voice_id||''} onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),voice_id:e.target.value||undefined}})}>{voicePresets.map(v=><option key={v.id} value={v.id}>{v.label}</option>)}</select></label>
+     <label>默认语速<select value={draft.voice_profile?.rate||'+0%'} onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),rate:e.target.value==='+0%'?undefined:e.target.value}})}>
+      <option value="-20%">偏慢 (-20%)</option><option value="-10%">稍慢 (-10%)</option><option value="+0%">标准</option><option value="+10%">稍快 (+10%)</option><option value="+20%">偏快 (+20%)</option>
+     </select></label>
+     <label>语气与声线描述<input maxLength={300} value={draft.voice_profile?.instruction||''} placeholder="例如：冷静克制的低沉男中音" onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),instruction:e.target.value||undefined}})}/></label>
+    </fieldset>}
    </div>
    <div className="fm-pack-heading"><span>参考图片 · {draft.media.length}/9</span><button className="fm-pack-button" disabled={busy||draft.media.length>=9} onClick={()=>fileRef.current?.click()}><Upload size={16}/>上传图片</button><input ref={fileRef} type="file" hidden accept="image/*,.heic,.heif" onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value='';void upload(file)}}/></div>
    <div className="fm-pack-images">{assets.map(a=><button key={a.id} disabled={busy} aria-label={'选择参考图 '+a.id.slice(0,6)} aria-pressed={draft.media.includes(a.id)} onClick={()=>toggle(a.id)}><img loading="lazy" src={'/media/'+a.id} alt="参考图"/>{draft.media.includes(a.id)&&<span>{draft.media.indexOf(a.id)+1}</span>}</button>)}</div>
    {!assets.length&&<p>上传图片，建立这个素材包。</p>}
    <div className="fm-pack-footer"><button className="fm-pack-primary" disabled={busy||!draft.name.trim()||!draft.media.length} onClick={()=>void save()}>{busy?'保存中…':'保存素材包'}</button></div>
   </>:pack?<>
-   <div className="fm-pack-detail-heading"><button className="fm-pack-button" disabled={busy} aria-label="返回素材包列表" onClick={()=>{setOpened(null);setChosen([]);setError('')}}><ArrowLeft size={18}/></button><div><h3>{pack.name}</h3><p>{purposes[pack.purpose]} · {pack.media.length} 张图片</p></div></div>
+   <div className="fm-pack-detail-heading"><button className="fm-pack-button" disabled={busy} aria-label="返回素材包列表" onClick={()=>{setOpened(null);setChosen([]);setError('')}}><ArrowLeft size={18}/></button><div><h3>{pack.name}</h3><p>{purposes[pack.purpose]} · {pack.media.length} 张图片{pack.voice_profile?.voice_id?` · 声线 ${pack.voice_profile.voice_id}`:''}</p></div></div>
    {pack.description&&<p className="fm-pack-description">{pack.description}</p>}
    <div className="fm-pack-images fm-pack-pick-images" role="group" aria-label="选择素材包图片">{pack.media.map((id,index)=>{
     const added=imageRefs.includes(id),checked=chosen.includes(id);
@@ -94,9 +128,9 @@ export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[
    <div className="fm-pack-heading"><span>选择素材包</span><button className="fm-pack-button" disabled={busy||loading} onClick={()=>{setDraft(blank());setEditing(null);setError('')}}><Plus size={16}/>新建素材包</button></div>
    {loading?<p role="status">正在加载素材包…</p>:packs.length===0?<p className="fm-pack-empty">暂无素材包</p>:<div className="fm-pack-list">{packs.map(pack=><article key={pack.id}>
     <button className="fm-pack-select" disabled={busy} aria-label={'打开素材包 '+pack.name} onClick={()=>{setOpened(pack.id);setChosen([]);setRemoving(null);setError('')}}>
-     <img loading="lazy" src={'/media/'+pack.media[0]} alt=""/><span><strong>{pack.name}</strong><small>{purposes[pack.purpose]} · {pack.media.length} 张图片{selected.some(p=>p.id===pack.id)?' · 已导入整包':''}</small>{pack.description&&<p>{pack.description}</p>}</span><ChevronRight size={18}/>
+     <img loading="lazy" src={'/media/'+pack.media[0]} alt=""/><span><strong>{pack.name}</strong><small>{purposes[pack.purpose]} · {pack.media.length} 张图片{pack.voice_profile?.voice_id?' · 已配声线':''}{selected.some(p=>p.id===pack.id)?' · 已导入整包':''}</small>{pack.description&&<p>{pack.description}</p>}</span><ChevronRight size={18}/>
     </button>
-    <div className="fm-pack-row-actions"><button className="fm-pack-button" disabled={busy} aria-label={'编辑 '+pack.name} onClick={()=>{setEditing(pack);setDraft({name:pack.name,purpose:pack.purpose,description:pack.description,media:pack.media});setError('')}}><Pencil size={16}/></button>
+    <div className="fm-pack-row-actions"><button className="fm-pack-button" disabled={busy} aria-label={'编辑 '+pack.name} onClick={()=>{setEditing(pack);setDraft({name:pack.name,purpose:pack.purpose,description:pack.description,media:pack.media,voice_profile:pack.voice_profile??null});setError('')}}><Pencil size={16}/></button>
      {(admin||pack.owner===userId)&&<button className="fm-pack-button" disabled={busy} aria-label={'删除 '+pack.name} onClick={()=>setRemoving(pack.id)}><Trash2 size={16}/></button>}</div>
     {removing===pack.id&&<div className="fm-pack-delete"><span>删除“{pack.name}”？原图片会保留。</span><button disabled={busy} onClick={async()=>{setBusy(true);setError('');try{const wasSelected=selected.some(p=>p.id===pack.id);await request('/api/asset-packs/'+pack.id,undefined,'DELETE');if(!mountedRef.current)return;setRemoving(null);if(onDeletePack)await onDeletePack(pack.id);else if(wasSelected)await onRemovePack(pack.id);if(mountedRef.current)await load()}catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}}}>删除素材包</button><button disabled={busy} onClick={()=>setRemoving(null)}>取消</button></div>}
    </article>)}</div>}

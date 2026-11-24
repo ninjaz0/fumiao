@@ -1,0 +1,157 @@
+{
+  "format": 1,
+  "id": "bgm-generator",
+  "label": "AI 背景音乐（BGM）生成",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "manifest": {
+    "id": "bgm-generator",
+    "label": "AI 背景音乐（BGM）生成",
+    "version": "1.0.0",
+    "contractVersion": 1,
+    "mode": "request",
+    "configSchema": {
+      "type": "object",
+      "required": [
+        "baseUrl",
+        "apiKey"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "type": "string",
+          "pattern": "^https://",
+          "title": "BGM 生成网关地址（Suno / ACE-Step 兼容）"
+        },
+        "apiKey": {
+          "type": "string",
+          "writeOnly": true,
+          "title": "API 密钥"
+        }
+      }
+    },
+    "models": [
+      {
+        "id": "bgm-v1",
+        "label": "AI 配乐生成 BGM v1",
+        "kind": "audio",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {}
+        },
+        "studio": {
+          "order": 75,
+          "priceOrder": 750,
+          "descriptor": {
+            "kind": "audio",
+            "label": "AI 配乐 BGM v1",
+            "provider": "bgm-generator"
+          },
+          "prices": [
+            {
+              "tier": "short",
+              "label": "15–30 秒配乐",
+              "amount": 10,
+              "match": {
+                "type": "object",
+                "properties": {
+                  "duration": {
+                    "enum": [
+                      15,
+                      30
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "tier": "long",
+              "label": "60–120 秒配乐",
+              "amount": 20,
+              "match": {
+                "type": "object",
+                "properties": {
+                  "duration": {
+                    "enum": [
+                      60,
+                      120
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "canvasSubmission": {
+      "version": 1,
+      "models": [
+        {
+          "model": "bgm-v1",
+          "kind": "audio",
+          "defaultForKind": false
+        }
+      ]
+    },
+    "artifactDownload": {
+      "version": 1
+    },
+    "artifactValidation": {
+      "version": 3,
+      "errors": {
+        "imageFormat": "配乐返回格式无效",
+        "imageDecode": "配乐返回格式无效",
+        "video": "配乐返回格式无效",
+        "audio": "生成的 BGM 音频无法解码或时长无效",
+        "failed": "BGM 成品保存失败，请重试"
+      }
+    },
+    "requestLifecycle": {
+      "version": 3,
+      "honorImageEnabled": false,
+      "cancelDisabled": true,
+      "referenceKinds": [
+        "ref"
+      ],
+      "queueOrder": "fifo",
+      "progressUpdatesHealth": false,
+      "recordCancelledRun": false,
+      "preferFinalizing": false,
+      "requireConfigured": true,
+      "atomicReferences": false,
+      "resumeAccepted": true,
+      "cancelOnlyWhenAvailable": false,
+      "executionDeadlineMs": 300000,
+      "notes": {
+        "submitting": "正在提交配乐生成",
+        "unavailable": "等待 BGM 服务就绪",
+        "inputUnavailable": "输入不可用",
+        "inputFailed": "输入准备失败",
+        "saveFailed": "配乐保存失败",
+        "recoverySaveFailed": "配乐恢复保存失败",
+        "submitFailed": "配乐提交失败",
+        "unknownSubmission": "配乐任务状态未确认",
+        "disabled": "账号已停用"
+      }
+    },
+    "originalSubmission": {
+      "version": 5,
+      "studioDigest": "33091ed4ea691bcabbfafe627c6c2b4a6fe58af0ddde3bcfbd7ff4a20a34d33f"
+    }
+  },
+  "studioProgram": "(()=>{\"use strict\";var policy=(()=>{var m=Object.defineProperty;var y=Object.getOwnPropertyDescriptor;var S=Object.getOwnPropertyNames;var N=Object.prototype.hasOwnProperty;var O=(e,r)=>{for(var t in r)m(e,t,{get:r[t],enumerable:!0})},b=(e,r,t,a)=>{if(r&&typeof r==\"object\"||typeof r==\"function\")for(let o of S(r))!N.call(e,o)&&o!==t&&m(e,o,{get:()=>r[o],enumerable:!(a=y(r,o))||a.enumerable});return e};var x=e=>b(m({},\"__esModule\",{value:!0}),e);var k={};O(k,{default:()=>P});var u={\"bgm-v1\":{parameterObject:!0,fields:{style:{type:\"string\",title:\"\\u97F3\\u4E50\\u98CE\\u683C\",enum:[\"cinematic\",\"lofi\",\"electronic\",\"orchestral\",\"guofeng\",\"ambient\",\"suspense\"],default:\"cinematic\",optionLabels:{cinematic:\"\\u7535\\u5F71\\u53F2\\u8BD7\",lofi:\"Lo-Fi \\u8212\\u7F13\",electronic:\"\\u7535\\u5B50\\u8D5B\\u535A\",orchestral:\"\\u4EA4\\u54CD\\u5F26\\u4E50\",guofeng:\"\\u56FD\\u98CE\\u53E4\\u97F5\",ambient:\"\\u73AF\\u5883\\u6C1B\\u56F4\",suspense:\"\\u60AC\\u7591\\u7D27\\u5F20\"}},duration:{type:\"integer\",title:\"\\u66F2\\u76EE\\u65F6\\u957F\\uFF08\\u79D2\\uFF09\",enum:[15,30,60,120],default:30,optionLabels:{\"15\":\"15 \\u79D2\\uFF08\\u77ED\\u89C6\\u9891\\uFF09\",\"30\":\"30 \\u79D2\\uFF08\\u6807\\u51C6\\u7247\\u5934\\uFF09\",\"60\":\"60 \\u79D2\\uFF08\\u5355\\u96C6\\u914D\\u4E50\\uFF09\",\"120\":\"120 \\u79D2\\uFF08\\u957F\\u914D\\u4E50\\uFF09\"}},bpm:{type:\"integer\",title:\"\\u8282\\u62CD (BPM)\",minimum:60,maximum:180,default:100,uiHint:\"slider\"},instrumental:{type:\"boolean\",title:\"\\u7EAF\\u97F3\\u4E50\\uFF08\\u65E0\\u4EBA\\u58F0\\uFF09\",default:!0},lyrics:{type:\"string\",title:\"\\u81EA\\u5B9A\\u4E49\\u6B4C\\u8BCD\",maxLength:1e3,uiHint:\"textarea\",visibleWhen:{instrumental:[!1]}}},tiers:[{tier:\"short\",when:{duration:[15,30]}},{tier:\"long\",when:{duration:[60,120]}}],references:{min:0,max:0}}};function f(e,r){try{return JSON.parse(e,r)}catch{}let t=[],a=[];for(let n=0;n<e.length;)if(e.charCodeAt(n)===34){let i=n++;for(;;){if(n>=e.length)throw new Error(\"Invalid JSON string\");let s=e.charCodeAt(n++);if(s===92)n++;else if(s===34)break}t.push(JSON.parse(e.slice(i,n)))}else{let i=e.startsWith(\"-Infinity\",n)?\"-Infinity\":e.startsWith(\"Infinity\",n)?\"Infinity\":e.startsWith(\"NaN\",n)?\"NaN\":null;i?(a.push({start:n,end:n+i.length,value:i===\"NaN\"?NaN:i===\"Infinity\"?1/0:-1/0}),n+=i.length):n++}let o=\"__muse_json_constant__\";for(;t.some(n=>n.startsWith(o));)o+=\"_\";let l={},c=[],p=0;for(let[n,i]of a.entries()){let s=o+n;l[s]=i.value,c.push(e.slice(p,i.start),\"[\"+JSON.stringify(s)+\"]\"),p=i.end}return c.push(e.slice(p)),JSON.parse(c.join(\"\"),function(n,i,s={}){return Array.isArray(i)&&i.length===1&&typeof i[0]==\"string\"&&Object.hasOwn(l,i[0])&&(i=l[i[0]],s={}),r?r.call(this,n,i,s):i})}var g=\"\\\\t-\\\\r\\\\x1c-\\\\x20\\\\x85\\\\xa0\\\\u1680\\\\u2000-\\\\u200a\\\\u2028\\\\u2029\\\\u202f\\\\u205f\\\\u3000\",M=new RegExp(\"^[\"+g+\"]+|[\"+g+\"]+$\",\"g\"),d=e=>e.replace(M,\"\");var h=()=>({source:\"none\",samples:0,confidence:\"none\",version:4});var P={modelForm(e){return u[e.id]||u[\"bgm-v1\"]},namespace(e){return\"-bgm-generator-\"+e.kind},validate(e){return d(e.prompt||\"\")?\"\":\"\\u8BF7\\u63CF\\u8FF0\\u80CC\\u666F\\u97F3\\u4E50\\u7684\\u573A\\u666F\\u4E0E\\u6C1B\\u56F4\"},plan(e){let r=[15,30,60,120].includes(Number(e.params?.duration))?Number(e.params.duration):30;return{refs:[],params:{style:String(e.params?.style||\"cinematic\"),duration:r,bpm:Math.max(60,Math.min(180,Number(e.params?.bpm||100))),instrumental:e.params?.instrumental!==!1,...e.params?.instrumental===!1&&e.params?.lyrics?{lyrics:String(e.params.lyrics).slice(0,1e3)}:{}},requireConfigured:\"BGM \\u751F\\u6210\\u670D\\u52A1\\u5C1A\\u672A\\u914D\\u7F6E\\uFF0C\\u8BF7\\u8054\\u7CFB\\u7BA1\\u7406\\u5458\",admission:{models:[\"bgm-v1\"],owner:6,global:30,message:\"\\u5F53\\u524D\\u914D\\u4E50\\u4EFB\\u52A1\\u8F83\\u591A\\uFF0C\\u8BF7\\u7A0D\\u540E\\u518D\\u8BD5\"}}},async prepare(e,r,t){return await t.task.admit(),{params:e.params??{},references:[]}},async estimate(e){let r=Number(e.params?.duration||30);return{tier:r>=60?\"long\":\"short\",params:{duration:r}}},configuration({connection:e}){return{configured:!!e?.configured,ready:!!e?.configured}},project(e){return{note:e.request_note||\"\"}},timingFeatures(e){return{kind:e.kind,model:e.model,duration:Number(e.input?.params?.duration||30)}},requestCapacity(){return null},queuePlan(){return{wait:h(),queue:[]}},request({remoteId:e,prompt:r,params:t}){return e?{path:`/v1/audio/music/${encodeURIComponent(e)}`,timeoutMs:15e3}:{path:\"/v1/audio/music\",body:{prompt:String(r||\"\"),style:String(t?.style||\"cinematic\"),duration:Number(t?.duration||30),bpm:Number(t?.bpm||100),instrumental:t?.instrumental!==!1,...t?.lyrics?{lyrics:String(t.lyrics)}:{}},idempotency:\"standard\",timeoutMs:3e4}},result(e,r){let t=null;if(e.status>=200&&e.status<300&&e.text)try{t=f(e.text)}catch{t=null}if(!r){if([429,502,503,504].includes(e.status))return{disposition:{action:\"retry\",note:\"BGM \\u670D\\u52A1\\u7E41\\u5FD9\\uFF0C\\u7A0D\\u540E\\u81EA\\u52A8\\u91CD\\u8BD5\",delaySeconds:20}};if([400,401,403,422].includes(e.status))return{disposition:{action:\"fail\",note:\"BGM \\u53C2\\u6570\\u6216\\u5BC6\\u94A5\\u65E0\\u6548\"}};let a=t?.audio_url||t?.url;if(typeof a==\"string\"&&a)return{receipt:{state:\"completed\",artifacts:[{url:a,mime:\"audio/mpeg\"}]}};let o=t?.task_id||t?.id;return typeof o==\"string\"&&/^[A-Za-z0-9_-]{4,128}$/.test(o)?{receipt:{state:\"pending\",remoteId:o},note:\"\\u6B63\\u5728\\u8C31\\u66F2\\u4E0E\\u6DF7\\u97F3\"}:{disposition:{action:\"fail\",note:\"BGM \\u4EFB\\u52A1\\u72B6\\u6001\\u672A\\u786E\\u8BA4\",interrupted:!0,uncertain:!0}}}if(e.status===404)return{disposition:{action:\"fail\",note:\"BGM \\u4EFB\\u52A1\\u8BB0\\u5F55\\u4E0D\\u5B58\\u5728\"}};if(!t||typeof t!=\"object\")return{disposition:{action:\"poll\"}};if([\"completed\",\"done\",\"succeeded\",\"success\"].includes(t.status)){let a=t.audio_url||t.url||t.result?.url;return typeof a==\"string\"&&a?{receipt:{state:\"completed\",artifacts:[{url:a,mime:\"audio/mpeg\"}]},note:\"\\u6B63\\u5728\\u4FDD\\u5B58\\u914D\\u4E50\\u6210\\u54C1\"}:{disposition:{action:\"fail\",note:\"BGM \\u6210\\u54C1\\u7F3A\\u5C11\\u97F3\\u9891\\u5730\\u5740\"}}}return t.status===\"failed\"?{disposition:{action:\"fail\",note:\"BGM \\u751F\\u6210\\u5931\\u8D25\\uFF0C\\u8BF7\\u91CD\\u8BD5\"}}:{receipt:{state:\"pending\",remoteId:r},note:\"BGM \\u6B63\\u5728\\u751F\\u6210\\u4E2D\"}},async serviceProbe(e){let r=await e.service.read(\"/v1/models\");return{ready:r.status>=200&&r.status<300}},async queueHealth(){return{ready:!0,checked:Math.floor(Date.now()/1e3)}},artifact(e,r){try{let t=new URL(e);if(t.host===r.netloc){let a=r.path||\"\",o=a&&t.pathname.startsWith(a)?t.pathname.slice(a.length):t.pathname;return{path:o.startsWith(\"/\")?o:\"/\"+o,timeoutMs:45e3}}return{error:\"BGM \\u97F3\\u9891\\u57DF\\u540D\\u8D85\\u51FA\\u670D\\u52A1\\u5730\\u5740\\u8303\\u56F4\"}}catch{return{error:\"BGM \\u97F3\\u9891\\u5730\\u5740\\u65E0\\u6548\"}}},downloadError(){return{note:\"BGM \\u97F3\\u9891\\u4E0B\\u8F7D\\u5931\\u8D25\\uFF0C\\u8BF7\\u91CD\\u8BD5\",disposition:\"retry\"}}};return x(k);})();\n;return policy.default})()",
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "http",
+      "secrets",
+      "media"
+    ],
+    "http": {
+      "origins": [],
+      "connection": true
+    }
+  }
+}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Download, Film, Package } from "lucide-react";
+import { Download, Film, Music, Package } from "lucide-react";
 import { api, ApiError } from "./api";
+import type { CanvasBgm } from "./types";
 
 type Exporter = {
   key: string;
@@ -34,11 +35,19 @@ export function Composition({
   getRevision,
   ready,
   waitingReason,
+  audioAssets,
+  bgm,
+  loudnorm,
+  onMixChange,
 }: {
   project: string;
   getRevision: () => Promise<number>;
   ready: boolean;
   waitingReason: string;
+  audioAssets?: { id: string; label: string }[];
+  bgm?: CanvasBgm | null;
+  loudnorm?: boolean;
+  onMixChange?: (patch: { bgm?: CanvasBgm | null; loudnorm?: boolean }) => void;
 }) {
   const [results, setResults] = useState<Result[]>([]),
     [busy, setBusy] = useState(false),
@@ -98,6 +107,14 @@ export function Composition({
           uid: crypto.randomUUID(),
           expected_revision: revision,
           ...(chosen ? { exporter: chosen.key } : {}),
+          ...(bgm?.asset_id
+            ? {
+                bgm_asset: bgm.asset_id,
+                bgm_volume: bgm.volume,
+                bgm_ducking: bgm.ducking,
+              }
+            : {}),
+          ...(loudnorm !== undefined ? { loudnorm } : {}),
         };
         localStorage.setItem(key, JSON.stringify(body));
       }
@@ -133,6 +150,77 @@ export function Composition({
             ))}
           </select>
         </label>
+      )}
+      {onMixChange && (
+        <div className="composition-mix-box">
+          <label>
+            <Music size={14} />
+            背景音乐 (BGM)
+            <select
+              aria-label="背景音乐"
+              value={bgm?.asset_id || ""}
+              onChange={(e) => {
+                const asset_id = e.target.value || null;
+                onMixChange({
+                  bgm: asset_id
+                    ? {
+                        asset_id,
+                        volume: bgm?.volume ?? 0.35,
+                        ducking: bgm?.ducking ?? true,
+                        loop: bgm?.loop ?? true,
+                      }
+                    : null,
+                });
+              }}
+            >
+              <option value="">不使用背景音乐</option>
+              {(audioAssets ?? []).map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {bgm?.asset_id && (
+            <>
+              <label>
+                BGM 音量 {Math.round((bgm.volume ?? 0.35) * 100)}%
+                <input
+                  type="range"
+                  min={0.05}
+                  max={1}
+                  step={0.05}
+                  value={bgm.volume ?? 0.35}
+                  onChange={(e) =>
+                    onMixChange({
+                      bgm: { ...bgm, volume: Number(e.target.value) },
+                    })
+                  }
+                />
+              </label>
+              <label className="composition-mix-check">
+                <input
+                  type="checkbox"
+                  checked={bgm.ducking !== false}
+                  onChange={(e) =>
+                    onMixChange({
+                      bgm: { ...bgm, ducking: e.target.checked },
+                    })
+                  }
+                />
+                旁白/对白自动闪避 BGM（Auto-Ducking）
+              </label>
+            </>
+          )}
+          <label className="composition-mix-check">
+            <input
+              type="checkbox"
+              checked={Boolean(loudnorm ?? bgm?.asset_id)}
+              onChange={(e) => onMixChange({ loudnorm: e.target.checked })}
+            />
+            广播级响度归一化（-14 LUFS）
+          </label>
+        </div>
       )}
       <div className="composition-heading">
         <h3>成片</h3>
