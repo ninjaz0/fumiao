@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState,useMemo,type MouseEvent} from 'react';
+import {useEffect,useRef,useState,useMemo,type ClipboardEvent,type MouseEvent} from 'react';
 import {ArrowUp,Square,Plus,Copy,Check,RotateCcw,Trash2,Pencil,PanelLeft,X,FileText,MessageSquare,ArrowDown,LoaderCircle,ExternalLink} from 'lucide-react';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
@@ -21,6 +21,7 @@ function Markdown({text}:{text:string}){
  const html=useMemo(()=>DOMPurify.sanitize(marked.parse(text,{async:false,gfm:true,breaks:true}) as string,{ALLOWED_TAGS:['p','br','strong','em','del','ul','ol','li','blockquote','pre','code','h1','h2','h3','h4','hr','a','table','thead','tbody','tr','th','td'],ALLOWED_ATTR:['href','title'],ALLOW_DATA_ATTR:false,ALLOWED_URI_REGEXP:/^(?:https?:|mailto:)/i}),[text]);
  return <div className="fm-chat-prose" dangerouslySetInnerHTML={{__html:html}} onClick={e=>{const a=(e.target as HTMLElement).closest('a');if(a){e.preventDefault();if(/^https?:|^mailto:/i.test(a.href))window.open(a.href,'_blank','noopener,noreferrer')}}}/>;
 }
+const DRAFT_LIMIT=12000,DRAFT_WARN=10800;
 const Credit=()=> <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 1c1.7 7 4 9.3 11 11-7 1.7-9.3 4-11 11C10.3 16 8 13.7 1 12 8 10.3 10.3 8 12 1Z"/></svg>;
 
 export function ChatWorkspace(props:Props){
@@ -28,7 +29,7 @@ export function ChatWorkspace(props:Props){
  const scope=`fm-chat-${userId}-${workspace}-${project||'main'}-${node||''}`;
  const acceptConversation=useMemo(()=>chatFreshness(),[scope]);
  const [list,setList]=useState<Conversation[]>([]),[data,setData]=useState<Snapshot|null>(null),[cid,setCid]=useState(()=>sessionStorage.getItem(scope+'-active')||''),[config,setConfig]=useState<Config|null>(null),[model,setModel]=useState('deepseek-flash');
- const [draft,setDraft]=useState(()=>sessionStorage.getItem(scope+'-draft-'+cid)||''),[pendingDraft,setPendingDraft]=useState<string|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loading,setLoading]=useState(true),[history,setHistory]=useState(false),[rename,setRename]=useState<string|null>(null),[notice,setNotice]=useState(''),[deleted,setDeleted]=useState(''),[copied,setCopied]=useState<number|null>(null),[network,setNetwork]=useState(false),[newBelow,setNewBelow]=useState(false);
+ const [draft,setDraft]=useState(()=>sessionStorage.getItem(scope+'-draft-'+cid)||''),[pendingDraft,setPendingDraft]=useState<string|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loading,setLoading]=useState(true),[history,setHistory]=useState(false),[rename,setRename]=useState<string|null>(null),[notice,setNotice]=useState(''),[deleted,setDeleted]=useState(''),[copied,setCopied]=useState<number|null>(null),[network,setNetwork]=useState(false),[newBelow,setNewBelow]=useState(false),[clipped,setClipped]=useState(0);
  const [picker,setPicker]=useState<Message|null>(null),[projects,setProjects]=useState<{id:string;title:string}[]>([]),[target,setTarget]=useState(''),[canvasName,setCanvasName]=useState('新画布');
  const [applied,setApplied]=useState<{id:string;message:number}|null>(null);
  const [listLoading,setListLoading]=useState(true),[listError,setListError]=useState('');
@@ -43,11 +44,12 @@ export function ChatWorkspace(props:Props){
  const loadList=async()=>{const started=acceptConversation.startList();try{const r=await req<{conversations:Conversation[]}>('/api/chats'+(project?'?project='+encodeURIComponent(project)+'&node='+encodeURIComponent(node||''):''));if(alive.current){setList(items=>acceptConversation.reconcile(r.conversations,items,started));setListError('');if(initialHistory.current&&compact&&!current.current&&r.conversations.length){const id=r.conversations[0].id;current.current=id;setCid(id);sessionStorage.setItem(scope+'-active',id)}initialHistory.current=false}}catch(e){if(alive.current)setListError((e as Error).message);throw e}finally{if(alive.current)setListLoading(false)}};
  const loadConfig=async()=>{const c=await req<Config>('/api/chat/config');if(alive.current){cfgRef.current=c;setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')}};
  const update=(s:Snapshot)=>{if(!alive.current||!acceptConversation(s.conversation))return;if(s.conversation.id===current.current)setData(s);setList(items=>[s.conversation,...items.filter(c=>c.id!==s.conversation.id)].sort((a,b)=>b.updated-a.updated));};
- const updateDraft=(value:string)=>{setDraft(value);setPendingDraft(null);const key=scope+'-draft-'+current.current;if(value)sessionStorage.setItem(key,value);else sessionStorage.removeItem(key)};
+ const updateDraft=(value:string,pasted=false)=>{setDraft(value);setPendingDraft(null);if(!pasted&&value.length<DRAFT_LIMIT)setClipped(0);const key=scope+'-draft-'+current.current;if(value)sessionStorage.setItem(key,value);else sessionStorage.removeItem(key)};
+ const measurePaste=(e:ClipboardEvent<HTMLTextAreaElement>)=>{const field=e.currentTarget,text=e.clipboardData.getData('text/plain').replace(/\r\n?/g,'\n');let room=DRAFT_LIMIT-field.value.length+field.selectionEnd-field.selectionStart;if(/[\uD800-\uDBFF]/.test(text[room-1]??''))room--;setClipped(room<text.length?[...text.slice(room)].length:0)};
  const applyPresetDraft=(value:string)=>{if(!draft.trim()||draft===value){updateDraft(value);input.current?.focus();return}setPendingDraft(value)};
  const confirmPendingDraft=()=>{if(pendingDraft===null)return;updateDraft(pendingDraft);input.current?.focus()};
  const cancelPendingDraft=()=>{setPendingDraft(null);input.current?.focus()};
- const choose=(id:string)=>{setDraft(sessionStorage.getItem(scope+'-draft-'+id)||'');setPendingDraft(null);const found=list.find(c=>c.id===id);if(found&&config?.models[found.model])setModel(found.model);current.current=id;setCid(id);setData(null);setError('');setRename(null);setPicker(null);setHistory(false);pending.current=null;setLoading(!!id);follow.current=true;setNewBelow(false);sessionStorage.setItem(scope+'-active',id)};
+ const choose=(id:string)=>{setDraft(sessionStorage.getItem(scope+'-draft-'+id)||'');setPendingDraft(null);setClipped(0);const found=list.find(c=>c.id===id);if(found&&config?.models[found.model])setModel(found.model);current.current=id;setCid(id);setData(null);setError('');setRename(null);setPicker(null);setHistory(false);pending.current=null;setLoading(!!id);follow.current=true;setNewBelow(false);sessionStorage.setItem(scope+'-active',id)};
  useEffect(()=>{alive.current=true;setListLoading(true);setListError('');void Promise.all([loadConfig(),inline?loadList():loadList().catch(()=>{})]).catch(e=>setError(e.message)).finally(()=>setLoading(false));const timer=setInterval(()=>{void loadConfig().catch(()=>{});void loadList().catch(()=>{})},10000);return()=>{alive.current=false;clearInterval(timer)}},[workspace,project,node]);
  useEffect(()=>{if(input.current&&!inline){input.current.style.height='0px';input.current.style.height=Math.min(input.current.scrollHeight,180)+'px'}},[draft,cid,inline]);
  useEffect(()=>{
@@ -109,6 +111,7 @@ export function ChatWorkspace(props:Props){
  });
  const latest=data?.messages.at(-1);
  const inlineFailure=latest&&['failed','stopped','interrupted'].includes(latest.state)?latest.error||(latest.state==='stopped'?'已停止，积分已退回':'生成中断，积分已退回'):'';
+ const draftLimit=draft.length>=DRAFT_WARN&&<p className="fm-chat-balance fm-chat-limit">{draft.length}/{DRAFT_LIMIT} 字{clipped>0&&<span role="alert">，已达上限，粘贴内容末尾 {clipped} 字未保留</span>}</p>;
  const draftConfirmBanner=pendingDraft!==null&&(
   <div
    className="fm-chat-notice fm-chat-draft-confirm"
@@ -127,7 +130,7 @@ export function ChatWorkspace(props:Props){
   <form className="fm-text-form" onSubmit={e=>{e.preventDefault();if(canSend)void send()}}>
    <div className="fm-text-presets">{[['补充镜头','保留原意，补充画面主体、动作、镜头运动和环境细节，只输出可直接使用的镜头提示词。'],['改写图生视频','基于当前文字改写为图生视频提示词，重点描述动作、镜头和画面变化，不虚构参考图片中未提供的事实。只输出提示词。']].map(([label,text])=><button type="button" key={label} disabled={busy||running} onClick={()=>applyPresetDraft(text)}>{label}</button>)}</div>
    {draftConfirmBanner}
-   <textarea ref={input} className="composer-prompt" aria-label="文本生成要求" placeholder={model?'描述你想生成的文字，或说明修改要求':'暂无可用模型'} value={draft} maxLength={12000} rows={3} onChange={e=>updateDraft(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend&&draft.trim())void send()}}}/>
+   <textarea ref={input} className="composer-prompt" aria-label="文本生成要求" placeholder={model?'描述你想生成的文字，或说明修改要求':'暂无可用模型'} value={draft} maxLength={DRAFT_LIMIT} rows={3} onChange={e=>updateDraft(e.target.value,(e.nativeEvent as InputEvent).inputType==='insertFromPaste')} onPaste={measurePaste} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend&&draft.trim())void send()}}}/>
    {(error||inlineFailure)&&<div className="fm-chat-error" role="alert"><span>{error||inlineFailure}</span>{error&&<button type="button" className="fm-chat-icon" aria-label="关闭错误提示" onClick={()=>setError('')}><X size={14}/></button>}</div>}
    {network&&<p className="fm-text-state" role="status">正在重新连接</p>}
    <div className="composer-bottom fm-text-bottom">
@@ -136,6 +139,7 @@ export function ChatWorkspace(props:Props){
     {(running||applying)&&<span className="fm-text-state" role="status">{applying?'正在写入':'生成中'}</span>}
     {running?<button type="button" className="fm-chat-send" aria-label="停止生成" onClick={()=>void stop()} disabled={busy}><Square size={15} fill="currentColor"/></button>:<button type="submit" className="fm-chat-send" aria-label="生成文本" disabled={!canSend||!draft.trim()}><ArrowUp size={21}/></button>}
    </div>
+   {draftLimit}
    {model&&price!=null&&config&&config.credits.available<price&&!running&&<p className="fm-chat-balance">当前空间积分不足</p>}
   </form>
  </div>;
@@ -168,9 +172,10 @@ export function ChatWorkspace(props:Props){
     {error&&<div className="fm-chat-error" role="alert"><span>{error}</span><button type="button" className="fm-chat-icon" aria-label="关闭错误提示" onClick={()=>setError('')}><X size={16}/></button></div>}
     {draftConfirmBanner}
     <form className="fm-chat-composer" onSubmit={e=>{e.preventDefault();if(canSend)void send()}}>
-     <textarea ref={input} aria-label="发送消息" placeholder={model?(compact?'说说你的修改想法…':'发送消息…'):'暂无可用模型'} value={draft} maxLength={12000} rows={2} onChange={e=>updateDraft(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend&&draft.trim())void send()}}}/>
+     <textarea ref={input} aria-label="发送消息" placeholder={model?(compact?'说说你的修改想法…':'发送消息…'):'暂无可用模型'} value={draft} maxLength={DRAFT_LIMIT} rows={2} onChange={e=>updateDraft(e.target.value,(e.nativeEvent as InputEvent).inputType==='insertFromPaste')} onPaste={measurePaste} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend&&draft.trim())void send()}}}/>
      <div className="fm-chat-composer-bottom"><ModelSelect models={config?.models||{}} value={model} disabled={busy||applying||running} onChange={setModel}/><span className="fm-chat-cost" title={price!=null?`每条完整回复 ${price} 积分，可用 ${config?.credits.available}`:'该模型尚未定价'} aria-label={price!=null?`${price} 积分`:undefined}>{model?(price==null?'未定价':<><Credit/>{price}</>):null}</span>{running?<button type="button" className="fm-chat-send" aria-label="停止回复" onClick={()=>void stop()} disabled={busy}><Square size={15} fill="currentColor"/></button>:<button type="submit" className="fm-chat-send" aria-label="发送" disabled={!canSend||!draft.trim()}><ArrowUp size={21}/></button>}</div>
     </form>
+    {draftLimit}
     {model&&price!=null&&config&&config.credits.available<price&&!running&&<p className="fm-chat-balance">当前空间积分不足</p>}
    </div>
   </section>

@@ -244,13 +244,6 @@ function Modal({
     </dialog>
   );
 }
-function Brand() {
-  return (
-    <a className="cv-brand" href={workspaceURL("/studio")} title="返回工作台" aria-label="返回工作台">
-      <img src="/static/mark.svg" alt="弗淼 AIGC" />
-    </a>
-  );
-}
 function duration(seconds: number) {
   const unit = seconds >= 3600 ? 60 : seconds >= 60 ? 15 : 5;
   const value = Math.max(5, Math.round(Math.max(0, seconds) / unit) * unit);
@@ -417,6 +410,7 @@ type ContextValue = {
   downstream: (id: string) => void;
   selectMedia: (id: string) => void;
   preview: (node: CanvasNode) => void;
+  beginEditing: (id: string) => void;
   setEditing: (id: string | null) => void;
 };
 const NodeContext = createContext<ContextValue>(null!);
@@ -471,10 +465,8 @@ const ContentNode = memo(function ContentNode({
       <div
         className="node-content"
         onDoubleClick={() => {
-          if (isText) {
-            ctx.begin();
-            ctx.setEditing(n.id);
-          } else if (media) ctx.preview(n);
+          if (isText) ctx.beginEditing(n.id);
+          else if (media) ctx.preview(n);
         }}
       >
         {n.extension ? <PluginNodeOutputs extension={n.extension}/> : isText ? (
@@ -495,14 +487,20 @@ const ContentNode = memo(function ContentNode({
                 e.stopPropagation();
                 if (e.key === "Escape") {
                   e.preventDefault();
-                  e.currentTarget.blur();
+                  if (n.type === "sticky") {
+                    e.currentTarget
+                      .closest<HTMLElement>(".react-flow__node")
+                      ?.focus();
+                  } else e.currentTarget.blur();
                 }
               }}
             />
           ) : (
             <div className="text-display">
               {n.text || (
-                <span>双击{n.type === "text" ? "输入文本" : "添加便签"}</span>
+                <span>
+                  {n.type === "text" ? "双击输入文本" : "按 Enter 或双击添加便签"}
+                </span>
               )}
             </div>
           )
@@ -613,6 +611,13 @@ export function CanvasWorkspace({
     [minimap, setMinimap] = useState(false),
     [showEdges, setShowEdges] = useState(true),
     [toast, setToast] = useState("");
+  const [leaveFailure, setLeaveFailure] = useState<{
+    path: string;
+    message: string;
+    retained: boolean;
+  } | null>(null);
+  const [retryingLeave, setRetryingLeave] = useState(false);
+  const leaveInFlight = useRef(false);
   const [activeTextNodes,setActiveTextNodes]=useState<string[]>([]);
   const textApplyQueue=useRef<Promise<void>>(Promise.resolve());
   const textPanelRef=useRef<HTMLElement|null>(null);
@@ -965,6 +970,13 @@ export function CanvasWorkspace({
     }
     if(updates.size)doc.change(d=>({...d,document:{...d.document,nodes:d.document.nodes.map(n=>updates.has(n.id)?{...n,narration_job:updates.get(n.id)!,narration_pending:null}:n)}}));
   },[runById,doc.value.document.nodes,doc.status]);
+  const beginEditing = useCallback(
+    (id: string) => {
+      doc.begin();
+      setEditing(id);
+    },
+    [doc.begin],
+  );
   const contextValue = useMemo(
     () => ({
       edit,
@@ -983,9 +995,10 @@ export function CanvasWorkspace({
           setPreview({ node, media, run });
         }
       },
+      beginEditing,
       setEditing,
     }),
-    [edit, doc.begin, doc.end],
+    [edit, doc.begin, doc.end, beginEditing],
   );
   const videoPort = useMemo(
     () =>
@@ -1036,7 +1049,9 @@ export function CanvasWorkspace({
         height: n.height,
         style: { width: n.width, height: n.height },
         selected: isSelected,
-        ariaLabel: names[n.type] + "节点 " + n.title,
+        ariaLabel:
+          names[n.type] + "节点 " + n.title +
+          (n.type === "sticky" && !n.extension ? "，按 Enter 编辑" : ""),
       };
       nextCache.set(n.id, next);
       return next;
@@ -1953,11 +1968,22 @@ export function CanvasWorkspace({
     doc.status !== "conflict" &&
     (single.type !== "image" || currentImageEnabled) && availableModel(selectedModel) && creditAvailable;
   const closeAndLeave = async (url: string) => {
+    if (leaveInFlight.current) return;
+    leaveInFlight.current = true;
+    setRetryingLeave(true);
+    setMenu(null);
     try {
       await doc.flush();
       location.assign(workspaceURL(url));
     } catch (e) {
-      notify((e as Error).message);
+      setLeaveFailure({
+        path: url,
+        message: (e as Error).message,
+        retained: doc.remember(),
+      });
+    } finally {
+      leaveInFlight.current = false;
+      setRetryingLeave(false);
     }
   };
   const showComposer =
@@ -2132,6 +2158,21 @@ export function CanvasWorkspace({
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          onKeyDown={(e) => {
+            const target = e.target;
+            if (
+              hand ||
+              e.key !== "Enter" ||
+              !(target instanceof HTMLElement) ||
+              !target.matches(".react-flow__node")
+            ) return;
+            const note = doc.ref.current.document.nodes.find(
+              (n) => n.id === target.dataset.id,
+            );
+            if (note?.type !== "sticky" || note.extension) return;
+            e.preventDefault();
+            beginEditing(note.id);
+          }}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={connect}
@@ -2224,7 +2265,19 @@ export function CanvasWorkspace({
       </NodeContext.Provider>
       <header className="canvas-header">
         <div className="project-heading">
-          <Brand />
+          <a
+            className="cv-brand"
+            href={workspaceURL("/studio")}
+            title="返回工作台"
+            aria-label="返回工作台"
+            onClick={(e) => {
+              if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+              e.preventDefault();
+              void closeAndLeave("/studio");
+            }}
+          >
+            <img src="/static/mark.svg" alt="弗淼 AIGC" />
+          </a>
           <input
             aria-label="画布名称"
             value={doc.value.title}
@@ -3085,7 +3138,7 @@ export function CanvasWorkspace({
       )}
       {doc.status === "conflict" && (
         <div className="save-banner" role="alert">
-          <span>画布已被其他成员修改，你的修改已保留。</span>
+          <span>画布已被其他成员修改，你的修改尚未保存到服务器。</span>
           <button
             onClick={() =>
               downloadJSON(doc.value.title + "-本地副本", doc.value)
@@ -3544,6 +3597,47 @@ export function CanvasWorkspace({
             </button>
             <button className="primary" onClick={() => confirm()}>
               重新载入
+            </button>
+          </div>
+        </Modal>
+      )}
+      {leaveFailure && (
+        <Modal
+          title="保存失败，仍要离开？"
+          onClose={() => {
+            if (!leaveInFlight.current) setLeaveFailure(null);
+          }}
+        >
+          <p className="error">{leaveFailure.message}</p>
+          <p>当前修改尚未同步到服务器。{leaveFailure.retained
+            ? "本地草稿已保留，在此标签页重新打开画布可继续编辑。"
+            : "浏览器无法保留本地草稿，离开后未保存的修改将丢失。"}</p>
+          <div className="dialog-actions">
+            <button className="secondary" disabled={retryingLeave} onClick={() => setLeaveFailure(null)}>
+              取消
+            </button>
+            {!leaveFailure.retained && (
+              <button className="secondary" disabled={retryingLeave} onClick={() =>
+                downloadJSON(doc.ref.current.title + "-本地副本", doc.ref.current)
+              }>
+                下载本地副本
+              </button>
+            )}
+            <button className="secondary" disabled={retryingLeave} onClick={() => {
+              if (leaveFailure.retained && !doc.remember()) {
+                setLeaveFailure({ ...leaveFailure, retained: false });
+                return;
+              }
+              doc.leave(workspaceURL(leaveFailure.path));
+            }}>
+              仍要离开
+            </button>
+            <button
+              className="primary"
+              disabled={retryingLeave || doc.status === "conflict"}
+              onClick={() => closeAndLeave(leaveFailure.path)}
+            >
+              重试保存
             </button>
           </div>
         </Modal>
