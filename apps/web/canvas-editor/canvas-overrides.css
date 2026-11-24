@@ -1,5 +1,9 @@
 /* Canvas editor style overrides (baseline/production/static/canvas.css is immutable). */
 
+.cv-dialog > p.error {
+  color: var(--cv-danger);
+}
+
 .run-list-state {
   display: flex;
   flex-direction: column;
