@@ -247,8 +247,18 @@ export async function verifyRemoteProvider(
       call("/api/state", { workspace });
     const before = await state();
     const workspace = before.workspace_id;
-    assert.deepEqual(before.model_catalog, {});
-    assert.deepEqual(before.model_groups, {});
+    // Built-in free Edge TTS is registered by default; no other models or groups exist before plugin import.
+    assert.deepEqual(
+      Object.keys(before.model_catalog).filter((id) => id !== "edge-tts"),
+      [],
+    );
+    assert.deepEqual(
+      Object.keys(before.model_groups).filter((id) => id !== "edge-tts"),
+      [],
+    );
+    if (before.model_groups["edge-tts"]) {
+      assert.equal(before.model_groups["edge-tts"].kind, "audio");
+    }
     assert.equal(
       (await context.request.get("/connect/install.sh")).status(),
       404,

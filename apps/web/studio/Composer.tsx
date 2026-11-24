@@ -34,6 +34,7 @@ import {
   isH3,
   modelForm,
   modelAvailable,
+  modelsForKind,
   packReferences,
   referenceAsset,
   referenceLabel,
@@ -656,7 +657,7 @@ export function Composer({
             <span>{creation}</span>
             <Chevron />
           </button>
-          {state.studio_plugins && !Object.entries(state.model_catalog).some(([id,m])=>!m.hidden && state.model_access?.[id]) && (
+          {state.studio_plugins && !Object.keys(modelsForKind(state, draft.kind)).some((id)=>!state.model_catalog[id]?.hidden && state.model_access?.[id]) && (
             state.me.role === "admin"
               ? <button className="parameter-button" onClick={managePlugins}>去导入插件</button>
               : <span>请联系管理员开通模型</span>
