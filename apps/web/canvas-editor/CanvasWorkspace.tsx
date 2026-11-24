@@ -3610,19 +3610,19 @@ export function CanvasWorkspace({
         >
           <p className="error">{leaveFailure.message}</p>
           <p>当前修改尚未同步到服务器。{leaveFailure.retained
-            ? "本地草稿已保留，在此标签页重新打开画布可继续编辑。"
+            ? "本地草稿已保留。画布仍可访问时，可在此标签页重新打开继续编辑。"
             : "浏览器无法保留本地草稿，离开后未保存的修改将丢失。"}</p>
-          <div className="dialog-actions">
+          <div className="dialog-actions" style={{ flexWrap: "wrap" }}>
             <button className="secondary" disabled={retryingLeave} onClick={() => setLeaveFailure(null)}>
               取消
             </button>
-            {!leaveFailure.retained && (
-              <button className="secondary" disabled={retryingLeave} onClick={() =>
-                downloadJSON(doc.ref.current.title + "-本地副本", doc.ref.current)
-              }>
-                下载本地副本
-              </button>
-            )}
+            <button
+              className="secondary"
+              disabled={retryingLeave}
+              onClick={() => downloadJSON(doc.ref.current.title + "-本地副本", doc.ref.current)}
+            >
+              下载本地副本
+            </button>
             <button className="secondary" disabled={retryingLeave} onClick={() => {
               if (leaveFailure.retained && !doc.remember()) {
                 setLeaveFailure({ ...leaveFailure, retained: false });

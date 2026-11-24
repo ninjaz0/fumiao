@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium, expect, type Browser, type Page } from "@playwright/test";
 import type { Project } from "../../apps/web/canvas-editor/types.js";
@@ -80,8 +81,9 @@ try {
     const headers = { Origin: origin, "X-Workspace-Id": String(workspace) };
     const cases = [
       ...[503, 409].flatMap((status) => exits.map((exit) => ({ status, exit, denyStorage: false }))),
-      { status: 503, exit: exits[0], denyStorage: true },
-      { status: 409, exit: exits[0], denyStorage: true },
+      { status: 503, exit: exits[3], denyStorage: true },
+      { status: 409, exit: exits[3], denyStorage: true },
+      { status: 404, exit: exits[0], denyStorage: false },
     ];
     const failures: unknown[] = [];
     for (const { status, exit, denyStorage } of cases) {
@@ -114,6 +116,7 @@ try {
           }
         });
         if (denyStorage) {
+          await page.setViewportSize({ width: 320, height: 568 });
           await page.addInitScript(() => {
             const setItem = Storage.prototype.setItem;
             Storage.prototype.setItem = function (key: string, value: string) {
@@ -135,6 +138,10 @@ try {
             },
           });
           assert.equal(remote.status(), 200, await remote.text());
+        }
+        if (status === 404) {
+          const removed = await context.request.delete(apiPath, { headers });
+          assert.ok(removed.ok(), await removed.text());
         }
         if (conflictOnExit) {
           const now = new Date();
@@ -173,18 +180,36 @@ try {
         if (denyStorage) {
           await expect(dialog).not.toContainText("已保留");
           await expect(dialog).toContainText("未保存的修改将丢失");
-          const download = page.waitForEvent("download");
-          await dialog.getByRole("button", { name: "下载本地副本" }).click();
-          assert.match((await download).suggestedFilename(), /\.json$/);
+          const actions = dialog.locator(".dialog-actions");
+          assert.ok(
+            await actions.evaluate((row) => {
+              const bounds = row.getBoundingClientRect();
+              return [...row.querySelectorAll("button")].every((button) => {
+                const item = button.getBoundingClientRect();
+                return item.left >= bounds.left && item.right <= bounds.right;
+              });
+            }),
+            "All leave actions must fit inside the narrow dialog",
+          );
         } else {
           await expect(dialog).toContainText("本地草稿已保留");
+        }
+        if (denyStorage || status === 404) {
+          const exportButton = dialog.getByRole("button", { name: "下载本地副本" });
+          await expect(exportButton).toBeVisible();
+          const downloading = page.waitForEvent("download");
+          await exportButton.click();
+          const download = await downloading;
+          assert.match(download.suggestedFilename(), /\.json$/);
+          const exported = JSON.parse(await readFile(await download.path(), "utf8"));
+          assert.equal(exported.title, draftTitle);
         }
         if (status === 409) {
           await expect(retry).toBeDisabled();
           assert.equal(putCount, 1, "known conflicts must not send another PUT");
         } else {
           await expect(retry).toBeEnabled();
-          if (!denyStorage && exit.name === "toolbar") {
+          if (status === 503 && !denyStorage && exit.name === "toolbar") {
             const retryResponse = page.waitForResponse((response) =>
               new URL(response.url()).pathname === `${apiPath}/document` && response.status() === 503,
             );
@@ -212,7 +237,13 @@ try {
           await expect(page.getByText(initialTitle, { exact: true }).first()).toBeVisible();
           await page.screenshot({ path: join(evidence, "canvas-leave-destination.png") });
         }
-        const stored: Project = await (await context.request.get(apiPath, { headers })).json();
+        const storedResponse = await context.request.get(apiPath, { headers });
+        if (status === 404) {
+          assert.equal(storedResponse.status(), 404);
+          console.log("PASS deleted canvas: retained draft can be exported before leaving");
+          continue;
+        }
+        const stored: Project = await storedResponse.json();
         assert.equal(stored.title, retrySucceeds ? draftTitle : serverTitle);
         await page.goto(editPath);
         await expect(title).toHaveValue(denyStorage ? serverTitle : draftTitle);
