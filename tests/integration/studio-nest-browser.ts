@@ -304,8 +304,6 @@ async function checkPackRefreshRace(page: Page, studio: string, state: StudioSta
   }, { key, pack, direct: direct.id });
 
   let stateReads = 0, packReads = 0;
-  let release!: () => void;
-  const delayed = new Promise<void>((resolve) => { release = resolve; });
   await page.route("**/api/state", (route) => {
     const read = ++stateReads;
     return route.fulfill({ json: {
@@ -315,12 +313,9 @@ async function checkPackRefreshRace(page: Page, studio: string, state: StudioSta
     } });
   });
   await page.route("**/api/asset-packs", async (route) => {
-    if (++packReads === 2) {
-      await delayed;
-      await route.fulfill({ status: 503, json: { detail: "素材包暂不可用" } });
-    } else {
-      await route.fulfill({ json: { packs: [pack] } });
-    }
+    // Hold read 2 until the refresh that supersedes it cancels the request.
+    if (++packReads === 2) return;
+    await route.fulfill({ json: { packs: [pack] } });
   });
   await page.route("**/api/me", (route) =>
     route.fulfill({ json: { ...state.me, nickname: "资料已保存" } }),
@@ -330,6 +325,9 @@ async function checkPackRefreshRace(page: Page, studio: string, state: StudioSta
     const refs = page.locator(".reference-deck-count");
     await expect(refs).toHaveText("2");
     await expect.poll(() => packReads, { timeout: apiTimeout }).toBe(2);
+    const cancelled = page.waitForEvent("requestfailed", (r) =>
+      new URL(r.url()).pathname === "/api/asset-packs",
+    );
     // Polls wait for the held read, so supersede it with the refresh a profile save starts.
     await page.locator(".account").click();
     await page.locator('.menu-item[data-nav="settings"]').click();
@@ -340,19 +338,14 @@ async function checkPackRefreshRace(page: Page, studio: string, state: StudioSta
       timeout: apiTimeout,
     });
     assert.equal(stateReads, 3);
-    const failed = page.waitForResponse((r) =>
-      new URL(r.url()).pathname === "/api/asset-packs" && r.status() === 503,
-    );
-    release();
-    await (await failed).finished();
+    await cancelled;
     await page.locator('nav [data-nav="home"]').click();
-    // Type again so the mounted composer persists the draft after the late response.
+    // Type again so the mounted composer persists the draft after the cancelled read.
     await page.locator("#prompt").fill("保留新引用");
     await expect(refs).toHaveText("2");
     assert.deepEqual(await page.evaluate((key) =>
       JSON.parse(sessionStorage.getItem(key)!).refs, key), [direct.id]);
   } finally {
-    release();
     await page.close();
   }
 }
