@@ -331,7 +331,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                       role="alert"
                     >
                       {usernameError &&
-                        "用户名需为 2–32 个字母、数字或 _ . -，不能包含空格或其他符号。"}
+                        "用户名仅支持 2–32 位中英文、数字或 _ . -，不能含空格"}
                     </div>
                   )}
                   {"\n      "}
