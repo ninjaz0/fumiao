@@ -106,12 +106,12 @@ try {
     await expect(limit).toHaveText("11999/12000 字");
 
     await composer.fill("");
-    await paste(page, "a".repeat(11_999) + "😀");
+    await paste(page, "a".repeat(11_999) + "😀😀");
     await expect(composer).toHaveJSProperty("value", "a".repeat(11_999));
     await expect(limit.getByRole("alert")).toContainText(
-      "粘贴内容末尾 1 字未保留",
+      "粘贴内容末尾 2 字未保留",
     );
-    console.log("New chat: an emoji cut at the limit is still reported");
+    console.log("New chat: emoji cut at the limit are counted as characters");
 
     await page
       .locator(".fm-chat-history-items .fm-chat-conversation-row")

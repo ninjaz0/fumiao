@@ -45,7 +45,7 @@ export function ChatWorkspace(props:Props){
  const loadConfig=async()=>{const c=await req<Config>('/api/chat/config');if(alive.current){cfgRef.current=c;setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')}};
  const update=(s:Snapshot)=>{if(!alive.current||!acceptConversation(s.conversation))return;if(s.conversation.id===current.current)setData(s);setList(items=>[s.conversation,...items.filter(c=>c.id!==s.conversation.id)].sort((a,b)=>b.updated-a.updated));};
  const updateDraft=(value:string,pasted=false)=>{setDraft(value);setPendingDraft(null);if(!pasted&&value.length<DRAFT_LIMIT)setClipped(0);const key=scope+'-draft-'+current.current;if(value)sessionStorage.setItem(key,value);else sessionStorage.removeItem(key)};
- const measurePaste=(e:ClipboardEvent<HTMLTextAreaElement>)=>{const field=e.currentTarget,room=DRAFT_LIMIT-field.value.length+field.selectionEnd-field.selectionStart;setClipped(Math.max(0,e.clipboardData.getData('text/plain').replace(/\r\n?/g,'\n').length-room))};
+ const measurePaste=(e:ClipboardEvent<HTMLTextAreaElement>)=>{const field=e.currentTarget,text=e.clipboardData.getData('text/plain').replace(/\r\n?/g,'\n');let room=DRAFT_LIMIT-field.value.length+field.selectionEnd-field.selectionStart;if(/[\uD800-\uDBFF]/.test(text[room-1]??''))room--;setClipped(room<text.length?[...text.slice(room)].length:0)};
  const applyPresetDraft=(value:string)=>{if(!draft.trim()||draft===value){updateDraft(value);input.current?.focus();return}setPendingDraft(value)};
  const confirmPendingDraft=()=>{if(pendingDraft===null)return;updateDraft(pendingDraft);input.current?.focus()};
  const cancelPendingDraft=()=>{setPendingDraft(null);input.current?.focus()};
