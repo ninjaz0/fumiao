@@ -13,6 +13,7 @@ import {
   matchViewportFocusShortcut,
   newNode,
   nextContextSelection,
+  resolveBatchShots,
   resolveFocusTargets,
   resolveHistoryModalState,
   resolvePasteOffset,
@@ -533,5 +534,103 @@ test("#110 #111 mobile composer/toolbar flags and canvas-overrides.css rules are
   assert.match(
     overridesCss,
     /\.canvas-workspace \.selection-toolbar \.color-menu\s*\{[\s\S]*left:\s*auto;[\s\S]*right:\s*0;[\s\S]*max-width:\s*calc\(100vw - 24px\);/,
+  );
+});
+
+test("#44 resolveBatchShots filters video nodes, preserves order, deduplicates existing shots, and switches multi-toolbar state", async () => {
+  const existingVideo = newNode("video", 0, 0, 1);
+  const videoA = newNode("video", 400, 0, 2);
+  const sticky = newNode("sticky", 800, 0, 1);
+  const image = newNode("image", 1200, 0, 1);
+  const text = newNode("text", 1600, 0, 1);
+  const plugin = newNode("plugin", 2000, 0, 1);
+  const videoB = newNode("video", 2400, 0, 3);
+  const unselectedVideo = newNode("video", 2800, 0, 4);
+  const nodes = [
+    existingVideo,
+    videoA,
+    sticky,
+    image,
+    text,
+    plugin,
+    videoB,
+    unselectedVideo,
+  ];
+
+  // Non-video multi-selection exposes no video shot targets
+  assert.deepEqual(
+    resolveBatchShots(
+      nodes,
+      [sticky.id, image.id, text.id, plugin.id],
+      [existingVideo.id],
+    ),
+    {
+      videoIds: [],
+      addedIds: [],
+      nextShots: [existingVideo.id],
+      allInShots: false,
+    },
+  );
+
+  // Mixed selection keeps only selected video nodes in stable document order and skips existing shots
+  const mixed = resolveBatchShots(
+    nodes,
+    [
+      videoB.id,
+      sticky.id,
+      existingVideo.id,
+      image.id,
+      videoA.id,
+      videoA.id,
+      "missing-node",
+    ],
+    [existingVideo.id],
+  );
+  assert.deepEqual(mixed, {
+    videoIds: [existingVideo.id, videoA.id, videoB.id],
+    addedIds: [videoA.id, videoB.id],
+    nextShots: [existingVideo.id, videoA.id, videoB.id],
+    allInShots: false,
+  });
+
+  // Once all selected videos are in shots, allInShots flips true so toolbar shows "查看镜头列表"
+  const afterAdd = resolveBatchShots(
+    nodes,
+    [videoB.id, sticky.id, existingVideo.id, videoA.id],
+    mixed.nextShots,
+  );
+  assert.deepEqual(afterAdd, {
+    videoIds: [existingVideo.id, videoA.id, videoB.id],
+    addedIds: [],
+    nextShots: [existingVideo.id, videoA.id, videoB.id],
+    allInShots: true,
+  });
+
+  // Single video + sticky multi-selection also works both before and after adding
+  const oneVideoAndSticky = resolveBatchShots(nodes, [videoA.id, sticky.id], []);
+  assert.deepEqual(oneVideoAndSticky, {
+    videoIds: [videoA.id],
+    addedIds: [videoA.id],
+    nextShots: [videoA.id],
+    allInShots: false,
+  });
+  assert.equal(
+    resolveBatchShots(nodes, [videoA.id, sticky.id], [videoA.id]).allInShots,
+    true,
+  );
+
+  // Verify CanvasWorkspace multi-toolbar wires ListVideo, atomic updateShots, and notify feedback
+  const root = process.cwd();
+  const workspaceSource = await readFile(
+    join(root, "apps/web/canvas-editor/CanvasWorkspace.tsx"),
+    "utf8",
+  );
+  assert.match(
+    workspaceSource,
+    /className="multi-toolbar"[\s\S]*?batchShots\.videoIds\.length > 0[\s\S]*?icon=\{ListVideo\}[\s\S]*?batchShots\.allInShots \? "查看镜头列表" : "加入镜头列表"/,
+  );
+  assert.match(
+    workspaceSource,
+    /notify\(`已将 \$\{addedIds\.length\} 个视频加入镜头列表`\)/,
   );
 });

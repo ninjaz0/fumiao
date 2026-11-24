@@ -95,6 +95,7 @@ import {
   matchViewportFocusShortcut,
   isCanvasComposerOpen,
   hasCanvasSelectionToolbar,
+  resolveBatchShots,
   linkedValue,
   type CanvasClipboard,
   type CanvasNode,
@@ -728,6 +729,10 @@ export function CanvasWorkspace({
   const current = single ? resolveNodeFromIndex(single, runsByNode) : null;
   const completedVersions = current?.list.filter((job) => job.status === "done" && job.result) ?? [];
   const shotIds = doc.value.document.shots ?? [];
+  const batchShots = useMemo(
+    () => resolveBatchShots(selectedNodes, selected, shotIds),
+    [selectedNodes, selected, shotIds],
+  );
   const studioJobByResult = useMemo(() => {
     const map = new Map<string, Job>();
     for (const job of studio.jobs) {
@@ -1363,6 +1368,28 @@ export function CanvasWorkspace({
   const addShot = (node: CanvasNode) => {
     updateShots((ids) => ids.includes(node.id) ? ids : [...ids, node.id]);
     notify("已加入镜头列表");
+  };
+  const addSelectedShots = () => {
+    const current = doc.ref.current.document;
+    const { videoIds, addedIds } = resolveBatchShots(
+      current.nodes,
+      selected,
+      current.shots ?? [],
+    );
+    if (!videoIds.length) return;
+    if (!addedIds.length) {
+      setShotList(true);
+      return;
+    }
+    updateShots((ids) => {
+      const plan = resolveBatchShots(
+        doc.ref.current.document.nodes,
+        selected,
+        ids,
+      );
+      return plan.addedIds.length ? plan.nextShots : ids;
+    });
+    notify(`已将 ${addedIds.length} 个视频加入镜头列表`);
   };
   const moveShot = (id: string, offset: number) => updateShots((ids) => {
     const index = ids.indexOf(id);
@@ -2551,6 +2578,15 @@ export function CanvasWorkspace({
             disabled={!canDownloadSelected}
             onClick={downloadNodes}
           />
+          {batchShots.videoIds.length > 0 && (
+            <IconButton
+              icon={ListVideo}
+              label={batchShots.allInShots ? "查看镜头列表" : "加入镜头列表"}
+              onClick={() =>
+                batchShots.allInShots ? setShotList(true) : addSelectedShots()
+              }
+            />
+          )}
           <IconButton
             icon={Trash2}
             label="删除所选节点"
