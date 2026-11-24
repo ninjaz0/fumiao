@@ -153,7 +153,11 @@ for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of
               ? "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS"
               : id === "example-node-pool"
                 ? "修复节点工作机拉取任务参考素材路径与安全文件名处理"
-                : "首次发布",
+                : id === "bgm-generator"
+                  ? "修复 BGM 原生任务计划校验、参数冻结与沙箱成品下载路径解析"
+                  : id === "tts-commercial"
+                    ? "修复商业 TTS 原生任务计划校验与参数冻结"
+                    : "首次发布",
       package: path,
       sha256: hash(data),
     }),

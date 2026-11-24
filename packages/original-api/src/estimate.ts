@@ -40,7 +40,7 @@ export class OriginalEstimates {
             sql,
             `SELECT c.id FROM studio_catalog c
           JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
-          WHERE c.id=$1 AND c.descriptor->>'kind'=$2 AND v.manifest->'originalSubmission'->>'version' IN ('2','3')`,
+          WHERE c.id=$1 AND c.descriptor->>'kind'=$2 AND (v.manifest->'originalSubmission'->>'version' IN ('2','3') OR (v.manifest->'originalSubmission'->>'version'='5' AND v.manifest->'originalEstimate' IS NULL))`,
             [draft.model, draft.kind],
           ))
         ) {

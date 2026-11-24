@@ -131,6 +131,7 @@ export const TOKEN_REST_ALLOWLIST: readonly TokenRouteRule[] = [
   tokenRule("POST", "/api/canvases/:key/proposals", "canvas:propose", "Agent", "提交提案式画布变更集（不自动改图、不自动扣费）"),
   // Paid generation actions (require job:submit AND pass in-tx F031 Agent policy)
   tokenRule("POST", "/api/canvases/:key/batch-runs", "job:submit", "Canvas", "按环节提交工作流组局部重跑（受 F031 策略管控）", true),
+  tokenRule("POST", "/api/canvases/:key/bgm", "job:submit", "Canvas", "提交画布项目级 AI 配乐生成任务（受 F031 策略与 F015 预算管控）", true),
   tokenRule("POST", "/api/canvases/:key/nodes/:node/runs", "job:submit", "Canvas", "提交画布单节点生成任务（受 F031 策略与 F015 预算管控）", true),
   tokenRule("POST", "/api/canvases/:key/nodes/:node/candidates", "job:submit", "Canvas", "提交画布节点多候选生成任务（受 F031 策略管控）", true),
   tokenRule("POST", "/api/canvases/:key/nodes/:node/narration", "job:submit", "Canvas", "提交画布节点旁白配音任务（受 F031 策略管控）", true),

@@ -1033,7 +1033,17 @@ async function start() {
       "--file=" + archive,
       "--dbname=" + profileEnv.DATABASE_URL,
     ]);
-    const objectCount = await backupStudioObjects(s3, backup);
+    const expectedBackupKeys = [
+      ...(await p.db.query<{ object_key: string }>("SELECT object_key FROM assets")).rows,
+      ...(
+        await p.db.query<{ object_key: string }>(
+          "SELECT object_key FROM asset_derivatives WHERE state='ready'",
+        )
+      ).rows,
+    ]
+      .map(({ object_key }) => object_key)
+      .sort();
+    const objectCount = await backupStudioObjects(s3, backup, expectedBackupKeys);
     await p.db.close();
     p = undefined;
     await Promise.all([stop(postgres), stop(redis), stop(s3.child)]);

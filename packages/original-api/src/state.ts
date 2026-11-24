@@ -401,7 +401,7 @@ export class OriginalState {
       await sql.query(`SELECT j.*,u.public_id AS owner_public_id,w.public_id AS workspace_public_id,
       COALESCE(NULLIF(u.nickname,''),u.name) AS author,n.public_id AS node_public_id,
       studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id) AS allowed,
-      v.manifest->'originalSubmission'->>'version' IN ('2','3') AS remote_studio
+      (v.manifest->'originalSubmission'->>'version' IN ('2','3') OR (v.manifest->'originalSubmission'->>'version'='5' AND v.manifest->'originalState' IS NULL)) AS remote_studio
       FROM jobs j JOIN users u ON u.id=j.owner_id JOIN workspaces w ON w.id=j.workspace_id JOIN models m ON m.id=j.model_id
       JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
       LEFT JOIN gpu_nodes n ON n.id::text=j.remote_id
@@ -413,7 +413,7 @@ export class OriginalState {
     const queued = (
       await sql.query(`SELECT j.id,j.provider_model,j.connection_id,j.kind,
       studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id) AS allowed,
-      v.manifest->'originalSubmission'->>'version' IN ('2','3') AS remote_studio
+      (v.manifest->'originalSubmission'->>'version' IN ('2','3') OR (v.manifest->'originalSubmission'->>'version'='5' AND v.manifest->'originalState' IS NULL)) AS remote_studio
       FROM jobs j JOIN models m ON m.id=j.model_id
       JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
       WHERE j.state='queued' AND j.plugin_id!='legacy-archive' AND j.deleted_at IS NULL

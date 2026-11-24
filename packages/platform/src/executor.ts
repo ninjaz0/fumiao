@@ -788,6 +788,10 @@ export class Executor {
     if (
       job.kind !== "audio" ||
       job.provider_model === "edge-tts" ||
+      job.plugin_id === "bgm-generator" ||
+      ["bgm-v1", "suno-v4", "udio-v1.5", "musicgen-large"].includes(
+        String(job.provider_model || ""),
+      ) ||
       job.remote_id ||
       job.receipt
     ) {

@@ -1,6 +1,51 @@
+import { splitArtifactUrl } from "@fumiao/plugin-sdk/artifact-url.js";
 import { pythonJsonText } from "@fumiao/plugin-sdk/json.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
 import { unobserved } from "@fumiao/plugin-sdk/request-workbench.js";
+import {
+  originalParent,
+  OriginalSubmissionError,
+} from "@fumiao/plugin-sdk/submission-errors.js";
+
+const ALLOWED_STYLES = [
+  "cinematic",
+  "lofi",
+  "electronic",
+  "orchestral",
+  "guofeng",
+  "ambient",
+  "suspense",
+];
+
+function normalizeBgmParams(d) {
+  const raw = d.params || {};
+  const rawDuration = Number(raw.duration);
+  const duration = [15, 30, 60, 120].includes(rawDuration) ? rawDuration : 30;
+  const style =
+    typeof raw.style === "string" && ALLOWED_STYLES.includes(raw.style)
+      ? raw.style
+      : "cinematic";
+  const rawBpm = Number(raw.bpm);
+  const bpm = Number.isFinite(rawBpm)
+    ? Math.max(60, Math.min(180, Math.round(rawBpm)))
+    : 100;
+  const instrumental = raw.instrumental !== false;
+  const lyrics =
+    !instrumental && typeof raw.lyrics === "string" && pythonStrip(raw.lyrics)
+      ? pythonStrip(raw.lyrics).slice(0, 1000)
+      : "";
+  const instruction = pythonStrip(
+    d.instruction || raw.instruction || "",
+  ).slice(0, 300);
+  return {
+    style,
+    duration,
+    bpm,
+    instrumental,
+    ...(lyrics ? { lyrics } : {}),
+    ...(instruction ? { instruction } : {}),
+  };
+}
 
 export default {
   modelForm(model) {
@@ -9,25 +54,24 @@ export default {
   namespace(d) {
     return "-bgm-generator-" + d.kind;
   },
-  validate(d) {
-    if (!pythonStrip(d.prompt || "")) return "请描述背景音乐的场景与氛围";
-    return "";
+  validate(d, phase) {
+    if (d.kind !== "audio") {
+      throw new OriginalSubmissionError("BGM 生成模型仅支持音频类型", 400);
+    }
+    if (
+      (phase === "before-packs" || phase === "before-retry" || phase === "prepare") &&
+      !pythonStrip(d.prompt || "")
+    ) {
+      throw new OriginalSubmissionError("请描述背景音乐的场景与氛围", 400);
+    }
   },
   plan(d) {
-    const duration = [15, 30, 60, 120].includes(Number(d.params?.duration))
-      ? Number(d.params.duration)
-      : 30;
     return {
+      namespace: "-bgm-generator-" + d.kind,
       refs: [],
-      params: {
-        style: String(d.params?.style || "cinematic"),
-        duration,
-        bpm: Math.max(60, Math.min(180, Number(d.params?.bpm || 100))),
-        instrumental: d.params?.instrumental !== false,
-        ...(d.params?.instrumental === false && d.params?.lyrics
-          ? { lyrics: String(d.params.lyrics).slice(0, 1000) }
-          : {}),
-      },
+      roles: ["ref"],
+      missing: { status: 404, message: "内容不存在或无权访问" },
+      parentKind: "audio",
       requireConfigured: "BGM 生成服务尚未配置，请联系管理员",
       admission: {
         models: ["bgm-v1"],
@@ -37,13 +81,39 @@ export default {
       },
     };
   },
-  async prepare(d, _r, host) {
+  async prepare(d, r, host) {
+    originalParent(d, r?.parent, "audio");
     await host.task.admit();
-    return { params: d.params ?? {}, references: [] };
+    await host.task.capacity();
+    const params = normalizeBgmParams(d);
+    return {
+      params,
+      references: [],
+      view: {
+        ratio: "",
+        quality: null,
+        seconds: params.duration,
+        sampling_steps: null,
+        seed: d.seed ?? null,
+        width: null,
+        height: null,
+        image_quality: null,
+        audio_settings: params,
+        h3_inputs: null,
+        refs: [],
+      },
+    };
   },
   async estimate(d) {
-    const dur = Number(d.params?.duration || 30);
-    return { tier: dur >= 60 ? "long" : "short", params: { duration: dur } };
+    const dur = [15, 30, 60, 120].includes(Number(d.params?.duration))
+      ? Number(d.params.duration)
+      : 30;
+    return {
+      model: d.model || "bgm-v1",
+      kind: "audio",
+      references: [],
+      params: { duration: dur },
+    };
   },
   configuration({ connection }) {
     return {
@@ -83,6 +153,7 @@ export default {
         bpm: Number(params?.bpm || 100),
         instrumental: params?.instrumental !== false,
         ...(params?.lyrics ? { lyrics: String(params.lyrics) } : {}),
+        ...(params?.instruction ? { instruction: String(params.instruction) } : {}),
       },
       idempotency: "standard",
       timeoutMs: 30000,
@@ -109,7 +180,12 @@ export default {
       }
       if ([400, 401, 403, 422].includes(reply.status)) {
         return {
-          disposition: { action: "fail", note: "BGM 参数或密钥无效" },
+          disposition: {
+            action: "fail",
+            note: "BGM 参数或密钥无效",
+            certainty: "rejected",
+            billable: false,
+          },
         };
       }
       const audioUrl = data?.audio_url || data?.url;
@@ -170,16 +246,28 @@ export default {
   async queueHealth() {
     return { ready: true, checked: Math.floor(Date.now() / 1000) };
   },
-  artifact(url, base) {
+  artifact(url, base, alias) {
     try {
-      const parsed = new URL(url);
-      if (parsed.host === base.netloc) {
-        const prefix = base.path || "";
-        const rel =
-          prefix && parsed.pathname.startsWith(prefix)
-            ? parsed.pathname.slice(prefix.length)
-            : parsed.pathname;
-        return { path: rel.startsWith("/") ? rel : "/" + rel, timeoutMs: 45000 };
+      const parsed = splitArtifactUrl(url);
+      if (parsed.scheme !== "https") {
+        return { error: "BGM 音频地址必须是 HTTPS" };
+      }
+      if (parsed.query || parsed.fragment) {
+        return { error: "BGM 音频地址包含不受支持的参数" };
+      }
+      for (const origin of [base, alias].filter(Boolean)) {
+        if (parsed.netloc !== origin.netloc) continue;
+        const prefix = (origin.path || "").replace(/\/+$/, "");
+        if (prefix && !parsed.path.startsWith(prefix + "/")) continue;
+        const rel = prefix ? parsed.path.slice(prefix.length) : parsed.path;
+        if (
+          !rel ||
+          !/^\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+$/.test(rel) ||
+          rel.split("/").some((part) => part === "." || part === "..")
+        ) {
+          return { error: "BGM 音频路径无效" };
+        }
+        return { path: rel, timeoutMs: 45000 };
       }
       return { error: "BGM 音频域名超出服务地址范围" };
     } catch {

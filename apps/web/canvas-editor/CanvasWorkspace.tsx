@@ -189,6 +189,13 @@ const labels: Record<string, string> = {
   failed: "生成失败",
   cancelled: "已取消",
 };
+const BGM_ACTIVE_STATUSES = new Set([
+  "queued",
+  "dispatching",
+  "running",
+  "finalizing",
+  "uncertain",
+]);
 const colors = ["none", "mint", "blue", "purple", "orange", "yellow"];
 const colorNames = ["无标签", "青绿", "蓝色", "紫色", "橙色", "黄色"];
 const mediaURL = (id: string) => "/media/" + id;
@@ -2462,45 +2469,83 @@ export function CanvasWorkspace({
             ),
         )
       : [];
+  const bgmRuns = useMemo(
+    () => runs.filter((r) => r.canvas_node === "bgm:project"),
+    [runs],
+  );
+  const latestBgmRun = bgmRuns[0] ?? null;
+  const activeBgmRun =
+    bgmRuns.find((r) => BGM_ACTIVE_STATUSES.has(r.status)) ?? null;
+  const bgmGenerating =
+    Boolean(activeBgmRun) ||
+    (pendingBgmJobId !== null &&
+      !bgmRuns.some(
+        (r) => r.id === pendingBgmJobId && !BGM_ACTIVE_STATUSES.has(r.status),
+      ));
+  const appliedBgmJobsRef = useRef<Set<number>>(new Set());
+  const notifiedBgmFailedRef = useRef<Set<number>>(new Set());
   useEffect(() => {
-    if (!pendingBgmJobId) return;
-    const job = studio.jobs.find((j) => j.id === pendingBgmJobId);
-    if (!job) return;
-    if (job.status === "done" && job.result) {
+    const candidate =
+      latestBgmRun ??
+      (pendingBgmJobId !== null
+        ? (studio.jobs.find((j) => j.id === pendingBgmJobId) ?? null)
+        : null);
+    if (!candidate) return;
+    if (BGM_ACTIVE_STATUSES.has(candidate.status)) {
+      if (pendingBgmJobId !== candidate.id) setPendingBgmJobId(candidate.id);
+      return;
+    }
+    const wasPending = pendingBgmJobId === candidate.id;
+    if (wasPending) setPendingBgmJobId(null);
+    if (candidate.status === "done" && candidate.result) {
+      const currentDoc = doc.ref.current.document;
+      if (
+        currentDoc.bgm_applied_job === candidate.id ||
+        appliedBgmJobsRef.current.has(candidate.id)
+      ) {
+        return;
+      }
+      appliedBgmJobsRef.current.add(candidate.id);
       doc.change((d) => ({
         ...d,
         document: {
           ...d.document,
+          bgm_applied_job: candidate.id,
           bgm: {
-            asset_id: job.result!,
+            asset_id: candidate.result!,
             volume: d.document.bgm?.volume ?? 0.35,
             ducking: d.document.bgm?.ducking ?? true,
             loop: d.document.bgm?.loop ?? true,
           },
         },
       }));
-      setPendingBgmJobId(null);
+      void doc.flush().catch(() => {});
       notify("AI 配乐已生成并自动挂载至背景音乐轨");
-    } else if (["failed", "cancelled"].includes(job.status)) {
-      setPendingBgmJobId(null);
-      notify(job.note || "AI 配乐生成失败，请重试");
+    } else if (
+      ["failed", "cancelled"].includes(candidate.status) &&
+      wasPending &&
+      !notifiedBgmFailedRef.current.has(candidate.id)
+    ) {
+      notifiedBgmFailedRef.current.add(candidate.id);
+      notify(candidate.note || "AI 配乐生成失败，请重试");
     }
-  }, [pendingBgmJobId, studio.jobs]);
+  }, [latestBgmRun, pendingBgmJobId, studio.jobs, doc.change, doc.flush, doc.ref]);
 
   const availableAudioModels = Object.entries(studio.model_catalog)
     .filter(([id, spec]) => spec.kind === "audio" && availableModel(id))
     .map(([id, spec]) => ({ id, label: spec.label || id }));
-  const bgmModels = [
-    ...availableAudioModels.filter((m) =>
-      ["suno-v4", "udio-v1.5", "musicgen-large"].includes(m.id) ||
-      studio.model_catalog[m.id]?.provider === "bgm-generator",
-    ),
-    ...availableAudioModels.filter(
-      (m) =>
-        !["suno-v4", "udio-v1.5", "musicgen-large"].includes(m.id) &&
-        studio.model_catalog[m.id]?.provider !== "bgm-generator",
-    ),
-  ];
+  const isBgmMusicModel = (
+    id: string,
+    spec?: { kind?: string; provider?: string },
+  ) =>
+    spec?.kind === "audio" &&
+    (spec.provider === "bgm-generator" ||
+      ["bgm-v1", "suno-v4", "udio-v1.5", "musicgen-large"].includes(id) ||
+      (typeof spec.provider === "string" &&
+        /(?:^|[-_])(bgm|music)(?:$|[-_])/i.test(spec.provider)));
+  const bgmModels = availableAudioModels.filter((m) =>
+    isBgmMusicModel(m.id, studio.model_catalog[m.id]),
+  );
   const defaultBgmPrompt = shots.length
     ? `为以下分镜创作背景配乐：${shots
         .slice(0, 4)
@@ -2511,7 +2556,7 @@ export function CanvasWorkspace({
   const handleGenerateBgm = async (opts: { prompt: string; model?: string }) => {
     const model = opts.model || bgmModels[0]?.id;
     if (!model) throw new Error("暂无可用的 AI 配乐模型");
-    const res = await api<{ id: number }>("/api/audio-jobs", {
+    const res = await api<{ id: number }>(`/api/canvases/${project.id}/bgm`, {
       uid: crypto.randomUUID(),
       model,
       prompt: opts.prompt.slice(0, 300),
@@ -2522,6 +2567,12 @@ export function CanvasWorkspace({
     await fetchRuns();
   };
   const compositionAudioAssets = [
+    ...bgmRuns
+      .filter((r) => r.status === "done" && r.result)
+      .map((r) => ({
+        id: r.result!,
+        label: `${r.model || "配乐"} · ${(r.prompt || "").slice(0, 18) || "#" + r.id}`,
+      })),
     ...studio.assets
       .filter((a) => a.kind === "audio" || a.kind === "ref_audio")
       .map((a) => ({
@@ -4437,7 +4488,7 @@ export function CanvasWorkspace({
                 loudnorm={doc.value.document.loudnorm}
                 defaultBgmPrompt={defaultBgmPrompt}
                 bgmModels={bgmModels}
-                bgmGenerating={Boolean(pendingBgmJobId)}
+                bgmGenerating={bgmGenerating}
                 onGenerateBgm={handleGenerateBgm}
                 onMixChange={(patch) =>
                   doc.change((d) => ({
@@ -4613,7 +4664,7 @@ export function CanvasWorkspace({
                 loudnorm={doc.value.document.loudnorm}
                 defaultBgmPrompt={defaultBgmPrompt}
                 bgmModels={bgmModels}
-                bgmGenerating={Boolean(pendingBgmJobId)}
+                bgmGenerating={bgmGenerating}
                 onGenerateBgm={handleGenerateBgm}
                 onMixChange={(patch) =>
                   doc.change((d) => ({

@@ -128,6 +128,56 @@ test("F038 asset derivatives generate WebP thumbs and video posters excluded fro
     await media.remove(f.admin, imgKey, String(f.team.public_id));
     assert.equal(await getReadyDerivative(f.db, imgId, "thumb"), null);
     await assert.rejects(() => f.p.storage.stat(thumb.object_key));
+
+    // Concurrent generateDerivative race on the same asset leaves exactly 1 ready DB row and 1 storage object (zero orphans).
+    const raceId = randomUUID();
+    const raceKey = randomUUID().replaceAll("-", "");
+    const raceObj = `img-${raceKey}`;
+    await f.p.storage.put(raceObj, png, "image/png");
+    await f.db.query(
+      `INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,metadata,original_kind,object_modified)
+       VALUES($1,$2,$3,$4,$5,'image/png',$6,'ready','{"width":960,"height":640}','ref',1700000000)`,
+      [raceId, raceKey, f.team.id, f.admin.id, raceObj, png.length],
+    );
+    await ensureDerivativeQueued(f.db, raceId, "image/png");
+    const origPut = f.p.storage.put.bind(f.p.storage);
+    const writtenKeys: string[] = [];
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const gateTimer = setTimeout(() => releaseGate(), 4000);
+    f.p.storage.put = async (key, body, mime) => {
+      const res = await origPut(key, body, mime);
+      writtenKeys.push(key);
+      if (writtenKeys.length === 2) releaseGate();
+      await gate;
+      return res;
+    };
+    let raced: (Awaited<ReturnType<typeof generateDerivative>>)[] = [];
+    try {
+      raced = await Promise.all([
+        generateDerivative(f.p, raceId, "thumb"),
+        generateDerivative(f.p, raceId, "thumb"),
+      ]);
+    } finally {
+      clearTimeout(gateTimer);
+      f.p.storage.put = origPut;
+    }
+    assert.equal(writtenKeys.length, 2);
+    assert.ok(raced.every((row) => row?.state === "ready"));
+    const winningRow = await getReadyDerivative(f.db, raceId, "thumb");
+    assert.ok(winningRow);
+    const surviving = (
+      await Promise.all(
+        writtenKeys.map((k) => f.p.storage.stat(k).then(() => k, () => null)),
+      )
+    ).filter((k): k is string => Boolean(k));
+    assert.deepEqual(surviving, [winningRow.object_key]);
+    assert.deepEqual(
+      raced.map((r) => r!.object_key),
+      [winningRow.object_key, winningRow.object_key],
+    );
   } finally {
     await f.cleanup();
   }

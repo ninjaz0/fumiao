@@ -158,6 +158,7 @@ export const canvasDocumentFields: Fields = {
   ),
   shots: { ...list({ kind: "string" }, 200), nullable: true, default: null },
   bgm: { ...object(canvasBgmFields), nullable: true, optional: true },
+  bgm_applied_job: { ...integer(), nullable: true, gt: 0, optional: true },
   loudnorm: { kind: "boolean", strict: false, optional: true },
 };
 export const canvasNewFields: Fields = {
@@ -205,6 +206,19 @@ export const canvasDialogueRunFields: Fields = {
   },
   uid: { kind: "uuid" },
   line_id: { ...identifier, optional: true },
+};
+export const canvasBgmRunFields: Fields = {
+  uid: { kind: "uuid" },
+  model: { kind: "string", min: 1, max: 80 },
+  prompt: { kind: "string", min: 1, max: 300 },
+  instruction: { kind: "string", max: 300, default: "" },
+  params: { kind: "dictionary", optional: true },
+  price_revision: {
+    ...integer(null),
+    nullable: true,
+    min: 1,
+    exactInteger: true,
+  },
 };
 export const canvasRunFields: Fields = {
   ...canvasExactRevisionFields,
@@ -413,6 +427,7 @@ export type CanvasDocument = {
   }[];
   shots?: string[];
   bgm?: CanvasBgm | null;
+  bgm_applied_job?: number | null;
   loudnorm?: boolean;
 };
 /** Pydantic excludes shots only when None; an explicit empty list stays visible. */

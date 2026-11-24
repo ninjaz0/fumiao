@@ -117,6 +117,7 @@ export type Doc = {
   edges: CanvasEdge[];
   shots?: string[];
   bgm?: CanvasBgm | null;
+  bgm_applied_job?: number | null;
   loudnorm?: boolean;
 };
 export type Draft = { title: string; document: Doc };

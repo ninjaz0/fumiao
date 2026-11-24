@@ -16,6 +16,7 @@ import {
   batchQuoteFields,
   canvasBatchPrecheckFields,
   canvasBatchRunFields,
+  canvasBgmRunFields,
   canvasCandidatesFields,
   canvasDialogueRunFields,
   canvasExactRevisionFields,
@@ -57,6 +58,7 @@ export const identityBodies: Record<string, Fields> = {
   canvasNew: canvasNewFields,
   canvasSave: canvasSaveFields,
   canvasRun: canvasRunFields,
+  canvasBgmRun: canvasBgmRunFields,
   canvasDialogueRun: canvasDialogueRunFields,
   canvasPluginRun: canvasPluginRunFields,
   canvasCandidates: canvasCandidatesFields,
@@ -255,6 +257,12 @@ export const canvasContracts: Contract[] = [
     literalQuery: { format: { choices: ["srt", "vtt"], default: "srt" } },
   },
   { method: "GET", path: /^\/api\/canvases\/[^/]+\/runs$/ },
+  {
+    method: "POST",
+    path: /^\/api\/canvases\/[^/]+\/bgm$/,
+    body: "canvasBgmRun",
+    exactIntegers: true,
+  },
   {
     method: "POST",
     path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/(?:runs|narration)$/,

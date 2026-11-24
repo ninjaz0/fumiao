@@ -1,7 +1,7 @@
 {
   "id": "tts-commercial",
-  "version": "1.0.0",
-  "notes": "首次发布",
+  "version": "1.1.0",
+  "notes": "修复商业 TTS 原生任务计划校验与参数冻结",
   "package": "tts-commercial.fmplugin.json",
-  "sha256": "583e1f162f60035b6c071a6cfae7beb2d9d19de39f65202bce2993ea0421272f"
+  "sha256": "f5eb41d255800f4a91d28589f011273990dee074cb179faba917a262be8c82bc"
 }

@@ -305,6 +305,15 @@ class OriginalApi {
   ) {
     return this.canvasRuns.narrateDialogue(req.actor, key, node, body);
   }
+  @Post("api/canvases/:key/bgm")
+  @HttpCode(200)
+  generateCanvasBgm(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.canvasRuns.generateBgm(req.actor, key, body);
+  }
   @Post("api/canvases/:key/nodes/:node/tail-frame")
   @HttpCode(200)
   extractCanvasTailFrame(

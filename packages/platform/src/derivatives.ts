@@ -253,9 +253,16 @@ export async function generateDerivative(
          height = excluded.height,
          size = excluded.size,
          state = 'ready'
+       WHERE asset_derivatives.state <> 'ready'
        RETURNING *`,
       [assetId, variant, objectKey, mime, width, height, buffer.length],
     );
+    if (!saved) {
+      // Another worker replica won the race and already marked this derivative ready.
+      // Remove our duplicate object so private storage never accumulates orphan keys.
+      await p.storage.remove(objectKey).catch(() => {});
+      return getReadyDerivative(p.db, assetId, variant);
+    }
     return saved as DerivativeRow;
   } catch {
     await p.storage.remove(objectKey).catch(() => {});

@@ -12,6 +12,7 @@ import { parseBody } from "./validation.js";
 import { parseDraft } from "./drafts.js";
 import {
   canvasBatchRunFields,
+  canvasBgmRunFields,
   canvasCandidatesFields,
   canvasDialogueRunFields,
   canvasRunFields,
@@ -40,6 +41,27 @@ import { OriginalState } from "./state.js";
 
 const namespaceUrl = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
 const active = ["queued", "dispatching", "running", "finalizing", "uncertain"];
+const BGM_MODEL_IDS = new Set([
+  "bgm-v1",
+  "suno-v4",
+  "udio-v1.5",
+  "musicgen-large",
+]);
+function isBgmMusicModel(
+  modelId: string,
+  spec?: { kind?: string; provider?: string },
+): boolean {
+  if (!spec || spec.kind !== "audio") return false;
+  if (spec.provider === "bgm-generator") return true;
+  if (BGM_MODEL_IDS.has(modelId)) return true;
+  if (
+    typeof spec.provider === "string" &&
+    /(?:^|[-_])(bgm|music)(?:$|[-_])/i.test(spec.provider)
+  ) {
+    return true;
+  }
+  return false;
+}
 
 /** F030: Compiles structured 6-dimension director cinematography spec into clean prompt text. */
 export function compileCinematographyPrompt(
@@ -723,6 +745,85 @@ export class OriginalCanvasRuns {
       await this.link(sql, p, user, nodeName, uid, result.id, {
         text: node.narration_text,
         instruction: node.narration_instruction,
+        revision: p.revision,
+      });
+      return result;
+    });
+  }
+  async generateBgm(user: OriginalActor, project: string, value: unknown) {
+    const body = parseBody(value, canvasBgmRunFields, true) as {
+      uid: string;
+      model: string;
+      prompt: string;
+      instruction: string;
+      params?: Record<string, unknown>;
+      price_revision: number | bigint | null;
+    };
+    const prompt = pythonStrip(body.prompt);
+    requireValue(prompt, 400, "请描述背景音乐的场景与氛围");
+    const instruction = pythonStrip(body.instruction || "");
+    return this.p.db.transaction(async (sql) => {
+      const p = await this.canvases.project(sql, user, project, true);
+      await this.ownerLock(sql, user);
+      const uid = uuid5(body.uid, "bgm"),
+        nodeName = "bgm:project",
+        old = await this.previous(sql, user, uid);
+      if (old) {
+        requireValue(
+          old.project_id === p.id && old.node === nodeName && old.job !== null,
+          409,
+          "这次提交已处理，请刷新后重试",
+        );
+        return { id: Number(old.job) };
+      }
+      requireValue(
+        !(await this.busy(sql, p.id, nodeName)),
+        409,
+        "当前画布配乐仍在生成中",
+      );
+      const catalog = await new StudioCatalog(this.p.db).catalog(sql);
+      const modelSpec = catalog[body.model];
+      requireValue(
+        modelSpec && modelSpec.kind === "audio",
+        400,
+        "未知配乐模型",
+      );
+      requireValue(
+        isBgmMusicModel(body.model, modelSpec),
+        400,
+        "该模型仅支持语音合成，不支持作为画布 AI 配乐模型；请启用 BGM 配乐插件",
+      );
+      const draft = parseDraft(
+        "audio",
+        {
+          uid: uuid5(body.uid, `bgm:${p.public_id}`),
+          model: body.model,
+          prompt,
+          instruction,
+          ...(body.params ? { params: body.params } : {}),
+          price_revision:
+            typeof body.price_revision === "number"
+              ? body.price_revision
+              : null,
+        },
+        catalog,
+      );
+      const result = await this.generation.submitOn(
+        sql,
+        user,
+        draft,
+        String(p.workspace_number),
+        body.price_revision,
+        {
+          projectId: String(p.id),
+          nodeId: nodeName,
+          executionKey: `canvas-bgm:${p.id}:${uid}`,
+        },
+      );
+      await this.link(sql, p, user, nodeName, uid, result.id, {
+        model: body.model,
+        prompt,
+        instruction,
         revision: p.revision,
       });
       return result;
