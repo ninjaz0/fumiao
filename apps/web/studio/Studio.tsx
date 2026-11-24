@@ -284,10 +284,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       pendingStateRead.current?.controller.abort();
       const controller = new AbortController();
       pendingStateRead.current = { version, controller };
-      const deadline = window.setTimeout(
-        () => controller.abort(new Error("状态刷新超时，正在重试")),
-        stateReadTimeout,
-      );
+      // Only an open Studio gives up on a read: nothing retries a slow first load.
+      const deadline = active.current
+        ? window.setTimeout(
+            () => controller.abort(new Error("状态刷新超时，正在重试")),
+            stateReadTimeout,
+          )
+        : undefined;
       try {
         const next = await api<StudioState>(
           workspaceId.current,
