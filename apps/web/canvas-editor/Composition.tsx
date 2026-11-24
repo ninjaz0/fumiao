@@ -1,8 +1,12 @@
 import {useEffect,useState} from 'react';
 import {Download,Film} from 'lucide-react';
+import {mediaDownloadFilename} from '@fumiao/plugin-sdk/media-filename';
 import {api,ApiError} from './api';
 type Exporter={key:string;title:string};
 type Result={id:string;state:string;result:string|null;error:string;revision:number;created:number};
+export function CompositionDownloadLink({result}:{result:string}){
+ return <a className="secondary" href={'/media/'+result+'?download=true'} download={mediaDownloadFilename(result,'video/mp4')}><Download size={15}/>MP4</a>;
+}
 export function Composition({project,getRevision,ready,waitingReason}:{project:string;getRevision:()=>Promise<number>;ready:boolean;waitingReason:string}){
  const [results,setResults]=useState<Result[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[pollError,setPollError]=useState(''),[preview,setPreview]=useState<string|null>(null);
  const [exporters,setExporters]=useState<Exporter[]|undefined>(),[selected,select]=useState("");
@@ -29,7 +33,7 @@ export function Composition({project,getRevision,ready,waitingReason}:{project:s
   {(error||pollError)&&<p className="error" role="alert">{error||pollError}</p>}
   <div className="composition-results">{results.slice(0,5).map(r=><div key={r.id}>
    <div className="composition-result"><span>{new Date(r.created*1000).toLocaleString()}<small>版本 {r.revision}</small></span>
-    {r.state==='done'&&r.result?<><button className="secondary" onClick={()=>setPreview(preview===r.id?null:r.id)}>{preview===r.id?'收起预览':'预览'}</button><a className="secondary" href={'/media/'+r.result+'?download=true'}><Download size={15}/>MP4</a><a className="secondary" href={'/api/storyboard-exports/'+r.id+'/subtitles'}>字幕 SRT</a></>:<span>{r.state==='queued'?'等待合成':r.state==='running'?'正在合成':r.state==='failed'?r.error:'成片已删除'}</span>}
+    {r.state==='done'&&r.result?<><button className="secondary" onClick={()=>setPreview(preview===r.id?null:r.id)}>{preview===r.id?'收起预览':'预览'}</button><CompositionDownloadLink result={r.result}/><a className="secondary" href={'/api/storyboard-exports/'+r.id+'/subtitles'}>字幕 SRT</a></>:<span>{r.state==='queued'?'等待合成':r.state==='running'?'正在合成':r.state==='failed'?r.error:'成片已删除'}</span>}
    </div>
    {preview===r.id&&r.result&&<video className="composition-preview" src={'/media/'+r.result} controls playsInline><track kind="captions" label="旁白字幕" srcLang="zh" src={'/api/storyboard-exports/'+r.id+'/subtitles?format=vtt'} default/></video>}
   </div>)}</div>

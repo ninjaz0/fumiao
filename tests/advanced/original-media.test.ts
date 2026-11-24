@@ -13,6 +13,8 @@ import { OriginalMedia } from "@fumiao/original-api/media.js";
 import { OriginalLibrary } from "@fumiao/original-api/library.js";
 import { zipStream } from "@fumiao/original-api/zip.js";
 import { sendFile } from "@fumiao/original-api/files.js";
+import { S3Storage } from "@fumiao/platform/storage.js";
+import { S3Client } from "@aws-sdk/client-s3";
 import { PluginRegistry } from "@fumiao/platform/plugins.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
@@ -693,6 +695,176 @@ test("original uploads clean partial objects and rolled-back metadata after stor
       (await f.db.query("SELECT * FROM avatar_objects")).rows.length,
       0,
     );
+  } finally {
+    await app.close();
+    await f.cleanup();
+  }
+});
+
+test("generated MP4 media serves .mp4 ASCII fallback and UTF-8 filename* for local sendFile, inline save-as, and S3 downloadUrl", async () => {
+  const f = await fixture(),
+    app = await createOriginalApp(f.p),
+    s3 = new S3Storage("private-fixture");
+  s3.client.destroy();
+  s3.client = new S3Client({
+    endpoint: "https://objects.invalid",
+    region: "us-east-1",
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: "fixture-key",
+      secretAccessKey: "fixture-secret",
+    },
+  });
+  try {
+    const mp4Bytes = Buffer.from("000000186674797069736f6d", "hex"),
+      id = randomUUID(),
+      key = randomUUID().replaceAll("-", ""),
+      objectKey = "video-" + randomUUID();
+    await f.p.storage.put(objectKey, mp4Bytes, "video/mp4");
+    await f.db.query(
+      "INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,original_kind,metadata) VALUES($1,$2,$3,$4,$5,'video/mp4',$6,'ready','video','{}')",
+      [id, key, f.team, f.admin.id, objectKey, mp4Bytes.length],
+    );
+    await app.listen(0, "127.0.0.1");
+    const base = await app.getUrl(),
+      cookie = { cookie: "fm_session=" + f.token },
+      prefix = key.slice(0, 8),
+      expectedAttachment = `attachment; filename="fumiao-${prefix}.mp4"; filename*=UTF-8''%E5%BC%97%E6%B7%BC-${prefix}.mp4`,
+      expectedInline = `inline; filename="fumiao-${prefix}.mp4"; filename*=UTF-8''%E5%BC%97%E6%B7%BC-${prefix}.mp4`;
+
+    const attachmentRes = await fetch(`${base}/media/${key}?download=true`, {
+      headers: cookie,
+    });
+    assert.equal(attachmentRes.status, 200);
+    assert.equal(attachmentRes.headers.get("content-type"), "video/mp4");
+    assert.equal(
+      attachmentRes.headers.get("content-disposition"),
+      expectedAttachment,
+    );
+    assert.deepEqual(Buffer.from(await attachmentRes.arrayBuffer()), mp4Bytes);
+
+    const inlineRes = await fetch(`${base}/media/${key}`, { headers: cookie });
+    assert.equal(inlineRes.status, 200);
+    assert.equal(inlineRes.headers.get("content-type"), "video/mp4");
+    assert.equal(inlineRes.headers.get("content-disposition"), expectedInline);
+    assert.deepEqual(Buffer.from(await inlineRes.arrayBuffer()), mp4Bytes);
+
+    f.p.storage.downloadUrl = s3.downloadUrl.bind(s3);
+    const s3Download = await fetch(`${base}/media/${key}?download=true`, {
+      headers: cookie,
+      redirect: "manual",
+    });
+    assert.equal(s3Download.status, 307);
+    const signedDownload = new URL(s3Download.headers.get("location")!);
+    assert.equal(
+      signedDownload.searchParams.get("response-content-type"),
+      "video/mp4",
+    );
+    assert.equal(
+      signedDownload.searchParams.get("response-content-disposition"),
+      expectedAttachment,
+    );
+
+    const s3Direct = await fetch(`${base}/media/${key}`, {
+      headers: cookie,
+      redirect: "manual",
+    });
+    assert.equal(s3Direct.status, 307);
+    const signedDirect = new URL(s3Direct.headers.get("location")!);
+    assert.equal(
+      signedDirect.searchParams.get("response-content-disposition"),
+      expectedInline,
+    );
+
+    const s3Embedded = await fetch(`${base}/media/${key}`, {
+      headers: { ...cookie, "Sec-Fetch-Dest": "video" },
+      redirect: "manual",
+    });
+    assert.equal(s3Embedded.status, 200);
+    assert.equal(s3Embedded.headers.get("content-disposition"), expectedInline);
+    await s3Embedded.arrayBuffer();
+  } finally {
+    s3.client.destroy();
+    await app.close();
+    await f.cleanup();
+  }
+});
+
+test("uploaded reference videos with dotted original names preserve dot stems and end with .mp4", async () => {
+  const f = await fixture(),
+    app = await createOriginalApp(f.p);
+  try {
+    await app.listen(0, "127.0.0.1");
+    const base = await app.getUrl(),
+      cookie = { cookie: "fm_session=" + f.token },
+      mp4Bytes = Buffer.from("000000186674797069736f6d", "hex");
+
+    const cases = [
+      {
+        original: "my.clip.2026.11.mov",
+        utf8: "my.clip.2026.11.mp4",
+        ascii: "my.clip.2026.11.mp4",
+      },
+      {
+        original: "scene.01.mp4",
+        utf8: "scene.01.mp4",
+        ascii: "scene.01.mp4",
+      },
+      {
+        original: "test.v2",
+        utf8: "test.v2.mp4",
+        ascii: "test.v2.mp4",
+      },
+      {
+        original: "2026.11.19.镜头1.mov",
+        utf8: "2026.11.19.镜头1.mp4",
+        ascii: "2026.11.19.1.mp4",
+      },
+      {
+        original: "产品演示.1080p",
+        utf8: "产品演示.1080p.mp4",
+        ascii: "1080p.mp4",
+      },
+      {
+        original: 'dir/sub\\quote"bad.v3.WEBM',
+        utf8: "dir_sub_quotebad.v3.mp4",
+        ascii: "dir_sub_quotebad.v3.mp4",
+      },
+    ];
+
+    for (const item of cases) {
+      const id = randomUUID(),
+        key = randomUUID().replaceAll("-", ""),
+        objectKey = "ref-video-" + randomUUID();
+      await f.p.storage.put(objectKey, mp4Bytes, "video/mp4");
+      await f.db.query(
+        "INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,original_kind,metadata) VALUES($1,$2,$3,$4,$5,'video/mp4',$6,'ready','ref_video','{}')",
+        [id, key, f.team, f.admin.id, objectKey, mp4Bytes.length],
+      );
+      await f.db.query(
+        "INSERT INTO asset_reference_media(asset_id,seconds,fps,has_audio,name) VALUES($1,5,24,true,$2)",
+        [id, item.original],
+      );
+
+      const expectedEncoded = encodeURIComponent(item.utf8);
+      const res = await fetch(`${base}/media/${key}?download=true`, {
+        headers: cookie,
+      });
+      assert.equal(res.status, 200);
+      assert.equal(
+        res.headers.get("content-disposition"),
+        `attachment; filename="${item.ascii}"; filename*=UTF-8''${expectedEncoded}`,
+      );
+      await res.arrayBuffer();
+
+      const inline = await fetch(`${base}/media/${key}`, { headers: cookie });
+      assert.equal(inline.status, 200);
+      assert.equal(
+        inline.headers.get("content-disposition"),
+        `inline; filename="${item.ascii}"; filename*=UTF-8''${expectedEncoded}`,
+      );
+      await inline.arrayBuffer();
+    }
   } finally {
     await app.close();
     await f.cleanup();

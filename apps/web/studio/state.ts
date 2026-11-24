@@ -1,5 +1,6 @@
 import type { MenuEntry, PluginPageEntry } from "@fumiao/plugin-sdk/contributions";
 import type { InstalledSettingsPage } from "@fumiao/plugin-sdk/settings-pages";
+import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename";
 import { resolve as resolveFlow } from "../canvas-editor/flowPicker";
 import {
   formError,
@@ -62,6 +63,8 @@ export type Asset = {
   id: string;
   owner: number;
   kind?: "ref" | "ref_video" | "ref_audio";
+  mime?: string;
+  name?: string;
   w: number;
   h: number;
   seconds?: number;
@@ -87,6 +90,7 @@ export type Job = {
   prompt: string;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
   result?: string;
+  result_mime?: string;
   refs: string[];
   seconds: number;
   created: number;
@@ -347,6 +351,32 @@ function readSnapshot(
 }
 export const displayName = (member: Member) => member.nickname || member.name;
 export const mediaURL = (key: string) => "/media/" + key;
+export function assetDownloadFilename(
+  asset: Pick<Asset, "id" | "kind" | "mime" | "name">,
+): string | undefined {
+  const mime =
+    asset.mime ??
+    (asset.kind === "ref_video"
+      ? "video/mp4"
+      : asset.kind === "ref_audio"
+        ? "audio/wav"
+        : undefined);
+  if (!mime && !asset.name) return undefined;
+  return mediaDownloadFilename(asset.id, mime, asset.name);
+}
+export function jobDownloadFilename(
+  job: Pick<Job, "result" | "kind" | "result_mime">,
+): string | undefined {
+  if (!job.result) return undefined;
+  const mime =
+    job.result_mime ??
+    (job.kind === "video"
+      ? "video/mp4"
+      : job.kind === "audio"
+        ? "audio/wav"
+        : undefined);
+  return mime ? mediaDownloadFilename(job.result, mime) : undefined;
+}
 export function modelAvailable(state: StudioState, model: string) {
   if (
     !model ||

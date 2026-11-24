@@ -8,15 +8,8 @@ import { requireValue } from "@fumiao/platform/security.js";
 import { originalUI } from "@fumiao/web-compat/ui.js";
 import { OriginalIdentity, avatars } from "./identity.js";
 import { modifiedSeconds } from "@fumiao/platform/storage.js";
+import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename.js";
 import { sendFile } from "./files.js";
-const extension: Record<string, string> = {
-  "audio/wav": ".wav",
-  "video/mp4": ".mp4",
-  "video/webm": ".webm",
-  "image/png": ".png",
-  "image/jpeg": ".jpg",
-  "image/webp": ".webp",
-};
 export class OriginalMedia {
   private identity: OriginalIdentity;
   constructor(readonly p: Platform) {
@@ -25,7 +18,8 @@ export class OriginalMedia {
   async resource(sql: Sql, user: Actor, key: string, workspace?: string) {
     const asset = await one(
       sql,
-      `SELECT a.* FROM assets a JOIN workspaces w ON w.id=a.workspace_id
+      `SELECT a.*, r.name FROM assets a JOIN workspaces w ON w.id=a.workspace_id
+    LEFT JOIN asset_reference_media r ON r.asset_id=a.id
     WHERE a.public_id=$1 AND a.state='ready' AND ($4::uuid IS NULL OR w.id=$4)
     AND ((w.kind='personal' AND w.owner_id=$2) OR (w.kind='team' AND ($3='admin' OR EXISTS(SELECT 1 FROM members m WHERE m.workspace_id=w.id AND m.user_id=$2))))`,
       [key, user.id, user.role, workspace || null],
@@ -41,9 +35,7 @@ export class OriginalMedia {
     res: Response,
   ) {
     const asset = await this.resource(this.p.db, user, key);
-    const filename = download
-      ? "弗淼-" + key.slice(0, 8) + (extension[asset.mime] || "")
-      : undefined;
+    const filename = mediaDownloadFilename(key, asset.mime, asset.name);
     // Keep embedded S3 media on its stable same-origin URL across refreshes.
     // Explicit downloads and API clients still receive a short-lived signed URL.
     const embedded = ["image", "audio", "video"].includes(
@@ -57,6 +49,7 @@ export class OriginalMedia {
         await this.p.storage.downloadUrl(asset.object_key, {
           mime: asset.mime,
           filename,
+          ...(download ? {} : { disposition: "inline" }),
         }),
       );
       res.setHeader("Content-Length", "0");
@@ -76,6 +69,7 @@ export class OriginalMedia {
           this.p.storage.stream(asset.object_key, start, end),
       },
       filename,
+      download ? "attachment" : "inline",
     );
   }
   async builtin(filename: string, req: Request, res: Response) {

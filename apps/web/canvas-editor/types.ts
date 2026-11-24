@@ -1,5 +1,6 @@
 import type { CanvasExtension, CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
 import {acceptsCanvasEdge,canvasSourceKind} from "@fumiao/plugin-sdk/canvas-ports";
+import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename";
 export type Kind = "text" | "image" | "video" | "sticky" | "plugin";
 export type H3Options = {mode:"reference"|"frames";first_frame?:string|null;last_frame?:string|null;video_audio?:string[]};
 export type Params = {
@@ -70,6 +71,7 @@ export type Job = {
   kind: "image" | "video" | "audio";
   status: string;
   result: string | null;
+  result_mime?: string;
   note: string;
   prompt: string;
   refs: string[];
@@ -86,7 +88,7 @@ export type Job = {
   eta?: any;
   timing?: any;
 };
-export type Asset = {kind?:string;seconds?:number;has_audio?:boolean;name?:string; id: string; w: number; h: number; owner: number };
+export type Asset = {kind?:string;mime?:string;seconds?:number;has_audio?:boolean;name?:string; id: string; w: number; h: number; owner: number };
 export type FlowModel = {kind:string;label:string;provider?:string;family?:string;family_label?:string;hidden?:boolean;mode?:string;ratio?:string;seconds?:number;resolution?:string;min_refs?:number;max_refs?:number};
 export type Studio = {
   canvas_nodes?: CanvasNodeEntry[];
@@ -341,6 +343,47 @@ export function textDownloadFilename(
     ? currentTitle
     : fallbackTitle || "未命名画布";
   return base + ".txt";
+}
+
+export function canvasMediaDownloadFilename(
+  key: string,
+  options: {
+    runs?: readonly Job[];
+    studio?: Pick<Studio, "jobs" | "assets">;
+    node?: Pick<CanvasNode, "type"> | null;
+    run?: Job;
+  } = {},
+): string | undefined {
+  const asset = options.studio?.assets.find((a) => a.id === key);
+  if (asset) {
+    const mime =
+      asset.mime ??
+      (asset.kind === "ref_video"
+        ? "video/mp4"
+        : asset.kind === "ref_audio"
+          ? "audio/wav"
+          : undefined);
+    if (mime || asset.name)
+      return mediaDownloadFilename(key, mime, asset.name);
+  }
+  const job =
+    (options.run?.result === key ? options.run : undefined) ??
+    options.runs?.find((j) => j.result === key) ??
+    options.studio?.jobs.find((j) => j.result === key);
+  if (job) {
+    const mime =
+      job.result_mime ??
+      (job.kind === "video"
+        ? "video/mp4"
+        : job.kind === "audio"
+          ? "audio/wav"
+          : undefined);
+    if (mime) return mediaDownloadFilename(key, mime);
+  }
+  if (options.node?.type === "video") {
+    return mediaDownloadFilename(key, "video/mp4");
+  }
+  return undefined;
 }
 
 export function shouldRedirectRunsError(error: unknown): boolean {

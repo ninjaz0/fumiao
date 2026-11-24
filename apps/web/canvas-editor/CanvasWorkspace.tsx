@@ -88,6 +88,7 @@ import {
   collectDownloadTargets,
   hasDownloadableNodes,
   textDownloadFilename,
+  canvasMediaDownloadFilename,
   shouldRedirectRunsError,
   formatRunsError,
   resolveHistoryModalState,
@@ -1575,9 +1576,17 @@ export function CanvasWorkspace({
     }
     try {
       if (keys.length === 1) {
+        const mediaNode = chosen.find(
+          (n) => resolveNode(n, runs).media === keys[0],
+        );
         const a = document.createElement("a");
         a.href = mediaURL(keys[0]) + "?download=true";
-        a.download = "";
+        a.download =
+          canvasMediaDownloadFilename(keys[0], {
+            runs,
+            studio,
+            node: mediaNode,
+          }) ?? "";
         a.click();
       } else if (keys.length) {
         const canonical = keys.map((key) => {
@@ -3527,7 +3536,14 @@ export function CanvasWorkspace({
             <a
               className="secondary"
               href={mediaURL(preview.media) + "?download=true"}
-              download
+              download={
+                canvasMediaDownloadFilename(preview.media, {
+                  runs,
+                  studio,
+                  node: preview.node,
+                  run: preview.run,
+                }) || true
+              }
             >
               <Download size={16} />
               下载

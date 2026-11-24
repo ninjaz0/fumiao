@@ -470,6 +470,7 @@ export class OriginalState {
               : j.state,
         created: epoch(j.created_at),
         result: j.result_public_id ?? null,
+        ...(j.result_mime ? { result_mime: j.result_mime } : {}),
         note:
           admissionNote && j.state === "queued" && !j.allowed
             ? "等待模型开放"

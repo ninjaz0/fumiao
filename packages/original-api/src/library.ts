@@ -11,6 +11,7 @@ import {
 } from "@fumiao/platform/security.js";
 import { OriginalIdentity } from "./identity.js";
 import { OriginalMedia } from "./media.js";
+import { disposition } from "./files.js";
 import { parseBody } from "./validation.js";
 import { identityBodies } from "./contracts.js";
 import { zipStream, type ArchiveEntry } from "./zip.js";
@@ -496,14 +497,7 @@ export class OriginalLibrary {
       }
       res.status(200);
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader(
-        "Content-Disposition",
-        "attachment; filename*=UTF-8''" +
-          encodeURIComponent(this.filename(entries)).replace(
-            /[!'()*]/g,
-            (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
-          ),
-      );
+      res.setHeader("Content-Disposition", disposition(this.filename(entries)));
       res.setHeader("X-Accel-Buffering", "no");
       await pipeline(Readable.from(zipStream(entries, streams)), res).catch(
         (error) => {

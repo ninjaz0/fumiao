@@ -15,6 +15,8 @@ import { isOwner } from "./Library";
 import { ResultPlayer } from "./ResultPlayer";
 import {
   H3,
+  assetDownloadFilename,
+  jobDownloadFilename,
   mediaURL,
   modelAvailable,
   type Asset,
@@ -282,7 +284,11 @@ export function JobDetail({
                 change={favorite}
                 detail
               />
-              <Download id={job.result} detail />
+              <Download
+                id={job.result}
+                filename={jobDownloadFilename(job)}
+                detail
+              />
             </>
           ) : (
             <span className="muted">{`#${job.id}`}</span>
@@ -510,7 +516,7 @@ export function ImageDetail({
             change={favorite}
             detail
           />
-          <Download id={id} detail />
+          <Download id={id} filename={assetDownloadFilename(asset)} detail />
           {more && (
             <button
               className="icon-button"

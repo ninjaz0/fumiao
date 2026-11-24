@@ -16,7 +16,13 @@ import {
 } from "./AssetMedia";
 import { JobCard, kindLabel } from "./History";
 import { Icon } from "./Icon";
-import { mediaURL, type Asset, type Job, type StudioState } from "./state";
+import {
+  assetDownloadFilename,
+  mediaURL,
+  type Asset,
+  type Job,
+  type StudioState,
+} from "./state";
 import { MAX_ASSET_SELECTION } from "@fumiao/original-api/asset-limits";
 import { groupHistoryJobs } from "./library-history";
 import { allAssetsSelected, selectAllAssets } from "./library-selection";
@@ -557,7 +563,7 @@ function UploadCard({
             >
               <Icon name="plus" />
             </button>
-            <Download id={asset.id} />
+            <Download id={asset.id} filename={assetDownloadFilename(asset)} />
             <Favorite id={key} saved={saved} change={actions.favorite} />
           </>
         )}
