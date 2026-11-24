@@ -1,4 +1,10 @@
-import { useRef, useState, type FocusEvent, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type FormEvent,
+} from "react";
 import type { AdminSave } from "./settings-admin";
 import {
   PRICE_CREDIT_RATE_TEXT,
@@ -29,6 +35,29 @@ export function PriceSettings({
   const actions = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState("");
+
+  useEffect(() => {
+    const bar = actions.current;
+    const viewport = window.visualViewport;
+    if (!visible || !bar || !viewport) return;
+
+    // Mobile keyboards can shrink only the visual viewport.
+    const syncViewport = () => {
+      const inset = Math.max(
+        0,
+        window.innerHeight - viewport.offsetTop - viewport.height,
+      );
+      bar.style.setProperty("--price-viewport-inset", `${inset}px`);
+    };
+    syncViewport();
+    viewport.addEventListener("resize", syncViewport);
+    viewport.addEventListener("scroll", syncViewport);
+    return () => {
+      viewport.removeEventListener("resize", syncViewport);
+      viewport.removeEventListener("scroll", syncViewport);
+    };
+  }, [visible]);
+
   if (!visible) return null;
 
   const latest =

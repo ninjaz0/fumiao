@@ -422,7 +422,7 @@ body:has(.ledger-settings) #modal {
 }
 .price-form-actions {
   position: sticky;
-  bottom: max(12px, env(safe-area-inset-bottom));
+  bottom: calc(var(--price-viewport-inset, 0px) + max(12px, env(safe-area-inset-bottom)));
   z-index: 2;
   margin-block-start: 16px;
   padding: 10px 14px;
