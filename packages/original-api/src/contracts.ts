@@ -38,6 +38,10 @@ import {
   skillUpdateFields,
   tokenCreateFields,
 } from "./wave4-fields.js";
+import {
+  comfyAnalyzeFields,
+  comfyPublishFields,
+} from "./wave5-fields.js";
 export const identityBodies: Record<string, Fields> = {
   canvasNew: canvasNewFields,
   canvasSave: canvasSaveFields,
@@ -59,6 +63,8 @@ export const identityBodies: Record<string, Fields> = {
   agentPolicy: agentPolicyFields,
   proposalCreate: proposalCreateFields,
   proposalApply: proposalApplyFields,
+  comfyAnalyze: comfyAnalyzeFields,
+  comfyPublish: comfyPublishFields,
   canvasShotsDownload: canvasExactRevisionFields,
   storyboardExport: storyboardExportFields,
   estimate: estimateFields,
@@ -415,6 +421,16 @@ export const identityContracts: Contract[] = [
     path: /^\/api\/admin\/credits\/adjust$/,
     body: "adjustCredits",
   },
+  {
+    method: "POST",
+    path: /^\/api\/admin\/comfy\/analyze$/,
+    body: "comfyAnalyze",
+  },
+  {
+    method: "POST",
+    path: /^\/api\/admin\/comfy\/publish$/,
+    body: "comfyPublish",
+  },
 ];
 /** FastAPI validates the request before running endpoint authentication. */
 export function validateIdentityRequest(
@@ -465,6 +481,8 @@ export function validateIdentityRequest(
           "agentPolicy",
           "proposalCreate",
           "proposalApply",
+          "comfyAnalyze",
+          "comfyPublish",
           "canvasCandidates",
           "canvasShotsDownload",
         ].includes(contract.body!),

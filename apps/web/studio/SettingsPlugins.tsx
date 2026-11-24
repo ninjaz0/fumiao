@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { SettingsTab } from "./settings-tabs";
 import { api } from "./api";
+import { ComfySlotMapper } from "./ComfySlotMapper";
 import {
   describeSavedService,
   findDuplicateModelIds,
@@ -417,6 +418,7 @@ export function PluginSettings({
     [confirmAction, setConfirmAction] = useState<"" | "rollback" | "remove">(
       "",
     );
+  const [showComfyMapper, setShowComfyMapper] = useState(false);
   const [pending, setPending] = useState<{
     file?: unknown;
     sha256?: string;
@@ -567,6 +569,12 @@ export function PluginSettings({
               <Plus size={15} />
               导入插件
             </button>
+            <button
+              type="button"
+              onClick={() => setShowComfyMapper((v) => !v)}
+            >
+              {showComfyMapper ? "收起 ComfyUI 发布器" : "ComfyUI 工作流发布器"}
+            </button>
             <input
               ref={picker}
               hidden
@@ -613,6 +621,15 @@ export function PluginSettings({
             )}
           </div>
         </header>
+        {showComfyMapper && (
+          <ComfySlotMapper
+            onClose={() => setShowComfyMapper(false)}
+            onPublished={async () => {
+              await load();
+              await refresh();
+            }}
+          />
+        )}
         {pending && (
           <form
             className="ledger-card plugin-overview plugin-form"
