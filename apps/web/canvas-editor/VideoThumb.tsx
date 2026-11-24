@@ -22,6 +22,7 @@ export const VideoThumb = memo(function VideoThumb({
   observeVisibility?: boolean;
 }) {
   const placeholderRef = useRef<HTMLSpanElement | null>(null);
+  const [posterFailed, setPosterFailed] = useState(false);
   const [url, setUrl] = useState<string | null>(() => scheduler.peek(mediaId));
   const [visible, setVisible] = useState(
     () =>
@@ -32,6 +33,7 @@ export const VideoThumb = memo(function VideoThumb({
 
   // Sync immediately when mediaId or scheduler changes.
   useEffect(() => {
+    setPosterFailed(false);
     const cached = scheduler.peek(mediaId);
     setUrl(cached);
     if (
@@ -43,9 +45,10 @@ export const VideoThumb = memo(function VideoThumb({
     }
   }, [mediaId, scheduler, observeVisibility]);
 
-  // Only observe intersection while waiting for extraction.
+  // Only observe intersection while waiting for client-side fallback extraction.
   useEffect(() => {
     if (
+      !posterFailed ||
       !observeVisibility ||
       url !== null ||
       typeof IntersectionObserver === "undefined"
@@ -63,9 +66,9 @@ export const VideoThumb = memo(function VideoThumb({
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [observeVisibility, url, mediaId]);
+  }, [posterFailed, observeVisibility, url, mediaId]);
 
-  const shouldSubscribe = visible || url !== null;
+  const shouldSubscribe = posterFailed && (visible || url !== null);
   useEffect(() => {
     if (!shouldSubscribe) return;
     const getPriority = () => {
@@ -80,6 +83,22 @@ export const VideoThumb = memo(function VideoThumb({
       setUrl(next);
     });
   }, [mediaId, scheduler, shouldSubscribe]);
+
+  // F038: Prefer server-side derived poster JPEG; falls back automatically to client frame extraction
+  // if the server returns video/* (derivative still pending) or errors.
+  if (!posterFailed) {
+    return (
+      <img
+        className={className}
+        src={`/media/${mediaId}?variant=poster`}
+        alt={alt}
+        draggable={false}
+        loading="lazy"
+        decoding="async"
+        onError={() => setPosterFailed(true)}
+      />
+    );
+  }
 
   if (url) {
     return (

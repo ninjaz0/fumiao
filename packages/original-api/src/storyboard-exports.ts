@@ -175,9 +175,9 @@ export class OriginalStoryboardExports {
       );
       const doc = parseCanvasDocument(canvasDocumentJson(project.document));
       requireValue(
-        (doc.shots ?? []).length > 0 && (doc.shots ?? []).length <= 30,
+        (doc.shots ?? []).length > 0 && (doc.shots ?? []).length <= 120,
         400,
-        "合成需要 1–30 个镜头",
+        "合成需要 1–120 个镜头",
       );
       requireValue(
         !(await one(

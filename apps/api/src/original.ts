@@ -52,6 +52,8 @@ import { OriginalState } from "@fumiao/original-api/state.js";
 import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
 import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
+import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
+import { OriginalSeries } from "@fumiao/original-api/series.js";
 import { readCanvasBody } from "@fumiao/original-api/canvas-http.js";
 import type { OriginalDraft } from "@fumiao/plugin-sdk/original.js";
 import type { ReferenceKind } from "@fumiao/plugin-sdk/references.js";
@@ -295,6 +297,34 @@ class OriginalApi {
   ) {
     return this.canvases.extractTailFrame(req.actor, key, node);
   }
+  @Post("api/canvases/:key/nodes/:node/grid-crop")
+  @HttpCode(200)
+  cropCanvasGridCell(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("node") node: string,
+    @Body() body: unknown,
+  ) {
+    return this.canvases.gridCrop(req.actor, key, node, body);
+  }
+  @Post("api/canvases/:key/batch-precheck")
+  @HttpCode(200)
+  precheckCanvasBatch(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.batchPrecheck.precheckCanvas(req.actor, key, body);
+  }
+  @Post("api/canvases/:key/batch-runs")
+  @HttpCode(200)
+  runCanvasBatch(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.canvasRuns.batchRun(req.actor, key, body);
+  }
   @Get("api/chat/config") chatConfig(@Req() req: AuthRequest) {
     return new OriginalChatSettings(this.identity.p).config(
       req.actor,
@@ -351,6 +381,11 @@ class OriginalApi {
       this.selected(req),
     );
   }
+  @Post("api/quotes/batch")
+  @HttpCode(200)
+  batchQuotes(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.batchPrecheck.quoteBatch(req.actor, body, this.selected(req));
+  }
   @Post(["api/jobs", "api/image-jobs", "api/audio-jobs"])
   @HttpCode(200)
   submitJob(@Req() req: AuthRequest) {
@@ -401,6 +436,8 @@ class OriginalApi {
   private canvases: OriginalCanvases;
   private canvasRuns: OriginalCanvasRuns;
   private storyboardExports: OriginalStoryboardExports;
+  private batchPrecheck: OriginalBatchPrecheck;
+  private series: OriginalSeries;
   constructor(@Inject(OriginalIdentity) private identity: OriginalIdentity) {
     this.packs = new OriginalPacks(identity.p);
     this.uploads = new OriginalUploads(identity.p);
@@ -411,6 +448,8 @@ class OriginalApi {
     this.canvases = new OriginalCanvases(identity.p);
     this.canvasRuns = new OriginalCanvasRuns(identity.p);
     this.storyboardExports = new OriginalStoryboardExports(identity.p);
+    this.batchPrecheck = new OriginalBatchPrecheck(identity.p);
+    this.series = new OriginalSeries(identity.p);
   }
   @Post("api/assets")
   @HttpCode(200)
@@ -447,6 +486,84 @@ class OriginalApi {
   deletePack(@Req() req: AuthRequest, @Param("key") key: string) {
     return this.packs.remove(req.actor, key, this.selected(req));
   }
+  @Post("api/asset-packs/:key/lock")
+  @HttpCode(200)
+  lockPack(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.packs.setLock(req.actor, key, true, this.selected(req));
+  }
+  @Post("api/asset-packs/:key/unlock")
+  @HttpCode(200)
+  unlockPack(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.packs.setLock(req.actor, key, false, this.selected(req));
+  }
+  @Put("api/asset-packs/:key/scope")
+  setPackScope(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.packs.setScope(req.actor, key, body, this.selected(req));
+  }
+  @Post("api/asset-packs/:key/turnaround")
+  @HttpCode(200)
+  packTurnaround(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.packs.turnaround(req.actor, key, body, this.selected(req));
+  }
+  @Get("api/series")
+  listSeries(@Req() req: AuthRequest) {
+    return this.series.list(req.actor, this.selected(req));
+  }
+  @Post("api/series")
+  @HttpCode(200)
+  createSeries(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.series.create(req.actor, body, this.selected(req));
+  }
+  @Get("api/series/:key")
+  getSeries(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.series.get(req.actor, key);
+  }
+  @Put("api/series/:key")
+  updateSeries(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.series.update(req.actor, key, body);
+  }
+  @Delete("api/series/:key")
+  removeSeries(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.series.remove(req.actor, key);
+  }
+  @Post("api/series/:key/episodes")
+  @HttpCode(200)
+  createEpisode(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.series.createEpisode(req.actor, key, body);
+  }
+  @Put("api/series/:key/episodes/:ep")
+  updateEpisode(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("ep") ep: string,
+    @Body() body: unknown,
+  ) {
+    return this.series.updateEpisode(req.actor, key, ep, body);
+  }
+  @Delete("api/series/:key/episodes/:ep")
+  removeEpisode(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("ep") ep: string,
+  ) {
+    return this.series.removeEpisode(req.actor, key, ep);
+  }
   @Put("api/favorites") favorites(
     @Req() req: AuthRequest,
     @Body() body: unknown,
@@ -476,12 +593,18 @@ class OriginalApi {
     @Res() res: Response,
   ) {
     const query = new URL(req.originalUrl, "http://localhost").searchParams;
+    const rawVariant = query.getAll("variant").at(-1);
+    const variant =
+      rawVariant === "thumb" || rawVariant === "poster"
+        ? rawVariant
+        : undefined;
     return this.media.serve(
       req.actor,
       key,
       queryBoolean(query.getAll("download").at(-1), "download"),
       req,
       res,
+      variant,
     );
   }
   @Get("avatars/:filename") builtinAvatar(

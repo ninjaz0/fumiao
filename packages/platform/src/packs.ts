@@ -23,6 +23,35 @@ export const packVoiceProfileSchema = z
 
 export type PackVoiceProfile = z.infer<typeof packVoiceProfileSchema>;
 
+export const packTurnaroundViewsSchema = z
+  .object({
+    front: z
+      .string()
+      .regex(/^[0-9a-f]{32}$/)
+      .nullable()
+      .optional(),
+    side: z
+      .string()
+      .regex(/^[0-9a-f]{32}$/)
+      .nullable()
+      .optional(),
+    back: z
+      .string()
+      .regex(/^[0-9a-f]{32}$/)
+      .nullable()
+      .optional(),
+    sheet: z
+      .string()
+      .regex(/^[0-9a-f]{32}$/)
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+export type PackTurnaroundViews = z.infer<typeof packTurnaroundViewsSchema>;
+
+export type PackScope = "workspace" | "global";
+
 export const packPurposes = {
   subject: "人物外观",
   outfit: "服装",
@@ -31,6 +60,7 @@ export const packPurposes = {
   product: "产品细节",
 } as const;
 export const packInUse = "素材包正在画布中使用，请先在相关节点移除引用";
+export const packLockedError = "素材包已锁定，请先解锁后再操作";
 export type PackDraft = {
   name: string;
   purpose: keyof typeof packPurposes;
@@ -38,6 +68,8 @@ export type PackDraft = {
   media: string[];
   expected_revision: number | null;
   voice_profile?: PackVoiceProfile | null;
+  turnaround_views?: PackTurnaroundViews | null;
+  scope?: PackScope;
 };
 export type PackSelection = { id: string; revision: number };
 
@@ -52,6 +84,9 @@ type PackViewRow = {
   body: { assets?: string[]; description?: string; purpose?: string };
   pack_text?: { name: string; description: string } | null;
   voice_profile?: PackVoiceProfile | null;
+  turnaround_views?: PackTurnaroundViews | null;
+  locked?: boolean | null;
+  scope?: PackScope | null;
   revision: number;
   updated_at: Date | string;
 };
@@ -91,6 +126,9 @@ function packView(row: PackViewRow, keys: ReadonlyMap<string, string>) {
     name: row.title,
     description: row.body.description ?? "",
   };
+  const hasTurnaround =
+    row.turnaround_views &&
+    Object.values(row.turnaround_views).some((v) => Boolean(v));
   return {
     id: row.public_id,
     workspace: Number(row.workspace_public),
@@ -102,6 +140,9 @@ function packView(row: PackViewRow, keys: ReadonlyMap<string, string>) {
     updated: Math.floor(new Date(row.updated_at).getTime() / 1000),
     media,
     ...(row.voice_profile ? { voice_profile: row.voice_profile } : {}),
+    ...(hasTurnaround ? { turnaround_views: row.turnaround_views } : {}),
+    ...(row.locked ? { locked: true } : {}),
+    ...(row.scope === "global" ? { scope: "global" as const } : {}),
   };
 }
 
@@ -116,14 +157,19 @@ export class ReferencePacks {
     wid: string | undefined,
     publicKey = true,
     lock: "share" | "update" | undefined = undefined,
+    allowGlobalRead = false,
   ) {
     const row = await one(
       sql,
-      `SELECT d.*,m.voice_profile,w.public_id AS workspace_public,u.public_id AS owner_public
+      `SELECT d.*,m.voice_profile,m.turnaround_views,COALESCE(m.locked,false) AS locked,COALESCE(m.scope,'workspace') AS scope,
+              w.public_id AS workspace_public,u.public_id AS owner_public
       FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
       LEFT JOIN asset_pack_meta m ON m.pack_id=d.id
       WHERE ${publicKey ? "d.public_id" : "d.id::text"}=$1 AND d.kind='pack' AND NOT d.deleted
-      AND ($4::uuid IS NULL OR w.id=$4) AND ${packWorkspaceAccess}
+      AND (
+        (($4::uuid IS NULL OR w.id=$4) AND ${packWorkspaceAccess})
+        ${allowGlobalRead ? "OR COALESCE(m.scope,'workspace')='global'" : ""}
+      )
       ${lock ? `FOR ${lock === "share" ? "SHARE" : "UPDATE"} OF d` : ""}`,
       [key, user.id, user.role, wid || null],
     );
@@ -136,19 +182,36 @@ export class ReferencePacks {
   async list(user: Actor, wid: string) {
     return this.db.transaction(async (sql) => {
       await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-      const { rows } = await sql.query<PackViewRow & { can_access: boolean }>(
-        `SELECT d.public_id,d.title,d.body,d.pack_text,m.voice_profile,d.revision,d.updated_at,
+      const { rows } = await sql.query<
+        PackViewRow & { can_access: boolean; is_local: boolean }
+      >(
+        `SELECT d.public_id,d.title,d.body,d.pack_text,m.voice_profile,m.turnaround_views,
+                COALESCE(m.locked,false) AS locked,COALESCE(m.scope,'workspace') AS scope,
+                d.revision,d.updated_at,
                 w.public_id AS workspace_public,u.public_id AS owner_public,
-                ${packWorkspaceAccess} AS can_access
+                (d.workspace_id=$1) AS is_local,
+                (CASE WHEN d.workspace_id=$1 THEN ${packWorkspaceAccess} ELSE true END) AS can_access
         FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
         LEFT JOIN asset_pack_meta m ON m.pack_id=d.id
-        WHERE d.workspace_id=$1 AND d.kind='pack' AND NOT d.deleted
-        ORDER BY d.updated_at DESC,d.public_id`,
+        WHERE (
+          d.workspace_id=$1
+          OR (
+            COALESCE(m.scope,'workspace')='global'
+            AND EXISTS (
+              SELECT 1 FROM workspaces w2 WHERE w2.id=$1 AND (
+                (w2.kind='personal' AND w2.owner_id=$2)
+                OR (w2.kind='team' AND ($3='admin' OR EXISTS(SELECT 1 FROM members m2 WHERE m2.workspace_id=w2.id AND m2.user_id=$2)))
+              )
+            )
+          )
+        ) AND d.kind='pack' AND NOT d.deleted
+        ORDER BY (COALESCE(m.scope,'workspace')='global') ASC, d.updated_at DESC, d.public_id`,
         [wid, user.id, user.role],
       );
       // Preserve the 404 for a nonempty workspace whose access was revoked.
-      if (rows.length)
-        requireValue(rows[0].can_access, 404, "内容不存在或无权访问");
+      const localRow = rows.find((r) => r.is_local);
+      if (localRow)
+        requireValue(localRow.can_access, 404, "内容不存在或无权访问");
       const ids = [...new Set(rows.flatMap((row) => row.body.assets || []))];
       const keys = await packAssetKeys(sql, ids);
       return {
@@ -194,12 +257,22 @@ export class ReferencePacks {
     const row = existing
       ? await this.get(sql, user, existing, wid, publicKey, "update")
       : undefined;
-    if (row)
+    if (row) {
+      requireValue(!row.locked, 409, packLockedError);
+      requireValue(
+        row.scope !== "global" || user.role === "admin",
+        403,
+        "仅管理员可编辑全局素材包",
+      );
       requireValue(
         draft.expected_revision === row.revision,
         409,
         "素材包已被修改，请重新打开后编辑",
       );
+    }
+    if (draft.scope !== undefined && draft.scope === "global") {
+      requireValue(user.role === "admin", 403, "仅管理员可发布全局素材包");
+    }
     const assets = await this.validate(sql, draft, wid, publicMedia);
     if (!row) {
       await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
@@ -218,6 +291,39 @@ export class ReferencePacks {
       400,
       "素材包名称和描述必须是有效的 Unicode 字符串",
     );
+    let resolvedTurnaround: PackTurnaroundViews | null | undefined = undefined;
+    const turnaroundAssetUuids: string[] = [];
+    if (draft.turnaround_views !== undefined) {
+      if (draft.turnaround_views === null) {
+        resolvedTurnaround = null;
+      } else {
+        const parsed = packTurnaroundViewsSchema.safeParse(
+          draft.turnaround_views,
+        );
+        requireValue(parsed.success, 400, "三视图配置无效");
+        resolvedTurnaround = parsed.data;
+        const pubIds = [
+          ...new Set(
+            Object.values(parsed.data).filter((v): v is string => Boolean(v)),
+          ),
+        ];
+        if (pubIds.length) {
+          const tRows = (
+            await sql.query<{ id: string; public_id: string }>(
+              `SELECT id,public_id FROM assets WHERE public_id=ANY($1::text[])
+               AND workspace_id=$2 AND original_kind='ref' AND state='ready' ORDER BY id FOR KEY SHARE`,
+              [pubIds, wid],
+            )
+          ).rows;
+          requireValue(
+            tRows.length === pubIds.length,
+            404,
+            "三视图图片不存在或无权访问",
+          );
+          for (const r of tRows) turnaroundAssetUuids.push(r.id);
+        }
+      }
+    }
     const id = row?.id || newId || randomUUID(),
       stored = packStorage(
         pythonStrip(draft.name),
@@ -239,7 +345,8 @@ export class ReferencePacks {
         [id, wid, user.id, stored.title, JSON.stringify(body), stored.text],
       );
     await sql.query("DELETE FROM document_assets WHERE document_id=$1", [id]);
-    for (const asset of assets)
+    const allLinkedAssets = [...new Set([...assets, ...turnaroundAssetUuids])];
+    for (const asset of allLinkedAssets)
       await sql.query(
         "INSERT INTO document_assets(document_id,asset_id) VALUES($1,$2)",
         [id, asset],
@@ -251,7 +358,9 @@ export class ReferencePacks {
           [id],
         );
       } else {
-        const parsedVoice = packVoiceProfileSchema.safeParse(draft.voice_profile);
+        const parsedVoice = packVoiceProfileSchema.safeParse(
+          draft.voice_profile,
+        );
         requireValue(parsedVoice.success, 400, "角色声线配置无效");
         const vp = parsedVoice.data;
         if (vp.ref_audio_asset_id) {
@@ -269,7 +378,144 @@ export class ReferencePacks {
         );
       }
     }
+    if (resolvedTurnaround !== undefined) {
+      await sql.query(
+        `INSERT INTO asset_pack_meta(pack_id,turnaround_views) VALUES($1,$2)
+         ON CONFLICT (pack_id) DO UPDATE SET turnaround_views=excluded.turnaround_views`,
+        [id, JSON.stringify(resolvedTurnaround ?? {})],
+      );
+    }
+    if (draft.scope !== undefined) {
+      await sql.query(
+        `INSERT INTO asset_pack_meta(pack_id,scope) VALUES($1,$2)
+         ON CONFLICT (pack_id) DO UPDATE SET scope=excluded.scope`,
+        [id, draft.scope],
+      );
+    }
     return this.get(sql, user, id, wid, false);
+  }
+  async setLock(
+    sql: Sql,
+    user: Actor,
+    key: string,
+    wid: string | undefined,
+    locked: boolean,
+    publicKey = true,
+  ) {
+    const row = await this.get(sql, user, key, wid, publicKey, "update");
+    requireValue(
+      row.owner_id === user.id || user.role === "admin",
+      403,
+      "只有创建者或管理员可以锁定或解锁素材包",
+    );
+    requireValue(
+      row.scope !== "global" || user.role === "admin",
+      403,
+      "仅管理员可操作全局素材包",
+    );
+    await sql.query(
+      `INSERT INTO asset_pack_meta(pack_id, locked, locked_by, locked_at)
+       VALUES($1, $2, $3, $4)
+       ON CONFLICT (pack_id) DO UPDATE SET
+         locked = excluded.locked,
+         locked_by = excluded.locked_by,
+         locked_at = excluded.locked_at`,
+      [row.id, locked, locked ? user.id : null, locked ? new Date() : null],
+    );
+    await sql.query(
+      "UPDATE documents SET revision=revision+1, updated_at=date_trunc('second',clock_timestamp()) WHERE id=$1",
+      [row.id],
+    );
+    return this.get(sql, user, row.id, wid, false);
+  }
+  async setScope(
+    sql: Sql,
+    user: Actor,
+    key: string,
+    wid: string | undefined,
+    scope: PackScope,
+    publicKey = true,
+  ) {
+    requireValue(user.role === "admin", 403, "仅管理员可修改素材包作用域");
+    const row = await this.get(sql, user, key, wid, publicKey, "update");
+    requireValue(!row.locked, 409, packLockedError);
+    await sql.query(
+      `INSERT INTO asset_pack_meta(pack_id, scope)
+       VALUES($1, $2)
+       ON CONFLICT (pack_id) DO UPDATE SET scope = excluded.scope`,
+      [row.id, scope],
+    );
+    await sql.query(
+      "UPDATE documents SET revision=revision+1, updated_at=date_trunc('second',clock_timestamp()) WHERE id=$1",
+      [row.id],
+    );
+    return this.get(sql, user, row.id, wid, false);
+  }
+  async attachTurnaroundViews(
+    sql: Sql,
+    user: Actor,
+    key: string,
+    wid: string,
+    views: PackTurnaroundViews,
+  ) {
+    const row = await this.get(sql, user, key, wid, true, "update");
+    requireValue(!row.locked, 409, packLockedError);
+    const parsed = packTurnaroundViewsSchema.safeParse(views);
+    requireValue(parsed.success, 400, "三视图配置无效");
+    const merged: PackTurnaroundViews = {
+      ...(row.turnaround_views ?? {}),
+      ...parsed.data,
+    };
+    const pubIds = [
+      ...new Set(
+        Object.values(merged).filter((v): v is string => Boolean(v)),
+      ),
+    ];
+    const assetUuids: string[] = [];
+    if (pubIds.length) {
+      const tRows = (
+        await sql.query<{ id: string; public_id: string }>(
+          `SELECT id,public_id FROM assets WHERE public_id=ANY($1::text[])
+           AND workspace_id=$2 AND original_kind='ref' AND state='ready' ORDER BY id FOR KEY SHARE`,
+          [pubIds, row.workspace_id],
+        )
+      ).rows;
+      requireValue(
+        tRows.length === pubIds.length,
+        404,
+        "三视图图片不存在或无权访问",
+      );
+      for (const r of tRows) assetUuids.push(r.id);
+    }
+    const existingAssets: string[] = Array.isArray(row.body?.assets)
+      ? [...row.body.assets]
+      : [];
+    for (const uuid of assetUuids) {
+      if (!existingAssets.includes(uuid) && existingAssets.length < 9) {
+        existingAssets.push(uuid);
+      }
+    }
+    const nextBody = { ...(row.body || {}), assets: existingAssets };
+    await sql.query(
+      "UPDATE documents SET body=$2, revision=revision+1, updated_at=date_trunc('second',clock_timestamp()) WHERE id=$1",
+      [row.id, JSON.stringify(nextBody)],
+    );
+    await sql.query(
+      `INSERT INTO asset_pack_meta(pack_id, turnaround_views)
+       VALUES($1, $2)
+       ON CONFLICT (pack_id) DO UPDATE SET turnaround_views=excluded.turnaround_views`,
+      [row.id, JSON.stringify(merged)],
+    );
+    await sql.query("DELETE FROM document_assets WHERE document_id=$1", [
+      row.id,
+    ]);
+    for (const asset of new Set([...existingAssets, ...assetUuids])) {
+      await sql.query(
+        "INSERT INTO document_assets(document_id,asset_id) VALUES($1,$2)",
+        [row.id, asset],
+      );
+    }
+    return this.get(sql, user, row.id, wid, false);
   }
   async remove(
     sql: Sql,
@@ -279,6 +525,7 @@ export class ReferencePacks {
     publicKey = true,
   ) {
     const row = await this.get(sql, user, key, wid, publicKey, "update");
+    requireValue(!row.locked, 409, packLockedError);
     requireValue(
       row.owner_id === user.id || user.role === "admin",
       403,
@@ -319,6 +566,7 @@ export class ReferencePacks {
         wid,
         /^[a-f0-9]{32}$/.test(key),
         "share",
+        true,
       );
       packs.push(row.id);
     }
@@ -352,7 +600,7 @@ export class ReferencePacks {
     for (const pack of [...selected].sort((a, b) => a.id.localeCompare(b.id)))
       rows.set(
         pack.id,
-        await this.get(sql, user, pack.id, wid, false, "share"),
+        await this.get(sql, user, pack.id, wid, false, "share", true),
       );
     for (const selectedPack of selected) {
       const row = rows.get(selectedPack.id),

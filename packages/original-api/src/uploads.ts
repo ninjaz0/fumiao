@@ -14,6 +14,7 @@ import { OriginalIdentity, type OriginalActor } from "./identity.js";
 import { OriginalMedia } from "./media.js";
 import { discardAvatar } from "./avatar-storage.js";
 import { capacity } from "@fumiao/platform/capacity.js";
+import { ensureDerivativeQueued } from "@fumiao/platform/derivatives.js";
 
 export async function receive(req: Request, directory: string, limit: number) {
   const length = req.headers["content-length"] || "";
@@ -172,6 +173,7 @@ export class OriginalUploads {
               "INSERT INTO asset_provenance(asset_id,source_id,source_public_id,frame_seconds) VALUES($1,$2,$3,$4)",
               [id, provenance.id, provenance.key, provenance.seconds],
             );
+          await ensureDerivativeQueued(sql, id, info.mime);
         });
       } catch (error) {
         await this.p.storage.remove(id);

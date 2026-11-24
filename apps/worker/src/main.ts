@@ -12,6 +12,7 @@ import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
 import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
 import { ChatQueue } from "@fumiao/original-api/chat-queue.js";
 import { redisConnection } from "@fumiao/platform/redis.js";
+import { DerivativeQueue } from "@fumiao/platform/derivative-queue.js";
 const p = runtime();
 const executor = new Executor(p);
 const connection = redisConnection(
@@ -32,6 +33,8 @@ const storyboardQueue = new StoryboardQueue(
   connection,
 );
 await storyboardQueue.start();
+const derivativeQueue = new DerivativeQueue(p, connection);
+await derivativeQueue.start();
 const worker = new Worker(
   "fumiao-jobs",
   async (job) => executor.execute(job.data.id),
@@ -109,6 +112,7 @@ for (const event of ["SIGTERM", "SIGINT"])
       worker.close(),
       chatQueue.close(),
       storyboardQueue.close(),
+      derivativeQueue.close(),
     ])
       .then(() => queue.close())
       .then(() => p.db.close())

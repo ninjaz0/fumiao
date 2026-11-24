@@ -1,0 +1,491 @@
+import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
+import type { Platform } from "@fumiao/platform/platform.js";
+import { one } from "@fumiao/platform/db.js";
+import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { ReferencePacks } from "@fumiao/platform/packs.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { OriginalIdentity, type OriginalActor } from "./identity.js";
+import { OriginalCanvases } from "./canvases.js";
+import {
+  batchQuoteFields,
+  canvasBatchPrecheckFields,
+  parseCanvasDocument,
+  type CanvasNode,
+} from "./canvas-draft.js";
+import { canvasDocumentJson } from "./canvas-values.js";
+import { parseBody } from "./validation.js";
+
+const ACTIVE_STATES = [
+  "queued",
+  "dispatching",
+  "running",
+  "finalizing",
+  "uncertain",
+];
+
+export type PrecheckStage = "image" | "video" | "narration" | "dialogue";
+export type PrecheckHealth = "ready" | "warning" | "blocked";
+
+export type PrecheckItem = {
+  node_id: string;
+  title: string;
+  node_type: CanvasNode["type"];
+  stage: PrecheckStage;
+  model: string;
+  credits: number;
+  status: PrecheckHealth;
+  issues: string[];
+};
+
+export function expandGroupNodeIds(
+  nodes: CanvasNode[],
+  requestedIds: string[],
+): CanvasNode[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const result: CanvasNode[] = [];
+  const seen = new Set<string>();
+  const addNode = (node: CanvasNode) => {
+    if (seen.has(node.id)) return;
+    seen.add(node.id);
+    result.push(node);
+  };
+  for (const id of requestedIds) {
+    const node = byId.get(id);
+    if (!node) continue;
+    if (node.type === "group") {
+      for (const child of nodes) {
+        if (child.parent_id === node.id && child.type !== "group") {
+          addNode(child);
+        }
+      }
+    } else {
+      addNode(node);
+    }
+  }
+  return result;
+}
+
+export class OriginalBatchPrecheck {
+  readonly identity: OriginalIdentity;
+  readonly canvases: OriginalCanvases;
+  readonly catalog: StudioCatalog;
+  readonly packs: ReferencePacks;
+  constructor(readonly p: Platform) {
+    this.identity = new OriginalIdentity(p);
+    this.canvases = new OriginalCanvases(p);
+    this.catalog = new StudioCatalog(p.db);
+    this.packs = new ReferencePacks(p.db);
+  }
+
+  /**
+   * F010: Standalone read-only batch credit quote (`POST /api/quotes/batch`).
+   * Executes inside a single REPEATABLE READ READ ONLY transaction with zero write locks.
+   */
+  async quoteBatch(user: OriginalActor, value: unknown, selected?: string) {
+    const body = parseBody(value, batchQuoteFields, true) as {
+      items: {
+        kind: "image" | "video" | "audio";
+        model: string;
+        seconds?: number;
+        quality?: number;
+        resolution?: string;
+        image_quality?: string;
+        ratio?: string;
+        count?: number;
+      }[];
+    };
+    return this.p.db.transaction(async (sql) => {
+      await sql.query(
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      const workspace = await this.identity.activeWorkspace(
+        sql,
+        user,
+        selected,
+      );
+      const bindings = await CanvasSubmissionModels.read(sql, {
+        strict: false,
+      });
+      const wallet = await one(
+        sql,
+        "SELECT balance, held FROM wallets WHERE workspace_id=$1",
+        [workspace.id],
+      );
+      const available =
+        Number(wallet?.balance ?? 0) - Number(wallet?.held ?? 0);
+      let priceRevision = 1;
+      let totalCredits = 0;
+      const items = [];
+      for (const [index, item] of body.items.entries()) {
+        const count = item.count ?? 1;
+        let model = item.model;
+        if (!model) {
+          if (item.kind === "audio") {
+            try {
+              model = bindings.resolveAudio();
+            } catch {
+              model = "edge-tts";
+            }
+          } else {
+            try {
+              model = bindings.default(item.kind);
+            } catch {
+              model = "";
+            }
+          }
+        }
+        const params: Record<string, unknown> = {
+          ...(item.seconds !== undefined ? { seconds: item.seconds } : {}),
+          ...(item.quality !== undefined ? { quality: item.quality } : {}),
+          ...(item.resolution ? { resolution: item.resolution } : {}),
+          ...(item.image_quality ? { image_quality: item.image_quality } : {}),
+          ...(item.ratio ? { ratio: item.ratio } : {}),
+        };
+        const q = model
+          ? await this.catalog.quoteReadOnly(sql, model, workspace.id, params)
+          : {
+              allowed: false,
+              priced: false,
+              amount: 0,
+              key: null,
+              revision: priceRevision,
+              reason: `缺少可用的 ${item.kind} 默认模型`,
+            };
+        priceRevision = q.revision;
+        const subtotal = q.amount * count;
+        if (q.allowed && q.priced) totalCredits += subtotal;
+        items.push({
+          index,
+          kind: item.kind,
+          model,
+          count,
+          unit_credits: q.amount,
+          credits: subtotal,
+          allowed: q.allowed,
+          priced: q.priced,
+          ...(q.reason ? { reason: q.reason } : {}),
+        });
+      }
+      return {
+        price_revision: priceRevision,
+        items,
+        total_credits: totalCredits,
+        available_credits: available,
+        sufficient: available >= totalCredits,
+      };
+    });
+  }
+
+  /**
+   * F010 + F007: Canvas node/group Precheck (`POST /api/canvases/:key/batch-precheck`).
+   * Validates prompts, busy jobs, asset pack revisions, ref limits, model permissions,
+   * and exact credit cost in a single lock-free REPEATABLE READ READ ONLY transaction.
+   */
+  async precheckCanvas(user: OriginalActor, projectKey: string, value: unknown) {
+    const body = parseBody(value, canvasBatchPrecheckFields, true) as {
+      expected_revision: number | null;
+      node_ids: string[];
+      stages: PrecheckStage[];
+    };
+    return this.p.db.transaction(async (sql) => {
+      await sql.query(
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      const project = await this.canvases.project(sql, user, projectKey);
+      const doc = parseCanvasDocument(canvasDocumentJson(project.document));
+      const nodesById = new Map(doc.nodes.map((n) => [n.id, n]));
+      const targets = expandGroupNodeIds(doc.nodes, body.node_ids);
+      requireValue(targets.length > 0, 400, "未找到可预检的目标节点");
+
+      const bindings = await CanvasSubmissionModels.read(sql, {
+        strict: false,
+      });
+      const wallet = await one(
+        sql,
+        "SELECT balance, held FROM wallets WHERE workspace_id=$1",
+        [project.workspace_id],
+      );
+      const availableCredits =
+        Number(wallet?.balance ?? 0) - Number(wallet?.held ?? 0);
+      const policyRow = await one(
+        sql,
+        "SELECT price_revision FROM studio_policy",
+      );
+      const priceRevision = Number(policyRow?.price_revision ?? 1);
+      const staleRevision =
+        body.expected_revision !== null &&
+        Number(body.expected_revision) !== Number(project.revision);
+
+      // Fetch active jobs for this canvas once (lock-free).
+      const busyRows = (
+        await sql.query<{ node: string }>(
+          `SELECT DISTINCT l.node FROM canvas_job_links l
+           JOIN jobs j ON j.id = l.job_id AND j.deleted_at IS NULL
+           WHERE l.project_id=$1 AND j.state = ANY($2::text[])`,
+          [project.id, ACTIVE_STATES],
+        )
+      ).rows;
+      const busyNodes = new Set(busyRows.map((r) => r.node));
+
+      // Check referenced AssetPack revisions once.
+      const packPublicIds = [
+        ...new Set(targets.flatMap((n) => n.asset_packs.map((p) => p.id))),
+      ];
+      const livePackRevisions = new Map<
+        string,
+        { revision: number; name: string; assetsCount: number }
+      >();
+      if (packPublicIds.length) {
+        const pRows = (
+          await sql.query(
+            `SELECT d.public_id, d.title, d.revision, d.body, d.pack_text
+             FROM documents d
+             LEFT JOIN asset_pack_meta m ON m.pack_id=d.id
+             WHERE d.public_id = ANY($1::text[]) AND d.kind='pack' AND NOT d.deleted
+             AND (d.workspace_id=$2 OR COALESCE(m.scope,'workspace')='global')`,
+            [packPublicIds, project.workspace_id],
+          )
+        ).rows;
+        for (const r of pRows) {
+          livePackRevisions.set(r.public_id, {
+            revision: Number(r.revision),
+            name: r.pack_text?.name ?? r.title,
+            assetsCount: Array.isArray(r.body?.assets)
+              ? r.body.assets.length
+              : 0,
+          });
+        }
+      }
+
+      const items: PrecheckItem[] = [];
+      const stages = [...new Set(body.stages)];
+
+      for (const node of targets) {
+        for (const stage of stages) {
+          if (stage === "image" && node.type !== "image") continue;
+          if (stage === "video" && node.type !== "video") continue;
+          if (
+            (stage === "narration" || stage === "dialogue") &&
+            node.type !== "video"
+          )
+            continue;
+
+          const issues: string[] = [];
+          let status: PrecheckHealth = "ready";
+          let credits = 0;
+          let model = "";
+
+          if (staleRevision) {
+            issues.push("画布已有新版本，提交前请先同步保存");
+            status = "warning";
+          }
+
+          if (stage === "image" || stage === "video") {
+            if (busyNodes.has(node.id)) {
+              issues.push("该节点当前有运行中的任务");
+              status = "blocked";
+            }
+            const connectedTexts: string[] = [];
+            let connectedImageCount = 0;
+            for (const edge of doc.edges) {
+              if (edge.target !== node.id) continue;
+              const src = nodesById.get(edge.source);
+              if (!src) continue;
+              const srcKind = canvasSourceKind(src, edge.sourcePort);
+              if (srcKind === "text") {
+                const txt = pythonStrip(src.text);
+                if (!txt) {
+                  issues.push(`上游文本节点「${src.title || src.id}」为空`);
+                  status = "blocked";
+                } else {
+                  connectedTexts.push(txt);
+                }
+              } else if (srcKind === "image") {
+                connectedImageCount++;
+                const media = await this.canvases.mediaForNode(
+                  sql,
+                  project.id,
+                  src,
+                );
+                if (!media) {
+                  // If upstream image is also being run in this batch, warn instead of hard block!
+                  if (
+                    stages.includes("image") &&
+                    targets.some((t) => t.id === src.id)
+                  ) {
+                    issues.push(
+                      `依赖上游图片「${src.title || src.id}」，将按顺序先生成图片`,
+                    );
+                    if (status === "ready") status = "warning";
+                  } else {
+                    issues.push(`上游参考图「${src.title || src.id}」尚未就绪`);
+                    status = "blocked";
+                  }
+                }
+              }
+            }
+            const combinedPrompt = [
+              ...connectedTexts,
+              ...(pythonStrip(node.prompt) ? [pythonStrip(node.prompt)] : []),
+            ].join("\n\n");
+            if (!combinedPrompt) {
+              issues.push("缺少提示词或连接的上游文本");
+              status = "blocked";
+            } else if ([...combinedPrompt].length > 12000) {
+              issues.push("提示词超过 12000 字上限");
+              status = "blocked";
+            }
+
+            let packImageCount = 0;
+            for (const sel of node.asset_packs) {
+              const live = livePackRevisions.get(sel.id);
+              if (!live) {
+                issues.push(`绑定的素材包已删除或不可访问 (${sel.id.slice(0, 6)})`);
+                status = "blocked";
+              } else {
+                packImageCount += live.assetsCount;
+                if (live.revision !== sel.revision) {
+                  issues.push(`素材包「${live.name}」已有新版本，请重新选择`);
+                  status = "blocked";
+                }
+              }
+            }
+            const totalRefs =
+              connectedImageCount +
+              packImageCount +
+              (node.params.h3_refs?.length ?? 0);
+            if (totalRefs > 9) {
+              issues.push(`参考图片合计 ${totalRefs} 张，超过上限 9 张`);
+              status = "blocked";
+            }
+
+            model = node.params.model || "";
+            if (!model) {
+              try {
+                model = bindings.default(stage);
+              } catch {
+                issues.push(
+                  stage === "image" ? "未配置默认生图模型" : "未配置默认视频模型",
+                );
+                status = "blocked";
+              }
+            }
+            if (model) {
+              const q = await this.catalog.quoteReadOnly(
+                sql,
+                model,
+                project.workspace_id,
+                stage === "image"
+                  ? {
+                      resolution: node.params.resolution,
+                      image_quality: node.params.image_quality,
+                      ratio: node.params.ratio,
+                    }
+                  : {
+                      seconds: node.params.seconds,
+                      quality: node.params.quality,
+                      ratio: node.params.ratio,
+                    },
+              );
+              if (!q.allowed || !q.priced) {
+                issues.push(q.reason || "当前模型不可用或未定价");
+                status = "blocked";
+              } else {
+                credits = q.amount;
+              }
+            }
+          } else if (stage === "narration") {
+            if (!pythonStrip(node.narration_text)) {
+              issues.push("镜头未填写旁白文本");
+              status = "blocked";
+            }
+            if (busyNodes.has("voice:" + node.id)) {
+              issues.push("该镜头旁白正在生成中");
+              status = "blocked";
+            }
+            try {
+              model = bindings.resolveAudio();
+            } catch {
+              model = "edge-tts";
+            }
+            const q = await this.catalog.quoteReadOnly(
+              sql,
+              model,
+              project.workspace_id,
+              {},
+            );
+            credits = q.amount;
+            if (model === "edge-tts") {
+              issues.push("使用内置免费 Edge TTS 兜底引擎（0 积分）");
+              if (status === "ready") status = "warning";
+            } else if (!q.allowed || !q.priced) {
+              issues.push(q.reason || "语音模型不可用");
+              status = "blocked";
+            }
+          } else if (stage === "dialogue") {
+            const validLines = (node.dialogue_lines ?? []).filter((l) =>
+              Boolean(pythonStrip(l.text)),
+            );
+            if (!validLines.length) {
+              issues.push("镜头未填写多角色对白台词");
+              status = "blocked";
+            }
+            try {
+              model = bindings.resolveAudio();
+            } catch {
+              model = "edge-tts";
+            }
+            const q = await this.catalog.quoteReadOnly(
+              sql,
+              model,
+              project.workspace_id,
+              {},
+            );
+            credits = q.amount * validLines.length;
+            if (model === "edge-tts" && validLines.length > 0) {
+              issues.push(
+                `${validLines.length} 句对白将使用内置免费 Edge TTS（0 积分）`,
+              );
+              if (status === "ready") status = "warning";
+            }
+          }
+
+          items.push({
+            node_id: node.id,
+            title: node.title || node.id,
+            node_type: node.type,
+            stage,
+            model,
+            credits: status === "blocked" ? 0 : credits,
+            status,
+            issues,
+          });
+        }
+      }
+
+      const readyCount = items.filter((i) => i.status === "ready").length;
+      const warningCount = items.filter((i) => i.status === "warning").length;
+      const blockedCount = items.filter((i) => i.status === "blocked").length;
+      const totalCredits = items.reduce((sum, i) => sum + i.credits, 0);
+
+      return {
+        revision: Number(project.revision),
+        stale_revision: staleRevision,
+        price_revision: priceRevision,
+        items,
+        summary: {
+          total: items.length,
+          ready: readyCount,
+          warning: warningCount,
+          blocked: blockedCount,
+          runnable: readyCount + warningCount,
+          total_credits: totalCredits,
+          available_credits: availableCredits,
+          sufficient: availableCredits >= totalCredits,
+        },
+      };
+    });
+  }
+}

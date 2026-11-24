@@ -10,11 +10,14 @@ import type { OriginalActor } from "./identity.js";
 import { parseBody } from "./validation.js";
 import { parseDraft } from "./drafts.js";
 import {
+  canvasBatchRunFields,
   canvasCandidatesFields,
   canvasDialogueRunFields,
   canvasRunFields,
   parseCanvasDocument,
+  type CinematographySpec,
 } from "./canvas-draft.js";
+import { expandGroupNodeIds, type PrecheckStage } from "./batch-precheck.js";
 import { resolveSpeakerVoice } from "./dialogue.js";
 import {
   canvasBytes,
@@ -28,6 +31,41 @@ import { OriginalState } from "./state.js";
 
 const namespaceUrl = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
 const active = ["queued", "dispatching", "running", "finalizing", "uncertain"];
+
+/** F030: Compiles structured 6-dimension director cinematography spec into clean prompt text. */
+export function compileCinematographyPrompt(
+  basePrompt: string,
+  spec?: CinematographySpec | null,
+  generationMode?: string,
+  gridLayout?: "2x2" | "3x3" | null,
+): string {
+  const parts: string[] = [];
+  if (generationMode === "grid_preview") {
+    const grid = gridLayout === "2x2" ? "2x2 四宫格" : "3x3 九宫格";
+    const count = gridLayout === "2x2" ? 4 : 9;
+    parts.push(
+      `【${grid}分镜构图预览】在一张画布上平均划分为 ${grid}（共 ${count} 个等大独立连续分镜画面），细黑线整齐分隔，无文字水印，主体与场景风格连贯：`,
+    );
+  }
+  parts.push(basePrompt.trim());
+  if (spec) {
+    const entries: [string, string | undefined][] = [
+      ["景别", spec.shot_size],
+      ["机位", spec.camera_angle],
+      ["运镜", spec.camera_movement],
+      ["光影", spec.lighting],
+      ["镜头", spec.lens],
+      ["氛围", spec.mood],
+    ];
+    const tags = entries
+      .filter(([, v]) => typeof v === "string" && v.trim().length > 0)
+      .map(([k, v]) => `${k}:${v!.trim()}`);
+    if (tags.length) {
+      parts.push(`【导演参数：${tags.join(" / ")}】`);
+    }
+  }
+  return parts.filter(Boolean).join("\n\n").slice(0, 12000);
+}
 type Run = {
   uid: string;
   expected_revision: number | bigint;
@@ -182,6 +220,16 @@ export class OriginalCanvasRuns {
         Math.floor(this.clock()),
       ],
     );
+    const hasJobProjects = await one(
+      sql,
+      "SELECT to_regclass('job_projects') IS NOT NULL AS ok",
+    );
+    if (hasJobProjects?.ok) {
+      await sql.query(
+        "INSERT INTO job_projects(job_id, project_id) VALUES($1, $2) ON CONFLICT DO NOTHING",
+        [row.id, p.id],
+      );
+    }
   }
   private async createOn(
     sql: Sql,
@@ -247,14 +295,20 @@ export class OriginalCanvasRuns {
         sources.push({ node: source.id, media: key });
       }
     }
-    const prompt = [
+    const rawPrompt = [
       ...texts,
       ...(pythonStrip(node.prompt) ? [pythonStrip(node.prompt)] : []),
     ].join("\n\n");
     requireValue(
-      prompt && [...prompt].length <= 12000,
+      rawPrompt && [...rawPrompt].length <= 12000,
       400,
       "请输入提示词或连接文本，合计不超过 12000 字",
+    );
+    const prompt = compileCinematographyPrompt(
+      rawPrompt,
+      node.cinematography,
+      node.generation_mode,
+      node.grid_layout,
     );
     const bindings = await CanvasSubmissionModels.read(sql),
       params = node.params,
@@ -272,7 +326,14 @@ export class OriginalCanvasRuns {
               ),
             ]
           : [...new Set([...refs, ...params.h3_refs])];
-    else
+    else if (node.generation_mode === "first_last_frame" && params.h3) {
+      const frameRefs = [params.h3.first_frame, params.h3.last_frame].filter(
+        (id): id is string => !!id,
+      );
+      if (frameRefs.length) refs = [...new Set([...frameRefs, ...refs])];
+    } else if (node.generation_mode === "omni_ref" && params.h3_refs.length) {
+      refs = [...new Set([...refs, ...params.h3_refs])];
+    } else
       requireValue(
         !params.h3_refs.length || !params.model || rule?.nativeH3,
         400,
@@ -589,5 +650,121 @@ export class OriginalCanvasRuns {
       }
       return { items };
     });
+  }
+  /**
+   * F007 + F010: Partial workflow group / multi-node batch rerun (`POST /api/canvases/:key/batch-runs`).
+   * Expands group nodes into children and submits only requested stages (`image`, `video`,
+   * `narration`, `dialogue`) with deterministic per-item idempotency keys.
+   */
+  async batchRun(user: OriginalActor, projectKey: string, value: unknown) {
+    const body = parseBody(value, canvasBatchRunFields, true) as Run & {
+      node_ids: string[];
+      stages: PrecheckStage[];
+    };
+    const submitted: { node: string; stage: PrecheckStage; job_id: number }[] =
+      [];
+    const skipped: { node: string; stage: PrecheckStage; reason: string }[] =
+      [];
+
+    const plan = await this.p.db.transaction(async (sql) => {
+      const p = await this.canvases.project(sql, user, projectKey, true);
+      requireValue(p.revision === body.expected_revision, 409, canvasConflict);
+      const doc = parseCanvasDocument(canvasDocumentJson(p.document));
+      const targets = expandGroupNodeIds(doc.nodes, body.node_ids);
+      requireValue(targets.length > 0, 400, "未找到可执行的节点");
+      return targets;
+    });
+
+    const stageOrder: PrecheckStage[] = [
+      "image",
+      "video",
+      "narration",
+      "dialogue",
+    ];
+    const requestedStages = stageOrder.filter((s) => body.stages.includes(s));
+
+    for (const stage of requestedStages) {
+      for (const node of plan) {
+        if (stage === "image" && node.type !== "image") continue;
+        if (stage === "video" && node.type !== "video") continue;
+        if (
+          (stage === "narration" || stage === "dialogue") &&
+          node.type !== "video"
+        )
+          continue;
+
+        const itemUid = uuid5(
+          body.uid,
+          `batch:${projectKey}:${node.id}:${stage}`,
+        );
+        try {
+          if (stage === "image" || stage === "video") {
+            const res = await this.generate(user, projectKey, node.id, {
+              expected_revision: body.expected_revision,
+              price_revision: body.price_revision,
+              uid: itemUid,
+            });
+            submitted.push({ node: node.id, stage, job_id: res.id });
+          } else if (stage === "narration") {
+            if (!pythonStrip(node.narration_text)) {
+              skipped.push({
+                node: node.id,
+                stage,
+                reason: "未填写旁白文本",
+              });
+              continue;
+            }
+            const res = await this.narrate(user, projectKey, node.id, {
+              expected_revision: body.expected_revision,
+              price_revision: body.price_revision,
+              uid: itemUid,
+            });
+            submitted.push({ node: node.id, stage, job_id: res.id });
+          } else if (stage === "dialogue") {
+            const lines = (node.dialogue_lines ?? []).filter((l) =>
+              Boolean(pythonStrip(l.text)),
+            );
+            if (!lines.length) {
+              skipped.push({
+                node: node.id,
+                stage,
+                reason: "未填写多角色对白",
+              });
+              continue;
+            }
+            const res = await this.narrateDialogue(user, projectKey, node.id, {
+              expected_revision: body.expected_revision,
+              price_revision: body.price_revision,
+              uid: itemUid,
+            });
+            for (const item of res.items) {
+              submitted.push({ node: node.id, stage, job_id: item.id });
+            }
+          }
+        } catch (err) {
+          skipped.push({
+            node: node.id,
+            stage,
+            reason: (err as Error).message || "提交跳过",
+          });
+        }
+      }
+    }
+
+    let totalCredits = 0;
+    if (submitted.length) {
+      const feeRow = await one(
+        this.p.db,
+        "SELECT COALESCE(SUM(price),0) AS total FROM jobs WHERE public_id=ANY($1::bigint[])",
+        [submitted.map((s) => s.job_id)],
+      );
+      totalCredits = Number(feeRow?.total ?? 0);
+    }
+
+    return {
+      submitted,
+      skipped,
+      total_credits: totalCredits,
+    };
   }
 }

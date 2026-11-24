@@ -84,6 +84,14 @@ export const canvasBgmFields: Fields = {
   ducking: { kind: "boolean", strict: false, default: true },
   loop: { kind: "boolean", strict: false, default: true },
 };
+export const cinematographyFields: Fields = {
+  shot_size: { ...text(40), optional: true },
+  camera_angle: { ...text(40), optional: true },
+  camera_movement: { ...text(40), optional: true },
+  lighting: { ...text(40), optional: true },
+  lens: { ...text(40), optional: true },
+  mood: { ...text(40), optional: true },
+};
 export const canvasNodeFields: Fields = {
   narration_text: text(300, ""),
   narration_instruction: text(300, ""),
@@ -96,18 +104,30 @@ export const canvasNodeFields: Fields = {
   original_audio_gain: { kind: "float", min: 0, max: 1, optional: true },
   tail_inherited: { kind: "boolean", strict: false, optional: true },
   dialogue_lines: { ...list(object(dialogueLineFields), 20), optional: true },
+  parent_id: { ...identifier, nullable: true, optional: true },
+  generation_mode: {
+    ...literal(["first_frame", "first_last_frame", "omni_ref", "grid_preview"]),
+    optional: true,
+  },
+  grid_layout: { ...literal(["2x2", "3x3"]), nullable: true, optional: true },
+  cinematography: {
+    ...object(cinematographyFields),
+    nullable: true,
+    optional: true,
+  },
+  extra_params: { kind: "dictionary", nullable: true, optional: true },
   asset_packs: list(
     object({ id: media, revision: { ...integer(), min: 1 } }),
     9,
   ),
   id: identifier,
-  type: literal(["text", "image", "video", "sticky", "plugin"]),
+  type: literal(["text", "image", "video", "sticky", "plugin", "group"]),
   extension: { kind: "dictionary", optional: true },
   title: text(80, ""),
   x: { kind: "float", min: -100000, max: 100000 },
   y: { kind: "float", min: -100000, max: 100000 },
-  width: { kind: "float", min: 160, max: 1600, default: 320 },
-  height: { kind: "float", min: 100, max: 1600, default: 240 },
+  width: { kind: "float", min: 160, max: 3200, default: 320 },
+  height: { kind: "float", min: 100, max: 3200, default: 240 },
   text: text(12000, ""),
   prompt: text(12000, ""),
   color: literal(
@@ -124,7 +144,7 @@ export const canvasNodeFields: Fields = {
 };
 export const canvasDocumentFields: Fields = {
   schemaVersion: literal([1], 1),
-  nodes: list(object(canvasNodeFields), 200),
+  nodes: list(object(canvasNodeFields), 400),
   edges: list(
     object({
       id: identifier,
@@ -133,7 +153,7 @@ export const canvasDocumentFields: Fields = {
       sourcePort: { ...text(32), optional: true },
       targetPort: { ...text(32), optional: true },
     }),
-    600,
+    1200,
   ),
   shots: { ...list({ kind: "string" }, 200), nullable: true, default: null },
   bgm: { ...object(canvasBgmFields), nullable: true, optional: true },
@@ -199,6 +219,84 @@ export const canvasCandidatesFields: Fields = {
   ...canvasRunFields,
   count: literal([1, 2], 1),
 };
+const batchStageField = literal(["image", "video", "narration", "dialogue"]);
+export const canvasBatchPrecheckFields: Fields = {
+  expected_revision: { ...integer(null), nullable: true, min: 1 },
+  node_ids: { ...list(identifier, 120), min: 1 },
+  stages: {
+    ...list(batchStageField, 4),
+    default: ["image", "video"],
+  },
+};
+export const canvasBatchRunFields: Fields = {
+  ...canvasRunFields,
+  node_ids: { ...list(identifier, 120), min: 1 },
+  stages: {
+    ...list(batchStageField, 4),
+    default: ["image", "video"],
+  },
+};
+export const canvasGridCropFields: Fields = {
+  rows: literal([2, 3], 3),
+  cols: literal([2, 3], 3),
+  row: { ...integer(0), min: 0, max: 2 },
+  col: { ...integer(0), min: 0, max: 2 },
+};
+export const batchQuoteItemFields: Fields = {
+  kind: literal(["image", "video", "audio"]),
+  model: text(180, ""),
+  seconds: { ...integer(5), min: 0, max: 15, optional: true },
+  quality: { ...literal([480, 768]), optional: true },
+  resolution: { ...literal(["1K", "2K", "4K"]), optional: true },
+  image_quality: { ...literal(["low", "medium", "high"]), optional: true },
+  ratio: {
+    ...literal(["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]),
+    optional: true,
+  },
+  count: { ...integer(1), min: 1, max: 20, optional: true },
+};
+export const batchQuoteFields: Fields = {
+  items: { ...list(object(batchQuoteItemFields), 120), min: 1 },
+};
+export const seriesCreateFields: Fields = {
+  title: { kind: "string", min: 1, max: 120 },
+  synopsis: { kind: "string", max: 4000, default: "" },
+  bible: { kind: "dictionary", optional: true },
+};
+export const seriesUpdateFields: Fields = {
+  expected_revision: { kind: "integer", min: 1 },
+  title: { kind: "string", min: 1, max: 120, optional: true },
+  synopsis: { kind: "string", max: 4000, optional: true },
+  bible: { kind: "dictionary", optional: true },
+};
+export const episodeCreateFields: Fields = {
+  season_no: { kind: "integer", min: 1, max: 99, default: 1 },
+  episode_no: { kind: "integer", min: 1, max: 999 },
+  title: { kind: "string", min: 1, max: 120 },
+  status: {
+    kind: "literal",
+    values: ["draft", "producing", "review", "done"],
+    default: "draft",
+  },
+  canvas_id: {
+    kind: "string",
+    pattern: "^[a-f0-9]{32}$",
+    strictPattern: true,
+    nullable: true,
+    optional: true,
+  },
+};
+export const episodeUpdateFields: Fields = {
+  expected_revision: { kind: "integer", min: 1 },
+  season_no: { kind: "integer", min: 1, max: 99, optional: true },
+  episode_no: { kind: "integer", min: 1, max: 999, optional: true },
+  title: { kind: "string", min: 1, max: 120, optional: true },
+  status: {
+    kind: "literal",
+    values: ["draft", "producing", "review", "done"],
+    optional: true,
+  },
+};
 export type CanvasParams = {
   h3: {
     mode: "reference" | "frames";
@@ -235,6 +333,19 @@ export type CanvasBgm = {
   ducking: boolean;
   loop: boolean;
 };
+export type CinematographySpec = {
+  shot_size?: string;
+  camera_angle?: string;
+  camera_movement?: string;
+  lighting?: string;
+  lens?: string;
+  mood?: string;
+};
+export type CanvasGenerationMode =
+  | "first_frame"
+  | "first_last_frame"
+  | "omni_ref"
+  | "grid_preview";
 export type CanvasNode = {
   narration_text: string;
   narration_instruction: string;
@@ -244,9 +355,14 @@ export type CanvasNode = {
   original_audio_gain?: number;
   tail_inherited?: boolean;
   dialogue_lines?: DialogueLine[];
+  parent_id?: string | null;
+  generation_mode?: CanvasGenerationMode;
+  grid_layout?: "2x2" | "3x3" | null;
+  cinematography?: CinematographySpec | null;
+  extra_params?: Record<string, unknown> | null;
   asset_packs: { id: string; revision: number }[];
   id: string;
-  type: "text" | "image" | "video" | "sticky" | "plugin";
+  type: "text" | "image" | "video" | "sticky" | "plugin" | "group";
   extension?: CanvasExtension;
   title: string;
   x: number;

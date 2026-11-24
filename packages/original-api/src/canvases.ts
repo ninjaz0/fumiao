@@ -7,11 +7,13 @@ import { CanvasModels } from "@fumiao/platform/canvas-models.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { ReferencePacks } from "@fumiao/platform/packs.js";
 import { createTailFrameAsset } from "@fumiao/platform/tail-frame.js";
+import { cropGridCell } from "@fumiao/platform/grid-crop.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { OriginalIdentity } from "./identity.js";
 import { archiveEntry, OriginalLibrary } from "./library.js";
 import { parseBody } from "./validation.js";
 import {
+  canvasGridCropFields,
   canvasNewFields,
   canvasExactRevisionFields,
   parseCanvasDocument,
@@ -184,6 +186,18 @@ export class OriginalCanvases {
         "INSERT INTO canvas_nodes(project_id,node) SELECT $1,unnest($2::text[])",
         [id, document.nodes.map((node) => node.id)],
       );
+  }
+  async createBoundCanvas(
+    sql: Sql,
+    user: Actor,
+    wid: string,
+    title: string,
+    document: CanvasDocument,
+  ) {
+    await this.limit(sql, wid);
+    const row = await this.insert(sql, user, wid, title, document);
+    await this.nodes(sql, row.id, document);
+    return row;
   }
   async importProject(
     sql: Sql,
@@ -694,6 +708,65 @@ export class OriginalCanvases {
         source_video: video.public_id as string,
       };
     });
+  }
+  /** F019: Crop a single cell from a 2x2 or 3x3 grid preview image node into a ready ref asset. */
+  async gridCrop(user: Actor, key: string, nodeId: string, value: unknown) {
+    const body = parseBody(value, canvasGridCropFields, true) as {
+      rows: 2 | 3;
+      cols: 2 | 3;
+      row: number;
+      col: number;
+    };
+    const source = await this.p.db.transaction(async (sql) => {
+      const project = await this.project(sql, user, key);
+      const doc = parseCanvasDocument(canvasDocumentJson(project.document));
+      const node = doc.nodes.find((n) => n.id === nodeId);
+      requireValue(
+        node && (node.type === "image" || node.type === "video"),
+        404,
+        "未找到对应的画面节点",
+      );
+      const mediaKey = await this.mediaForNode(sql, project.id, node);
+      requireValue(mediaKey, 409, "该节点尚未生成图片");
+      const asset = await one(
+        sql,
+        "SELECT id, public_id, object_key, mime, workspace_id FROM assets WHERE public_id=$1 AND state='ready'",
+        [mediaKey],
+      );
+      requireValue(asset, 404, "源图片不存在");
+      await this.library.access(
+        sql,
+        user,
+        { kind: "asset", row: asset },
+        project.workspace_id,
+      );
+      return {
+        sourceAssetId: String(asset.id),
+        sourcePublicId: String(asset.public_id),
+        sourceObjectKey: String(asset.object_key),
+        sourceMime: String(asset.mime),
+        workspaceId: String(project.workspace_id),
+      };
+    });
+    const cropped = await cropGridCell(this.p, {
+      ...source,
+      ownerId: user.id,
+      rows: body.rows,
+      cols: body.cols,
+      row: body.row,
+      col: body.col,
+    });
+    return {
+      asset_id: cropped.public_id,
+      mime: cropped.mime,
+      width: cropped.width,
+      height: cropped.height,
+      size: cropped.size,
+      rows: cropped.rows,
+      cols: cropped.cols,
+      row: cropped.row,
+      col: cropped.col,
+    };
   }
   async remove(user: Actor, key: string) {
     return this.p.db.transaction(async (sql) => {

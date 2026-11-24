@@ -8,6 +8,11 @@ import { requireValue } from "@fumiao/platform/security.js";
 import { originalUI } from "@fumiao/web-compat/ui.js";
 import { OriginalIdentity, avatars } from "./identity.js";
 import { modifiedSeconds } from "@fumiao/platform/storage.js";
+import {
+  collectDerivativeObjectKeys,
+  getReadyDerivative,
+  type DerivativeVariant,
+} from "@fumiao/platform/derivatives.js";
 import { sendFile } from "./files.js";
 const extension: Record<string, string> = {
   "audio/wav": ".wav",
@@ -40,7 +45,25 @@ export class OriginalMedia {
     AND ((w.kind='personal' AND w.owner_id=$2) OR (w.kind='team' AND ($3='admin' OR EXISTS(SELECT 1 FROM members m WHERE m.workspace_id=w.id AND m.user_id=$2))))`,
       [key, user.id, user.role, workspace || null],
     );
-    requireValue(asset, 404, "内容不存在或无权访问");
+    if (asset) return asset;
+    // F022: Read-only access to assets explicitly attached to an active global AssetPack.
+    // Never loosens isolation for ordinary private or workspace-scoped media.
+    if (!workspace) {
+      const globalAsset = await one(
+        sql,
+        `SELECT a.* FROM assets a
+         WHERE a.public_id=$1 AND a.state='ready'
+         AND EXISTS (
+           SELECT 1 FROM document_assets da
+           JOIN documents d ON d.id=da.document_id
+           JOIN asset_pack_meta m ON m.pack_id=d.id
+           WHERE da.asset_id=a.id AND d.kind='pack' AND NOT d.deleted AND m.scope='global'
+         )`,
+        [key],
+      );
+      if (globalAsset) return globalAsset;
+    }
+    requireValue(false, 404, "内容不存在或无权访问");
     return asset;
   }
   async serve(
@@ -49,11 +72,21 @@ export class OriginalMedia {
     download: boolean,
     req: Request,
     res: Response,
+    variant?: DerivativeVariant,
   ) {
     const asset = await this.resource(this.p.db, user, key);
+    let objectKey: string = asset.object_key;
+    let mime: string = asset.mime;
+    if (variant && !download) {
+      const deriv = await getReadyDerivative(this.p.db, asset.id, variant);
+      if (deriv) {
+        objectKey = deriv.object_key;
+        mime = deriv.mime;
+      }
+    }
     const filename = download
       ? (safeDownloadFilename(asset.metadata?.filename) ??
-        "弗淼-" + key.slice(0, 8) + (extension[asset.mime] || ""))
+        "弗淼-" + key.slice(0, 8) + (extension[mime] || ""))
       : undefined;
     // Keep embedded S3 media on its stable same-origin URL across refreshes.
     // Explicit downloads and API clients still receive a short-lived signed URL.
@@ -65,8 +98,8 @@ export class OriginalMedia {
     if (this.p.storage.downloadUrl && (download || !embedded)) {
       res.status(307).setHeader(
         "Location",
-        await this.p.storage.downloadUrl(asset.object_key, {
-          mime: asset.mime,
+        await this.p.storage.downloadUrl(objectKey, {
+          mime,
           filename,
         }),
       );
@@ -74,17 +107,17 @@ export class OriginalMedia {
       res.end();
       return;
     }
-    const info = await this.p.storage.stat(asset.object_key);
+    const info = await this.p.storage.stat(objectKey);
     await sendFile(
       req,
       res,
       {
         revalidate: !download,
         size: info.size,
-        mime: asset.mime,
+        mime,
         modified: asset.object_modified,
         open: (start, end) =>
-          this.p.storage.stream(asset.object_key, start, end),
+          this.p.storage.stream(objectKey, start, end),
       },
       filename,
     );
@@ -208,14 +241,15 @@ export class OriginalMedia {
         409,
         "请从生成记录中删除这张图片",
       );
+      const derivObjects = await collectDerivativeObjectKeys(sql, [asset.id]);
       await sql.query("DELETE FROM document_assets WHERE asset_id=$1", [
         asset.id,
       ]);
       await sql.query("DELETE FROM favorites WHERE asset_id=$1", [asset.id]);
       await sql.query("DELETE FROM assets WHERE id=$1", [asset.id]);
-      return asset.object_key;
+      return [asset.object_key as string, ...derivObjects];
     });
-    await this.p.storage.remove(object);
+    for (const key of object) await this.p.storage.remove(key).catch(() => {});
     return { ok: true };
   }
 }

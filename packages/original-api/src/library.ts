@@ -9,6 +9,7 @@ import {
   requireValue,
   DomainError,
 } from "@fumiao/platform/security.js";
+import { collectDerivativeObjectKeys } from "@fumiao/platform/derivatives.js";
 import { OriginalIdentity } from "./identity.js";
 import { OriginalMedia } from "./media.js";
 import { parseBody } from "./validation.js";
@@ -384,12 +385,19 @@ export class OriginalLibrary {
         "DELETE FROM document_assets WHERE asset_id=ANY($1::uuid[])",
         [assets.map((a) => a.id)],
       );
+      const derivObjects = await collectDerivativeObjectKeys(
+        sql,
+        assets.map((a) => a.id),
+      );
       await sql.query("DELETE FROM assets WHERE id=ANY($1::uuid[])", [
         assets.map((a) => a.id),
       ]);
       return {
         deleted: entries.size,
-        objects: assets.map((a) => a.object_key as string),
+        objects: [
+          ...assets.map((a) => a.object_key as string),
+          ...derivObjects,
+        ],
       };
     });
     for (const object of outcome.objects) await this.p.storage.remove(object);

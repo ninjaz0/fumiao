@@ -1,6 +1,46 @@
 import type { CanvasExtension, CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
 import {acceptsCanvasEdge,canvasSourceKind} from "@fumiao/plugin-sdk/canvas-ports";
-export type Kind = "text" | "image" | "video" | "sticky" | "plugin";
+export type Kind = "text" | "image" | "video" | "sticky" | "plugin" | "group";
+export type CanvasGenerationMode =
+  | "first_frame"
+  | "first_last_frame"
+  | "omni_ref"
+  | "grid_preview";
+export type CinematographySpec = {
+  shot_size?: string;
+  camera_angle?: string;
+  camera_movement?: string;
+  lighting?: string;
+  lens?: string;
+  mood?: string;
+};
+export type PrecheckStage = "image" | "video" | "narration" | "dialogue";
+export type PrecheckItem = {
+  node_id: string;
+  title: string;
+  node_type: Kind;
+  stage: PrecheckStage;
+  model: string;
+  credits: number;
+  status: "ready" | "warning" | "blocked";
+  issues: string[];
+};
+export type PrecheckResponse = {
+  revision: number;
+  stale_revision: boolean;
+  price_revision: number;
+  items: PrecheckItem[];
+  summary: {
+    total: number;
+    ready: number;
+    warning: number;
+    blocked: number;
+    runnable: number;
+    total_credits: number;
+    available_credits: number;
+    sufficient: boolean;
+  };
+};
 export type H3Options = {mode:"reference"|"frames";first_frame?:string|null;last_frame?:string|null;video_audio?:string[]};
 export type Params = {
   h3?: H3Options|null;
@@ -42,6 +82,11 @@ export type CanvasNode = {
   original_audio_gain?: number;
   tail_inherited?: boolean;
   dialogue_lines?: DialogueLine[];
+  parent_id?: string | null;
+  generation_mode?: CanvasGenerationMode;
+  grid_layout?: "2x2" | "3x3" | null;
+  cinematography?: CinematographySpec | null;
+  extra_params?: Record<string, unknown> | null;
   asset_packs?: {id:string;revision:number;name?:string}[];
   id: string;
   type: Kind;
@@ -159,6 +204,7 @@ export const names: Record<Kind, string> = {
   video: "视频",
   sticky: "便签",
   plugin: "插件",
+  group: "工作流组",
 };
 export const newNode = (
   type: Kind,
@@ -171,11 +217,11 @@ export const newNode = (
   title: names[type] + " " + count,
   x,
   y,
-  width: 320,
-  height: type === "text" || type === "sticky" ? 240 : 240,
+  width: type === "group" ? 720 : 320,
+  height: type === "group" ? 440 : 240,
   text: "",
   prompt: "",
-  color: type === "sticky" ? "yellow" : "none",
+  color: type === "sticky" ? "yellow" : type === "group" ? "blue" : "none",
   media_id: null,
   active_job: null,
   params: { ...defaults },

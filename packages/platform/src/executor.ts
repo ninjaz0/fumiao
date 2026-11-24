@@ -24,6 +24,7 @@ import { FrozenQueueHealth } from "./queue-health.js";
 import type { QueueHealth, QueueJob } from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
 import { hasTailChainTable, wakeTailFrameChildren } from "./tail-frame.js";
+import { ensureDerivativeQueued } from "./derivatives.js";
 class ReferenceUnavailable extends Error {}
 
 export class Executor {
@@ -936,6 +937,7 @@ export class Executor {
             "INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')",
             [job.id, id],
           );
+          await ensureDerivativeQueued(sql, id, metadata.mime);
           if (atomic) await p.settle(sql, current, "completed", result([id]));
           return id;
         });

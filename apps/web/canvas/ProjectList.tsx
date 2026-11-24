@@ -13,6 +13,7 @@ import { api, workspaceURL, type Studio } from "./api";
 
 import { PluginImport } from "../studio/PluginImport";
 import { VideoThumb } from "../canvas-editor/VideoThumb";
+import { SeriesTree } from "./SeriesTree";
 
 const COVER_VIDEO_PLACEHOLDER_STYLE = {
   display: "block",
@@ -171,6 +172,7 @@ export default function ProjectList({ studio }: { studio: Studio }) {
         <span>{studio.me.nickname || studio.me.name}</span>
       </header>
       <div className="project-list-body">
+        <SeriesTree workspace={workspace} />
         <div className="project-list-heading">
           <h1>画布</h1>
           <PluginImport
