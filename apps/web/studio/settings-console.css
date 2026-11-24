@@ -437,3 +437,174 @@ body:has(.ledger-settings) #modal {
     line-height: 1.4;
   }
 }
+
+/* Settings shell polish */
+.ledger-settings .settings-title {
+  border-bottom: 1px solid var(--line);
+}
+.ledger-settings .ledger-navigation {
+  border-inline-end: 1px solid var(--line);
+}
+.ledger-settings .settings-navigation h2 {
+  margin: 18px 0 6px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.ledger-settings .settings-navigation h2:first-of-type {
+  margin-top: 4px;
+}
+.ledger-settings .settings-navigation button {
+  gap: 10px;
+  padding: 6px 10px;
+  color: var(--secondary);
+  transition:
+    background-color 120ms ease-out,
+    color 120ms ease-out;
+}
+.ledger-settings .settings-navigation button:hover {
+  color: var(--text);
+}
+.ledger-settings .settings-navigation button.active {
+  color: var(--text);
+  font-weight: 600;
+}
+.ledger-settings .settings-content {
+  padding-top: 32px;
+}
+.ledger-settings .settings-section > h2:has(+ .console-description) {
+  margin-bottom: 6px;
+}
+.ledger-settings .settings-section > .console-description {
+  margin: 0 0 24px;
+  color: var(--secondary);
+}
+
+/* Profile page */
+.ledger-settings .profile-section {
+  max-width: 720px;
+}
+.ledger-settings .profile-section .ledger-card {
+  padding: 20px 24px;
+}
+.ledger-settings .profile-section .ledger-card + .ledger-card {
+  margin-top: 16px;
+}
+.ledger-settings .profile-section .ledger-card h3 {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.ledger-settings .profile-section .ledger-profile-identity {
+  padding-bottom: 20px;
+}
+.ledger-settings .profile-section .ledger-profile-identity .user-avatar {
+  width: 56px;
+  height: 56px;
+}
+.ledger-settings .profile-section .ledger-profile-identity strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+.ledger-settings .profile-section .profile-name-row {
+  max-width: none;
+  padding-top: 20px;
+}
+.ledger-settings .profile-section .profile-field-label {
+  color: var(--text);
+  font-weight: 500;
+}
+.ledger-settings .profile-section .profile-count {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+}
+.ledger-settings .profile-section .profile-input-action {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  max-width: 480px;
+}
+.ledger-settings .profile-section .profile-input-action input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  transition:
+    border-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+.ledger-settings .profile-section .profile-input-action input:focus-visible {
+  border-color: var(--blue);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.ledger-settings .profile-section :is(.profile-save, .profile-secondary) {
+  flex: none;
+  min-height: 36px;
+  margin: 0;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ledger-settings .profile-section .profile-secondary:hover {
+  background: var(--selected);
+}
+.ledger-settings .profile-section .profile-save:not(:disabled) {
+  border-color: var(--button);
+  background: var(--button);
+  color: var(--on-button);
+}
+.ledger-settings .profile-section .profile-save:not(:disabled):hover {
+  opacity: 0.88;
+}
+.ledger-settings .profile-section .profile-save:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.ledger-settings
+  .profile-section
+  .profile-save-status:has(.form-message:empty) {
+  display: none;
+}
+.ledger-settings .profile-section .ledger-card > .profile-field-row {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.ledger-settings .profile-section .ledger-card > .profile-password-row {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.ledger-settings .profile-section .profile-field-label small {
+  margin-inline-start: 6px;
+  font-weight: 400;
+}
+.ledger-settings
+  .profile-section
+  .profile-password-row
+  .profile-field-label
+  small {
+  margin: 4px 0 0;
+}
+.ledger-settings .profile-section .profile-readonly {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--selected);
+  color: var(--secondary);
+  font: 12px/1.6 var(--ledger-mono, ui-monospace, monospace);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ledger-settings .settings-navigation button,
+  .ledger-settings .profile-section .profile-input-action input {
+    transition: none;
+  }
+}
