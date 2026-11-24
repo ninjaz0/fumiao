@@ -83,6 +83,16 @@ for (const width of [320, 390, 1280]) {
         console.log(
           `${path} at ${width}px: ${box.width} × ${box.height} CSS px`,
         );
+        const { height, lineHeight } = await page
+          .locator(".auth-switch")
+          .evaluate((row) => ({
+            height: row.getBoundingClientRect().height,
+            lineHeight: Number.parseFloat(getComputedStyle(row).lineHeight),
+          }));
+        assert.ok(
+          Math.abs(height - lineHeight) <= 1 / 64,
+          `Expected the switch row to stay one line tall (height ${height}px; line height ${lineHeight}px)`,
+        );
         assert.ok(
           box.width >= 44 && box.height >= 44,
           "Expected a 44 × 44 CSS px target or larger",

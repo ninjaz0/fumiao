@@ -1,5 +1,6 @@
 .switchRow {
   align-items: center;
+  block-size: 1lh;
 }
 
 .switchLink {
