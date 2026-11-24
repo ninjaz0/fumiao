@@ -94,6 +94,10 @@ export default function ProjectList({ studio }: { studio: Studio }) {
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [deleting, setDeleting] = useState<Project | null>(null);
+  const query = search.trim().toLowerCase();
+  const visibleProjects = query
+    ? projects.filter((p) => p.title.trim().toLowerCase().includes(query))
+    : projects;
   const load = useCallback(
     () =>
       api<{ projects: Project[] }>(workspace, "/api/canvases")
@@ -201,69 +205,73 @@ export default function ProjectList({ studio }: { studio: Studio }) {
               新建画布
             </button>
           </div>
+        ) : !visibleProjects.length ? (
+          <div className="project-empty">
+            <Search size={40} />
+            <h2>没有找到匹配的画布</h2>
+            <button className="secondary" onClick={() => setSearch("")}>
+              清除搜索
+            </button>
+          </div>
         ) : (
           <div className="project-grid">
-            {projects
-              .filter((p) =>
-                p.title.toLowerCase().includes(search.toLowerCase()),
-              )
-              .map((p) => (
-                <article className="project-card" key={p.id}>
-                  <a
-                    href={workspaceURL("/canvas/" + p.id, workspace)}
-                    className="project-cover"
-                    aria-label={"打开画布 " + p.title}
-                  >
-                    {p.covers?.length ? (
-                      <div className={"cover-grid count-" + p.covers.length}>
-                        {p.covers.map((c) =>
-                          c.type === "video" ? (
-                            <video
-                              key={c.id}
-                              src={"/media/" + c.id + "#t=0.05"}
-                              muted
-                              preload="metadata"
-                            />
-                          ) : (
-                            <img
-                              key={c.id}
-                              src={"/media/" + c.id}
-                              alt=""
-                              loading="lazy"
-                            />
-                          ),
-                        )}
-                      </div>
-                    ) : (
-                      <LayoutGrid size={32} />
-                    )}
-                  </a>
-                  <div className="project-card-info">
-                    <a href={workspaceURL("/canvas/" + p.id, workspace)}>
-                      <strong>{p.title}</strong>
-                      <span>
-                        {p.count} 个节点 ·{" "}
-                        {new Date(p.updated * 1000).toLocaleDateString()}
-                      </span>
-                    </a>
-                    <div className="project-actions">
-                      <IconButton
-                        icon={Copy}
-                        label={"复制画布 " + p.title}
-                        onClick={() => duplicate(p)}
-                        disabled={busy}
-                      />
-                      {p.can_delete && (
-                        <IconButton
-                          icon={Trash2}
-                          label={"删除画布 " + p.title}
-                          onClick={() => setDeleting(p)}
-                        />
+            {visibleProjects.map((p) => (
+              <article className="project-card" key={p.id}>
+                <a
+                  href={workspaceURL("/canvas/" + p.id, workspace)}
+                  className="project-cover"
+                  aria-label={"打开画布 " + p.title}
+                >
+                  {p.covers?.length ? (
+                    <div className={"cover-grid count-" + p.covers.length}>
+                      {p.covers.map((c) =>
+                        c.type === "video" ? (
+                          <video
+                            key={c.id}
+                            src={"/media/" + c.id + "#t=0.05"}
+                            muted
+                            preload="metadata"
+                          />
+                        ) : (
+                          <img
+                            key={c.id}
+                            src={"/media/" + c.id}
+                            alt=""
+                            loading="lazy"
+                          />
+                        ),
                       )}
                     </div>
+                  ) : (
+                    <LayoutGrid size={32} />
+                  )}
+                </a>
+                <div className="project-card-info">
+                  <a href={workspaceURL("/canvas/" + p.id, workspace)}>
+                    <strong>{p.title}</strong>
+                    <span>
+                      {p.count} 个节点 ·{" "}
+                      {new Date(p.updated * 1000).toLocaleDateString()}
+                    </span>
+                  </a>
+                  <div className="project-actions">
+                    <IconButton
+                      icon={Copy}
+                      label={"复制画布 " + p.title}
+                      onClick={() => duplicate(p)}
+                      disabled={busy}
+                    />
+                    {p.can_delete && (
+                      <IconButton
+                        icon={Trash2}
+                        label={"删除画布 " + p.title}
+                        onClick={() => setDeleting(p)}
+                      />
+                    )}
                   </div>
-                </article>
-              ))}
+                </div>
+              </article>
+            ))}
           </div>
         )}
       </div>
