@@ -204,6 +204,7 @@ function Modal({
       ref={ref}
       className={"cv-dialog " + (wide ? "wide" : "")}
       onCancel={(e) => {
+        if (e.target !== e.currentTarget) return;
         e.preventDefault();
         onClose();
       }}
