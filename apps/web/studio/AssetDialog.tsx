@@ -19,6 +19,12 @@ import {
   type StudioState,
 } from "./state";
 
+const PREVIEW_LABELS: Record<NonNullable<Asset["kind"]>, string> = {
+  ref: "图片预览",
+  ref_video: "视频预览",
+  ref_audio: "音频预览",
+};
+
 export type DialogContent =
   | {
       kind: "packs";
@@ -112,7 +118,10 @@ export function AssetDialog({
   const [confirming, setConfirming] = useState(false);
   const retained = dialog || previous;
   const content = retained?.adminOnly && !admin ? undefined : retained?.content;
-  const previewKind = content?.kind === "preview" ? content.mediaKind : null;
+  const previewLabel =
+    content?.kind === "preview"
+      ? PREVIEW_LABELS[content.mediaKind ?? "ref"]
+      : undefined;
 
   useLayoutEffect(() => {
     if (!admin) setPrevious((value) => (value?.adminOnly ? null : value));
@@ -169,15 +178,7 @@ export function AssetDialog({
   return (
     <dialog
       id="modal"
-      aria-label={
-        previewKind === null
-          ? undefined
-          : previewKind === "ref_audio"
-            ? "音频预览"
-            : previewKind === "ref_video"
-              ? "视频预览"
-              : "图片预览"
-      }
+      aria-label={previewLabel}
       aria-labelledby={
         content && content.kind !== "preview" ? "modal-heading" : undefined
       }
