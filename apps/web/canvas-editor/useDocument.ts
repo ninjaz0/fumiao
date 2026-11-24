@@ -47,7 +47,8 @@ export function useDocument(project: Project, userId: number) {
   );
   const blocked = useRef(initial.current.conflict),
     busy = useRef<Promise<number> | null>(null),
-    gesture = useRef<Draft | null>(null);
+    gesture = useRef<Draft | null>(null),
+    allowUnload = useRef(false);
   const undo = useRef<Draft[]>([]),
     redo = useRef<Draft[]>([]),
     [historyTick, setHistoryTick] = useState(0);
@@ -62,14 +63,16 @@ export function useDocument(project: Project, userId: number) {
     try {
       if (serial.current === ack.current) {
         localStorage.removeItem(key);
-        return;
+      } else {
+        localStorage.setItem(
+          key,
+          JSON.stringify({ revision: revision.current, draft: ref.current }),
+        );
       }
-      localStorage.setItem(
-        key,
-        JSON.stringify({ revision: revision.current, draft: ref.current }),
-      );
+      return true;
     } catch {
       setError("浏览器无法保留本地草稿，请保持页面打开并保存");
+      return false;
     }
   }, [key]);
   const scheduleRemember = useCallback(() => {
@@ -198,6 +201,10 @@ export function useDocument(project: Project, userId: number) {
       if (serial.current !== ack.current) remember();
     };
     const before = (event: BeforeUnloadEvent) => {
+      if (allowUnload.current) {
+        allowUnload.current = false;
+        return;
+      }
       if (serial.current !== ack.current) {
         remember();
         event.preventDefault();
@@ -224,7 +231,7 @@ export function useDocument(project: Project, userId: number) {
   const acceptRemote = (result: Project, expectedDraft: string, operation = "采用回答") => {
     if (JSON.stringify(ref.current) !== expectedDraft) {
       blocked.current = true; setStatus("conflict");
-      setError(operation + "期间画布发生了修改。你的本地草稿已保留，请先处理保存冲突。");
+      setError(operation + "期间画布发生了修改，请先处理保存冲突。");
       remember(); throw new Error("画布有新的本地修改，请先处理保存冲突");
     }
     undo.current.push(clone(ref.current)); redo.current = []; setHistoryTick(n => n + 1);
@@ -237,6 +244,10 @@ export function useDocument(project: Project, userId: number) {
     localStorage.removeItem(key);
     location.reload();
   };
+  const leave = (url: string) => {
+    allowUnload.current = true;
+    location.assign(url);
+  };
   return {
     value,
     ref,
@@ -246,6 +257,8 @@ export function useDocument(project: Project, userId: number) {
     end,
     travel,
     flush,
+    remember,
+    leave,
     status,
     error,
     reload,
