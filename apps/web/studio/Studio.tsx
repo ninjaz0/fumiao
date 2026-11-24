@@ -1820,7 +1820,12 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       edit: editJob,
                       job: openJob,
                       image: (id) => transition({ image: id }),
-                      preview: (id, button) => preview(id, button, true),
+                      preview: (id, button, manage = true) =>
+                        preview(
+                          id,
+                          button,
+                          manage && !library.selecting && !referencePicking,
+                        ),
                       use: useAsset,
                       remove: deleteAsset,
                       filter: setFilter,

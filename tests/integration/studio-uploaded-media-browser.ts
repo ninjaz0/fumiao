@@ -314,7 +314,7 @@ export async function checkUploadedMediaPreview(
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();
     await expect(dialog).toBeHidden();
 
-    // 3. Verify Library -> 语音 card contrast, metadata and actions.
+    // 3. Verify Library -> 语音 card contrast, metadata, AX name, Escape focus and actions.
     await page.getByRole("tab", { name: "语音", exact: true }).click();
     const audioCard = page.locator(
       `article[data-asset-key="asset:${audioAsset.id}"]`,
@@ -328,7 +328,9 @@ export async function checkUploadedMediaPreview(
       "rgb(255, 255, 255)",
       "Audio card duration must stay readable against light card surface",
     );
-    await audioCard.locator('.asset-preview[data-act="h3-preview"]').click();
+    const audioOpener = audioCard.locator('.asset-preview[data-act="h3-preview"]');
+    await audioOpener.focus();
+    await page.keyboard.press("Enter");
     await expect(dialog.locator("audio[controls]")).toBeVisible();
     assert.equal(await dialogAccessibleName(), "音频预览");
     assert.deepEqual(
@@ -341,6 +343,57 @@ export async function checkUploadedMediaPreview(
       await page.mouse.move(8, 8);
       await page.screenshot({ path: join(screenshotDir, "library-audio-preview.png") });
     }
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(audioOpener).toBeFocused();
+
+    // 3b. Verify multi-select ("多选") card-action preview stays read-only on both 语音 and 视频.
+    await page.getByRole("button", { name: "多选", exact: true }).click();
+    const cancelSelect = page.getByRole("button", { name: "取消选择", exact: true });
+    await expect(cancelSelect).toBeVisible();
+
+    const audioSelectPreview = audioCard.locator(
+      '.asset-actions button[data-act="h3-preview"]',
+    );
+    await expect(audioCard.locator('[data-act="delete-asset"]')).toHaveCount(0);
+    await audioSelectPreview.click();
+    await expect(dialog.locator("audio[controls]")).toBeVisible();
+    assert.equal(await dialogAccessibleName(), "音频预览");
+    await expect(dialog.locator('[data-act="delete-asset"]')).toHaveCount(0);
+    await expect(dialog.locator('[data-act="use"]')).toHaveCount(0);
+    await expect(dialog.locator('[data-act="favorite"]')).toHaveCount(0);
+    await expect(dialog.locator("a.download-action")).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "关闭", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(cancelSelect).toBeVisible();
+    await expect(audioSelectPreview).toBeFocused();
+
+    await page.getByRole("tab", { name: "视频", exact: true }).click();
+    await page.getByRole("button", { name: "多选", exact: true }).click();
+    await expect(cancelSelect).toBeVisible();
+    const videoSelectPreview = soundVideoCard.locator(
+      '.asset-actions button[data-act="h3-preview"]',
+    );
+    await expect(soundVideoCard.locator('[data-act="delete-asset"]')).toHaveCount(0);
+    await videoSelectPreview.click();
+    await expect(dialog.locator("video[controls]")).toBeVisible();
+    assert.equal(await dialogAccessibleName(), "视频预览");
+    await expect(dialog.locator('[data-act="delete-asset"]')).toHaveCount(0);
+    await expect(dialog.locator('[data-act="use"]')).toHaveCount(0);
+    await expect(dialog.locator('[data-act="favorite"]')).toHaveCount(0);
+    await expect(dialog.locator("a.download-action")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(cancelSelect).toBeVisible();
+    await expect(videoSelectPreview).toBeFocused();
+
+    await cancelSelect.click();
+    await expect(cancelSelect).toBeHidden();
+    await soundVideoCard.hover();
+    await videoSelectPreview.click();
+    await expect(dialog.locator('[data-act="delete-asset"]')).toHaveText("删除");
+    await expect(dialog.locator('[data-act="use"]')).toHaveText("用作参考");
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();
     await expect(dialog).toBeHidden();
 

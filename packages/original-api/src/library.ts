@@ -133,7 +133,7 @@ export class OriginalLibrary {
     requireValue(item, 400, "资产标识无效");
     return item;
   }
-  private bulkAccess(sql: Sql, user: Actor, workspace: string) {
+  bulkAccess(sql: Sql, user: Actor, workspace: string) {
     let checked = false;
     return async (item: Selection) => {
       requireValue(

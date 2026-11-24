@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -41,6 +42,27 @@ const scopes = [
   ["history", "生成历史"],
   ["favorites", "收藏夹"],
 ] as const;
+
+function moveFilterFocus(event: KeyboardEvent<HTMLDivElement>) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  const tabs = Array.from(
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+  );
+  const index = tabs.findIndex((tab) => tab === event.target);
+  if (index < 0) return;
+  const count = tabs.length;
+  const next = {
+    ArrowLeft: (index + count - 1) % count,
+    ArrowRight: (index + 1) % count,
+    Home: 0,
+    End: count - 1,
+  }[event.key];
+  if (next === undefined) return;
+  event.preventDefault();
+  if (next === index) return;
+  tabs[next].focus();
+  tabs[next].click();
+}
 
 export function isOwner(state: StudioState, item: { owner: number }) {
   return state.me.role === "admin" || item.owner === state.me.id;
@@ -194,7 +216,7 @@ type LibraryActions = {
   edit: (id: number) => void;
   job: (id: number) => void;
   image: (id: string) => void;
-  preview: (id: string, button: HTMLButtonElement) => void;
+  preview: (id: string, button: HTMLButtonElement, manage?: boolean) => void;
   use: (id: string) => void;
   remove: (id: string, button: HTMLButtonElement) => void;
   batchFavorite: () => void;
@@ -226,15 +248,16 @@ export function Library({
     library;
   const surface = useRef<HTMLDivElement>(null);
   const floating = useRef<HTMLDivElement>(null);
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const browseScroll = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
     const node = surface.current!;
     const holder = floating.current!;
     // A full redraw measures the composer before selection hides it again.
     if (holder.hidden) {
-      node.className = "assets-view is-selecting ";
       holder.hidden = false;
       const height = Math.ceil(
-        holder.firstElementChild!.getBoundingClientRect().height,
+        holder.lastElementChild!.getBoundingClientRect().height,
       );
       node
         .closest<HTMLElement>(".shell")
@@ -243,8 +266,13 @@ export function Library({
     }
   }, [filter, library.redraw]);
   useLayoutEffect(() => {
-    surface.current!.classList.toggle("is-selecting", selecting);
-  }, [filter, selecting, library.redraw]);
+    if (composerExpanded) {
+      floating.current?.scrollIntoView({ block: "end", behavior: "instant" });
+    } else if (browseScroll.current !== undefined) {
+      scrollTo({ top: browseScroll.current, behavior: "instant" });
+      browseScroll.current = undefined;
+    }
+  }, [composerExpanded]);
   const images = filter.tab === "images";
   const groups = groupHistoryJobs(
     referencePicking
@@ -285,18 +313,23 @@ export function Library({
   return (
     <>
       <div
-        className={`assets-view  ${referencePicking ? "is-picking-reference" : ""}`}
-        key={filter.tab + ":" + filter.scope + ":" + library.redraw}
+        className={`assets-view ${selecting ? "is-selecting" : ""} ${referencePicking ? "is-picking-reference" : ""}`}
         ref={surface}
       >
         <div className="asset-top">
-          <div className="library-scopes" role="tablist" aria-label="资产视图">
+          <div
+            className="library-scopes"
+            role="tablist"
+            aria-label="资产视图"
+            onKeyDown={moveFilterFocus}
+          >
             {scopes.map(([scope, label]) => (
               <button
                 key={scope}
                 className={`top-tab ${filter.scope === scope ? "selected" : ""}`}
                 role="tab"
                 aria-selected={filter.scope === scope}
+                tabIndex={filter.scope === scope ? 0 : -1}
                 data-act="library-scope"
                 data-value={scope}
                 onClick={() => actions.filter({ ...filter, scope })}
@@ -305,7 +338,7 @@ export function Library({
               </button>
             ))}
           </div>
-          <div id="selection-toolbar">
+          <div id="selection-toolbar" key={library.redraw}>
             {referencePicking ? (
               <div className="reference-pick-toolbar">
                 <span role="status">{`已添加 ${referencePicking.ids.size} 张图片`}</span>
@@ -392,7 +425,12 @@ export function Library({
             )}
           </div>
         </div>
-        <div className="asset-filter" role="tablist" aria-label="资产类型">
+        <div
+          className="asset-filter"
+          role="tablist"
+          aria-label="资产类型"
+          onKeyDown={moveFilterFocus}
+        >
           {filters
             .filter(([tab]) => !referencePicking || tab === "images")
             .map(([tab, label]) => (
@@ -400,6 +438,7 @@ export function Library({
                 key={tab}
                 role="tab"
                 aria-selected={filter.tab === tab}
+                tabIndex={filter.tab === tab ? 0 : -1}
                 data-tab={tab}
                 onClick={() => actions.filter({ ...filter, tab })}
               >
@@ -407,7 +446,7 @@ export function Library({
               </button>
             ))}
         </div>
-        <div id="library-grid" key={library.gridRevision}>
+        <div id="library-grid" key={library.redraw + ":" + library.gridRevision}>
           {!groups.length &&
             !(library.uploadsVisible && visibleAssets.length) && (
               <div className="empty-state">
@@ -456,11 +495,26 @@ export function Library({
       </div>
       <div
         id="asset-composer"
-        className="floating-composer"
+        className={`floating-composer${referencePicking ? "" : " mobile-asset-composer"}`}
+        data-expanded={composerExpanded}
         hidden={selecting}
         ref={floating}
       >
-        {composer}
+        {!referencePicking && (
+          <button
+            type="button"
+            className="quiet-button asset-composer-toggle"
+            aria-controls="asset-composer-panel"
+            aria-expanded={composerExpanded}
+            onClick={() => {
+              if (!composerExpanded) browseScroll.current = scrollY;
+              setComposerExpanded(!composerExpanded);
+            }}
+          >
+            {composerExpanded ? "收起创作框" : "展开创作框"}
+          </button>
+        )}
+        <div id="asset-composer-panel">{composer}</div>
       </div>
     </>
   );
@@ -518,7 +572,7 @@ function UploadCard({
         onClick={(event) => {
           if (referencePicking) actions.use(asset.id);
           else if (selecting) library.toggle(key);
-          else if (!images) actions.preview(asset.id, event.currentTarget);
+          else if (!images) actions.preview(asset.id, event.currentTarget, true);
           else actions.image(asset.id);
         }}
         onMouseEnter={selecting ? undefined : playPreview}
@@ -549,7 +603,9 @@ function UploadCard({
             title="预览"
             aria-label="预览参考素材"
             style={selecting ? { display: "grid" } : undefined}
-            onClick={(event) => actions.preview(asset.id, event.currentTarget)}
+            onClick={(event) =>
+              actions.preview(asset.id, event.currentTarget, !selecting)
+            }
           >
             <Icon name="play" />
           </button>

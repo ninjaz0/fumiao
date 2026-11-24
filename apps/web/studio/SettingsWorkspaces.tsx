@@ -79,6 +79,7 @@ export function Workspaces({
                 className="quiet-button"
                 data-act="switch-workspace"
                 data-id={space.id}
+                disabled={space.id === state.workspace_id}
                 onClick={() => select(space.id)}
               >
                 进入
