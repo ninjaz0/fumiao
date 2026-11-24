@@ -664,6 +664,9 @@ body:has(.ledger-settings) #modal {
   color: var(--muted);
   text-align: center;
 }
+.ledger-settings .settings-content .model-settings .console-empty {
+  margin-top: 14px;
+}
 .ledger-settings
   .settings-content
   :is(
