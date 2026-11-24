@@ -1,6 +1,5 @@
 import type { StudioState } from "./state";
-
-const gb = (value: number) => (value / 1e9).toFixed(1);
+import { formatStorageBytes } from "./storage-size";
 
 export function StorageSettings({
   state: { used, reserved, quota, disk_free },
@@ -24,7 +23,7 @@ export function StorageSettings({
       <p className="console-description">查看全站所有空间共用的媒体用量和任务预留容量。</p>
       <div className="ledger-card">
         <div className="storage-total">
-          <strong>{`${gb(used)} GB`}</strong>
+          <strong>{formatStorageBytes(used)}</strong>
           <span>{` / ${quota / 1e9} GB`}</span>
         </div>
         <div
@@ -43,13 +42,13 @@ export function StorageSettings({
         </div>
         <dl className="settings-facts">
           <dt>素材与成片</dt>
-          <dd>{`${gb(used)} GB`}</dd>
+          <dd>{formatStorageBytes(used)}</dd>
           <dt>任务预留</dt>
-          <dd>{`${gb(reserved)} GB`}</dd>
+          <dd>{formatStorageBytes(reserved)}</dd>
           <dt>可用空间</dt>
-          <dd>{`${gb(Math.max(0, quota - used - reserved))} GB`}</dd>
+          <dd>{formatStorageBytes(Math.max(0, quota - used - reserved))}</dd>
           <dt>服务器可用磁盘</dt>
-          <dd>{`${gb(disk_free)} GB`}</dd>
+          <dd>{formatStorageBytes(disk_free)}</dd>
         </dl>
         <button
           className="quiet-button"
