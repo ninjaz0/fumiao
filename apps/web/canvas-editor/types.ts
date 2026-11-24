@@ -436,3 +436,40 @@ export function hasCanvasSelectionToolbar(
 ): boolean {
   return Boolean(single && !editing);
 }
+
+export type BatchShotPlan = {
+  videoIds: string[];
+  addedIds: string[];
+  nextShots: string[];
+  allInShots: boolean;
+};
+
+export function resolveBatchShots(
+  nodes: readonly Pick<CanvasNode, "id" | "type">[],
+  selectedIds: readonly string[],
+  existingShots: readonly string[] = [],
+): BatchShotPlan {
+  const selectedSet = new Set(selectedIds);
+  const videoIds: string[] = [];
+  const seenVideos = new Set<string>();
+  for (const node of nodes) {
+    if (
+      node.type === "video" &&
+      selectedSet.has(node.id) &&
+      !seenVideos.has(node.id)
+    ) {
+      seenVideos.add(node.id);
+      videoIds.push(node.id);
+    }
+  }
+  const inShots = new Set(existingShots);
+  const addedIds = videoIds.filter((id) => !inShots.has(id));
+  return {
+    videoIds,
+    addedIds,
+    nextShots: addedIds.length
+      ? [...existingShots, ...addedIds]
+      : [...existingShots],
+    allInShots: videoIds.length > 0 && addedIds.length === 0,
+  };
+}
