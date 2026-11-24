@@ -92,6 +92,7 @@ import {
   type Space,
   type StudioState,
 } from "./state";
+import "./studio-polish.css";
 
 type Page = Exclude<Destination, "canvas"> | "settings";
 type Detail = { job: number } | { image: string };

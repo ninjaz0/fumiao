@@ -1,0 +1,126 @@
+/* Studio page polish. Overrides the fixed baseline studio.css; keep it scoped. */
+:root:not([data-theme="dark"]) {
+  --line: rgba(0, 0, 0, 0.08);
+}
+.side {
+  border-inline-end: 1px solid var(--line);
+}
+.side nav button {
+  color: var(--secondary);
+  transition:
+    background-color 120ms ease-out,
+    color 120ms ease-out;
+}
+.side nav button:hover,
+.side nav button.active {
+  color: var(--text);
+}
+.side nav button.active {
+  font-weight: 600;
+}
+.side nav button.active svg {
+  color: var(--blue);
+}
+:is(
+  .side nav button,
+  .quiet-button,
+  .primary,
+  .job-row button,
+  .asset-preview
+):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* 创作 */
+.home-view:before {
+  content: none;
+}
+.home-view > h1 {
+  margin-bottom: 40px;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.home-composer {
+  margin-bottom: 56px;
+}
+.composer {
+  border: 1px solid var(--line);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 8px 24px rgba(0, 0, 0, 0.04);
+  transition:
+    border-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--focus) 55%, var(--line));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--focus) 14%, transparent),
+    0 8px 24px rgba(0, 0, 0, 0.05);
+}
+.section-head {
+  margin-bottom: 16px;
+}
+.section-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* 资产 / 画布 列表卡片 */
+.asset-preview {
+  border: 1px solid var(--line);
+  transition:
+    border-color 150ms ease-out,
+    transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.asset-card:hover .asset-preview {
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
+  transform: translateY(-1px);
+}
+
+/* 页面标题与空状态 */
+.page-heading {
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.page-heading h1 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+.empty-state {
+  margin: 0;
+  padding: 32px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  text-align: center;
+}
+
+/* 任务队列 */
+.job-row {
+  margin-inline: -12px;
+  padding: 14px 12px;
+  border-radius: 10px;
+  transition: background-color 120ms ease-out;
+}
+.job-row:hover {
+  background: var(--hover);
+}
+.job-id,
+.job-progress {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side nav button,
+  .composer,
+  .asset-preview,
+  .job-row {
+    transition: none;
+  }
+  .asset-card:hover .asset-preview {
+    transform: none;
+  }
+}
