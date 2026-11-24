@@ -46,12 +46,14 @@ const voicePresets:{id:string;label:string}[]=[
  {id:'onyx',label:'Onyx（OpenAI 低沉男声）'},
 ];
 const blank=()=>({name:'',purpose:'subject',description:'',media:[] as string[],voice_profile:null as PackVoiceProfile|null});
-export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[],onImportImages,onImportPack,onRemovePack,onDeletePack}:AssetPacksProps){
+export function AssetPacks(props:AssetPacksProps){
+ return <WorkspaceAssetPacks key={props.workspace} {...props}/>;
+}
+function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[],onImportImages,onImportPack,onRemovePack,onDeletePack}:AssetPacksProps){
  const [packs,setPacks]=useState<Pack[]>([]),[assets,setAssets]=useState<{id:string}[]>([]),[opened,setOpened]=useState<string|null>(null),[chosen,setChosen]=useState<string[]>([]),[editing,setEditing]=useState<Pack|null|undefined>(),[draft,setDraft]=useState(blank),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[removing,setRemoving]=useState<string|null>(null);
+ const newDraft=useRef(draft);
  const mountedRef=useRef(true);
  const fileRef=useRef<HTMLInputElement>(null);
- const workspaceRef=useRef(workspace);
- workspaceRef.current=workspace;
  const loadSeqRef=useRef(0);
  const uploadSeqRef=useRef(0);
  const recentUploadsRef=useRef<{seq:number;asset:{id:string}}[]>([]);
@@ -79,7 +81,17 @@ export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[
    if(mountedRef.current&&!signal?.aborted&&seq===loadSeqRef.current)setLoading(false);
   }
  };
- useEffect(()=>{const controller=new AbortController();recentUploadsRef.current=[];setOpened(null);setChosen([]);setEditing(undefined);setRemoving(null);setNotice('');void load(controller.signal);return()=>{++loadSeqRef.current;controller.abort()}},[workspace]);
+ useEffect(()=>{const controller=new AbortController();void load(controller.signal);return()=>{++loadSeqRef.current;controller.abort()}},[workspace]);
+ const returnToPacks=()=>{
+  if(editing===null)newDraft.current=draft;
+  else if(editing){
+   const dirty=draft.name!==editing.name||draft.purpose!==editing.purpose||draft.description!==editing.description||
+    draft.media.length!==editing.media.length||draft.media.some((id,index)=>id!==editing.media[index])||
+    JSON.stringify(draft.voice_profile??null)!==JSON.stringify(editing.voice_profile??null);
+   if(dirty&&!window.confirm('放弃未保存的素材包修改？'))return;
+  }
+  setEditing(undefined);setError('');
+ };
  const save=async()=>{
   setBusy(true);setError('');setNotice('');try{
    const vp=draft.purpose==='subject'&&draft.voice_profile?Object.fromEntries(Object.entries(draft.voice_profile).filter(([,v])=>v!==undefined&&v!==''&&v!==null)):null;
@@ -89,21 +101,21 @@ export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[
    else if(editing?.voice_profile)payload.voice_profile=null;
    await request('/api/asset-packs'+(editing?'/'+editing.id:''),payload,editing?'PUT':'POST');
    if(!mountedRef.current)return;
+   if(editing===null)newDraft.current=blank();
    setEditing(undefined);await load();
   }catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}
  };
  const upload=async(file?:File)=>{
   if(!file)return;
-  const targetWorkspace=workspace;
   setBusy(true);setError('');try{
-   const r=await fetch('/api/assets',{method:'POST',headers:{'X-Workspace-Id':String(targetWorkspace)},body:file});const a=await r.json();
+   const r=await fetch('/api/assets',{method:'POST',headers:{'X-Workspace-Id':String(workspace)},body:file});const a=await r.json();
    if(!r.ok)throw new Error(typeof a.detail==='string'?a.detail:'上传失败');
-   if(!mountedRef.current||workspaceRef.current!==targetWorkspace)return;
+   if(!mountedRef.current)return;
    const seq=++uploadSeqRef.current;
    recentUploadsRef.current=[{seq,asset:a},...recentUploadsRef.current.filter(entry=>entry.asset.id!==a.id)];
    setAssets(items=>mergeAssetPackAssets(items,[a]));
    setDraft(d=>({...d,media:d.media.includes(a.id)?d.media:[...d.media,a.id].slice(0,9)}));
-  }catch(e){if(mountedRef.current&&workspaceRef.current===targetWorkspace)setError((e as Error).message)}finally{if(mountedRef.current&&workspaceRef.current===targetWorkspace)setBusy(false)}
+  }catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}
  };
  const toggleLock=async(target:Pack)=>{
   setBusy(true);setError('');setNotice('');try{
@@ -136,7 +148,7 @@ export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[
   {error&&<p role="alert" className="fm-pack-error">{error}</p>}
   {notice&&<p role="status" className="fm-pack-notice">{notice}</p>}
   {editing!==undefined?<>
-   <button className="fm-pack-button" disabled={busy} onClick={()=>{setEditing(undefined);setError('')}}><ArrowLeft size={16}/>返回素材包</button>
+   <button className="fm-pack-button" disabled={busy} onClick={returnToPacks}><ArrowLeft size={16}/>返回素材包</button>
    <div className="fm-pack-fields">
     <label>名称<input value={draft.name} maxLength={60} placeholder="例如：主角 A、展台场景" onChange={e=>setDraft({...draft,name:e.target.value})}/></label>
     <fieldset><legend>用途</legend><div className="fm-pack-purpose">{Object.entries(purposes).map(([key,label])=><button key={key} aria-pressed={draft.purpose===key} onClick={()=>setDraft({...draft,purpose:key})}>{label}</button>)}</div></fieldset>
@@ -182,7 +194,7 @@ export function AssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[
    })}</div>
    <div className="fm-pack-import-footer"><div className="fm-pack-whole-actions"><button className="fm-pack-button" disabled={busy||loading||imported?.revision===pack.revision} onClick={()=>void apply(()=>onImportPack(pack))}>{imported?imported.revision===pack.revision?'已导入整包':'更新整包引用':'导入整个素材包'}</button>{imported&&<button className="fm-pack-button" disabled={busy} onClick={()=>void apply(()=>onRemovePack(pack.id))}>移除整包引用</button>}</div><button className="fm-pack-primary" disabled={busy||!chosen.length} onClick={()=>void apply(()=>onImportImages(chosen,pack))}>导入所选图片{chosen.length?` · ${chosen.length}`:''}</button></div>
   </>:<>
-   <div className="fm-pack-heading"><span>选择素材包</span><button className="fm-pack-button" disabled={busy||loading} onClick={()=>{setDraft(blank());setEditing(null);setError('')}}><Plus size={16}/>新建素材包</button></div>
+   <div className="fm-pack-heading"><span>选择素材包</span><button className="fm-pack-button" disabled={busy||loading} onClick={()=>{setDraft(newDraft.current);setEditing(null);setError('')}}><Plus size={16}/>新建素材包</button></div>
    {loading?<p role="status">正在加载素材包…</p>:packs.length===0?<p className="fm-pack-empty">暂无素材包</p>:<div className="fm-pack-list">{packs.map(pack=><article key={pack.id}>
     <button className="fm-pack-select" disabled={busy} aria-label={'打开素材包 '+pack.name} onClick={()=>{setOpened(pack.id);setChosen([]);setRemoving(null);setError('');setNotice('')}}>
      <img loading="lazy" src={'/media/'+pack.media[0]+'?variant=thumb'} onError={ev=>{ev.currentTarget.src='/media/'+pack.media[0]}} alt=""/><span><strong>{pack.name}{pack.locked?' 🔒':''}{pack.scope==='global'?' 🌐':''}</strong><small>{purposes[pack.purpose]} · {pack.media.length} 张图片{pack.voice_profile?.voice_id?' · 已配声线':''}{selected.some(p=>p.id===pack.id)?' · 已导入整包':''}</small>{pack.description&&<p>{pack.description}</p>}</span><ChevronRight size={18}/>

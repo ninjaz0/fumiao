@@ -157,6 +157,9 @@ export type Job = {
 export type Asset = {kind?:string;seconds?:number;has_audio?:boolean;name?:string; id: string; w: number; h: number; owner: number };
 export type FlowModel = {kind:string;label:string;provider?:string;family?:string;family_label?:string;hidden?:boolean;mode?:string;ratio?:string;seconds?:number;resolution?:string;min_refs?:number;max_refs?:number};
 export type Studio = {
+  studio_plugins?: boolean;
+  model_groups?: Record<string, { kind: string; label: string; models: string[] }>;
+  team_model_policies?: Record<string, { revision: number; enabled: Record<string, boolean> }>;
   canvas_nodes?: CanvasNodeEntry[];
   model_forms: Record<string, import("@fumiao/plugin-sdk/model-form").ModelForm>;
   model_catalog: Record<string,FlowModel>;
@@ -504,4 +507,41 @@ export function hasCanvasSelectionToolbar(
   editing: string | null,
 ): boolean {
   return Boolean(single && !editing);
+}
+
+export type BatchShotPlan = {
+  videoIds: string[];
+  addedIds: string[];
+  nextShots: string[];
+  allInShots: boolean;
+};
+
+export function resolveBatchShots(
+  nodes: readonly Pick<CanvasNode, "id" | "type">[],
+  selectedIds: readonly string[],
+  existingShots: readonly string[] = [],
+): BatchShotPlan {
+  const selectedSet = new Set(selectedIds);
+  const videoIds: string[] = [];
+  const seenVideos = new Set<string>();
+  for (const node of nodes) {
+    if (
+      node.type === "video" &&
+      selectedSet.has(node.id) &&
+      !seenVideos.has(node.id)
+    ) {
+      seenVideos.add(node.id);
+      videoIds.push(node.id);
+    }
+  }
+  const inShots = new Set(existingShots);
+  const addedIds = videoIds.filter((id) => !inShots.has(id));
+  return {
+    videoIds,
+    addedIds,
+    nextShots: addedIds.length
+      ? [...existingShots, ...addedIds]
+      : [...existingShots],
+    allInShots: videoIds.length > 0 && addedIds.length === 0,
+  };
 }

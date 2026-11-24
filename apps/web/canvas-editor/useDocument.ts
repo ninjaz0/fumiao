@@ -12,30 +12,35 @@ export function useDocument(project: Project, userId: number) {
   const key = `fm-canvas-${userId}-${project.id}-${editorId}`;
   const initial = useRef<{
     draft: Draft;
+    revision: number;
     conflict: boolean;
     dirty: boolean;
   } | null>(null);
   if (!initial.current) {
     let draft: Draft = { title: project.title, document: project.document },
+      revision = project.revision,
       conflict = false,
       dirty = false;
     try {
-      const saved = JSON.parse(localStorage.getItem(key) || "null");
+      const saved = JSON.parse(localStorage.getItem(key) || "null") as
+        | { draft: Draft; revision: number }
+        | null;
       if (
         saved?.draft &&
         saved.draft.document.schemaVersion === 1 &&
         JSON.stringify(saved.draft) !== JSON.stringify(draft)
       ) {
         draft = saved.draft;
+        revision = saved.revision;
         dirty = true;
-        conflict = saved.revision !== project.revision;
+        conflict = revision !== project.revision;
       }
     } catch {}
-    initial.current = { draft, conflict, dirty };
+    initial.current = { draft, revision, conflict, dirty };
   }
   const [value, setValue] = useState(initial.current.draft),
     ref = useRef(value);
-  const revision = useRef(project.revision),
+  const revision = useRef(initial.current.revision),
     serial = useRef(initial.current.dirty ? 1 : 0),
     ack = useRef(0);
   const [status, setStatus] = useState(
@@ -47,7 +52,8 @@ export function useDocument(project: Project, userId: number) {
   );
   const blocked = useRef(initial.current.conflict),
     busy = useRef<Promise<number> | null>(null),
-    gesture = useRef<Draft | null>(null);
+    gesture = useRef<Draft | null>(null),
+    allowUnload = useRef(false);
   const undo = useRef<Draft[]>([]),
     redo = useRef<Draft[]>([]),
     [historyTick, setHistoryTick] = useState(0);
@@ -62,14 +68,16 @@ export function useDocument(project: Project, userId: number) {
     try {
       if (serial.current === ack.current) {
         localStorage.removeItem(key);
-        return;
+      } else {
+        localStorage.setItem(
+          key,
+          JSON.stringify({ revision: revision.current, draft: ref.current }),
+        );
       }
-      localStorage.setItem(
-        key,
-        JSON.stringify({ revision: revision.current, draft: ref.current }),
-      );
+      return true;
     } catch {
       setError("浏览器无法保留本地草稿，请保持页面打开并保存");
+      return false;
     }
   }, [key]);
   const scheduleRemember = useCallback(() => {
@@ -168,14 +176,18 @@ export function useDocument(project: Project, userId: number) {
         return revision.current;
       })
       .catch((e) => {
+        const conflict = e instanceof ApiError && e.status === 409;
+        const saveError = conflict
+          ? new ApiError("画布已被其他成员修改，请先处理保存冲突。", e.status)
+          : e;
         if (alive.current) {
-          if (e instanceof ApiError && e.status === 409) {
+          if (conflict) {
             blocked.current = true;
             setStatus("conflict");
           } else setStatus("error");
-          setError(e.message);
+          setError(saveError.message);
         }
-        throw e;
+        throw saveError;
       })
       .finally(() => {
         busy.current = null;
@@ -198,6 +210,10 @@ export function useDocument(project: Project, userId: number) {
       if (serial.current !== ack.current) remember();
     };
     const before = (event: BeforeUnloadEvent) => {
+      if (allowUnload.current) {
+        allowUnload.current = false;
+        return;
+      }
       if (serial.current !== ack.current) {
         remember();
         event.preventDefault();
@@ -224,7 +240,7 @@ export function useDocument(project: Project, userId: number) {
   const acceptRemote = (result: Project, expectedDraft: string, operation = "采用回答") => {
     if (JSON.stringify(ref.current) !== expectedDraft) {
       blocked.current = true; setStatus("conflict");
-      setError(operation + "期间画布发生了修改。你的本地草稿已保留，请先处理保存冲突。");
+      setError(operation + "期间画布发生了修改，请先处理保存冲突。");
       remember(); throw new Error("画布有新的本地修改，请先处理保存冲突");
     }
     undo.current.push(clone(ref.current)); redo.current = []; setHistoryTick(n => n + 1);
@@ -237,6 +253,10 @@ export function useDocument(project: Project, userId: number) {
     localStorage.removeItem(key);
     location.reload();
   };
+  const leave = (url: string) => {
+    allowUnload.current = true;
+    location.assign(url);
+  };
   return {
     value,
     ref,
@@ -246,6 +266,8 @@ export function useDocument(project: Project, userId: number) {
     end,
     travel,
     flush,
+    remember,
+    leave,
     status,
     error,
     reload,

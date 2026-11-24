@@ -766,9 +766,13 @@ export function PluginPage({
         {view?.primary && button(view.primary, true)}
       </div>
       {error && (
-        <div>
+        <div className="ledger-card plugin-alert plugin-page-error">
           <p role="alert">{error}</p>
-          <button className="ledger-button" onClick={() => void reread()}>
+          <button
+            type="button"
+            className="ledger-button"
+            onClick={() => void reread()}
+          >
             重试
           </button>
         </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, Film, Music, Package } from "lucide-react";
 import { api, ApiError } from "./api";
 import type { CanvasBgm } from "./types";
@@ -7,7 +7,7 @@ type Exporter = {
   key: string;
   title: string;
   output_kind?: "composition" | "project";
-  file_extension?: "mp4" | "zip" | "fcpxml";
+  file_extension?: "mp4" | "zip" | "fcpxml" | "edl";
 };
 type Result = {
   id: string;
@@ -25,6 +25,8 @@ type Result = {
 function exportDownloadLabel(r: Result): string {
   if (r.output_kind !== "project") return "MP4";
   if (r.exporter?.startsWith("jianying-exporter/")) return "剪映草稿 ZIP";
+  if (r.output_filename?.endsWith(".edl") || r.exporter?.includes("edl"))
+    return "EDL";
   if (r.output_mime === "application/xml") return "FCPXML";
   if (r.exporter?.startsWith("fcpxml-exporter/")) return "FCPXML 工程包";
   return "工程包 ZIP";
@@ -56,42 +58,46 @@ export function Composition({
     [preview, setPreview] = useState<string | null>(null);
   const [exporters, setExporters] = useState<Exporter[] | undefined>(),
     [selected, select] = useState("");
+  const reload = useRef<(() => Promise<void>) | null>(null);
   const chosen =
     exporters?.find((x) => x.key === selected) ??
     exporters?.find((x) => x.key === "storyboard/mp4") ??
     exporters?.[0];
   const isProjectExporter = chosen?.output_kind === "project";
-  const load = async () => {
-    const data = await api<{ exports: Result[]; exporters?: Exporter[] }>(
-      `/api/canvases/${project}/exports`,
-    );
-    setResults(data.exports);
-  };
   useEffect(() => {
-    let active = true;
-    const poll = async () => {
+    let active = true,
+      requested = 0,
+      applied = 0;
+    const load = async () => {
+      if (!active) return;
+      const request = ++requested;
       try {
         const data = await api<{ exports: Result[]; exporters?: Exporter[] }>(
           `/api/canvases/${project}/exports`,
         );
-        if (active) {
-          setResults(data.exports);
-          setExporters(data.exporters);
-          setPollError("");
-        }
+        if (!active || request < applied) return;
+        applied = request;
+        setResults(data.exports);
+        setExporters(data.exporters);
+        setPollError("");
       } catch (e) {
-        if (active) setPollError((e as Error).message);
+        if (!active || request < applied) return;
+        applied = request;
+        setPollError((e as Error).message);
       }
     };
-    void poll();
-    const timer = setInterval(() => void poll(), 5000);
+    reload.current = load;
+    void load();
+    const timer = setInterval(() => void load(), 5000);
     return () => {
       active = false;
+      reload.current = null;
       clearInterval(timer);
     };
   }, [project]);
   const pending = results.some((r) => ["queued", "running"].includes(r.state));
   const submit = async () => {
+    const refresh = reload.current;
     setBusy(true);
     setError("");
     setPollError("");
@@ -126,7 +132,7 @@ export function Composition({
           localStorage.removeItem(key);
         throw e;
       }
-      await load();
+      await refresh?.();
     } catch (e) {
       setError((e as Error).message);
     } finally {

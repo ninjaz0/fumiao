@@ -25,8 +25,8 @@ import { label as modelLabel } from "../canvas-editor/flowPicker";
 import {
   estimateBody,
   activeReferences,
+  composerFeedback,
   creationOptions,
-  flowIssue,
   flowSpec,
   frames,
   h3Options,
@@ -35,9 +35,7 @@ import {
   modelForm,
   modelAvailable,
   packReferences,
-  promptLimit,
   referenceAsset,
-  referenceIssue,
   referenceLabel,
   selectedModel,
   type FrameSlot,
@@ -195,10 +193,12 @@ export function Composer({
   const plainPrompt = frameMode || audio;
   const frameOptions = h3Options(draft.h3);
   const references = useMemo(() => packReferences(session), [session]);
-  const issue = referenceIssue(state, session) || flowIssue(state, session);
   const price = quote(state, draft);
-  const limit = promptLimit(draft);
   const available = modelAvailable(state, model);
+  const { status, submitReason } = composerFeedback(state, session, {
+    uploading,
+    submitting,
+  });
   const ratio = audio
     ? ""
     : frameMode && activeReferences(session).length
@@ -764,7 +764,11 @@ export function Composer({
             <span
               className="composer-credit"
               aria-label={model ? price.label : ""}
-              title={`${price.label}；当前空间可用 ${price.available} 积分`}
+              title={
+                model
+                  ? `${price.label}；当前空间可用 ${price.available} 积分`
+                  : undefined
+              }
             >
               {model &&
                 (price.amount === undefined ? (
@@ -788,17 +792,9 @@ export function Composer({
             <button
               className={`generate-button${submitting ? " working" : ""}`}
               data-act="submit"
-              aria-label="生成"
-              title="生成"
-              disabled={
-                !draft.prompt.trim() ||
-                draft.prompt.length > limit ||
-                uploading ||
-                submitting ||
-                !available ||
-                !!issue ||
-                !price.allowed
-              }
+              aria-label={submitReason ? `生成（${submitReason}）` : "生成"}
+              title={submitReason || "生成"}
+              disabled={!!submitReason}
               onClick={submit}
             >
               <Icon name="arrow" />
@@ -835,12 +831,7 @@ export function Composer({
         )}
       </div>
       <div className="composer-status" aria-live="polite">
-        {uploading
-          ? "上传中"
-          : issue ||
-            (draft.prompt.length > limit
-              ? `${draft.prompt.length} / ${limit} 字`
-              : "")}
+        {status}
       </div>
     </section>
   );

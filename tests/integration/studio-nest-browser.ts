@@ -22,6 +22,7 @@ import {
   setTab,
 } from "./studio-settings-browser.js";
 import { checkStorageScope } from "./studio-storage-browser.js";
+import { checkUploadedMediaPreview } from "./studio-uploaded-media-browser.js";
 
 const imagePrompt = "隔离工作台生成图片";
 const draft = "重启后恢复创作草稿";
@@ -248,6 +249,71 @@ async function checkImageToVideoFrames(page: Page, studio: string, state: Studio
   await expect(page.locator('.h3-frame-preview[data-slot="last_frame"]'))
     .toHaveAttribute("data-key", "");
   await page.close();
+}
+
+async function checkComposerCreditFeedback(
+  page: Page,
+  studio: string,
+  state: StudioState,
+) {
+  let availableCredits = 0;
+  let audioAmount: number | null = 1;
+  await page.route("**/api/state", (route) =>
+    route.fulfill({
+      json: {
+        ...state,
+        model_access: { ...state.model_access, "breeze-tts-2": true },
+        credits: { ...state.credits, available: availableCredits },
+        pricing: {
+          ...state.pricing,
+          items: state.pricing.items.map((item) =>
+            item.model === "breeze-tts-2"
+              ? { ...item, amount: audioAmount }
+              : item,
+          ),
+        },
+      },
+    }),
+  );
+  try {
+    await page.goto(studio);
+    await page.locator('.composer [data-menu="creation"]').click();
+    await page.getByRole("option", { name: "语音生成" }).click();
+    const prompt = page.locator("#prompt");
+    const status = page.locator(".composer-status");
+    const submit = page.locator(".generate-button");
+    await prompt.fill("这是一段用于验证积分不足提示的语音草稿");
+    await expect(page.locator(".composer-credit")).toHaveAttribute(
+      "aria-label",
+      "1 积分 · 余额不足",
+    );
+    await expect(status).toBeVisible();
+    await expect(status).toHaveText("当前空间积分不足");
+    await expect(submit).toBeDisabled();
+    await expect(submit).toHaveAttribute("title", "当前空间积分不足");
+    await expect(submit).toHaveAttribute(
+      "aria-label",
+      "生成（当前空间积分不足）",
+    );
+    await prompt.press("Control+Enter");
+    await expect(page.locator("#toast")).toHaveText("当前空间积分不足");
+
+    audioAmount = null;
+    await page.reload();
+    await expect(status).toHaveText("当前模型尚未定价");
+    await expect(submit).toBeDisabled();
+    await expect(submit).toHaveAttribute("title", "当前模型尚未定价");
+
+    audioAmount = 1;
+    availableCredits = 5;
+    await page.reload();
+    await expect(status).toBeHidden();
+    await expect(submit).toBeEnabled();
+    await expect(submit).toHaveAttribute("title", "生成");
+    await expect(submit).toHaveAttribute("aria-label", "生成");
+  } finally {
+    await page.close();
+  }
 }
 
 async function dragPastImage(page: Page) {
@@ -615,6 +681,121 @@ export async function studioBrowser(
     await settings(page);
     await setTab(page, "prices");
     const priceInput = page.locator('[data-price="gpt-image-2.6-sunburst|1K|medium"]');
+    const priceForm = page.locator("#price-form");
+    const savePrice = priceForm.getByRole("button", { name: "保存价格" });
+    const restorePrice = priceForm.getByRole("button", { name: "还原" });
+    const dirtyPrice = priceForm.getByText("有未保存的修改", { exact: true });
+    const firstTier = priceForm.locator("[data-price]").first();
+    const firstValue = await firstTier.inputValue();
+    const editedValue = firstValue === "23" ? "24" : "23";
+
+    await page.evaluate(() => window.scrollTo(0, window.document.body.scrollHeight));
+    await expect(savePrice).toBeInViewport({ ratio: 1 });
+    const lastCard = await priceForm.locator(".ledger-card").last().boundingBox();
+    const saveButton = await savePrice.boundingBox();
+    assert.ok(lastCard && saveButton);
+    assert.ok(
+      saveButton.y - lastCard.y - lastCard.height >= 16,
+      "Save must have at least 16px of space below the last price card",
+    );
+    await expect(savePrice).toBeDisabled();
+    await expect(priceForm.getByRole("alert")).toBeHidden();
+
+    await firstTier.scrollIntoViewIfNeeded();
+    await firstTier.fill(editedValue);
+    for (const scroll of [0, 0.5, 1]) {
+      await page.evaluate((fraction) => window.scrollTo(
+        0,
+        (window.document.documentElement.scrollHeight - window.innerHeight) * fraction,
+      ), scroll);
+      for (const action of [savePrice, restorePrice, dirtyPrice])
+        await expect(action).toBeInViewport({ ratio: 1 });
+    }
+
+    const tiers = priceForm.locator("[data-price]");
+    const nextTier = tiers.nth(24);
+    const distanceFromActions = () => nextTier.evaluate((input) => {
+      const bar = input.closest("form")!.querySelector(".price-form-actions")!;
+      return bar.getBoundingClientRect().top - input.getBoundingClientRect().bottom;
+    });
+    await nextTier.evaluate((input) => input.scrollIntoView({ block: "center" }));
+    await page.evaluate(
+      (distance) => window.scrollBy(0, -distance - 20),
+      await distanceFromActions(),
+    );
+    assert.ok(await distanceFromActions() < 0, "Next price input starts behind the bar");
+    await tiers.nth(23).focus();
+    await page.keyboard.press("Tab");
+    await expect(nextTier).toBeFocused();
+    await expect.poll(distanceFromActions).toBeGreaterThanOrEqual(0);
+
+    // A mobile keyboard may move the action bar after the input gains focus.
+    await nextTier.blur();
+    await page.evaluate(
+      (distance) => window.scrollBy(0, 32 - distance),
+      await distanceFromActions(),
+    );
+    await nextTier.focus();
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    }));
+    const keyboardHeight = 80;
+    const clearance = await distanceFromActions();
+    assert.ok(clearance > 0 && clearance < keyboardHeight, "Focused input starts just above the bar");
+    const barTop = () => priceForm.locator(".price-form-actions").evaluate(
+      (bar) => bar.getBoundingClientRect().top,
+    );
+    const originalTop = await barTop();
+    await page.evaluate((height) => {
+      const viewport = window.visualViewport!;
+      Object.defineProperty(viewport, "height", {
+        configurable: true,
+        value: viewport.height - height,
+      });
+      viewport.dispatchEvent(new Event("resize"));
+    }, keyboardHeight);
+    try {
+      await expect(nextTier).toBeFocused();
+      await expect.poll(barTop).toBeLessThan(originalTop);
+      await expect.poll(distanceFromActions, {
+        message: "Focused price input must stay above the bar when the keyboard opens",
+      }).toBeGreaterThanOrEqual(0);
+    } finally {
+      await page.evaluate(() => {
+        const viewport = window.visualViewport!;
+        Reflect.deleteProperty(viewport, "height");
+        viewport.dispatchEvent(new Event("resize"));
+      });
+    }
+
+    // Exercise the real API's conflict response without changing the fixture.
+    await page.route("**/api/settings/prices", async (route) => {
+      const draft = route.request().postDataJSON();
+      const response = await route.fetch({
+        postData: { ...draft, expected_revision: draft.expected_revision + 1 },
+      });
+      await route.fulfill({ response });
+    }, { times: 1 });
+    const conflict = await request(page, "/api/settings/prices", "PUT", () => savePrice.click());
+    assert.equal(conflict.status(), 409, await conflict.text());
+    const priceError = priceForm.getByRole("alert");
+    await expect(priceError).toHaveText("价格已更新，请刷新后重试");
+    await expect(priceError).toBeInViewport({ ratio: 1 });
+    assert.ok(await priceError.evaluate((element) => {
+      const danger = window.document.createElement("span");
+      danger.style.color = "var(--danger)";
+      element.append(danger);
+      const matches = getComputedStyle(element).color === getComputedStyle(danger).color;
+      danger.remove();
+      return matches;
+    }), "Price save errors must use the theme's danger color");
+    await expect(firstTier).toHaveValue(editedValue);
+    await restorePrice.click();
+    await expect(firstTier).toHaveValue(firstValue);
+    await expect(priceError).toBeHidden();
+    await expect(savePrice).toBeDisabled();
+    console.log("Verified spaced pricing actions, unobscured keyboard focus, conflict feedback and draft restore");
+
     // A slow save must preserve edits from the administrator's next visit.
     let releaseSave!: () => void;
     const delayedSave = new Promise<void>((resolve) => { releaseSave = resolve; });
@@ -626,7 +807,7 @@ export async function studioBrowser(
     try {
       await Promise.all([
         page.waitForRequest((r) => new URL(r.url()).pathname === "/api/settings/prices" && r.method() === "PUT"),
-        page.locator("#price-form button").click(),
+        savePrice.click(),
       ]);
       await setTab(page, "general");
       await setTab(page, "prices");
@@ -641,12 +822,13 @@ export async function studioBrowser(
     await expect(priceInput).toHaveValue("7");
     await expect(page.getByText("有未保存的修改", { exact: true })).toBeVisible();
     const pricing = await request(page, "/api/settings/prices", "PUT", () =>
-      page.locator("#price-form button").click(),
+      savePrice.click(),
     );
     assert.equal(pricing.status(), 200, await pricing.text());
     const { revision: priceRevision } = await pricing.json();
     assert.ok(Number.isSafeInteger(priceRevision));
     await expect(page.locator("#toast")).toHaveText("价格已保存");
+    await expect(savePrice).toBeDisabled();
     await nav("home");
     const composerCreation = page.locator('.composer [data-menu="creation"]');
     await composerCreation.focus();
@@ -1063,10 +1245,12 @@ export async function studioBrowser(
     const savedCanvas = await document();
     const before = await state();
     await checkImageToVideoFrames(await context.newPage(), studio, before);
+    await checkComposerCreditFeedback(await context.newPage(), studio, before);
     await checkPackRefreshRace(await context.newPage(), studio, before);
     await checkDeletedH3Frame(await context.newPage(), studio, before);
     await checkH3ImageUploadLimit(await context.newPage(), studio, bytes);
     await checkStorageScope(await context.newPage(), web, await state());
+    await checkUploadedMediaPreview(browser, web, user);
     const jobEntries = before.credit_history.filter(
       (entry) => entry.job === jobId,
     );

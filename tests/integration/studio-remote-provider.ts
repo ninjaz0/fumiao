@@ -23,6 +23,12 @@ import { execFileSync } from "node:child_process";
 import sharp from "sharp";
 import { verifyToolConversation } from "./studio-chat-tools.js";
 import { verifyChatPackage } from "./studio-chat-package.js";
+import {
+  verifyAdminCanvasEmptyGuidance,
+  verifyChatEmptyGuidance,
+  verifyMemberContextEmptyGuidance,
+  verifyTeamCanvasModelScopeGuidance,
+} from "./studio-chat-empty-guidance.js";
 
 async function composerMedia(directory: string) {
   const path = join(directory, "composer-media");
@@ -254,6 +260,8 @@ export async function verifyRemoteProvider(
     );
     await expect(page.locator(".generate-button")).toBeDisabled();
     await call("/api/canvases", { data: { title: "零插件画布" } });
+    await verifyChatEmptyGuidance(page);
+    await verifyAdminCanvasEmptyGuidance(page, web);
     await page.getByRole("button", { name: "去导入插件" }).click();
     await expect(page.locator(".settings-section h2")).toHaveText("插件");
     const settingsSearch = page.getByRole("searchbox", { name: "搜索设置项" });
@@ -278,6 +286,10 @@ export async function verifyRemoteProvider(
     const other = await call("/api/workspaces", {
       data: { name: "隔离提供方测试空间" },
     });
+    await verifyTeamCanvasModelScopeGuidance(context, web, {
+      id: other.id,
+      name: "隔离提供方测试空间",
+    });
     const invite = await call("/api/invite-codes", {
       data: { name: "隔离提供方测试用户" },
     });
@@ -291,6 +303,7 @@ export async function verifyRemoteProvider(
         code: invite.code,
       },
     });
+    await verifyMemberContextEmptyGuidance(member, web);
     const install = (
       spec: unknown,
       path = "/first",
@@ -372,11 +385,15 @@ export async function verifyRemoteProvider(
       status: 400,
     });
     await page.getByLabel("服务名称").fill(connection.name);
+    await expect(page.getByLabel("并行任务数量")).toHaveValue("1");
     await page.getByLabel("API 密钥").fill("original-key");
     const created = await request(page, "/api/admin/connections", "POST", () =>
       page.getByRole("button", { name: "保存服务设置" }).click(),
     );
     assert.equal(created.status(), 201, await created.text());
+    await expect(
+      page.locator(".plugin-service-meta").filter({ hasText: "并行任务上限" }),
+    ).toContainText("1 个");
     const { id } = await created.json();
     const connectionPath = "/api/admin/connections/" + id;
     const update = (revision: number, apiKey?: string) =>
@@ -761,6 +778,32 @@ export async function verifyRemoteProvider(
       assert.notEqual(colors.light, colors.dark);
     }
     await page.setViewportSize(originalViewport);
+    await setTab(page, "plugins");
+    await page
+      .locator(".plugin-connection")
+      .filter({
+        has: page.getByRole("switch", { name: manifest.label + "开关" }),
+      })
+      .getByRole("button", { name: "设置", exact: true })
+      .click();
+    const demoDrawer = page.getByRole("dialog", {
+      name: new RegExp(manifest.label),
+    });
+    await demoDrawer.getByRole("button", { name: "修改设置" }).click();
+    const concurrencyInput = demoDrawer.getByLabel("并行任务数量");
+    await expect(concurrencyInput).toHaveValue("1");
+    await concurrencyInput.fill("4");
+    const updatedConcurrency = await request(
+      page,
+      connectionPath,
+      "PUT",
+      () => demoDrawer.getByRole("button", { name: "保存服务设置" }).click(),
+    );
+    assert.equal(updatedConcurrency.status(), 200, await updatedConcurrency.text());
+    await expect(
+      demoDrawer.locator(".plugin-service-meta").filter({ hasText: "并行任务上限" }),
+    ).toContainText("4 个");
+    await demoDrawer.getByRole("button", { name: "关闭插件设置" }).click();
     await call("/api/admin/plugins/import", {
       data: { file: gpuFile },
       client: member.request,

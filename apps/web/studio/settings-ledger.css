@@ -628,7 +628,7 @@
   background: var(--surface);
 }
 
-.ledger-card + .ledger-card,
+.ledger-card + .ledger-card:not(:where(.plugin-page > *)),
 #price-form .ledger-card,
 .ledger-settings .model-group {
   margin-top: 14px;
@@ -644,11 +644,19 @@
     .profile-field-row,
     .price-row,
     .credit-account-row,
+    .credit-ledger-row,
     .workspace-row,
     .member-row,
     .node-row
-  ):last-child {
+  ):last-child,
+#modal :is(.credit-ledger-row, .recharge-order-row):last-child {
   border-bottom-width: 0;
+}
+.ledger-list-more {
+  display: flex;
+  justify-content: center;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 .ledger-settings .model-group .setting-row:last-of-type {
   border-bottom-width: 0;
@@ -1034,11 +1042,83 @@
 #modal.ledger-invite-sheet .form-message:empty {
   display: none;
 }
-#modal :is(#add-member-form, #workspace-form) .form-message {
+#modal
+  :is(
+    #add-member-form,
+    #workspace-form,
+    #credit-adjust-form,
+    #recharge-form,
+    .recharge-detail
+  )
+  .form-message {
   color: var(--danger);
   font-size: 13px;
 }
-#modal :is(#add-member-form, #workspace-form) .form-message:empty {
+#modal
+  :is(#credit-adjust-form, #recharge-form)
+  .form-message[data-tone="status"] {
+  color: var(--muted);
+}
+#modal #credit-adjust-form .form-message {
+  margin: 0 0 14px;
+}
+#modal #credit-adjust-form .formlabel select {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  background: var(--field);
+}
+#modal #credit-adjust-form .credit-adjust-preview {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: -6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--side);
+  font-size: 13px;
+  color: var(--secondary);
+}
+#modal #credit-adjust-form .credit-adjust-preview strong {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+#modal #credit-adjust-form .credit-adjust-preview[data-invalid="true"] {
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+#modal #credit-adjust-form .credit-adjust-preview[data-invalid="true"] strong {
+  color: var(--danger);
+}
+#modal #recharge-form .recharge-amount-group {
+  display: grid;
+  gap: 6px;
+}
+#modal #recharge-form .formlabel {
+  margin: 0;
+}
+#modal #recharge-form .recharge-field-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+#modal #recharge-form .recharge-field-error {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--danger);
+}
+#modal
+  :is(
+    #add-member-form,
+    #workspace-form,
+    #credit-adjust-form,
+    #recharge-form,
+    .recharge-detail
+  )
+  .form-message:empty {
   display: none;
 }
 
@@ -1143,11 +1223,47 @@
 }
 .extension-settings fieldset {
   border: 0;
+  margin: 0;
   min-width: 0;
   padding: 0;
 }
-.extension-settings fieldset button {
-  margin: 12px 8px 0 0;
+.extension-settings .setting-row {
+  flex-wrap: wrap;
+}
+.extension-settings .setting-row:last-of-type {
+  border-bottom-width: 0;
+}
+.extension-settings select {
+  min-width: 0;
+  max-width: min(100%, 240px);
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+}
+.extension-settings-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.extension-settings .setting-row ~ .extension-settings-actions {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.extension-settings-status {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--secondary);
+}
+.extension-settings-status:empty {
+  display: none;
+}
+.extension-settings-status.is-error {
+  color: var(--danger);
 }
 .member-search {
   width: min(100%, 320px);

@@ -698,3 +698,114 @@ test("original uploads clean partial objects and rolled-back metadata after stor
     await f.cleanup();
   }
 });
+
+test("single-item deletion of uploaded video and audio enforces ownership, job reference messages and reference-media cleanup", async () => {
+  const f = await fixture();
+  try {
+    const plugin: ProviderPlugin = {
+      manifest: {
+        id: "av-media-fixture",
+        version: "1.0.0",
+        contractVersion: 1,
+        label: "Fixture",
+        mode: "pull",
+        configSchema: { type: "object" },
+        models: [
+          {
+            id: "fixture",
+            label: "Fixture",
+            kind: "video",
+            inputSchema: { type: "object" },
+          },
+        ],
+      },
+      health: async () => true,
+      submit: async () => {
+        throw new Error("Fixture must not execute");
+      },
+    };
+    f.p.registry = new PluginRegistry([plugin]);
+    await f.p.registry.installBuiltins(f.db);
+    const conn = await f.p.createConnection(f.admin, {
+      name: "av-fixture",
+      pluginId: plugin.manifest.id,
+      version: "1.0.0",
+      config: {},
+    });
+    await f.p.updateConnection(f.admin, conn.id, {
+      revision: 1,
+      enabled: true,
+      concurrency: 1,
+    });
+    const model = await one(
+      f.db,
+      "SELECT id FROM models WHERE connection_id=$1",
+      [conn.id],
+    );
+    await f.p.setModel(f.admin, model.id, { enabled: true, price: 1 });
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, f.team, 20, randomUUID(), "adjust"),
+    );
+
+    for (const [kind, mime, expectedMessage] of [
+      [
+        "ref_video",
+        "video/mp4",
+        "仍有作品或任务引用这段视频，请先删除相关版本",
+      ],
+      [
+        "ref_audio",
+        "audio/wav",
+        "仍有作品或任务引用这段音频，请先删除相关版本",
+      ],
+    ] as const) {
+      const refAsset = await f.asset();
+      await f.db.query(
+        "UPDATE assets SET original_kind=$2, mime=$3 WHERE id=$1",
+        [refAsset.id, kind, mime],
+      );
+      await f.db.query(
+        "INSERT INTO asset_reference_media(asset_id,seconds,fps,has_audio,name) VALUES($1,4,24,true,'sample')",
+        [refAsset.id],
+      );
+      await f.p.favorite(f.admin, refAsset.id, true);
+
+      await assert.rejects(
+        f.media.remove(f.member, refAsset.public_id, "1"),
+        { status: 403, message: "只能删除自己的素材" },
+      );
+
+      const job = await f.p.submit(f.admin, f.team, {
+        modelId: model.id,
+        key: randomUUID(),
+        prompt: "av-ref",
+        references: [refAsset.id],
+      });
+      await assert.rejects(
+        f.media.remove(f.admin, refAsset.public_id, "1"),
+        { status: 409, message: expectedMessage },
+      );
+
+      await f.p.cancel(f.admin, job.id);
+      await f.db.query("DELETE FROM job_assets WHERE job_id=$1", [job.id]);
+      assert.deepEqual(
+        await f.media.remove(f.admin, refAsset.public_id, "1"),
+        { ok: true },
+      );
+      assert.equal(
+        await one(
+          f.db,
+          "SELECT asset_id FROM asset_reference_media WHERE asset_id=$1",
+          [refAsset.id],
+        ),
+        undefined,
+      );
+      assert.equal(
+        await one(f.db, "SELECT * FROM assets WHERE id=$1", [refAsset.id]),
+        undefined,
+      );
+    }
+  } finally {
+    await f.cleanup();
+  }
+});

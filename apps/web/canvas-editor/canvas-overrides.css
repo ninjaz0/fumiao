@@ -858,3 +858,19 @@
   align-items: center;
   gap: 8px;
 }
+
+.fm-chat-node .fm-chat-no-model {
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0 6px 8px;
+  padding: 6px 10px;
+  min-height: 30px;
+  border-radius: 8px;
+  background: var(--chat-hover);
+  font-size: 12px;
+}
+.fm-chat-node .fm-chat-no-model-link {
+  color: var(--chat-text);
+  font-weight: 500;
+  white-space: nowrap;
+}

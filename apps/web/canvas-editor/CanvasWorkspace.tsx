@@ -105,6 +105,7 @@ import {
   matchViewportFocusShortcut,
   isCanvasComposerOpen,
   hasCanvasSelectionToolbar,
+  resolveBatchShots,
   linkedValue,
   type CanvasClipboard,
   type CanvasNode,
@@ -117,6 +118,7 @@ import {
   type PrecheckStage,
 } from "./types";
 import {ChatWorkspace, chatRequest} from "./chat/ChatWorkspace";
+import { chatSettingsPath } from "./chat/guidance";
 import { ShotList } from "./ShotList";
 import { VideoVersions } from "./VideoVersions";
 import { AiStoryboard } from "./AiStoryboard";
@@ -261,13 +263,6 @@ function Modal({
       </div>
       {children}
     </dialog>
-  );
-}
-function Brand() {
-  return (
-    <a className="cv-brand" href={workspaceURL("/studio")} title="返回工作台" aria-label="返回工作台">
-      <img src="/static/mark.svg" alt="弗淼 AIGC" />
-    </a>
   );
 }
 function duration(seconds: number) {
@@ -438,6 +433,7 @@ type ContextValue = {
   downstream: (id: string) => void;
   selectMedia: (id: string) => void;
   preview: (node: CanvasNode) => void;
+  beginEditing: (id: string) => void;
   setEditing: (id: string | null) => void;
   rerunGroup: (groupId: string) => void;
   ungroup: (groupId: string) => void;
@@ -554,10 +550,8 @@ const ContentNode = memo(function ContentNode({
       <div
         className="node-content"
         onDoubleClick={() => {
-          if (isText) {
-            ctx.begin();
-            ctx.setEditing(n.id);
-          } else if (media) ctx.preview(n);
+          if (isText) ctx.beginEditing(n.id);
+          else if (media) ctx.preview(n);
         }}
       >
         {n.extension ? <PluginNodeOutputs extension={n.extension}/> : isText ? (
@@ -578,14 +572,20 @@ const ContentNode = memo(function ContentNode({
                 e.stopPropagation();
                 if (e.key === "Escape") {
                   e.preventDefault();
-                  e.currentTarget.blur();
+                  if (n.type === "sticky") {
+                    e.currentTarget
+                      .closest<HTMLElement>(".react-flow__node")
+                      ?.focus();
+                  } else e.currentTarget.blur();
                 }
               }}
             />
           ) : (
             <div className="text-display">
               {n.text || (
-                <span>双击{n.type === "text" ? "输入文本" : "添加便签"}</span>
+                <span>
+                  {n.type === "text" ? "双击输入文本" : "按 Enter 或双击添加便签"}
+                </span>
               )}
             </div>
           )
@@ -702,6 +702,13 @@ export function CanvasWorkspace({
     [minimap, setMinimap] = useState(false),
     [showEdges, setShowEdges] = useState(true),
     [toast, setToast] = useState("");
+  const [leaveFailure, setLeaveFailure] = useState<{
+    path: string;
+    message: string;
+    retained: boolean;
+  } | null>(null);
+  const [retryingLeave, setRetryingLeave] = useState(false);
+  const leaveInFlight = useRef(false);
   const [activeTextNodes,setActiveTextNodes]=useState<string[]>([]);
   const textApplyQueue=useRef<Promise<void>>(Promise.resolve());
   const textPanelRef=useRef<HTMLElement|null>(null);
@@ -832,6 +839,10 @@ export function CanvasWorkspace({
   const current = single ? resolveNodeFromIndex(single, runsByNode) : null;
   const completedVersions = current?.list.filter((job) => job.status === "done" && job.result) ?? [];
   const shotIds = doc.value.document.shots ?? [];
+  const batchShots = useMemo(
+    () => resolveBatchShots(selectedNodes, selected, shotIds),
+    [selectedNodes, selected, shotIds],
+  );
   const studioJobByResult = useMemo(() => {
     const map = new Map<string, Job>();
     for (const job of studio.jobs) {
@@ -1094,6 +1105,13 @@ export function CanvasWorkspace({
     }
     if(updates.size)doc.change(d=>({...d,document:{...d.document,nodes:d.document.nodes.map(n=>updates.has(n.id)?{...n,narration_job:updates.get(n.id)!,narration_pending:null}:n)}}));
   },[runById,doc.value.document.nodes,doc.status]);
+  const beginEditing = useCallback(
+    (id: string) => {
+      doc.begin();
+      setEditing(id);
+    },
+    [doc.begin],
+  );
   const contextValue = useMemo(
     () => ({
       edit,
@@ -1112,6 +1130,7 @@ export function CanvasWorkspace({
           setPreview({ node, media, run });
         }
       },
+      beginEditing,
       setEditing,
       rerunGroup: (groupId: string) => {
         const group = doc.ref.current.document.nodes.find((n) => n.id === groupId);
@@ -1140,7 +1159,7 @@ export function CanvasWorkspace({
         notify("已解散工作流组");
       },
     }),
-    [edit, doc.begin, doc.end, doc.ref, doc.flush, doc.change],
+    [edit, doc.begin, doc.end, beginEditing, doc.ref, doc.flush, doc.change],
   );
   const createGroupFromSelection = useCallback(() => {
     const picked = doc.ref.current.document.nodes.filter(
@@ -1235,7 +1254,9 @@ export function CanvasWorkspace({
         height: n.height,
         style: { width: n.width, height: n.height },
         selected: isSelected,
-        ariaLabel: names[n.type] + "节点 " + n.title,
+        ariaLabel:
+          names[n.type] + "节点 " + n.title +
+          (n.type === "sticky" && !n.extension ? "，按 Enter 编辑" : ""),
       };
       nextCache.set(n.id, next);
       return next;
@@ -1562,6 +1583,28 @@ export function CanvasWorkspace({
   const addShot = (node: CanvasNode) => {
     updateShots((ids) => ids.includes(node.id) ? ids : [...ids, node.id]);
     notify("已加入镜头列表");
+  };
+  const addSelectedShots = () => {
+    const current = doc.ref.current.document;
+    const { videoIds, addedIds } = resolveBatchShots(
+      current.nodes,
+      selected,
+      current.shots ?? [],
+    );
+    if (!videoIds.length) return;
+    if (!addedIds.length) {
+      setShotList(true);
+      return;
+    }
+    updateShots((ids) => {
+      const plan = resolveBatchShots(
+        doc.ref.current.document.nodes,
+        selected,
+        ids,
+      );
+      return plan.addedIds.length ? plan.nextShots : ids;
+    });
+    notify(`已将 ${addedIds.length} 个视频加入镜头列表`);
   };
   const moveShot = (id: string, offset: number) => updateShots((ids) => {
     const index = ids.indexOf(id);
@@ -2152,11 +2195,22 @@ export function CanvasWorkspace({
     doc.status !== "conflict" &&
     (single.type !== "image" || currentImageEnabled) && availableModel(selectedModel) && creditAvailable;
   const closeAndLeave = async (url: string) => {
+    if (leaveInFlight.current) return;
+    leaveInFlight.current = true;
+    setRetryingLeave(true);
+    setMenu(null);
     try {
       await doc.flush();
       location.assign(workspaceURL(url));
     } catch (e) {
-      notify((e as Error).message);
+      setLeaveFailure({
+        path: url,
+        message: (e as Error).message,
+        retained: doc.remember(),
+      });
+    } finally {
+      leaveInFlight.current = false;
+      setRetryingLeave(false);
     }
   };
   const showComposer =
@@ -2356,6 +2410,21 @@ export function CanvasWorkspace({
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          onKeyDown={(e) => {
+            const target = e.target;
+            if (
+              hand ||
+              e.key !== "Enter" ||
+              !(target instanceof HTMLElement) ||
+              !target.matches(".react-flow__node")
+            ) return;
+            const note = doc.ref.current.document.nodes.find(
+              (n) => n.id === target.dataset.id,
+            );
+            if (note?.type !== "sticky" || note.extension) return;
+            e.preventDefault();
+            beginEditing(note.id);
+          }}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={connect}
@@ -2448,7 +2517,19 @@ export function CanvasWorkspace({
       </NodeContext.Provider>
       <header className="canvas-header">
         <div className="project-heading">
-          <Brand />
+          <a
+            className="cv-brand"
+            href={workspaceURL("/studio")}
+            title="返回工作台"
+            aria-label="返回工作台"
+            onClick={(e) => {
+              if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+              e.preventDefault();
+              void closeAndLeave("/studio");
+            }}
+          >
+            <img src="/static/mark.svg" alt="弗淼 AIGC" />
+          </a>
           <input
             aria-label="画布名称"
             value={doc.value.title}
@@ -2841,6 +2922,15 @@ export function CanvasWorkspace({
             disabled={!canDownloadSelected}
             onClick={downloadNodes}
           />
+          {batchShots.videoIds.length > 0 && (
+            <IconButton
+              icon={ListVideo}
+              label={batchShots.allInShots ? "查看镜头列表" : "加入镜头列表"}
+              onClick={() =>
+                batchShots.allInShots ? setShotList(true) : addSelectedShots()
+              }
+            />
+          )}
           <IconButton
             icon={Trash2}
             label="删除所选节点"
@@ -3458,7 +3548,7 @@ export function CanvasWorkspace({
       )}
       {doc.status === "conflict" && (
         <div className="save-banner" role="alert">
-          <span>画布已被其他成员修改，你的修改已保留。</span>
+          <span>画布已被其他成员修改，你的修改尚未保存到服务器。</span>
           <button
             onClick={() =>
               downloadJSON(doc.value.title + "-本地副本", doc.value)
@@ -3486,7 +3576,15 @@ export function CanvasWorkspace({
         if(!textNode)return null;
         const visible=single?.id===id&&!editing;
         return <section key={id} ref={visible?textPanelRef:undefined} className="node-composer text-node-composer" style={{...COMPOSER_POSITION_STYLE,display:visible?undefined:'none'}} hidden={!visible} aria-label="文本生成器" onKeyDown={e=>e.stopPropagation()}>
-          <ChatWorkspace inline compact workspace={project.workspace} userId={initial.me.id} project={project.id} node={id} nodeTitle={textNode.title}
+          <ChatWorkspace inline compact workspace={project.workspace} userId={initial.me.id} isAdmin={studio.me.role === "admin"}
+            configureHref={studio.me.role === "admin" ? workspaceURL(chatSettingsPath(studio)) : undefined}
+            onConfigureModels={studio.me.role === "admin" ? (e => {
+              if (e.button === 0 && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                e.preventDefault();
+                void closeAndLeave(chatSettingsPath(studio));
+              }
+            }) : undefined}
+            project={project.id} node={id} nodeTitle={textNode.title}
             onActivityChange={active=>setActiveTextNodes(ids=>active?(ids.includes(id)?ids:[...ids,id]):(ids.includes(id)?ids.filter(n=>n!==id):ids))}
             getContext={async()=>({project:project.id,node:id,expected_revision:await doc.flush(),writeback:true})}
             onApply={(cid,message,_mode,options)=>{
@@ -4253,6 +4351,47 @@ export function CanvasWorkspace({
       {skillsModal && (
         <Modal title="工作区技能包 (SKILL.md)" wide onClose={() => setSkillsModal(false)}>
           <SkillEditorModal workspace={project.workspace} />
+        </Modal>
+      )}
+      {leaveFailure && (
+        <Modal
+          title="保存失败，仍要离开？"
+          onClose={() => {
+            if (!leaveInFlight.current) setLeaveFailure(null);
+          }}
+        >
+          <p className="error">{leaveFailure.message}</p>
+          <p>当前修改尚未同步到服务器。{leaveFailure.retained
+            ? "本地草稿已保留。画布仍可访问时，可在此标签页重新打开继续编辑。"
+            : "浏览器无法保留本地草稿，离开后未保存的修改将丢失。"}</p>
+          <div className="dialog-actions" style={{ flexWrap: "wrap" }}>
+            <button className="secondary" disabled={retryingLeave} onClick={() => setLeaveFailure(null)}>
+              取消
+            </button>
+            <button
+              className="secondary"
+              disabled={retryingLeave}
+              onClick={() => downloadJSON(doc.ref.current.title + "-本地副本", doc.ref.current)}
+            >
+              下载本地副本
+            </button>
+            <button className="secondary" disabled={retryingLeave} onClick={() => {
+              if (leaveFailure.retained && !doc.remember()) {
+                setLeaveFailure({ ...leaveFailure, retained: false });
+                return;
+              }
+              doc.leave(workspaceURL(leaveFailure.path));
+            }}>
+              仍要离开
+            </button>
+            <button
+              className="primary"
+              disabled={retryingLeave || doc.status === "conflict"}
+              onClick={() => closeAndLeave(leaveFailure.path)}
+            >
+              重试保存
+            </button>
+          </div>
         </Modal>
       )}
     </div>

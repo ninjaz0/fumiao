@@ -1,7 +1,17 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { api } from "./api";
 import { openDialogFor } from "./AssetDialog";
 import { Icon } from "./Icon";
+import {
+  evaluateRechargeYuan,
+  formatRechargeRangeHint,
+} from "./settings-credits-helpers";
 import type { CreditEntry, StudioState } from "./state";
 
 type Notify = (message: string) => void;
@@ -391,15 +401,17 @@ export function Credits({
         <h3 className="credit-heading">积分明细</h3>
         <CreditLedger rows={rows} />
         {before !== undefined && (
-          <button
-            className="quiet-button"
-            data-act="credit-more"
-            data-before={before}
-            disabled={busy}
-            onClick={(event) => void more(event.currentTarget)}
-          >
-            加载更多
-          </button>
+          <div className="ledger-list-more">
+            <button
+              className="quiet-button"
+              data-act="credit-more"
+              data-before={before}
+              disabled={busy}
+              onClick={(event) => void more(event.currentTarget)}
+            >
+              加载更多
+            </button>
+          </div>
         )}
       </section>
     </section>
@@ -453,24 +465,43 @@ export function RechargeForm({
   const workspace = state.workspaces.find(
     ({ id }) => id === state.workspace_id,
   );
-  const [yuan, setYuan] = useState("10");
+  const initialYuan = String(
+    Math.min(Math.max(10, config.min_yuan), config.max_yuan),
+  );
+  const [yuan, setYuan] = useState(initialYuan);
+  const [badInput, setBadInput] = useState(false);
   const amountField = useRef<HTMLInputElement>(null);
   const [method, setMethod] = useState(config.methods[0]?.id ?? "");
-  const notice = config.methods.find(option => option.id === method)?.notice;
+  const notice = config.methods.find((option) => option.id === method)?.notice;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const request = useRef({ fingerprint: "", uid: "" });
-  const amount = Number(yuan);
-  const valid =
-    Number.isInteger(amount) &&
-    amount >= config.min_yuan &&
-    amount <= config.max_yuan;
+  const hasMethods = config.methods.length > 0;
+  const controlsDisabled = busy || !hasMethods;
+  const evaluation = evaluateRechargeYuan(yuan, config, badInput);
+  const inlineError = hasMethods ? evaluation.error : "";
+
+  useLayoutEffect(() => {
+    amountField.current?.setCustomValidity(inlineError);
+  }, [inlineError]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
-    if (busy || !method || !form.reportValidity()) return;
-    const payload = { workspace: state.workspace_id, yuan: amount, method };
+    if (
+      busy ||
+      !hasMethods ||
+      !method ||
+      !evaluation.valid ||
+      evaluation.amount === null ||
+      !form.reportValidity()
+    )
+      return;
+    const payload = {
+      workspace: state.workspace_id,
+      yuan: evaluation.amount,
+      method,
+    };
     const fingerprint = JSON.stringify(payload);
     if (fingerprint !== request.current.fingerprint)
       request.current = { fingerprint, uid: crypto.randomUUID() };
@@ -497,22 +528,53 @@ export function RechargeForm({
         充值到 <strong>{workspace?.name || "当前空间"}</strong>
         {workspace?.kind === "team" ? " · 团队共用" : ""}
       </p>
-      <label className="formlabel">
-        充值金额（元）
-        <input
-          name="yuan"
-          type="number"
-          min={config.min_yuan}
-          max={config.max_yuan}
-          step="1"
-          ref={amountField}
-          defaultValue="10"
-          inputMode="numeric"
-          required
-          disabled={busy}
-          onChange={(event) => setYuan(event.currentTarget.value)}
-        />
-      </label>
+      <div className="recharge-amount-group">
+        <label className="formlabel" htmlFor="recharge-yuan">
+          充值金额（元）
+          <input
+            id="recharge-yuan"
+            name="yuan"
+            type="number"
+            min={config.min_yuan}
+            max={config.max_yuan}
+            step="1"
+            ref={amountField}
+            defaultValue={initialYuan}
+            inputMode="numeric"
+            required
+            disabled={controlsDisabled}
+            aria-invalid={Boolean(inlineError) || undefined}
+            aria-describedby={
+              inlineError
+                ? "recharge-yuan-hint recharge-yuan-error"
+                : "recharge-yuan-hint"
+            }
+            onChange={(event) => {
+              const nextValue = event.currentTarget.value;
+              const nextBad = event.currentTarget.validity.badInput;
+              const nextEval = evaluateRechargeYuan(nextValue, config, nextBad);
+              event.currentTarget.setCustomValidity(
+                hasMethods ? nextEval.error : "",
+              );
+              setYuan(nextValue);
+              setBadInput(nextBad);
+              if (message) setMessage("");
+            }}
+          />
+        </label>
+        <p id="recharge-yuan-hint" className="recharge-field-hint">
+          {formatRechargeRangeHint(config.min_yuan, config.max_yuan)}
+        </p>
+        {inlineError && (
+          <p
+            id="recharge-yuan-error"
+            className="recharge-field-error"
+            role="alert"
+          >
+            {inlineError}
+          </p>
+        )}
+      </div>
       <div className="recharge-presets">
         {[1, 10, 50, 100].map((preset) => (
           <button
@@ -520,12 +582,23 @@ export function RechargeForm({
             type="button"
             className="profile-secondary"
             data-yuan={preset}
-            aria-pressed={amount === preset}
-            disabled={busy}
+            aria-pressed={evaluation.valid && evaluation.amount === preset}
+            disabled={
+              controlsDisabled ||
+              preset < config.min_yuan ||
+              preset > config.max_yuan
+            }
             onClick={() => {
               if (!amountField.current) return;
-              amountField.current.value = String(preset);
-              setYuan(amountField.current.value);
+              const nextValue = String(preset);
+              const nextEval = evaluateRechargeYuan(nextValue, config, false);
+              amountField.current.value = nextValue;
+              amountField.current.setCustomValidity(
+                hasMethods ? nextEval.error : "",
+              );
+              setYuan(nextValue);
+              setBadInput(false);
+              if (message) setMessage("");
             }}
           >{`¥${preset}`}</button>
         ))}
@@ -533,13 +606,15 @@ export function RechargeForm({
       <div className="recharge-total">
         <span>到账积分</span>
         <strong id="recharge-total" key={method}>
-          {valid ? (amount * 10).toLocaleString() : "—"}
+          {evaluation.credits !== null
+            ? evaluation.credits.toLocaleString()
+            : "—"}
         </strong>
       </div>
       <p className="recharge-rate">¥1 = 10 积分</p>
       <fieldset className="recharge-methods">
         <legend>付款方式</legend>
-        {config.methods.length ? (
+        {hasMethods ? (
           config.methods.map((option) => (
             <label key={option.id}>
               <input
@@ -558,13 +633,17 @@ export function RechargeForm({
         )}
       </fieldset>
       {notice && <p className="recharge-network">{notice}</p>}
-      <p className="form-message" role="alert">
+      <p
+        className="form-message"
+        data-tone={busy ? "status" : undefined}
+        role="alert"
+      >
         {message}
       </p>
       <button
         className="primary"
         type="submit"
-        disabled={busy || !config.methods.length}
+        disabled={controlsDisabled || !evaluation.valid}
       >
         创建充值订单
       </button>
@@ -633,14 +712,16 @@ export function RechargeHistory({
         )}
       </div>
       {before !== undefined && (
-        <button
-          className="quiet-button"
-          id="recharge-more"
-          disabled={busy}
-          onClick={(event) => void more(event.currentTarget)}
-        >
-          加载更多
-        </button>
+        <div className="ledger-list-more">
+          <button
+            className="quiet-button"
+            id="recharge-more"
+            disabled={busy}
+            onClick={(event) => void more(event.currentTarget)}
+          >
+            加载更多
+          </button>
+        </div>
       )}
     </>
   );

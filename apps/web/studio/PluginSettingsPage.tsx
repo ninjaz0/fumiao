@@ -38,17 +38,23 @@ export function PluginSettingsPage({
       setBusy(false);
     }
   }
+  const status = page.removing
+    ? "等待已受理任务结束后移除"
+    : stale
+      ? "设置已变化，当前修改尚未保存。"
+      : error;
+  const isError = !page.removing && (stale || Boolean(error));
   return (
     <section className="settings-section extension-settings">
       <h2>{page.title}</h2>
-      <p className="muted">
+      <p className="console-description">
         {page.label} · {page.version}
       </p>
       <form className="ledger-card" onSubmit={save}>
         <fieldset disabled={busy || page.removing}>
           {(draft?.fields ?? page.fields).map((field) => (
             <label className="setting-row" key={field.id}>
-              {field.label}
+              <span>{field.label}</span>
               <select
                 value={values[field.id]}
                 onChange={(event) => {
@@ -69,29 +75,38 @@ export function PluginSettingsPage({
               </select>
             </label>
           ))}
-          <button className="primary" disabled={!draft || stale}>
-            保存
-          </button>
-          {stale && (
+          <div className="extension-settings-actions">
             <button
-              className="quiet-button"
-              type="button"
-              onClick={() => {
-                setDraft(undefined);
-                setError("");
-              }}
+              className="primary"
+              type="submit"
+              disabled={!draft || stale}
             >
-              载入最新设置
+              保存
             </button>
-          )}
+            {stale && (
+              <button
+                className="quiet-button"
+                type="button"
+                onClick={() => {
+                  setDraft(undefined);
+                  setError("");
+                }}
+              >
+                载入最新设置
+              </button>
+            )}
+          </div>
         </fieldset>
       </form>
-      <p role="status">
-        {page.removing
-          ? "等待已受理任务结束后移除"
-          : stale
-            ? "设置已变化，当前修改尚未保存。"
-            : error}
+      <p
+        className={
+          isError
+            ? "extension-settings-status is-error"
+            : "extension-settings-status"
+        }
+        role="status"
+      >
+        {status}
       </p>
     </section>
   );
