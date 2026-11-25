@@ -1,5 +1,7 @@
+export const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
+
 export function reducedMotion() {
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return window.matchMedia(reducedMotionQuery).matches;
 }
 
 export function scrollMotion(): ScrollBehavior {
