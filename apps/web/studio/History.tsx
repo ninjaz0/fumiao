@@ -220,7 +220,7 @@ export function JobCard({
               : duration(Math.round(job.actual?.duration ?? job.seconds))
             : status(job)}
         </span>
-        {job.kind !== "image" && (
+        {job.kind !== "image" && job.result && (
           <span className="asset-play">
             <Icon name="play" />
           </span>
@@ -246,7 +246,7 @@ export function JobCard({
         )}
       </div>
       {["running", "queued", "done"].includes(job.status) && (
-        <div className="pending-caption" data-time-job={job.id}>
+        <div className="pending-caption fm-number" data-time-job={job.id}>
           {timing(job, delta)}
         </div>
       )}
@@ -281,11 +281,13 @@ export function Queue({
   delta,
   detail,
   cancel,
+  cancelling,
 }: {
   state: StudioState;
   delta: number;
   detail: (id: number) => void;
   cancel: (id: number) => void;
+  cancelling: ReadonlySet<number>;
 }) {
   const jobs = state.jobs
     .filter(({ status }) => status === "queued" || status === "running")
@@ -321,7 +323,7 @@ export function Queue({
                 </div>
               </div>
               <div className="job-progress">
-                <span>{status(job)}</span>
+                <span className="fm-state-change" key={status(job)}>{status(job)}</span>
                 <small data-time-job={job.id}>{timing(job, delta)}</small>
               </div>
               <div className="job-actions">
@@ -331,16 +333,18 @@ export function Queue({
                       className="quiet-button"
                       data-act="cancel"
                       data-id={job.id}
+                      disabled={cancelling.has(job.id)}
+                      aria-busy={cancelling.has(job.id)}
                       onClick={() => cancel(job.id)}
                     >
-                      取消
+                      {cancelling.has(job.id) ? "正在取消…" : "取消"}
                     </button>
                   )}
               </div>
             </div>
           ))
         ) : (
-          <div className="empty-state">暂无待处理任务</div>
+          <div className="empty-state" role="status">暂无待处理任务</div>
         )}
       </div>
     </div>

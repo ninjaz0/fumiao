@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Copy,
   LayoutGrid,
+  LoaderCircle,
   Plus,
   Search,
   Trash2,
@@ -99,11 +100,12 @@ export default function ProjectList({ studio }: { studio: Studio }) {
   const [projects, setProjects] = useState<Project[]>([]),
     [loading, setLoading] = useState(true),
     [search, setSearch] = useState(""),
-    [busy, setBusy] = useState(false),
+    [opening, setOpening] = useState<{ kind: "create" } | { kind: "copy"; id: string } | null>(null),
     [error, setError] = useState(""),
     [deleteBusy, setDeleteBusy] = useState(false),
     [deleteError, setDeleteError] = useState(""),
     [deleting, setDeleting] = useState<Project | null>(null);
+  const copying = opening?.kind === "copy" ? opening.id : null;
   const query = search.trim().toLowerCase();
   const visibleProjects = query
     ? projects.filter((p) => p.title.trim().toLowerCase().includes(query))
@@ -127,18 +129,21 @@ export default function ProjectList({ studio }: { studio: Studio }) {
     void load();
   }, [load]);
   const create = async () => {
-    setBusy(true);
+    if (opening) return;
+    setOpening({ kind: "create" });
     setError("");
     try {
       const p = await api<{ id: string }>(workspace, "/api/canvases", {});
       location.assign(workspaceURL("/canvas/" + p.id, workspace));
     } catch (e) {
       setError((e as Error).message);
-      setBusy(false);
+      setOpening(null);
     }
   };
   const duplicate = async (p: Project) => {
-    setBusy(true);
+    if (opening) return;
+    setOpening({ kind: "copy", id: p.id });
+    setError("");
     try {
       const next = await api<{ id: string }>(
         workspace,
@@ -148,7 +153,7 @@ export default function ProjectList({ studio }: { studio: Studio }) {
       location.assign(workspaceURL("/canvas/" + next.id, workspace));
     } catch (e) {
       setError((e as Error).message);
-      setBusy(false);
+      setOpening(null);
     }
   };
   return (
@@ -185,9 +190,9 @@ export default function ProjectList({ studio }: { studio: Studio }) {
                 );
             }}
           />
-          <button className="primary" disabled={busy} onClick={() => create()}>
+          <button className="primary" disabled={!!opening} aria-label="新建画布" aria-busy={opening?.kind === "create"} onClick={() => create()}>
             <Plus size={18} />
-            新建画布
+            {opening?.kind === "create" ? "正在新建…" : "新建画布"}
           </button>
         </div>
         {projects.length > 0 && (
@@ -215,9 +220,11 @@ export default function ProjectList({ studio }: { studio: Studio }) {
             <button
               className="secondary"
               onClick={() => create()}
-              disabled={busy}
+              disabled={!!opening}
+              aria-label="新建画布"
+              aria-busy={opening?.kind === "create"}
             >
-              新建画布
+              {opening?.kind === "create" ? "正在新建…" : "新建画布"}
             </button>
           </div>
         ) : !visibleProjects.length ? (
@@ -272,10 +279,12 @@ export default function ProjectList({ studio }: { studio: Studio }) {
                     </a>
                     <div className="project-actions">
                       <IconButton
-                        icon={Copy}
-                        label={"复制画布 " + p.title}
+                        icon={copying === p.id ? LoaderCircle : Copy}
+                        label={(copying === p.id ? "正在复制画布 " : "复制画布 ") + p.title}
                         onClick={() => duplicate(p)}
-                        disabled={busy}
+                        disabled={!!opening}
+                        aria-label={"复制画布 " + p.title}
+                        aria-busy={copying === p.id}
                       />
                       {p.can_delete && (
                         <IconButton
@@ -316,6 +325,8 @@ export default function ProjectList({ studio }: { studio: Studio }) {
             <button
               className="primary danger"
               disabled={deleteBusy}
+              aria-label="删除画布"
+              aria-busy={deleteBusy}
               onClick={async () => {
                 if (deleteBusy) return;
                 setDeleteBusy(true);
@@ -336,7 +347,7 @@ export default function ProjectList({ studio }: { studio: Studio }) {
                 }
               }}
             >
-              删除画布
+              {deleteBusy ? "正在删除…" : "删除画布"}
             </button>
           </div>
         </Modal>

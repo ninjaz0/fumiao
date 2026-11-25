@@ -220,27 +220,34 @@
   color: var(--blue);
   font-size: 12px;
 }
-.plugin-progress progress {
-  width: 100%;
+.plugin-progress-track {
+  position: relative;
   height: 6px;
-  border: 0;
   border-radius: 999px;
   overflow: hidden;
-  appearance: none;
   background: color-mix(in srgb, var(--line) 70%, transparent);
 }
-.plugin-progress progress::-webkit-progress-bar {
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--line) 70%, transparent);
+.plugin-progress-track progress {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
 }
-.plugin-progress progress::-webkit-progress-value {
-  border-radius: 999px;
+.plugin-progress-track > span {
+  position: absolute;
+  inset: 0;
   background: var(--blue);
-  transition: inline-size 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  scale: var(--progress) 1;
+  transform-origin: left center;
+  transition: scale var(--motion-enter) var(--motion-ease);
 }
-.plugin-progress progress::-moz-progress-bar {
-  border-radius: 999px;
-  background: var(--blue);
+@media (forced-colors: active) {
+  .plugin-progress-track progress {
+    opacity: 1;
+  }
+  .plugin-progress-track > span {
+    display: none;
+  }
 }
 .plugin-tabs [role="tablist"] {
   display: flex;
@@ -259,8 +266,8 @@
   font-size: 14px;
   cursor: pointer;
   transition:
-    color 150ms ease-out,
-    border-color 150ms ease-out;
+    color var(--motion-feedback) var(--motion-ease),
+    border-color var(--motion-feedback) var(--motion-ease);
 }
 .plugin-tabs [role="tab"]:hover {
   color: var(--text);
@@ -322,10 +329,4 @@
   font-size: 21px;
   font-weight: 600;
   letter-spacing: -0.01em;
-}
-@media (prefers-reduced-motion: reduce) {
-  .plugin-tabs [role="tab"],
-  .plugin-progress progress::-webkit-progress-value {
-    transition: none;
-  }
 }

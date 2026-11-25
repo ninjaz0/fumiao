@@ -57,7 +57,7 @@ export function VideoVersions({ runs, adopted, onAdopt }: {
         leftPlayer.current?.pause();
         rightPlayer.current?.pause();
       }}>同时暂停</button>
-      <span>有差异的参数会加粗显示</span>
+      <span>有差异的参数会加粗显示。右侧默认静音，避免两段音频重叠。</span>
     </div>
     {error && <p className="error" role="alert">{error}</p>}
     <div className="version-compare">

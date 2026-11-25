@@ -762,7 +762,7 @@ export function Composer({
           </div>
           <span className="submit-controls">
             <span
-              className="composer-credit"
+              className="composer-credit fm-number"
               aria-label={model ? price.label : ""}
               title={
                 model
@@ -786,7 +786,7 @@ export function Composer({
                   </>
                 ))}
             </span>
-            <span className="composer-estimate" aria-live="polite" title={hint}>
+            <span className="composer-estimate fm-number" aria-live="polite" title={hint}>
               {estimateLabel}
             </span>
             <button
@@ -795,6 +795,7 @@ export function Composer({
               aria-label={submitReason ? `生成（${submitReason}）` : "生成"}
               title={submitReason || "生成"}
               disabled={!!submitReason}
+              aria-busy={submitting}
               onClick={submit}
             >
               <Icon name="arrow" />
@@ -831,7 +832,7 @@ export function Composer({
         )}
       </div>
       <div className="composer-status" aria-live="polite">
-        {status}
+        {status && <span className="fm-state-change" key={status}>{status}</span>}
       </div>
     </section>
   );
