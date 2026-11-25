@@ -129,8 +129,11 @@ test("login returns to the requested canvas and preserves its workspace", async 
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await expect(page).toHaveURL(baseURL + project);
     await expect(page.locator(".react-flow")).toBeVisible();
+    const workspaceResponse = await context.request.get("/api/workspaces");
+    assert.ok(workspaceResponse.ok());
+    const { workspace_id: fallbackWorkspace } = await workspaceResponse.json();
     await page.goto("/canvas?workspace=987654321");
-    await expect(page).toHaveURL(/\/canvas\?workspace=1$/);
+    await expect(page).toHaveURL(`${baseURL}/canvas?workspace=${fallbackWorkspace}`);
     await expect(page.getByText("无法进入原工作区，已打开「个人空间」。")).toBeVisible();
   } finally {
     await context.close();
