@@ -46,7 +46,7 @@ export function AuthPasswordField({ registering }: { registering: boolean }) {
           onClick={() => setVisible((current) => !current)}
         >
           <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d={visible ? eyeOff : eye} />
+            <path className="fm-state-change" key={label} d={visible ? eyeOff : eye} />
           </svg>
         </button>
       </div>

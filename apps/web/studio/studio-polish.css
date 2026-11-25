@@ -8,15 +8,15 @@
 .side nav button {
   color: var(--secondary);
   transition:
-    background-color 120ms ease-out,
-    color 120ms ease-out;
+    background-color var(--motion-feedback) var(--motion-ease),
+    color var(--motion-feedback) var(--motion-ease);
 }
 .side nav button:hover,
 .side nav button.active {
   color: var(--text);
 }
 .side nav button.active {
-  font-weight: 600;
+  font-weight: 550;
 }
 .side nav button.active svg {
   color: var(--blue);
@@ -50,8 +50,8 @@
     0 1px 2px rgba(0, 0, 0, 0.04),
     0 8px 24px rgba(0, 0, 0, 0.04);
   transition:
-    border-color 120ms ease-out,
-    box-shadow 120ms ease-out;
+    border-color var(--motion-feedback) var(--motion-ease),
+    box-shadow var(--motion-feedback) var(--motion-ease);
 }
 .composer:focus-within {
   border-color: color-mix(in srgb, var(--focus) 55%, var(--line));
@@ -76,13 +76,22 @@
 /* 资产 / 画布 列表卡片 */
 .asset-preview {
   border: 1px solid var(--line);
-  transition:
-    border-color 150ms ease-out,
-    transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color var(--motion-feedback) var(--motion-ease);
 }
-.asset-card:hover .asset-preview {
-  border-color: color-mix(in srgb, var(--text) 18%, transparent);
-  transform: translateY(-1px);
+.asset-card .asset-preview:not(:disabled):active {
+  opacity: 1;
+  border-color: var(--focus);
+}
+@media (hover: none) {
+  .asset-card:hover:not(:focus-within) .asset-actions,
+  .asset-card:hover .asset-play {
+    opacity: 0;
+  }
+}
+@media (hover: hover) {
+  .asset-card:hover .asset-preview {
+    border-color: color-mix(in srgb, var(--text) 18%, transparent);
+  }
 }
 .mobile-asset-composer .asset-composer-toggle {
   display: none;
@@ -144,7 +153,7 @@
   margin-inline: -12px;
   padding: 14px 12px;
   border-radius: 10px;
-  transition: background-color 120ms ease-out;
+  transition: background-color var(--motion-feedback) var(--motion-ease);
 }
 .job-row:hover {
   background: var(--hover);
@@ -330,14 +339,114 @@
   font-weight: 500;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .side nav button,
-  .composer,
-  .asset-preview,
-  .job-row {
-    transition: none;
+/* Layout commits once when the navigation rail changes width. */
+.shell.collapsed .side,
+.shell .side {
+  transition: background-color var(--motion-feedback) var(--motion-ease);
+}
+.shell :is(.floating-composer, .detail-view),
+.shell.collapsed :is(.floating-composer, .detail-view) {
+  transition: none;
+}
+.side :is(.nav-label, .brand > span) {
+  transition: opacity var(--motion-feedback) var(--motion-ease);
+}
+
+@media (max-width: 760px) {
+  .shell > .rail-backdrop {
+    position: fixed;
+    inset: 0 0 0 64px;
+    z-index: 19;
+    background: rgb(0 0 0 / 22%);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity var(--motion-exit) var(--motion-ease),
+      display var(--motion-exit) allow-discrete;
   }
-  .asset-card:hover .asset-preview {
-    transform: none;
+  .shell:not(.collapsed) > .rail-backdrop {
+    inset-inline-start: 64px;
+    opacity: 1;
+    pointer-events: auto;
+    transition-duration: var(--motion-feedback);
+  }
+  @starting-style {
+    .shell:not(.collapsed) > .rail-backdrop {
+      opacity: 0;
+    }
+  }
+}
+
+#popover.popover {
+  opacity: 0;
+  transform: none;
+  translate: var(--motion-popover-x, 0) var(--motion-popover-y, -4px);
+  transition:
+    opacity var(--motion-exit) var(--motion-ease),
+    translate var(--motion-exit) var(--motion-ease);
+}
+#popover.popover.open {
+  opacity: 1;
+  translate: none;
+  transition-duration: var(--motion-feedback);
+}
+#popover.popover:not(.open) {
+  pointer-events: none;
+}
+@starting-style {
+  #popover.popover.open {
+    opacity: 0;
+    translate: var(--motion-popover-x, 0) var(--motion-popover-y, -4px);
+  }
+}
+
+html #toast {
+  transition:
+    opacity var(--motion-exit) var(--motion-ease),
+    transform var(--motion-exit) var(--motion-ease);
+}
+html #toast.visible {
+  transition-duration: var(--motion-enter);
+}
+
+.asset-card .asset-actions,
+.asset-card .asset-play,
+.player .player-controls {
+  transition: opacity var(--motion-feedback) var(--motion-ease);
+}
+.favorite-button .icon {
+  fill: transparent;
+  transition:
+    fill var(--motion-feedback) var(--motion-ease),
+    stroke var(--motion-feedback) var(--motion-ease);
+}
+.favorite-button.is-favorite .icon {
+  fill: currentColor;
+}
+.asset-card.new-result {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+  animation: fm-result-located 900ms var(--motion-ease) forwards;
+}
+@keyframes fm-result-located {
+  30% { outline-color: var(--blue); }
+  to { outline-color: transparent; }
+}
+.model-switch > span {
+  transition: background-color var(--motion-feedback) var(--motion-ease);
+}
+.model-switch > span::before {
+  transition: transform var(--motion-feedback) var(--motion-ease);
+}
+
+.detail-view :is(.video-stage, .audio-stage) > :is(.player, .detail-audio, .result-pending) {
+  animation: fm-reveal var(--motion-enter) var(--motion-ease);
+}
+.mobile-asset-composer[data-expanded="true"] #asset-composer-panel {
+  transition: opacity var(--motion-feedback) var(--motion-ease);
+}
+@starting-style {
+  .mobile-asset-composer[data-expanded="true"] #asset-composer-panel {
+    opacity: 0;
   }
 }

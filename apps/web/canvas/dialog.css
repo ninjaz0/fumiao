@@ -5,3 +5,7 @@
   margin: 16px 0;
   border-radius: 8px;
 }
+[data-theme="dark"] .cv-dialog > p.error {
+  color: var(--cv-danger);
+  background: color-mix(in srgb, var(--cv-danger) 12%, var(--cv-surface));
+}

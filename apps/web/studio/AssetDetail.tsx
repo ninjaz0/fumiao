@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { Download, Favorite, ReferenceMedia } from "./AssetMedia";
 import {
   canEdit,
@@ -23,6 +23,19 @@ import {
 } from "./state";
 
 const qualityLabels = { low: "草稿", medium: "标准", high: "高清" };
+
+function DetailImage({ id, alt }: { id: string; alt: string }) {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <img
+      className={loaded ? "detail-image fm-state-change" : "detail-image"}
+      src={mediaURL(id)}
+      alt={alt}
+      onLoad={() => setLoaded(true)}
+    />
+  );
+}
+
 function parameters(state: StudioState, job: Job) {
   const { width, height, duration: seconds } = job.actual || {};
   const model = job.model;
@@ -146,6 +159,7 @@ export function JobDetail({
   close,
   favorite,
   cancel,
+  cancelling,
   pageTo,
   locate,
   preview,
@@ -165,6 +179,7 @@ export function JobDetail({
   close: () => void;
   favorite: (id: string, saved: boolean) => void;
   cancel: (id: number) => void;
+  cancelling: boolean;
   pageTo: (id: number) => void;
   locate: (job: Job) => void;
   preview: (id: string, button: HTMLButtonElement) => void;
@@ -188,16 +203,18 @@ export function JobDetail({
   const pending = (
     <div className="result-pending">
       {!audio && <Icon name={glyph(job)} />}
-      <h2>{status(job)}</h2>
+      <h2 className="fm-state-change" key={status(job)}>{status(job)}</h2>
       <p data-time-job={job.id}>{timing(job, delta) || job.note}</p>
       {job.status === "queued" && isOwner(state, job) && (
         <button
           className="quiet-button"
           data-act="cancel"
           data-id={job.id}
+          disabled={cancelling}
+          aria-busy={cancelling}
           onClick={() => cancel(job.id)}
         >
-          取消生成
+          {cancelling ? "正在取消…" : "取消生成"}
         </button>
       )}
     </div>
@@ -237,9 +254,9 @@ export function JobDetail({
               {!job.result ? (
                 pending
               ) : image ? (
-                <img
-                  className="detail-image"
-                  src={mediaURL(job.result)}
+                <DetailImage
+                  key={job.result}
+                  id={job.result}
                   alt="生成图片"
                 />
               ) : (
@@ -307,7 +324,7 @@ export function JobDetail({
                   ? "图片提示词"
                   : "视频提示词"}
           </div>
-          <p className="prompt-text">
+          <p className="prompt-text fm-state-change" key={job.id}>
             {audio ? job.prompt : <Prompt job={job} />}
           </p>
           {audio ? (
@@ -499,7 +516,7 @@ export function ImageDetail({
           <Icon name="back" />
         </button>
         <div className="video-stage">
-          <img className="detail-image" src={mediaURL(id)} alt="参考图片" />
+          <DetailImage key={id} id={id} alt="参考图片" />
         </div>
       </div>
       <aside className="detail-info">

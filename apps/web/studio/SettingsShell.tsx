@@ -235,7 +235,7 @@ export function SettingsShell({
               <span>/</span>
               <span>{active && groups[active[3]]}</span>
               <span>/</span>
-              <strong>{active?.[1]}</strong>
+              <strong className="fm-state-change" key={tab}>{active?.[1]}</strong>
             </div>
             <button
               type="button"

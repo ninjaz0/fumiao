@@ -181,6 +181,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
     setNote("");
     const fields = new FormData(event.currentTarget);
     const value = (key: string) => String(fields.get(key) ?? "");
+    let redirecting = false;
     try {
       await request(
         registering ? "/api/register" : "/api/login",
@@ -198,6 +199,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
         await request("/api/state");
         // Resolve the authenticated workspace through the normal Studio entry.
         location.replace(location.pathname);
+        redirecting = true;
       } catch (error) {
         if (!(error instanceof RequestError && error.status === 401)) {
           setToast((error as Error).message);
@@ -209,7 +211,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
     } catch (error) {
       if (revision.current === version) setNote((error as Error).message);
     } finally {
-      if (busyRevision.current === version) {
+      if (!redirecting && busyRevision.current === version) {
         busyRevision.current = null;
         setBusy(false);
       }
@@ -346,7 +348,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                   )}
                   {"\n      "}
                   {registering && (
-                    <label className="formlabel">
+                    <label className="formlabel fm-state-change">
                       昵称
                       <input
                         required
@@ -361,7 +363,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                   <AuthPasswordField registering={registering} />
                   {"\n      "}
                   {registering && (
-                    <label className="formlabel">
+                    <label className="formlabel fm-state-change">
                       邀请码
                       <input
                         required
@@ -376,7 +378,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                   )}
                   {"\n      "}
                   <div className="authnote" role="alert">
-                    {note}
+                    {note && <span key={note} className="fm-state-change">{note}</span>}
                   </div>
                   {"\n      "}
                   <button className="primary" type="submit" disabled={busy}>

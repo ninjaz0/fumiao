@@ -97,6 +97,7 @@ import {
   type Space,
   type StudioState,
 } from "./state";
+import { reducedMotion, scrollMotion } from "../app/motion";
 import "./studio-polish.css";
 
 type Page = Exclude<Destination, "canvas"> | "settings";
@@ -110,21 +111,6 @@ function isComposerMenu(menu: StudioMenu): menu is ComposerMenu {
 function sameSpace(before: StudioState, after: StudioState | null) {
   return (
     before.me.id === after?.me.id && before.workspace_id === after.workspace_id
-  );
-}
-
-function animateMove(element: Element, before: DOMRect) {
-  const after = element.getBoundingClientRect();
-  if (!before.width || !after.width || !after.height) return;
-  element.animate(
-    [
-      {
-        transformOrigin: "top left",
-        transform: `translate(${before.left - after.left}px,${before.top - after.top}px) scale(${before.width / after.width},${before.height / after.height})`,
-      },
-      { transformOrigin: "top left", transform: "none" },
-    ],
-    { duration: 260, easing: "cubic-bezier(.22,1,.36,1)" },
   );
 }
 
@@ -156,12 +142,12 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const [menuShown, setMenuShown] = useState(false);
   const [menuHidden, setMenuHidden] = useState(true);
   const [menuOpenVersion, setMenuOpenVersion] = useState(0);
-  const [sidebarChanged, setSidebarChanged] = useState(false);
   const [accountOpened, setAccountOpened] = useState(false);
   const [toast, setToast] = useState("");
   const [toastVisible, setToastVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [cancelling, setCancelling] = useState<ReadonlySet<number>>(() => new Set());
   const [delta, setDelta] = useState(0);
   const receivedAt = useRef(0);
   const shell = useRef<HTMLDivElement>(null);
@@ -194,7 +180,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   >(null);
   const assetScroll = useRef(0);
   const scrollAfterRender = useRef<(() => void) | null>(null);
-  const animateAfterRender = useRef<(() => void) | null>(null);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -232,9 +217,20 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     setCollapsed(
       settingsPage || localStorage.getItem("fm-sidebar") === "collapsed",
     );
-    setSidebarChanged(true);
   }, [settingsPage, narrowScreen]);
   const ready = !!state && !!session;
+  const showsJobTimes =
+    (page === "home" || page === "library" || page === "queue" || !!detail) &&
+    !!state?.jobs.some((job) => job.status === "running" || job.status === "queued");
+  useEffect(() => {
+    if (!showsJobTimes) return;
+    const update = () => {
+      if (!document.hidden) setDelta((Date.now() - receivedAt.current) / 1000);
+    };
+    update();
+    const clock = window.setInterval(update, 1000);
+    return () => clearInterval(clock);
+  }, [showsJobTimes]);
   const mobileDrawerOpen = narrowScreen && !collapsed;
   const sidebarPopoverOpen =
     !menuHidden &&
@@ -277,17 +273,15 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   useLayoutEffect(() => {
     onLibraryRead.current = (before, after) => {
-      if (page !== "library" || detail) return;
+      if (page !== "library" || detail || library.highlight === null) return;
       const content = ({ jobs, assets, favorites }: StudioState) => [
         jobs.map(({ timing, eta, ...job }) => job),
         assets,
         favorites,
       ];
       if (JSON.stringify(content(before)) !== JSON.stringify(content(after)))
-        library.refreshGrid();
+        library.clearHighlight();
     };
-    animateAfterRender.current?.();
-    animateAfterRender.current = null;
     scrollAfterRender.current?.();
     scrollAfterRender.current = null;
   });
@@ -299,13 +293,15 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }, []);
 
   const closeMenu = useCallback((focus = false) => {
+    if (!anchor.current) return;
     if (focus || popover.current?.contains(document.activeElement))
       menuFocusTarget.current?.focus({ preventScroll: true });
     anchor.current = null;
     menuFocusTarget.current = null;
     setMenuShown(false);
     clearTimeout(menuTimer.current);
-    menuTimer.current = window.setTimeout(() => setMenuHidden(true), 100);
+    if (reducedMotion()) setMenuHidden(true);
+    else menuTimer.current = window.setTimeout(() => setMenuHidden(true), 150);
   }, []);
 
   const refresh = useCallback(
@@ -527,11 +523,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       setNarrowScreen(event.matches);
       if (event.matches) {
         setCollapsed(true);
-        setSidebarChanged(true);
         closeMenu();
       } else {
         setCollapsed(localStorage.getItem("fm-sidebar") === "collapsed");
-        setSidebarChanged(true);
       }
     };
     narrow.addEventListener("change", onNarrow);
@@ -551,16 +545,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       )
         void refresh();
     }, 6000);
-    const clock = window.setInterval(() => {
-      if (active.current && !document.hidden)
-        setDelta((Date.now() - receivedAt.current) / 1000);
-    }, 1000);
     return () => {
       ++stateRead.current;
       pendingStateRead.current?.controller.abort();
       narrow.removeEventListener("change", onNarrow);
       clearInterval(poll);
-      clearInterval(clock);
       clearTimeout(menuTimer.current);
       clearTimeout(toastTimer.current);
     };
@@ -588,12 +577,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     Object.assign(element.style, {
       left: left + "px",
       top: top + "px",
-      transformOrigin: above ? "bottom left" : "top left",
     });
+    element.style.setProperty("--motion-popover-x", beside ? "-4px" : "0px");
+    element.style.setProperty("--motion-popover-y", beside ? "0px" : above ? "4px" : "-4px");
   }, []);
 
   useLayoutEffect(() => {
-    if (!menu || menuHidden || !anchor.current) return;
+    if (!menu || !menuShown || !anchor.current) return;
     positionMenu();
     const element = popover.current;
     if (
@@ -613,7 +603,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         ) ?? element;
       option?.focus({ preventScroll: true });
     }
-    const frame = requestAnimationFrame(() => setMenuShown(true));
     const outside = (event: Event) => {
       const target = event.target as Node;
       if (event.type === "pointerdown") editor.current?.remember();
@@ -627,12 +616,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     document.addEventListener("pointerdown", outside);
     document.addEventListener("scroll", positionMenu, true);
     return () => {
-      cancelAnimationFrame(frame);
       window.removeEventListener("resize", positionMenu);
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("scroll", positionMenu, true);
     };
-  }, [menu, menuHidden, menuOpenVersion, closeMenu, positionMenu]);
+  }, [menu, menuShown, menuOpenVersion, closeMenu, positionMenu]);
 
   function openMenu(kind: StudioMenu, button: HTMLButtonElement, focus = true) {
     if (anchor.current === button) {
@@ -655,7 +643,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (kind === "account") setAccountOpened(true);
     if (kind === "detail-more") setDetailMenuUsed(true);
     setMenuHidden(false);
-    setMenuShown(false);
+    setMenuShown(true);
     setMenu(kind);
     setMenuOpenVersion((version) => version + 1);
   }
@@ -703,7 +691,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (page === "library") assetScroll.current = scrollY;
     library.reset();
     if (destination === "library") library.redrawLibrary();
-    transition(null);
+    showDetail(null);
     // The original navigation remounts chat even when it is already selected.
     if (destination === "chat") setChatVisit((visit) => visit + 1);
     if (destination === "settings") setSettingsVisit((visit) => visit + 1);
@@ -801,48 +789,17 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     );
   }
 
-  function transition(next: Detail | null, animate = true) {
+  function showDetail(next: Detail | null) {
     closeMenu();
     library.clearHighlight();
     library.showUploads();
     setDetail(next);
     setEditing(false);
     setDetailMenuUsed(false);
-    if (
-      !animate ||
-      matchMedia("(prefers-reduced-motion: reduce)").matches ||
-      !view.current
-    )
-      return;
-    const root = view.current;
-    const oldComposer = root
-      .querySelector(".composer")
-      ?.getBoundingClientRect();
-    const oldVideo = root.querySelector(".detail-video");
-    const videoBox = oldVideo?.getBoundingClientRect();
-    const videoSource = oldVideo?.getAttribute("src");
-    animateAfterRender.current = () => {
-      root.animate([{ opacity: 0.5 }, { opacity: 1 }], {
-        duration: 160,
-        easing: "ease-out",
-      });
-      const video = root.querySelector(".detail-video");
-      if (videoBox && videoSource === video?.getAttribute("src") && video)
-        animateMove(video, videoBox);
-      const composer = root.querySelector(".composer");
-      if (
-        oldComposer &&
-        composer &&
-        oldComposer.top >= 0 &&
-        oldComposer.top < innerHeight
-      )
-        animateMove(composer, oldComposer);
-    };
   }
 
   function changeSidebar(nextCollapsed: boolean, moveFocus: boolean) {
     setCollapsed(nextCollapsed);
-    setSidebarChanged(true);
     localStorage.setItem("fm-sidebar", nextCollapsed ? "collapsed" : "expanded");
     closeMenu();
     if (moveFocus)
@@ -891,22 +848,22 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   function openJob(id: number) {
     assetScroll.current = scrollY;
-    transition({ job: id });
+    showDetail({ job: id });
     scrollAfterRender.current = () => scrollTo(0, 0);
   }
 
   function closeDetail() {
-    transition(null);
+    showDetail(null);
     scrollAfterRender.current = () => scrollTo(0, assetScroll.current);
   }
 
   function setFilter(filter: LibraryFilter) {
-    transition(null);
+    showDetail(null);
     library.choose(filter);
   }
 
   function showResult(id: number, tab: LibraryFilter["tab"], locate = false) {
-    transition(null);
+    showDetail(null);
     setPage("library");
     setReferencePicking(null);
     library.choose({ tab, scope: "history" }, id);
@@ -914,16 +871,38 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       if (locate)
         document
           .getElementById("job-" + id)
-          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+          ?.scrollIntoView({ block: "center", behavior: scrollMotion() });
       else scrollTo(0, 0);
     };
   }
 
   function cancel(id: number) {
     void mutate(`cancel-${id}`, async () => {
-      await api(workspaceId.current, `/api/jobs/${id}/cancel`, {});
-      await refresh(true);
-      library.redrawLibrary();
+      const before = active.current;
+      if (!before) return;
+      setCancelling((current) => new Set(current).add(id));
+      try {
+        await api(workspaceId.current, `/api/jobs/${id}/cancel`, {});
+        const current = active.current;
+        if (leaving.current || !current || !sameSpace(before, current)) return;
+        const next: StudioState = {
+          ...current,
+          jobs: current.jobs.map((job) =>
+            job.id === id ? { ...job, status: "cancelled" } : job,
+          ),
+        };
+        active.current = next;
+        setState(next);
+        notify(`任务 #${id} 已取消`);
+        await refresh(true);
+        library.redrawLibrary();
+      } finally {
+        setCancelling((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+      }
     });
   }
 
@@ -935,7 +914,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (!detail) assetScroll.current = scrollY;
     setReferencePicking(null);
     updateDraft(loadJob(space, previous, job));
-    transition({ job: id });
+    showDetail({ job: id });
     setEditing(true);
     scrollAfterRender.current = () => {
       scrollTo(0, 0);
@@ -1020,7 +999,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }
 
   function openHomeComposer() {
-    transition(null);
+    showDetail(null);
     setPage("home");
     scrollAfterRender.current = () => {
       scrollTo(0, 0);
@@ -1088,7 +1067,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   function startPicking() {
     if (!referencePicking)
       setReferencePicking({ page, filter: library.filter, scroll: scrollY });
-    transition(null);
+    showDetail(null);
     setPage("library");
     library.choose({ tab: "images", scope: "history" });
     scrollAfterRender.current = () => scrollTo(0, 0);
@@ -1096,7 +1075,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   function finishPicking() {
     if (!referencePicking) return;
-    transition(null);
+    showDetail(null);
     setPage(referencePicking.page);
     library.choose(referencePicking.filter);
     setReferencePicking(null);
@@ -1319,7 +1298,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           undefined,
           "DELETE",
         );
-        transition(null, false);
+        showDetail(null);
         setPage("library");
       },
     );
@@ -1343,7 +1322,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           "DELETE",
         );
         if (detail && "image" in detail && detail.image === id)
-          transition(null, false);
+          showDetail(null);
       },
       previousPreview ? previousPreview.opener : opener,
       previousPreview
@@ -1642,7 +1621,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       submit={() => submit()}
       upload={upload}
       menu={
-        menu && !menuHidden && anchor.current && isComposerMenu(menu)
+        menuShown && menu && isComposerMenu(menu)
           ? menu
           : null
       }
@@ -1663,13 +1642,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       <div id="app">
         {state && session ? (
           <div
-            className={
-              collapsed
-                ? "shell collapsed"
-                : sidebarChanged
-                  ? "shell"
-                  : "shell "
-            }
+            className={collapsed ? "shell collapsed" : "shell"}
             ref={shell}
           >
             <Sidebar
@@ -1693,7 +1666,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     close={closeDetail}
                     favorite={favorite}
                     cancel={cancel}
-                    pageTo={(id) => transition({ job: id })}
+                    cancelling={cancelling.has(job.id)}
+                    pageTo={(id) => showDetail({ job: id })}
                     locate={(job) =>
                       showResult(job.id, resultTab(job.kind), true)
                     }
@@ -1705,7 +1679,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     composer={editing ? composer : null}
                     more={(button) => openMenu("detail-more", button)}
                     menuOpen={
-                      menu === "detail-more" && !menuHidden && !!anchor.current
+                      menuShown && menu === "detail-more"
                     }
                     menuUsed={detailMenuUsed}
                     notify={notify}
@@ -1787,7 +1761,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     draft={profileDraft}
                     modelPreferences={modelPreferences.current}
                     navigate={(tab) => {
-                      transition(null);
+                      showDetail(null);
                       setSettingsTab(tab);
                       setSettingsVisit((visit) => visit + 1);
                     }}
@@ -1809,6 +1783,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     delta={delta}
                     detail={openJob}
                     cancel={cancel}
+                    cancelling={cancelling}
                   />
                 ) : (
                   <Library
@@ -1860,7 +1835,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       favorite,
                       edit: editJob,
                       job: openJob,
-                      image: (id) => transition({ image: id }),
+                      image: (id) => showDetail({ image: id }),
                       preview: (id, button, manage = true) =>
                         preview(
                           id,
@@ -1939,7 +1914,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         ref={popover}
         tabIndex={-1}
         hidden={menuHidden}
-        inert={mobileDrawerOpen && !sidebarPopoverOpen}
+        inert={!menuShown || (mobileDrawerOpen && !sidebarPopoverOpen)}
         className={
           menu
             ? `popover ${menu === "account" ? "account-menu" : menu}${menuShown ? " open" : ""}`

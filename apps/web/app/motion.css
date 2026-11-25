@@ -1,0 +1,216 @@
+:root {
+  --motion-feedback: 120ms;
+  --motion-enter: 180ms;
+  --motion-exit: 110ms;
+  --motion-ease: cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+@keyframes fm-reveal {
+  from {
+    opacity: 0;
+    translate: var(--motion-from-x, 0) var(--motion-from-y, 0);
+  }
+}
+
+@keyframes fm-recognize {
+  from {
+    opacity: 0.65;
+  }
+}
+
+/* Use on the part that changed. Never replay it on a polling or typing update. */
+.fm-reveal {
+  animation: fm-reveal var(--motion-enter) var(--motion-ease);
+}
+.fm-state-change {
+  animation: fm-recognize var(--motion-feedback) var(--motion-ease);
+}
+.fm-number {
+  font-variant-numeric: tabular-nums;
+}
+
+html .stage .links path {
+  animation-iteration-count: 2;
+}
+html .top {
+  transition: border-color var(--motion-feedback) var(--motion-ease);
+}
+html .cta-row .button .icon {
+  transition: transform var(--motion-feedback) var(--motion-ease);
+}
+html [data-act="theme"] :is(.light-icon, .dark-icon, .only-light, .only-dark) {
+  transition: opacity var(--motion-feedback) var(--motion-ease);
+}
+@starting-style {
+  html
+    [data-act="theme"]
+    :is(.light-icon, .dark-icon, .only-light, .only-dark) {
+    opacity: 0;
+  }
+}
+html .react-flow__edge.animated path {
+  animation: none;
+}
+
+html
+  body
+  :where(#app, .canvas-workspace, .project-list, .fm-chat, dialog)
+  button,
+html :is(.top-row .text-link, .top-row .icon-button, .cta-row .button) {
+  transition:
+    background-color var(--motion-feedback) var(--motion-ease),
+    border-color var(--motion-feedback) var(--motion-ease),
+    color var(--motion-feedback) var(--motion-ease);
+}
+/* Active feedback is immediate. Hit areas and focus outlines stay in place. */
+html
+  :where(#app, .canvas-workspace, .project-list, dialog, .fm-chat)
+  button:not(:disabled):active {
+  transition-duration: 0s;
+  filter: none;
+  transform: none;
+  opacity: 0.76;
+}
+
+.fm-chat-model-trigger > svg:last-child,
+.ledger-navigation-toggle > svg {
+  transition: rotate var(--motion-feedback) var(--motion-ease);
+}
+.fm-chat-model-trigger[aria-expanded="true"] > svg:last-child {
+  rotate: 180deg;
+}
+
+html :is(.fm-chat-model-menu, .fm-chat-context-menu, .cv-menu) {
+  animation: fm-reveal var(--motion-feedback) var(--motion-ease);
+}
+html .cv-menu.context-menu {
+  --motion-from-y: 0;
+}
+html :is(.fm-chat-model-menu, .cv-menu) {
+  --motion-from-y: 3px;
+}
+html :is(.fm-chat-latest, .canvas-toast, .upload-progress, .save-banner) {
+  --motion-from-y: 4px;
+  animation: fm-reveal var(--motion-enter) var(--motion-ease);
+}
+
+html dialog[open] {
+  --motion-from-y: 6px;
+  animation: fm-reveal var(--motion-enter) var(--motion-ease);
+}
+html dialog[open]::backdrop {
+  animation: fm-reveal var(--motion-enter) var(--motion-ease);
+  --motion-from-x: 0;
+  --motion-from-y: 0;
+}
+html dialog:is(.ledger-invite-sheet, .console-account-sheet, .plugin-drawer) {
+  --motion-from-x: 12px;
+  --motion-from-y: 0;
+}
+@media (max-width: 640px) {
+  html dialog.ledger-invite-sheet {
+    --motion-from-x: 0;
+    --motion-from-y: 10px;
+  }
+}
+@supports (overlay: auto) and (transition-behavior: allow-discrete) {
+  html dialog[data-motion-exit] {
+    opacity: 0;
+    translate: var(--motion-from-x, 0) var(--motion-from-y, 6px);
+    transition:
+      opacity var(--motion-exit) var(--motion-ease),
+      translate var(--motion-exit) var(--motion-ease),
+      overlay var(--motion-exit) allow-discrete,
+      display var(--motion-exit) allow-discrete;
+  }
+  html dialog[data-motion-exit][open] {
+    opacity: 1;
+    translate: none;
+    animation: none;
+    transition-duration: var(--motion-enter);
+  }
+  html dialog[data-motion-exit]::backdrop {
+    opacity: 0;
+    transition:
+      opacity var(--motion-exit) var(--motion-ease),
+      overlay var(--motion-exit) allow-discrete,
+      display var(--motion-exit) allow-discrete;
+  }
+  html dialog[data-motion-exit][open]::backdrop {
+    opacity: 1;
+    animation: none;
+    transition-duration: var(--motion-enter);
+  }
+  html dialog[data-motion-exit]:not([open]),
+  html dialog[data-motion-exit]:not([open])::backdrop {
+    pointer-events: none;
+  }
+  @starting-style {
+    html dialog[data-motion-exit][open] {
+      opacity: 0;
+      translate: var(--motion-from-x, 0) var(--motion-from-y, 6px);
+    }
+    html dialog[data-motion-exit][open]::backdrop {
+      opacity: 0;
+    }
+  }
+}
+
+/* The history overlay remains mounted. CSS can reverse a mid-flight close. */
+.fm-chat button.fm-chat-history-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  border-radius: 0;
+  background: rgb(0 0 0 / 10%);
+  animation: fm-reveal var(--motion-feedback) var(--motion-ease);
+}
+.fm-chat button.fm-chat-history-backdrop:not(:disabled):is(:hover, :active) {
+  background: rgb(0 0 0 / 10%);
+  opacity: 1;
+}
+.fm-chat[data-history-overlay] > .fm-chat-history {
+  position: absolute;
+  inset: 0 36px 0 0;
+  z-index: 5;
+  padding: 20px 12px;
+  background: var(--chat-bg);
+  box-shadow: 8px 0 30px #00000014;
+  opacity: 0;
+  translate: -8px 0;
+  transition:
+    opacity var(--motion-exit) var(--motion-ease),
+    translate var(--motion-exit) var(--motion-ease),
+    display var(--motion-exit) allow-discrete;
+}
+.fm-chat.fm-chat-compact[data-history-overlay] > .fm-chat-history {
+  inset-inline-end: 48px;
+  padding: 20px;
+}
+.fm-chat[data-history-overlay].fm-chat-history-open > .fm-chat-history {
+  opacity: 1;
+  translate: none;
+  transition-duration: var(--motion-enter);
+}
+@starting-style {
+  .fm-chat[data-history-overlay].fm-chat-history-open > .fm-chat-history {
+    opacity: 0;
+    translate: -8px 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-feedback: 0s;
+    --motion-enter: 0s;
+    --motion-exit: 0s;
+  }
+  *,
+  *::before,
+  *::after,
+  *::backdrop {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

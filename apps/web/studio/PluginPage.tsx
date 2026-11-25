@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
   type ReactNode,
 } from "react";
@@ -624,10 +625,10 @@ export function PluginPage({
           </div>
         );
       case "progress": {
-        const percent =
-          block.max > 0
-            ? Math.min(100, Math.round((block.value / block.max) * 100))
-            : 0;
+        const fraction = block.max > 0
+          ? Math.max(0, Math.min(1, block.value / block.max))
+          : 0;
+        const percent = Math.round(fraction * 100);
         return (
           <div className="plugin-progress" data-complete={percent >= 100}>
             <div className="plugin-progress-head">
@@ -637,11 +638,14 @@ export function PluginPage({
                 <small>{percent}%</small>
               </span>
             </div>
-            <progress
-              value={block.value}
-              max={block.max}
-              aria-label={block.label}
-            />
+            <div className="plugin-progress-track">
+              <progress
+                value={block.value}
+                max={block.max}
+                aria-label={block.label}
+              />
+              <span aria-hidden="true" style={{ "--progress": fraction } as CSSProperties} />
+            </div>
           </div>
         );
       }

@@ -114,6 +114,25 @@ try {
       ["ArrowRight", "视频"], ["End", "语音"], ["Home", "视频"],
     ]);
     console.log("Asset library ArrowLeft, ArrowRight, Home and End move focus and selection in both bars");
+
+    await page.locator('nav [data-nav="home"]').click();
+    const trigger = page.getByRole("button", { name: "创作类型" });
+    const popover = page.locator("#popover");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await trigger.press("Enter");
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await page.keyboard.press("Escape");
+    await expect(trigger).toBeFocused();
+    await expect(popover).toHaveAttribute("inert", "");
+    await trigger.press("Enter");
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect(popover).not.toHaveAttribute("inert", "");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(popover).toHaveCSS("transition-duration", "0s");
+    await page.keyboard.press("Escape");
+    await expect(popover).toHaveAttribute("hidden", "");
+    await expect(trigger).toBeFocused();
+    console.log("Popover exits inert, reopens from the keyboard and respects a live reduced-motion preference");
   } finally {
     await context.close();
   }
