@@ -15,7 +15,10 @@ export function parseStoryboard(text:string):SuggestedShot[]{
   return {title:r.title,prompt:r.prompt,narration:r.narration,seconds:r.seconds};
  });
 }
-export function AiStoryboard({workspace,userId,project,onApply}:{workspace:number;userId:number;project:string;onApply:(shots:SuggestedShot[])=>Promise<void>}){
+export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConfigureModels}:{
+ workspace:number;userId:number;project:string;onApply:(shots:SuggestedShot[])=>Promise<void>;
+ onRecharge:()=>void;onConfigureModels?:()=>void;
+}){
  const key=`fm-storyboard-${userId}-${workspace}-${project}`;
  const [draft,setDraft]=useState(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]'));
  const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(draft.shots),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
@@ -46,6 +49,7 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
  },[cid,workspace]);
  useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:lastMessage.current,shots}))},[shots,key,draft.message]);
  const price=config?.pricing.items.find((p:any)=>p.key===model+'|reply')?.amount;
+ const funded = price != null && config?.credits.available >= price;
  const send=async()=>{
   setBusy(true);setError('');
   try{
@@ -60,7 +64,16 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
  };
  return <div className="ai-storyboard">
   <label>创作需求<textarea value={brief} maxLength={8000} rows={4} disabled={running||busy} placeholder="介绍活动主题、受众、地点和希望传达的信息…" onChange={e=>{setBrief(e.target.value);localStorage.setItem(key+'-brief',e.target.value)}}/></label>
-  <div className="storyboard-request"><ModelSelect models={config?.models||{}} value={model} disabled={busy||running} onChange={setModel}/><span>{price==null?'':`文字生成 · ${price}`}</span>{running?<button className="secondary" onClick={()=>void req('/api/chats/'+cid+'/stop',{}).catch(e=>setError(e.message))}>停止</button>:<button className="primary" disabled={busy||!brief.trim()||!model||!config?.models[model]||price==null||config?.credits.available<price} onClick={()=>void send()}>{busy?'提交中…':pending.current?'重试确认':complete&&error?`重新拟定 · ${price}`:'拟定分镜'}</button>}</div>
+  <div className="storyboard-request">{model&&config?.models[model]&&<>
+   <ModelSelect models={config.models} value={model} disabled={busy||running} onChange={setModel}/>
+   {price!=null&&<span>{`文字生成 · ${price} 积分`}</span>}
+  </>}{running?<button className="secondary" onClick={()=>void req('/api/chats/'+cid+'/stop',{}).catch(e=>setError(e.message))}>停止</button>:model&&<button className="primary" disabled={busy||!brief.trim()||!config?.models[model]||!funded} onClick={()=>void send()}>{busy?'提交中…':pending.current?'重试确认':complete&&error?'重新拟定':'拟定分镜'}</button>}</div>
+  {!running&&config&&(!model
+   ? <p role="status">当前空间暂无可用对话模型{onConfigureModels
+    ? <button className="secondary" type="button" onClick={onConfigureModels}>前往配置对话模型</button>
+    : "，请联系管理员开通"}</p>
+   : price==null ? <p role="status">当前对话模型尚未定价</p>
+   : !funded && <p role="status">当前空间积分不足<button className="secondary" type="button" onClick={onRecharge}>去充值</button></p>)}
   {error&&<p className="error" role="alert">{error}</p>}
 
   {!!shots.length&&<><div className="storyboard-proposal">{shots.map((shot,i)=><section key={i}><label>镜头 {i+1}<input value={shot.title} maxLength={80} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,title:e.target.value}:r))}/></label><label>画面<textarea rows={3} value={shot.prompt} maxLength={12000} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,prompt:e.target.value}:r))}/></label><label>旁白<textarea rows={2} maxLength={300} value={shot.narration} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,narration:e.target.value}:r))}/></label><div className="storyboard-seconds" role="group" aria-label={`镜头 ${i+1} 时长`}>{([5,10,15] as const).map(seconds=><button key={seconds} aria-pressed={shot.seconds===seconds} onClick={()=>setShots(rows=>rows.map((r,j)=>j===i?{...r,seconds}:r))}>{seconds}s</button>)}</div></section>)}</div>

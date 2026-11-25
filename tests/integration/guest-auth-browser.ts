@@ -15,6 +15,7 @@ const harness = spawn(
 const closed = once(harness, "close");
 let browser: Browser | undefined;
 let baseURL: string;
+let credentials: { name: string; password: string };
 
 before(
   async () => {
@@ -23,9 +24,12 @@ before(
     harness.stdout.on("data", (chunk: Buffer) => {
       output = (output + chunk.toString()).slice(-16000);
       const ready = output.match(
-        /Isolated Studio (http:\/\/[^\s]+)\/studio\r?\n/,
+        /Isolated Studio (http:\/\/[^\s]+)\/studio\r?\nSynthetic login (\S+) \/ (\S+)\r?\n/,
       );
-      if (ready) harness.emit("studio-ready", ready[1]);
+      if (ready) {
+        credentials = { name: ready[2], password: ready[3] };
+        harness.emit("studio-ready", ready[1]);
+      }
     });
     harness.stderr.on("data", (chunk: Buffer) => {
       output = (output + chunk.toString()).slice(-16000);
@@ -94,6 +98,65 @@ test("guest Studio offers help and a home link without JavaScript", async () => 
     );
     await expect(loading).toBeHidden();
     await expect(login).toBeHidden();
+  } finally {
+    await context.close();
+  }
+});
+
+test("login returns to the requested canvas and preserves its workspace", async () => {
+  const context = await browser!.newContext({ baseURL, viewport });
+  try {
+    const page = await context.newPage();
+    await page.goto("/canvas?workspace=1");
+    const url = new URL(page.url());
+    assert.equal(url.pathname, "/studio");
+    assert.equal(url.searchParams.get("next"), "/canvas");
+    assert.equal(url.searchParams.get("workspace"), "1");
+    await page.getByLabel("用户名").fill(credentials.name);
+    await page.locator('[name="pw"]').fill(credentials.password);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    await expect(page).toHaveURL(/\/canvas\?workspace=1$/);
+    await expect(page.getByRole("heading", { name: "画布", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "新建画布", exact: true }).click();
+    await expect(page.locator(".react-flow")).toBeVisible();
+    const project = new URL(page.url()).pathname + new URL(page.url()).search;
+    await context.clearCookies();
+    await page.goto(project);
+    await expect(page.getByRole("heading", { name: "登录工作台" })).toBeVisible();
+    assert.equal(new URL(page.url()).searchParams.get("next"), project.split("?")[0]);
+    await page.getByLabel("用户名").fill(credentials.name);
+    await page.locator('[name="pw"]').fill(credentials.password);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    await expect(page).toHaveURL(baseURL + project);
+    await expect(page.locator(".react-flow")).toBeVisible();
+    await page.goto("/canvas?workspace=987654321");
+    await expect(page).toHaveURL(/\/canvas\?workspace=1$/);
+    await expect(page.getByText("无法进入原工作区，已打开「个人空间」。")).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
+test("login opens a payment receipt and ignores an external return target", async () => {
+  const context = await browser!.newContext({ baseURL, viewport });
+  try {
+    const page = await context.newPage();
+    const id = "FM-LOCAL-RECEIPT";
+    await page.route(`**/api/recharge/orders/${id}`, (route) => route.fulfill({
+      json: {
+        id, workspace: 1, method: "alipay", method_label: "支付宝",
+        amount: 100, credits: 10, created: 1, state: "paid",
+        can_pay: false, payment_url: "",
+      },
+    }));
+    await page.goto(`/studio?recharge=${id}&next=%2F%2Fexample.invalid`);
+    await page.getByLabel("用户名").fill(credentials.name);
+    await page.locator('[name="pw"]').fill(credentials.password);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    const receipt = page.getByRole("dialog", { name: "充值订单" });
+    await expect(receipt.getByText("已到账")).toBeVisible();
+    await expect(receipt.getByRole("button", { name: "刷新支付结果" })).toBeHidden();
+    await expect(page).toHaveURL(`${baseURL}/studio`);
   } finally {
     await context.close();
   }

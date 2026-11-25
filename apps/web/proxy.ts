@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { originalHeaders } from "@fumiao/web-compat/ui";
+import { canvasLoginPath, canvasReturnPath } from "./auth/return-path";
 import { backend } from "./proxy-backend";
 
 // The pages below need the API; reload until it answers again.
@@ -59,7 +60,12 @@ export async function proxy(request: NextRequest) {
       await state.body?.cancel();
       studio = auth && state.ok;
       if (!state.ok && state.status !== 401) return unavailable(request);
-      if (canvas && !state.ok) return redirect(request, "/studio");
+      if (canvas && !state.ok)
+        return redirect(request, canvasLoginPath(pathname, searchParams));
+      if (studio) {
+        const destination = canvasReturnPath(searchParams);
+        if (destination) return redirect(request, destination);
+      }
     } catch {
       return unavailable(request);
     }

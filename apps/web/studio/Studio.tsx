@@ -87,7 +87,9 @@ import {
   submittedDraft,
   syncDraftReferences,
   readDraft,
+  readDraftBackup,
   writeDraft,
+  writeDraftBackup,
   type Asset,
   type DraftSession,
   type FrameSlot,
@@ -131,6 +133,7 @@ function animateMove(element: Element, before: DOMRect) {
 export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const [state, setState] = useState<StudioState | null>(null);
   const [session, setSession] = useState<DraftSession | null>(null);
+  const [hasDraftBackup, setHasDraftBackup] = useState(false);
   const [expired, setExpired] = useState(false);
   const [bootstrapError, setBootstrapError] = useState("");
   const retryBootstrap = useRef(false);
@@ -149,7 +152,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   } | null>(null);
   const [detailMenuUsed, setDetailMenuUsed] = useState(false);
   const [dialog, setDialog] = useState<AssetDialogState | null>(null);
-  const [chatVisit, setChatVisit] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
   const [narrowScreen, setNarrowScreen] = useState(false);
   const [menu, setMenu] = useState<StudioMenu | null>(null);
@@ -161,6 +163,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const [toast, setToast] = useState("");
   const [toastVisible, setToastVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState<ReadonlySet<number>>(() => new Set());
   const [uploading, setUploading] = useState(false);
   const [delta, setDelta] = useState(0);
   const receivedAt = useRef(0);
@@ -189,10 +192,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     controller: AbortController;
   } | null>(null);
   const leaving = useRef(false);
-  const onLibraryRead = useRef<
-    ((before: StudioState, after: StudioState) => void) | null
-  >(null);
   const assetScroll = useRef(0);
+  const viewVersion = useRef(0);
   const scrollAfterRender = useRef<(() => void) | null>(null);
   const animateAfterRender = useRef<(() => void) | null>(null);
 
@@ -276,16 +277,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }, [ready]);
 
   useLayoutEffect(() => {
-    onLibraryRead.current = (before, after) => {
-      if (page !== "library" || detail) return;
-      const content = ({ jobs, assets, favorites }: StudioState) => [
-        jobs.map(({ timing, eta, ...job }) => job),
-        assets,
-        favorites,
-      ];
-      if (JSON.stringify(content(before)) !== JSON.stringify(content(after)))
-        library.refreshGrid();
-    };
     animateAfterRender.current?.();
     animateAfterRender.current = null;
     scrollAfterRender.current?.();
@@ -309,7 +300,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }, []);
 
   const refresh = useCallback(
-    async (force = false) => {
+    async () => {
       if (leaving.current) return;
       retryBootstrap.current = false;
       setBootstrapError("");
@@ -353,6 +344,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           );
         }
         const initialDraft = currentDraft.current || readDraft(next);
+        if (!previous) setHasDraftBackup(Boolean(readDraftBackup(next)));
         let livePacks: Map<string, Pack> | null = null;
         if (hasDraftPacks(initialDraft)) {
           try {
@@ -456,7 +448,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         )
           closeMenu();
         workspaceId.current = String(next.workspace_id);
-        if (previous && !force) onLibraryRead.current?.(previous, next);
         setDialog((current) => {
           if (current?.content.kind !== "preview" || !current.content.manage)
             return current;
@@ -478,6 +469,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           setDialog(null);
           setState(null);
           setSession(null);
+          setHasDraftBackup(false);
           setExpired(true);
         } else if (
           error instanceof ApiError &&
@@ -695,6 +687,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   function navigate(destination: Destination | "settings") {
     const space = active.current;
     if (!space || leaving.current) return;
+    if (destination === page && !detail && !referencePicking) {
+      closeMenu();
+      if (mobileDrawerOpen) changeSidebar(true, true);
+      return;
+    }
     setReferencePicking(null);
     if (destination === "canvas") {
       openCanvas();
@@ -704,8 +701,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     library.reset();
     if (destination === "library") library.redrawLibrary();
     transition(null);
-    // The original navigation remounts chat even when it is already selected.
-    if (destination === "chat") setChatVisit((visit) => visit + 1);
     if (destination === "settings") setSettingsVisit((visit) => visit + 1);
     if (destination.startsWith("plugin:") || page.startsWith("plugin:")) {
       const url = new URL(location.href);
@@ -744,8 +739,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     await refresh();
   }, [refresh]);
 
-  const refreshSettings = useCallback(() => refresh(true), [refresh]);
-
   const adminRequest: AdminRequest = useCallback(
     async (path, body, method) => {
       try {
@@ -772,7 +765,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         state={current}
         space={space}
         request={adminRequest}
-        refresh={refreshSettings}
+        refresh={refresh}
         notify={notify}
       />,
       opener,
@@ -793,7 +786,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         summary,
         run: async () => {
           await run();
-          void refreshSettings();
+          void refresh();
         },
       },
       opener,
@@ -802,9 +795,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }
 
   function transition(next: Detail | null, animate = true) {
+    ++viewVersion.current;
     closeMenu();
     library.clearHighlight();
-    library.showUploads();
     setDetail(next);
     setEditing(false);
     setDetailMenuUsed(false);
@@ -875,6 +868,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }
 
   function selectWorkspace(id: number) {
+    if (id === active.current?.workspace_id) {
+      closeMenu(true);
+      return;
+    }
     if (busy.current.has("upload")) {
       notify("图片正在上传，请稍候切换");
       return;
@@ -893,6 +890,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     assetScroll.current = scrollY;
     transition({ job: id });
     scrollAfterRender.current = () => scrollTo(0, 0);
+  }
+
+  function openCredits() {
+    setSettingsTab("credits");
+    navigate("settings");
   }
 
   function closeDetail() {
@@ -921,9 +923,34 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   function cancel(id: number) {
     void mutate(`cancel-${id}`, async () => {
-      await api(workspaceId.current, `/api/jobs/${id}/cancel`, {});
-      await refresh(true);
-      library.redrawLibrary();
+      const space = active.current;
+      if (!space) return;
+      setCancelling((current) => new Set([...current, id]));
+      try {
+        await api(workspaceId.current, `/api/jobs/${id}/cancel`, {});
+        if (!sameSpace(space, active.current) || leaving.current) return;
+        const current = active.current!;
+        ++stateRead.current;
+        const next = {
+          ...current,
+          jobs: current.jobs.map((job) =>
+            job.id === id ? { ...job, status: "cancelled" as const, note: "" } : job,
+          ),
+        };
+        active.current = next;
+        setState(next);
+        notify("已取消生成，积分已退回");
+        void refresh();
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) void refresh();
+        throw error;
+      } finally {
+        setCancelling((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+      }
     });
   }
 
@@ -931,16 +958,48 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     const space = active.current;
     const previous = currentDraft.current;
     const job = space?.jobs.find((item) => item.id === id);
-    if (!space || !previous || !job || busy.current.has("upload")) return;
+    if (!space || !previous || !job || busy.current.has("upload") || busy.current.has("submit")) return;
+    if (previous.parent === id && detail && "job" in detail && detail.job === id && editing)
+      return;
     if (!detail) assetScroll.current = scrollY;
     setReferencePicking(null);
-    updateDraft(loadJob(space, previous, job));
+    if (previous.parent !== id) {
+      if (!hasDraftBackup && (previous.draft.prompt.trim() || packReferences(previous).length)) {
+        writeDraftBackup(space, previous);
+        setHasDraftBackup(true);
+      }
+      updateDraft(loadJob(space, previous, job));
+    }
     transition({ job: id });
     setEditing(true);
     scrollAfterRender.current = () => {
       scrollTo(0, 0);
       focusEditor();
     };
+  }
+
+  function recoverDraft(space: StudioState) {
+    const backup = readDraftBackup(space);
+    if (!backup) return false;
+    const parentExists = backup.parent === null || space.jobs.some((job) => job.id === backup.parent);
+    updateDraft(parentExists ? backup : { ...backup, parent: null, retainedSeed: null });
+    writeDraftBackup(space, null);
+    setHasDraftBackup(false);
+    return true;
+  }
+
+  function returnToComposer() {
+    transition(null);
+    scrollAfterRender.current = () => {
+      scrollTo(0, 0);
+      focusEditor();
+    };
+  }
+
+  function restoreDraft() {
+    const space = active.current;
+    if (!space || busy.current.has("upload") || busy.current.has("submit")) return;
+    if (recoverDraft(space)) returnToComposer();
   }
 
   function imageToVideo(id: number) {
@@ -992,7 +1051,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     { requestId, version: entry.version, target, values },
                   );
                   notify(response.notice);
-                  await refresh(true);
+                  await refresh();
                 },
               },
               anchor.current,
@@ -1282,7 +1341,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
               void refresh();
             throw error;
           }
-          await refresh(true);
+          await refresh();
           library.redrawLibrary();
         },
       },
@@ -1446,6 +1505,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       }
     }
     void mutate("submit", async () => {
+      const originalView = viewVersion.current;
+      const keepCreating = page === "home" && !detail && !job;
       setSubmitting(true);
       try {
         let retryId: string | undefined;
@@ -1465,12 +1526,24 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         if (job) retryIds.current.delete(job.id);
         if (!sameSpace(space, active.current) || leaving.current) return;
         const latest = currentDraft.current!;
-        if (!job && latest.submitId === session.submitId) {
-          updateDraft(submittedDraft(latest));
+        const draftUnchanged = latest.submitId === session.submitId;
+        const draftRestored = !job && draftUnchanged && recoverDraft(active.current!);
+        if (!job && draftUnchanged) {
+          if (!draftRestored) updateDraft(submittedDraft(latest));
+          else if (originalView === viewVersion.current && detail) returnToComposer();
         }
-        notify("已加入生成队列");
+        const acceptedDraft = currentDraft.current;
+        notify(draftRestored ? "已加入生成队列，原草稿已恢复" : "已加入生成队列，可继续创作");
         await refresh();
-        if (sameSpace(space, active.current) && !leaving.current)
+        if (
+          !keepCreating &&
+          !draftRestored &&
+          draftUnchanged &&
+          acceptedDraft === currentDraft.current &&
+          originalView === viewVersion.current &&
+          sameSpace(space, active.current) &&
+          !leaving.current
+        )
           showResult(id, resultTab(request.kind));
       } finally {
         setSubmitting(false);
@@ -1631,7 +1704,24 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   const composer = state && session && (
     <Composer
-      managePlugins={() => {setSettingsTab("plugins");setPage("settings");}}
+      managePlugins={() => {
+        const models = [
+          ...Object.keys(state.video_models),
+          ...Object.keys(state.images.models),
+          ...Object.keys(state.audio_models),
+        ].filter((id) => !state.model_catalog[id]?.hidden);
+        const globalPolicy = state.model_policy?.enabled;
+        const teamPolicy = state.team_model_policies?.[String(state.workspace_id)]?.enabled;
+        const globallyAllowed = models.some((id) => globalPolicy?.[id]);
+        const allowedHere = models.some((id) => globalPolicy?.[id] && (!teamPolicy || teamPolicy[id]));
+        if (models.length && globalPolicy && !allowedHere) {
+          modelPreferences.current.scope = globallyAllowed && teamPolicy
+            ? String(state.workspace_id)
+            : "global";
+          setSettingsTab("models");
+        } else setSettingsTab("plugins");
+        navigate("settings");
+      }}
       state={state}
       session={session}
       estimate={estimate}
@@ -1653,11 +1743,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       seenMenus={seenComposerMenus.current}
       referenceContents={referenceContents}
       flowSourceContents={flowSourceContents}
+      restoreDraft={hasDraftBackup ? restoreDraft : undefined}
+      onRecharge={openCredits}
     />
   );
   const favorite = (key: string, saved: boolean) => saveFavorites([key], saved);
 
-  if (expired) return <Auth loadingLogo={loadingLogo} />;
+  if (expired) return <Auth loadingLogo={loadingLogo} expired />;
   return (
     <>
       <div id="app">
@@ -1693,6 +1785,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     close={closeDetail}
                     favorite={favorite}
                     cancel={cancel}
+                    cancelling={cancelling.has(job.id)}
                     pageTo={(id) => transition({ job: id })}
                     locate={(job) =>
                       showResult(job.id, resultTab(job.kind), true)
@@ -1733,7 +1826,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       {composer}
                     </div>
                     <section className="recent-section">
-                      <HistoryHeading open={() => navigate("library")} />
+                      <HistoryHeading open={state.jobs.length ? () => {
+                        navigate("library");
+                        library.choose({ tab: resultTab(state.jobs[0].kind), scope: "history" });
+                      } : undefined} />
                       <div id="recent-grid">
                         <History
                           state={state}
@@ -1748,7 +1844,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                 ) : page === "chat" ? (
                   <div id="chat-root">
                     <ChatWorkspace
-                      key={`${state.me.id}:${state.workspace_id}:${chatVisit}`}
+                      key={`${state.me.id}:${state.workspace_id}`}
                       userId={state.me.id}
                       workspace={state.workspace_id}
                       isAdmin={state.me.role === "admin"}
@@ -1766,6 +1862,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                           : undefined
                       }
                       openCanvas={followCanvas}
+                      onRecharge={openCredits}
                     />
                   </div>
                 ) : page.startsWith("plugin:") ? (
@@ -1775,7 +1872,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       page={studioPage}
                       client={pageClient}
                       open={openAdminDialog}
-                      refresh={refreshSettings}
+                      refresh={refresh}
                       notify={notify}
                     />
                   ) : <p role="status">此插件页面已不可用</p>
@@ -1794,7 +1891,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     dialogOpen={!!dialog}
                     open={openSettingsDialog}
                     saved={saveProfile}
-                    refresh={refreshSettings}
+                    refresh={refresh}
                     notify={notify}
                     viewLibrary={() => navigate("library")}
                     showWorkspace={showWorkspace}
@@ -1809,6 +1906,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     delta={delta}
                     detail={openJob}
                     cancel={cancel}
+                    cancelling={cancelling}
                   />
                 ) : (
                   <Library
@@ -1824,7 +1922,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                             video: "videos",
                             audio: "audio",
                           } as const;
-                          await refresh(true);
+                          await refresh();
                           if (assets[0])
                             setFilter({
                               tab: tabs[assets[0].kind],

@@ -862,7 +862,6 @@ export async function studioBrowser(
       '[data-menu="format"]',
       '[data-menu="advanced"]',
       '[data-act="reference"]',
-      '[data-menu="mention"]',
       '[data-menu="image-model"]',
       '[data-menu="duration"]',
     ]) {
@@ -934,6 +933,10 @@ export async function studioBrowser(
     );
     const { id: jobId } = await submission.json();
     assert.ok(Number.isSafeInteger(jobId) && jobId > 0);
+    await expect(page.locator('nav [data-nav="home"]')).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
     await expect
       .poll(
         async () =>
@@ -965,6 +968,9 @@ export async function studioBrowser(
     await expect(page.locator(`#job-${jobId} .asset-preview img`)).toHaveAttribute(
       "src", "/media/" + result, { timeout: apiTimeout },
     );
+    await expect(page.locator("#recent-grid").locator(`#job-${jobId}`)).toBeVisible();
+    const previousDraft = "尚未发送的下一张图";
+    await page.locator("#prompt").fill(previousDraft);
     await page
       .locator(`#job-${jobId} .asset-preview`)
       .click({ timeout: apiTimeout });
@@ -975,6 +981,20 @@ export async function studioBrowser(
     await expect(page.locator(".detail-view.editing #prompt")).toHaveText(
       imagePrompt,
     );
+    await page.reload();
+    await page.getByRole("button", { name: "恢复刚才草稿" }).click();
+    await expect(page.locator("#home-composer #prompt")).toHaveText(previousDraft);
+    await page.locator(`#job-${jobId} .asset-preview`).click();
+    await page.locator('.edit-actions [data-act="edit"]').click();
+    const mockAdmission = "**/api/image-jobs";
+    await page.route(mockAdmission, (route) => route.fulfill({ json: { id: jobId } }));
+    try {
+      await page.locator(".detail-view.editing .generate-button").click();
+      await expect(page.locator("#home-composer #prompt")).toHaveText(previousDraft);
+      await expect(page.getByRole("button", { name: "恢复刚才草稿" })).toBeHidden();
+    } finally {
+      await page.unroute(mockAdmission);
+    }
     await nav("home");
 
     const audioScript = "这段语音草稿还没有发送。";

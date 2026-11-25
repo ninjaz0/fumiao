@@ -341,3 +341,19 @@
     transform: none;
   }
 }
+.inline-reference > video,
+.inline-reference > .h3-audio-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.composer-draft-recovery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 8px;
+  font-size: 13px;
+}

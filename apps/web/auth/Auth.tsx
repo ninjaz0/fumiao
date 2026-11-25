@@ -8,6 +8,7 @@ import {
 } from "react";
 import { useAppearance } from "../home/controls";
 import { AuthPasswordField } from "./AuthPasswordField";
+import { studioLoginDestination } from "./return-path";
 import "./auth.css";
 import styles from "./Auth.module.css";
 
@@ -69,14 +70,6 @@ function Appearance() {
     </button>
   );
 }
-class RequestError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-  }
-}
 async function request(
   path: string,
   body?: Record<string, string>,
@@ -93,16 +86,15 @@ async function request(
   });
   const data: { detail?: unknown } = await response.json().catch(() => ({}));
   if (!response.ok)
-    throw new RequestError(
+    throw new Error(
       typeof data.detail === "string"
         ? data.detail
         : "请求未完成，请检查输入后重试",
-      response.status,
     );
   return data;
 }
 /** Login/register replace only the anonymous entry, using the authoritative session API. */
-export default function Auth({ loadingLogo }: { loadingLogo: string }) {
+export default function Auth({ loadingLogo, expired = false }: { loadingLogo: string; expired?: boolean }) {
   const [locationState, setLocationState] = useState({
     mode: "login" as Mode,
     retired: false,
@@ -113,16 +105,11 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
   const [username, setUsername] = useState("");
   const [usernameError, setUsernameError] = useState(false);
   const [note, setNote] = useState("");
-  const [toast, setToast] = useState("");
-  const [toastVisible, setToastVisible] = useState(false);
   const revision = useRef(0);
   const lastHash = useRef<string | null>(null);
   const busyRevision = useRef<number | null>(null);
   const form = useRef<HTMLFormElement>(null);
   const focusNext = useRef(false);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
   const registering = locationState.mode === "register";
   useEffect(() => {
     try {
@@ -148,7 +135,6 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
     return () => {
       window.removeEventListener("hashchange", read);
       window.removeEventListener("popstate", read);
-      clearTimeout(toastTimer.current);
     };
   }, []);
   useEffect(() => {
@@ -181,31 +167,21 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
     setNote("");
     const fields = new FormData(event.currentTarget);
     const value = (key: string) => String(fields.get(key) ?? "");
+    const search = new URLSearchParams(location.search);
+    const username = value("user").trim();
     try {
       await request(
         registering ? "/api/register" : "/api/login",
         {
-          name: value("user").trim(),
+          name: username,
           password: value("pw"),
           ...(registering
-            ? { nickname: value("nickname").trim(), code: value("code").trim() }
+            ? { nickname: value("nickname").trim() || username, code: value("code").trim() }
             : {}),
         },
-        new URLSearchParams(location.search).get("workspace"),
+        search.get("workspace"),
       );
-      history.replaceState(null, "", location.pathname);
-      try {
-        await request("/api/state");
-        // Resolve the authenticated workspace through the normal Studio entry.
-        location.replace(location.pathname);
-      } catch (error) {
-        if (!(error instanceof RequestError && error.status === 401)) {
-          setToast((error as Error).message);
-          setToastVisible(true);
-          clearTimeout(toastTimer.current);
-          toastTimer.current = setTimeout(() => setToastVisible(false), 4200);
-        }
-      }
+      location.replace(studioLoginDestination(search));
     } catch (error) {
       if (revision.current === version) setNote((error as Error).message);
     } finally {
@@ -349,11 +325,10 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                     <label className="formlabel">
                       昵称
                       <input
-                        required
                         name="nickname"
                         autoComplete="nickname"
                         maxLength={40}
-                        placeholder="在工作台显示的名字"
+                        placeholder="选填，默认与用户名相同"
                       />
                     </label>
                   )}
@@ -376,7 +351,7 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
                   )}
                   {"\n      "}
                   <div className="authnote" role="alert">
-                    {note}
+                    {note || (expired && !registering ? "登录已过期，请重新登录。" : "")}
                   </div>
                   {"\n      "}
                   <button className="primary" type="submit" disabled={busy}>
@@ -406,13 +381,6 @@ export default function Auth({ loadingLogo }: { loadingLogo: string }) {
             </main>
           </div>
         )}
-      </div>
-      <div
-        role="status"
-        id="toast"
-        className={toastVisible ? "visible" : undefined}
-      >
-        {toast}
       </div>
       <dialog id="modal">
         <div id="dialog-body" />
