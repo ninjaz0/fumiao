@@ -143,6 +143,25 @@ try {
     await expect(page.getByRole("button", { name: `预览视频 #${firstId + 1}` })).toBeVisible({ timeout: 12_000 });
     await expect(original).toBeFocused();
     console.log("Adding a task during polling preserves focus on the existing asset");
+
+    await page.locator('nav [data-nav="home"]').click();
+    const trigger = page.getByRole("button", { name: "创作类型" });
+    const popover = page.locator("#popover");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await trigger.press("Enter");
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await page.keyboard.press("Escape");
+    await expect(trigger).toBeFocused();
+    await expect(popover).toHaveAttribute("inert", "");
+    await trigger.press("Enter");
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect(popover).not.toHaveAttribute("inert", "");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(popover).toHaveCSS("transition-duration", "0s");
+    await page.keyboard.press("Escape");
+    await expect(popover).toHaveAttribute("hidden", "");
+    await expect(trigger).toBeFocused();
+    console.log("Popover exits inert, reopens from the keyboard and respects a live reduced-motion preference");
   } finally {
     await page.unrouteAll({ behavior: "wait" });
     await context.close();

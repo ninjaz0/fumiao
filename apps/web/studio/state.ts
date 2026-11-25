@@ -1749,16 +1749,23 @@ export function composerFeedback(
       ? unpricedReason
       : "当前空间积分不足";
 
+  const limitReason = overLimit
+    ? `超出字数限制：${draft.prompt.length} / ${limit} 字`
+    : "";
+  const promptReason = hasPrompt
+    ? ""
+    : draft.kind === "audio"
+      ? "请输入要朗读的文字"
+      : "请输入提示词";
   const status = options.uploading
     ? "上传中"
     : options.submitting
-      ? ""
+      ? "正在提交…"
       : !available
         ? model || hasPrompt
           ? unavailableReason
           : ""
-        : issue ||
-          (overLimit ? `${draft.prompt.length} / ${limit} 字` : priceReason);
+        : issue || limitReason || priceReason;
 
   const submitReason = options.submitting
     ? "提交中"
@@ -1766,16 +1773,7 @@ export function composerFeedback(
       ? "上传中"
       : !available
         ? unavailableReason
-        : issue ||
-          (overLimit
-            ? `超出字数限制：${draft.prompt.length} / ${limit} 字`
-            : !price.allowed
-              ? priceReason
-              : !hasPrompt
-                ? draft.kind === "audio"
-                  ? "请输入要朗读的文字"
-                  : "请输入提示词"
-                : "");
+        : issue || limitReason || priceReason || promptReason;
 
   return { status, submitReason, priceReason };
 }

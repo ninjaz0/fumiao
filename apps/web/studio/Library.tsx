@@ -327,7 +327,7 @@ export function Library({
           <div id="selection-toolbar" key={library.redraw}>
             {referencePicking ? (
               <div className="reference-pick-toolbar">
-                <span role="status">{`已添加 ${referencePicking.ids.size} 张图片`}</span>
+                <span className="fm-number" role="status">{`已添加 ${referencePicking.ids.size} 张图片`}</span>
                 <button
                   className="primary"
                   data-act="finish-reference-picking"
@@ -352,7 +352,7 @@ export function Library({
                   <span>{library.count > 0 && <Icon name="check" />}</span>全选
                 </button>
                 <span
-                  className="selection-count"
+                  className="selection-count fm-number"
                   aria-live="polite"
                 >{`已选择 ${keys.length} 项内容`}</span>
                 <div className="bulk-actions">
@@ -438,9 +438,9 @@ export function Library({
                 {filter.scope === "favorites" ? "暂无收藏" : "暂无相关资产"}
               </div>
             )}
-          {groups.map(({ day, label, jobs }) => (
+          {groups.map(({ key, label, jobs }) => (
             <JobGroup
-              key={day}
+              key={key}
               date={label}
               jobs={jobs}
               state={state}

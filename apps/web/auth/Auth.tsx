@@ -111,6 +111,7 @@ export default function Auth({ loadingLogo, expired = false }: { loadingLogo: st
   const form = useRef<HTMLFormElement>(null);
   const focusNext = useRef(false);
   const registering = locationState.mode === "register";
+  const statusNote = note || (expired && !registering ? "登录已过期，请重新登录。" : "");
   useEffect(() => {
     try {
       sessionStorage.removeItem("fm-invite");
@@ -169,6 +170,7 @@ export default function Auth({ loadingLogo, expired = false }: { loadingLogo: st
     const value = (key: string) => String(fields.get(key) ?? "");
     const search = new URLSearchParams(location.search);
     const username = value("user").trim();
+    let redirecting = false;
     try {
       await request(
         registering ? "/api/register" : "/api/login",
@@ -182,10 +184,11 @@ export default function Auth({ loadingLogo, expired = false }: { loadingLogo: st
         search.get("workspace"),
       );
       location.replace(studioLoginDestination(search));
+      redirecting = true;
     } catch (error) {
       if (revision.current === version) setNote((error as Error).message);
     } finally {
-      if (busyRevision.current === version) {
+      if (!redirecting && busyRevision.current === version) {
         busyRevision.current = null;
         setBusy(false);
       }
@@ -322,7 +325,7 @@ export default function Auth({ loadingLogo, expired = false }: { loadingLogo: st
                   )}
                   {"\n      "}
                   {registering && (
-                    <label className="formlabel">
+                    <label className="formlabel fm-state-change">
                       昵称
                       <input
                         name="nickname"
@@ -336,7 +339,7 @@ export default function Auth({ loadingLogo, expired = false }: { loadingLogo: st
                   <AuthPasswordField registering={registering} />
                   {"\n      "}
                   {registering && (
-                    <label className="formlabel">
+                    <label className="formlabel fm-state-change">
                       邀请码
                       <input
                         required
@@ -351,7 +354,7 @@ export default function Auth({ loadingLogo, expired = false }: { loadingLogo: st
                   )}
                   {"\n      "}
                   <div className="authnote" role="alert">
-                    {note || (expired && !registering ? "登录已过期，请重新登录。" : "")}
+                    {statusNote && <span key={statusNote} className="fm-state-change">{statusNote}</span>}
                   </div>
                   {"\n      "}
                   <button className="primary" type="submit" disabled={busy}>

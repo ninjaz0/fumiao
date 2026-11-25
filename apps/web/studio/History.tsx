@@ -220,7 +220,7 @@ export function JobCard({
               : duration(Math.round(job.actual?.duration ?? job.seconds))
             : status(job)}
         </span>
-        {job.kind !== "image" && (
+        {job.kind !== "image" && job.result && (
           <span className="asset-play">
             <Icon name="play" />
           </span>
@@ -246,7 +246,7 @@ export function JobCard({
         )}
       </div>
       {["running", "queued", "done"].includes(job.status) && (
-        <div className="pending-caption" data-time-job={job.id}>
+        <div className="pending-caption fm-number" data-time-job={job.id}>
           {timing(job, delta)}
         </div>
       )}
@@ -323,7 +323,7 @@ export function Queue({
                 </div>
               </div>
               <div className="job-progress">
-                <span>{status(job)}</span>
+                <span className="fm-state-change" key={status(job)}>{status(job)}</span>
                 <small data-time-job={job.id}>{timing(job, delta)}</small>
               </div>
               <div className="job-actions">
@@ -335,7 +335,7 @@ export function Queue({
             </div>
           ))
         ) : (
-          <div className="empty-state">暂无待处理任务</div>
+          <div className="empty-state" role="status">暂无待处理任务</div>
         )}
       </div>
     </div>
@@ -357,6 +357,7 @@ export function CancelGeneration({
       data-act="cancel"
       data-id={job.id}
       disabled={pending}
+      aria-busy={pending}
       onClick={() => cancel(job.id)}
     >
       {pending ? "正在取消…" : "取消生成"}

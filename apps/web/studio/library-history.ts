@@ -2,15 +2,16 @@ export function groupHistoryJobs<T extends { created: number }>(
   jobs: readonly T[],
   now = new Date(),
 ) {
-  const groups = new Map<string, { day: string; label: string; jobs: T[] }>();
+  const groups: { day: string; key: string; label: string; jobs: T[] }[] = [];
+  const segments = new Map<string, number>();
   const today = now.toDateString();
   const currentYear = now.getFullYear();
   for (const job of jobs) {
     const date = new Date(job.created * 1000);
     const day = date.toDateString();
-    const group = groups.get(day);
-    if (group) {
-      group.jobs.push(job);
+    const previous = groups.at(-1);
+    if (previous?.day === day) {
+      previous.jobs.push(job);
       continue;
     }
     const year = date.getFullYear();
@@ -21,7 +22,10 @@ export function groupHistoryJobs<T extends { created: number }>(
         : year === currentYear
           ? monthDay
           : `${year}年${monthDay}`;
-    groups.set(day, { day, label, jobs: [job] });
+    // Imported jobs may interleave dates when ordered by public ID.
+    const segment = segments.get(day) ?? 0;
+    segments.set(day, segment + 1);
+    groups.push({ day, key: day + ":" + segment, label, jobs: [job] });
   }
-  return [...groups.values()];
+  return groups;
 }

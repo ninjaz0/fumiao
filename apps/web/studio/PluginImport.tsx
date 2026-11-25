@@ -83,6 +83,7 @@ export function PluginImport({
       </button>
       <dialog
         ref={dialog}
+        data-motion-exit=""
         aria-labelledby={titleId}
         className={styles.dialog}
         onCancel={(event) => {

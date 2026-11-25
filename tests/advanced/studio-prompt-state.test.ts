@@ -1574,14 +1574,14 @@ test("#53 composerFeedback surfaces visible status and button reason for insuffi
     draft: { ...audioFilled.draft, prompt: "字".repeat(301) },
   };
   assert.deepEqual(composerFeedback(state, overLimitAudio), {
-    status: "301 / 300 字",
+    status: "超出字数限制：301 / 300 字",
     submitReason: "超出字数限制：301 / 300 字",
     priceReason: "当前空间积分不足",
   });
 
-  // Submitting hides transient insufficient-credit status after credits are reserved.
+  // Submitting replaces the transient credit hint with request feedback.
   assert.deepEqual(composerFeedback(state, audioFilled, { submitting: true }), {
-    status: "",
+    status: "正在提交…",
     submitReason: "提交中",
     priceReason: "当前空间积分不足",
   });

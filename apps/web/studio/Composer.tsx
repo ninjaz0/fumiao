@@ -211,6 +211,9 @@ export function Composer({
     uploading,
     submitting,
   });
+  const statusMessage = status || (unavailable && hasAnyAvailableModel && !hasAvailableModel
+    ? "当前类型暂无可用模型，可切换创作类型"
+    : "");
   const ratio = audio
     ? ""
     : frameMode && activeReferences(session).length
@@ -775,7 +778,7 @@ export function Composer({
           </div>
           <span className="submit-controls">
             <span
-              className="composer-credit"
+              className="composer-credit fm-number"
               hidden={unavailable}
               aria-label={model ? price.label : ""}
               title={
@@ -800,7 +803,7 @@ export function Composer({
                   </>
                 ))}
             </span>
-            <span className="composer-estimate" hidden={unavailable} aria-live="polite" title={hint}>
+            <span className="composer-estimate fm-number" hidden={unavailable} aria-live="polite" title={hint}>
               {estimateLabel}
             </span>
             <button
@@ -809,6 +812,7 @@ export function Composer({
               aria-label={submitReason ? `生成（${submitReason}）` : "生成"}
               title={submitReason || "生成"}
               disabled={!!submitReason}
+              aria-busy={submitting}
               onClick={submit}
             >
               <Icon name="arrow" />
@@ -845,9 +849,7 @@ export function Composer({
         )}
       </div>
       <div className="composer-status" aria-live="polite">
-        {status || (unavailable && hasAnyAvailableModel && !hasAvailableModel
-          ? "当前类型暂无可用模型，可切换创作类型"
-          : "")}
+        {statusMessage && <span className="fm-state-change" key={statusMessage}>{statusMessage}</span>}
       </div>
       {available && price.amount !== undefined && price.available < price.amount && (
         <button className="quiet-button" onClick={onRecharge}>去充值</button>

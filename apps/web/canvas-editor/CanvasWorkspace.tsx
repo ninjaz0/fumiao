@@ -109,6 +109,7 @@ import {ChatWorkspace, chatRequest} from "./chat/ChatWorkspace";
 import { chatSettingsPath } from "./chat/guidance";
 import { ShotList } from "./ShotList";
 import { VideoVersions } from "./VideoVersions";
+import { cameraMotion } from "../app/motion";
 import { AiStoryboard } from "./AiStoryboard";
 import { Narration } from "./Narration";
 import { Composition } from "./Composition";
@@ -1232,7 +1233,7 @@ export function CanvasWorkspace({
     const center=force?windowSize.w*0.55:(n.x+n.width/2)*vp.zoom+vp.x;
     const centerX=Math.max(76+n.width*zoom/2,Math.min(center,windowSize.w-24-n.width*zoom/2));
     const nextTop=Math.max(150,Math.min(top,windowSize.h-100-textPanelHeight-n.height*zoom));
-    void flow.setViewport({zoom,x:centerX-(n.x+n.width/2)*zoom,y:nextTop-n.y*zoom},{duration:matchMedia('(prefers-reduced-motion: reduce)').matches?0:180});
+    void flow.setViewport({zoom,x:centerX-(n.x+n.width/2)*zoom,y:nextTop-n.y*zoom},cameraMotion());
   };
   useEffect(()=>{
     if(single?.type!=='text'||editing||!textPanelRef.current)return;
@@ -1263,11 +1264,7 @@ export function CanvasWorkspace({
         x: windowSize.w * 0.55 - (n.x + n.width / 2) * zoom,
         y: Math.max(200, windowSize.h * 0.32) - (n.y + n.height / 2) * zoom,
       },
-      {
-        duration: matchMedia("(prefers-reduced-motion: reduce)").matches
-          ? 0
-          : 200,
-      },
+      cameraMotion(),
     );
   };
   const selectOne = (id: string) => {
@@ -1293,9 +1290,7 @@ export function CanvasWorkspace({
       nodes: targets.map((id) => ({ id })),
       padding: 0.5,
       maxZoom: 1,
-      duration: matchMedia("(prefers-reduced-motion: reduce)").matches
-        ? 0
-        : 220,
+      ...cameraMotion(),
     });
   };
   const add = (
@@ -2372,7 +2367,7 @@ export function CanvasWorkspace({
               onClick={() => setMenu(menu === "project" ? null : "project")}
             />
           </span>
-          <span className="node-count">节点 {nodes.length}</span>
+          <span className="node-count fm-number">节点 {nodes.length}</span>
           <button
             className={
               "save-state " +
@@ -2386,7 +2381,7 @@ export function CanvasWorkspace({
           >
             {doc.status === "saved" ? (
               <>
-                <Check size={13} />
+                <Check className="fm-state-change" size={13} />
                 已保存
               </>
             ) : doc.status === "saving" || doc.status === "dirty" ? (
@@ -3109,7 +3104,7 @@ export function CanvasWorkspace({
               <button
                 key={z}
                 onClick={() => {
-                  void flow.zoomTo(z, { duration: 160 });
+                  void flow.zoomTo(z, cameraMotion());
                   setMenu(null);
                 }}
               >

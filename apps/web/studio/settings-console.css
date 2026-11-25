@@ -498,8 +498,8 @@ body:has(.ledger-settings) #modal {
   padding: 6px 10px;
   color: var(--secondary);
   transition:
-    background-color 120ms ease-out,
-    color 120ms ease-out;
+    background-color var(--motion-feedback) var(--motion-ease),
+    color var(--motion-feedback) var(--motion-ease);
 }
 .ledger-settings .settings-navigation button:hover {
   color: var(--text);
@@ -572,8 +572,8 @@ body:has(.ledger-settings) #modal {
   border-radius: 8px;
   background: var(--field);
   transition:
-    border-color 120ms ease-out,
-    box-shadow 120ms ease-out;
+    border-color var(--motion-feedback) var(--motion-ease),
+    box-shadow var(--motion-feedback) var(--motion-ease);
 }
 .ledger-settings .profile-section .profile-input-action input:focus-visible {
   border-color: var(--blue);
@@ -739,7 +739,7 @@ body:has(.ledger-settings) #modal {
 .ledger-settings
   .settings-content
   :is(.workspace-row, .price-row, .setting-row) {
-  transition: background-color 120ms ease-out;
+  transition: background-color var(--motion-feedback) var(--motion-ease);
 }
 .ledger-settings .settings-content :is(.workspace-row, .price-row):hover {
   background: color-mix(in srgb, var(--selected) 55%, transparent);
