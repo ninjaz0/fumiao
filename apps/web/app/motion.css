@@ -205,10 +205,11 @@ html dialog:is(.ledger-invite-sheet, .console-account-sheet, .plugin-drawer) {
     --motion-enter: 0s;
     --motion-exit: 0s;
   }
-  *,
-  *::before,
-  *::after,
-  *::backdrop {
+  html,
+  html *,
+  html *::before,
+  html *::after,
+  html *::backdrop {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
