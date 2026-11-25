@@ -402,7 +402,7 @@ export function AssetDialog({
               </label>
             ))}
             <div className="buttons">
-              <button className="primary" disabled={confirming}>
+              <button className="primary" disabled={confirming} aria-label="执行" aria-busy={confirming}>
                 {confirming ? "处理中…" : "执行"}
               </button>
               <button
@@ -430,6 +430,8 @@ export function AssetDialog({
                 id="confirm"
                 className="primary"
                 disabled={confirming}
+                aria-label="确定"
+                aria-busy={confirming}
                 onClick={() => void confirm()}
               >
                 {confirming ? "处理中…" : "确定"}

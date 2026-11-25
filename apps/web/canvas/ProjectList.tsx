@@ -190,7 +190,7 @@ export default function ProjectList({ studio }: { studio: Studio }) {
                 );
             }}
           />
-          <button className="primary" disabled={!!opening} aria-busy={opening?.kind === "create"} onClick={() => create()}>
+          <button className="primary" disabled={!!opening} aria-label="新建画布" aria-busy={opening?.kind === "create"} onClick={() => create()}>
             <Plus size={18} />
             {opening?.kind === "create" ? "正在新建…" : "新建画布"}
           </button>
@@ -221,6 +221,7 @@ export default function ProjectList({ studio }: { studio: Studio }) {
               className="secondary"
               onClick={() => create()}
               disabled={!!opening}
+              aria-label="新建画布"
               aria-busy={opening?.kind === "create"}
             >
               {opening?.kind === "create" ? "正在新建…" : "新建画布"}
@@ -282,6 +283,7 @@ export default function ProjectList({ studio }: { studio: Studio }) {
                         label={(copying === p.id ? "正在复制画布 " : "复制画布 ") + p.title}
                         onClick={() => duplicate(p)}
                         disabled={!!opening}
+                        aria-label={"复制画布 " + p.title}
                         aria-busy={copying === p.id}
                       />
                       {p.can_delete && (
