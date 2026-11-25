@@ -1,8 +1,8 @@
-import {useEffect,useRef} from 'react';
+import {useEffect,useRef,type KeyboardEventHandler} from 'react';
 import type {Asset} from './types';
 import {h3MediaType,h3TokenKey} from './h3References';
 const escape=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
-export function H3Prompt({value,ids,assets,frames,onChange,onFocus,onBlur}:{value:string;ids:string[];assets:Asset[];frames:boolean;onChange:(s:string)=>void;onFocus:()=>void;onBlur:()=>void}) {
+export function H3Prompt({value,ids,assets,frames,onChange,onFocus,onBlur,onKeyDown}:{value:string;ids:string[];assets:Asset[];frames:boolean;onChange:(s:string)=>void;onFocus:()=>void;onBlur:()=>void;onKeyDown:KeyboardEventHandler<HTMLDivElement>}) {
  const editor=useRef<HTMLDivElement>(null),signature=useRef('');
  const read=()=>{
   function text(n:Node):string {
@@ -22,7 +22,7 @@ export function H3Prompt({value,ids,assets,frames,onChange,onFocus,onBlur}:{valu
   }
   el.innerHTML=html+escape(value.slice(cursor)).replace(/\n/g,'<br>');signature.current=key;
  },[value,ids.join(','),frames,assets]);
- return <div ref={editor} className="composer-prompt cv-h3-prompt" contentEditable suppressContentEditableWarning role="textbox" aria-label="生成提示词" aria-multiline="true" data-placeholder={frames?'描述画面的运动与首尾帧之间的过渡':'描述想生成的视频，点击素材下方的引用插入参考'} onFocus={onFocus} onBlur={onBlur} onInput={()=>onChange(read().slice(0,12000))} onPaste={e=>{
+ return <div ref={editor} className="composer-prompt cv-h3-prompt" contentEditable suppressContentEditableWarning role="textbox" aria-label="生成提示词" aria-multiline="true" data-placeholder={frames?'描述画面的运动与首尾帧之间的过渡':'描述想生成的视频，点击素材下方的引用插入参考'} onFocus={onFocus} onBlur={onBlur} onKeyDown={onKeyDown} onInput={()=>onChange(read().slice(0,12000))} onPaste={e=>{
   e.preventDefault();const text=e.clipboardData.getData('text/plain'),selection=getSelection();if(!selection?.rangeCount)return;const range=selection.getRangeAt(0);range.deleteContents();const node=document.createTextNode(text);range.insertNode(node);range.setStartAfter(node);range.collapse(true);selection.removeAllRanges();selection.addRange(range);onChange(read().slice(0,12000));
  }}/>;
 }

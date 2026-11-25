@@ -13,7 +13,7 @@ type Snapshot={conversation:Conversation;messages:Message[]};
 type Config={models:Record<string,{label:string;provider:string}>;pricing:{revision:number;items:{key:string;amount:number|null}[]};credits:{available:number}};
 export type ChatContext={project:string;node:string;expected_revision:number;writeback?:boolean};
 export type ApplyOptions={automatic?:boolean;expectedText?:string;uid?:string};
-type Props={workspace:number;userId:number;isAdmin?:boolean;configureLabel?:string;configureHref?:string;onConfigureModels?:(event:MouseEvent<HTMLButtonElement|HTMLAnchorElement>)=>void;compact?:boolean;inline?:boolean;onActivityChange?:(active:boolean)=>void;project?:string;node?:string;nodeTitle?:string;getContext?:()=>Promise<ChatContext>;onApply?:(cid:string,message:Message,mode:'new'|'replace',options?:ApplyOptions)=>Promise<void>;onClose?:()=>void;openCanvas?:(event:MouseEvent<HTMLAnchorElement>)=>void};
+type Props={workspace:number;userId:number;isAdmin?:boolean;configureLabel?:string;configureHref?:string;onConfigureModels?:(event:MouseEvent<HTMLButtonElement|HTMLAnchorElement>)=>void;compact?:boolean;inline?:boolean;onActivityChange?:(active:boolean)=>void;project?:string;node?:string;nodeTitle?:string;getContext?:()=>Promise<ChatContext>;onApply?:(cid:string,message:Message,mode:'new'|'replace',options?:ApplyOptions)=>Promise<void>;onClose?:()=>void;openCanvas?:(event:MouseEvent<HTMLAnchorElement>)=>void;onRecharge?:()=>void};
 class ApiError extends Error {constructor(public status:number,message:string){super(message)}}
 export async function chatRequest<T=any>(workspace:number,path:string,body?:unknown,method?:string):Promise<T>{
  const r=await fetch(path,{method:method||(body===undefined?'GET':'POST'),credentials:'same-origin',headers:{'Content-Type':'application/json','X-Workspace-Id':String(workspace)},body:body===undefined?undefined:JSON.stringify(body)});
@@ -42,7 +42,8 @@ export function ChatWorkspace(props:Props){
 
  const scope=`fm-chat-${userId}-${workspace}-${project||'main'}-${node||''}`;
  const acceptConversation=useMemo(()=>chatFreshness(),[scope]);
- const [list,setList]=useState<Conversation[]>([]),[data,setData]=useState<Snapshot|null>(null),[cid,setCid]=useState(()=>sessionStorage.getItem(scope+'-active')||''),[config,setConfig]=useState<Config|null>(null),[model,setModel]=useState('deepseek-flash');
+ const [list,setList]=useState<Conversation[]>([]),[data,setData]=useState<Snapshot|null>(null),[cid,setCid]=useState(()=>sessionStorage.getItem(scope+'-active')||''),[config,setConfig]=useState<Config|null>(null),[selectedModel,setModel]=useState('deepseek-flash');
+ const model=config?.models[selectedModel]?selectedModel:'';
  const [draft,setDraft]=useState(()=>sessionStorage.getItem(scope+'-draft-'+cid)||''),[pendingDraft,setPendingDraft]=useState<string|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loading,setLoading]=useState(true),[history,setHistory]=useState(false),[rename,setRename]=useState<string|null>(null),[notice,setNotice]=useState(''),[deleted,setDeleted]=useState(''),[copied,setCopied]=useState<number|null>(null),[network,setNetwork]=useState(false),[newBelow,setNewBelow]=useState(false),[clipped,setClipped]=useState(0);
  const [picker,setPicker]=useState<Message|null>(null),[projects,setProjects]=useState<{id:string;title:string}[]>([]),[target,setTarget]=useState(''),[canvasName,setCanvasName]=useState('新画布');
  const [applied,setApplied]=useState<{id:string;message:number}|null>(null);
@@ -52,6 +53,8 @@ export function ChatWorkspace(props:Props){
  const saveWrites=(fn:(current:Record<string,{cid:string;uid:string}>)=>Record<string,{cid:string;uid:string}>)=>setWrites(current=>{const next=fn(current);sessionStorage.setItem(scope+'-writes',JSON.stringify(next));return next});
  const forgetWrite=(id:number)=>saveWrites(current=>{const next={...current};delete next[id];return next});
  const deletedWasCurrent=useRef(false);
+ const operationPending=useRef(false);
+ const creatingConversation=useRef(false);
  const initialHistory=useRef(true), cfgRef=useRef<Config|null>(null);
  const scroll=useRef<HTMLDivElement>(null),input=useRef<HTMLTextAreaElement>(null),follow=useRef(true),alive=useRef(true),current=useRef(cid),pending=useRef<{signature:string;uid:string}|null>(null);
  const req=<T=any,>(path:string,body?:unknown,method?:string)=>chatRequest<T>(workspace,path,body,method);
@@ -64,6 +67,11 @@ export function ChatWorkspace(props:Props){
  const confirmPendingDraft=()=>{if(pendingDraft===null)return;updateDraft(pendingDraft);input.current?.focus()};
  const cancelPendingDraft=()=>{setPendingDraft(null);input.current?.focus()};
  const choose=(id:string)=>{setDraft(sessionStorage.getItem(scope+'-draft-'+id)||'');setPendingDraft(null);setClipped(0);const found=list.find(c=>c.id===id);if(found&&config?.models[found.model])setModel(found.model);current.current=id;setCid(id);setData(null);setError('');setRename(null);setPicker(null);setHistory(false);pending.current=null;setLoading(!!id);follow.current=true;setNewBelow(false);sessionStorage.setItem(scope+'-active',id)};
+ const switchConversation=(id:string)=>{
+  if(creatingConversation.current)return;
+  if(id===current.current){setHistory(false);return}
+  choose(id);
+ };
  useEffect(()=>{alive.current=true;setListLoading(true);setListError('');void Promise.all([loadConfig(),inline?loadList():loadList().catch(()=>{})]).catch(e=>setError(e.message)).finally(()=>setLoading(false));const timer=setInterval(()=>{void loadConfig().catch(()=>{});void loadList().catch(()=>{})},10000);return()=>{alive.current=false;clearInterval(timer)}},[workspace,project,node]);
  useEffect(()=>{if(input.current&&!inline){input.current.style.height='0px';input.current.style.height=Math.min(input.current.scrollHeight,180)+'px'}},[draft,cid,inline]);
  useEffect(()=>{
@@ -95,6 +103,11 @@ export function ChatWorkspace(props:Props){
  const activityCallback=useRef(props.onActivityChange);activityCallback.current=props.onActivityChange;
  useEffect(()=>{activityCallback.current?.(activeWork)},[activeWork]);
  const price=config?.pricing.items.find(p=>p.key===model+'|reply')?.amount;
+ const creditNotice=model&&config&&!running&&(price==null
+  ? <p className="fm-chat-balance" role="status">当前对话模型尚未定价</p>
+  : config.credits.available<price&&<p className="fm-chat-balance" role="status">
+   当前空间积分不足{props.onRecharge&&<button type="button" onClick={props.onRecharge}>去充值</button>}
+  </p>);
  const canSend=!!model&&price!=null&&!!config&&config.credits.available>=price&&!busy&&!applying&&!running&&!loading&&(!cid||!!data);
  const noModels=hasAvailableChatModels(config)===false;
  const canConfigure=props.isAdmin??Boolean(props.onConfigureModels||props.configureHref);
@@ -111,13 +124,20 @@ export function ChatWorkspace(props:Props){
    {canConfigure&&renderConfigureAction(false)}
   </div>
  );
- const safely=async(fn:()=>Promise<void>)=>{setError('');setBusy(true);try{await fn()}catch(e){setError((e as Error).message)}finally{if(alive.current)setBusy(false)}};
+ const safely=async(fn:()=>Promise<void>)=>{
+  if(operationPending.current)return;
+  operationPending.current=true;setError('');setBusy(true);
+  try{await fn()}catch(e){if(alive.current)setError((e as Error).message)}
+  finally{operationPending.current=false;creatingConversation.current=false;if(alive.current)setBusy(false)}
+ };
  const send=async(retry?:number)=>safely(async()=>{
   if(!model||(!retry&&!draft.trim()))return;
   setPendingDraft(null);
   let active=data;
+  creatingConversation.current=!active;
   const context=props.getContext?await props.getContext():undefined;
   if(!active){active=await req<Snapshot>('/api/chats',{model,context});const key=scope+'-draft-';const saved=sessionStorage.getItem(key);if(saved!==null){sessionStorage.setItem(key+active.conversation.id,saved);sessionStorage.removeItem(key)}current.current=active.conversation.id;setCid(active.conversation.id);sessionStorage.setItem(scope+'-active',active.conversation.id);setData(active)}
+  creatingConversation.current=false;
   const signature=JSON.stringify([active.conversation.id,model,draft,retry]);
   if(pending.current?.signature!==signature)pending.current={signature,uid:crypto.randomUUID()};
   try{
@@ -163,33 +183,33 @@ export function ChatWorkspace(props:Props){
  },[history,historyOverlay]);
  if(inline)return <div className="fm-chat fm-chat-node" onKeyDown={e=>{if(e.key==='Escape'&&pendingDraft!==null){cancelPendingDraft();e.stopPropagation()}}}>
   <form className="fm-text-form" onSubmit={e=>{e.preventDefault();if(canSend)void send()}}>
-   {noModelBanner||<div className="fm-text-presets">{[['补充镜头','保留原意，补充画面主体、动作、镜头运动和环境细节，只输出可直接使用的镜头提示词。'],['改写图生视频','基于当前文字改写为图生视频提示词，重点描述动作、镜头和画面变化，不虚构参考图片中未提供的事实。只输出提示词。']].map(([label,text])=><button type="button" key={label} disabled={busy||running||!config} onClick={()=>applyPresetDraft(text)}>{label}</button>)}</div>}
+   {noModelBanner||(model&&<div className="fm-text-presets">{[['补充镜头','保留原意，补充画面主体、动作、镜头运动和环境细节，只输出可直接使用的镜头提示词。'],['改写图生视频','基于当前文字改写为图生视频提示词，重点描述动作、镜头和画面变化，不虚构参考图片中未提供的事实。只输出提示词。']].map(([label,text])=><button type="button" key={label} disabled={busy||running} onClick={()=>applyPresetDraft(text)}>{label}</button>)}</div>)}
    {draftConfirmBanner}
    <textarea ref={input} className="composer-prompt" aria-label="文本生成要求" placeholder={model?'描述你想生成的文字，或说明修改要求':'暂无可用模型'} value={draft} maxLength={DRAFT_LIMIT} rows={3} onChange={e=>updateDraft(e.target.value,(e.nativeEvent as InputEvent).inputType==='insertFromPaste')} onPaste={measurePaste} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend&&draft.trim())void send()}}}/>
    {(error||inlineFailure)&&<div className="fm-chat-error" role="alert"><span>{error||inlineFailure}</span>{error&&<button type="button" className="fm-chat-icon" aria-label="关闭错误提示" onClick={()=>setError('')}><X size={14}/></button>}</div>}
    {network&&<p className="fm-text-state" role="status">正在重新连接</p>}
    <div className="composer-bottom fm-text-bottom">
-    <ModelSelect models={config?.models||{}} value={model} disabled={busy||applying||running} onChange={setModel}/>
-    <span className="fm-chat-cost fm-number" title={price!=null?`每次生成 ${price} 积分，可用 ${config?.credits.available}`:'该模型尚未定价'} aria-label={price!=null?`${price} 积分`:undefined}>{model?(price==null?'未定价':<><Credit/>{price}</>):null}</span>
+    {model&&config&&<><ModelSelect models={config.models} value={model} disabled={busy||applying||running} onChange={setModel}/>
+    <span className="fm-chat-cost fm-number" title={price!=null?`每次生成 ${price} 积分，可用 ${config.credits.available}`:'该模型尚未定价'} aria-label={price!=null?`${price} 积分`:undefined}>{price==null?'未定价':<><Credit/>{price}</>}</span></>}
     {(running||applying)&&<span className="fm-text-state" role="status">{applying?'正在写入':'生成中'}</span>}
-    {running?<button type="button" className="fm-chat-send" aria-label="停止生成" onClick={()=>void stop()} disabled={busy}><Square className="fm-state-change" size={15} fill="currentColor"/></button>:<button type="submit" className="fm-chat-send" aria-label="生成文本" disabled={!canSend||!draft.trim()}><ArrowUp className="fm-state-change" size={21}/></button>}
+    {running?<button type="button" className="fm-chat-send" aria-label="停止生成" onClick={()=>void stop()} disabled={busy}><Square className="fm-state-change" size={15} fill="currentColor"/></button>:model&&<button type="submit" className="fm-chat-send" aria-label="生成文本" disabled={!canSend||!draft.trim()}><ArrowUp className="fm-state-change" size={21}/></button>}
    </div>
    {draftLimit}
-   {model&&price!=null&&config&&config.credits.available<price&&!running&&<p className="fm-chat-balance">当前空间积分不足</p>}
+   {creditNotice}
   </form>
  </div>;
  const headerTitle=compact?props.nodeTitle||'AI 写作':data?.conversation.title||'新对话';
  return <div onKeyDown={e=>{if(e.key==='Escape'&&pendingDraft!==null){cancelPendingDraft();e.stopPropagation();return}if(e.key==='Escape'&&history){setHistory(false);e.stopPropagation()}}} data-history-overlay={historyOverlay||undefined} className={'fm-chat '+(compact?'fm-chat-compact ':'')+(history?'fm-chat-history-open':'')}>
   <aside className="fm-chat-history" aria-label="对话历史" inert={historyOverlay&&!history}>
    <div className="fm-chat-history-top"><h2>对话</h2><button type="button" className="fm-chat-icon" aria-label="关闭对话历史" ref={historyClose} onClick={()=>setHistory(false)}><X size={18}/></button></div>
-   <button type="button" className="fm-chat-new" onClick={()=>choose('')}><Plus size={18}/>新对话</button>
-   <ConversationList items={list} loading={listLoading} loadError={listError} selected={cid} onChoose={choose} onRefresh={loadList} onDelete={removeConversation} onRename={async(item,title)=>{update(await req<Snapshot>('/api/chats/'+item.id,{title,expected_revision:item.revision},'PATCH'))}}/>
+   <button type="button" className="fm-chat-new" disabled={busy&&creatingConversation.current} onClick={()=>switchConversation('')}><Plus size={18}/>新对话</button>
+   <ConversationList items={list} loading={listLoading} loadError={listError} selected={cid} busy={busy&&creatingConversation.current} onChoose={switchConversation} onRefresh={loadList} onDelete={removeConversation} onRename={async(item,title)=>{update(await req<Snapshot>('/api/chats/'+item.id,{title,expected_revision:item.revision},'PATCH'))}}/>
   </aside>
   {historyOverlay&&history&&<button type="button" className="fm-chat-history-backdrop" aria-hidden="true" tabIndex={-1} onClick={()=>setHistory(false)}/>}
   <section className="fm-chat-main" aria-label="AI 对话" inert={historyOverlay&&history}>
    <header className="fm-chat-header"><button type="button" className="fm-chat-icon fm-chat-history-toggle" ref={historyToggle} aria-expanded={history} aria-label="对话历史" onClick={()=>setHistory(!history)}><PanelLeft size={18}/></button>
     {rename!==null?<form className="fm-chat-rename" onSubmit={e=>{e.preventDefault();void safely(async()=>{update(await req('/api/chats/'+cid,{title:rename,expected_revision:data!.conversation.revision},'PATCH'));setRename(null)})}}><input autoFocus maxLength={80} aria-label="对话名称" value={rename} onChange={e=>setRename(e.target.value)}/><button className="fm-chat-icon" type="submit" disabled={busy||!rename.trim()} aria-label="保存名称"><Check size={16}/></button><button className="fm-chat-icon" type="button" onClick={()=>setRename(null)} aria-label="取消改名"><X size={16}/></button></form>:<h1 title={headerTitle}>{headerTitle}</h1>}
-    <div className="fm-chat-header-actions">{cid&&!compact&&<button type="button" className="fm-chat-icon" aria-label="重命名对话" onClick={()=>setRename(data?.conversation.title||'')}><Pencil size={16}/></button>}{cid&&data?.conversation.can_delete&&<button type="button" className="fm-chat-icon" aria-label="删除对话" disabled={running||busy} onClick={()=>void remove()}><Trash2 size={16}/></button>}{compact&&<button type="button" className="fm-chat-icon" aria-label="新对话" onClick={()=>choose('')}><Plus size={18}/></button>}{props.onClose&&<button type="button" className="fm-chat-icon" aria-label="关闭 AI 写作" onClick={props.onClose}><X size={18}/></button>}</div>
+    <div className="fm-chat-header-actions">{data&&!compact&&rename===null&&<button type="button" className="fm-chat-icon" aria-label="重命名对话" disabled={busy} onClick={()=>setRename(data.conversation.title)}><Pencil size={16}/></button>}{data?.conversation.can_delete&&<button type="button" className="fm-chat-icon" aria-label="删除对话" disabled={running||busy} onClick={()=>void remove()}><Trash2 size={16}/></button>}{compact&&<button type="button" className="fm-chat-icon" aria-label="新对话" disabled={busy&&creatingConversation.current} onClick={()=>switchConversation('')}><Plus size={18}/></button>}{props.onClose&&<button type="button" className="fm-chat-icon" aria-label="关闭 AI 写作" onClick={props.onClose}><X size={18}/></button>}</div>
    </header>
    <div className="fm-chat-scroll" ref={scroll} onScroll={()=>{const e=scroll.current!;follow.current=e.scrollHeight-e.scrollTop-e.clientHeight<80;if(follow.current)setNewBelow(false)}}>
     <div className="fm-chat-messages">
@@ -202,7 +222,7 @@ export function ChatWorkspace(props:Props){
    {newBelow&&<button type="button" className="fm-chat-latest fm-chat-icon" aria-label="查看最新回复" onClick={()=>{follow.current=true;scroll.current?.scrollTo({top:scroll.current.scrollHeight,behavior:scrollMotion()});setNewBelow(false)}}><ArrowDown size={18}/></button>}
    <div className="fm-chat-compose-area">
     {picker&&<section className="fm-chat-canvas-picker fm-reveal" aria-label="放入画布"><header><strong>放入画布</strong><button type="button" className="fm-chat-icon" aria-label="取消放入画布" onClick={()=>setPicker(null)}><X size={16}/></button></header><select aria-label="选择画布" value={target} onChange={e=>setTarget(e.target.value)}><option value="">新建画布</option>{projects.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select>{!target&&<input aria-label="画布名称" value={canvasName} maxLength={80} onChange={e=>setCanvasName(e.target.value)}/>}<button type="button" className="fm-chat-primary" disabled={busy} onClick={()=>void confirmCanvas()}>添加文本节点</button></section>}
-    {deleted&&<div className="fm-chat-notice" role="status">对话已删除<button type="button" onClick={()=>void restore()}>撤销</button><button type="button" className="fm-chat-icon" aria-label="关闭删除提示" onClick={()=>setDeleted('')}><X size={14}/></button></div>}
+    {deleted&&<div className="fm-chat-notice" role="status">对话已删除<button type="button" disabled={busy} onClick={()=>void restore()}>撤销</button><button type="button" className="fm-chat-icon" aria-label="关闭删除提示" onClick={()=>setDeleted('')}><X size={14}/></button></div>}
     {notice&&<div className="fm-chat-notice" role="status">{notice}</div>}
     {!!data?.messages.length&&noModelBanner}
     {network&&<div className="fm-chat-notice" role="status">正在重新连接，回复会在后台继续</div>}
@@ -210,10 +230,10 @@ export function ChatWorkspace(props:Props){
     {draftConfirmBanner}
     <form className="fm-chat-composer" onSubmit={e=>{e.preventDefault();if(canSend)void send()}}>
      <textarea ref={input} aria-label="发送消息" placeholder={model?(compact?'说说你的修改想法…':'发送消息…'):'暂无可用模型'} value={draft} maxLength={DRAFT_LIMIT} rows={2} onChange={e=>updateDraft(e.target.value,(e.nativeEvent as InputEvent).inputType==='insertFromPaste')} onPaste={measurePaste} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend&&draft.trim())void send()}}}/>
-     <div className="fm-chat-composer-bottom"><ModelSelect models={config?.models||{}} value={model} disabled={busy||applying||running} onChange={setModel}/><span className="fm-chat-cost fm-number" title={price!=null?`每条完整回复 ${price} 积分，可用 ${config?.credits.available}`:'该模型尚未定价'} aria-label={price!=null?`${price} 积分`:undefined}>{model?(price==null?'未定价':<><Credit/>{price}</>):null}</span>{running?<button type="button" className="fm-chat-send" aria-label="停止回复" onClick={()=>void stop()} disabled={busy}><Square className="fm-state-change" size={15} fill="currentColor"/></button>:<button type="submit" className="fm-chat-send" aria-label="发送" disabled={!canSend||!draft.trim()}><ArrowUp className="fm-state-change" size={21}/></button>}</div>
+     {(model||running)&&<div className="fm-chat-composer-bottom">{model&&config&&<><ModelSelect models={config.models} value={model} disabled={busy||applying||running} onChange={setModel}/><span className="fm-chat-cost fm-number" title={price!=null?`每条完整回复 ${price} 积分，可用 ${config.credits.available}`:'该模型尚未定价'} aria-label={price!=null?`${price} 积分`:undefined}>{price==null?'未定价':<><Credit/>{price}</>}</span></>}{running?<button type="button" className="fm-chat-send" aria-label="停止回复" onClick={()=>void stop()} disabled={busy}><Square className="fm-state-change" size={15} fill="currentColor"/></button>:<button type="submit" className="fm-chat-send" aria-label="发送" disabled={!canSend||!draft.trim()}><ArrowUp className="fm-state-change" size={21}/></button>}</div>}
     </form>
     {draftLimit}
-    {model&&price!=null&&config&&config.credits.available<price&&!running&&<p className="fm-chat-balance">当前空间积分不足</p>}
+    {creditNotice}
    </div>
   </section>
  </div>;

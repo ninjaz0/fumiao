@@ -162,18 +162,13 @@ test("Studio composer: discarding existing-pack edits requires confirmation and 
     await edit.click();
     await expect(name).toHaveValue(savedName);
     await name.fill("未保存的编辑");
-    await Promise.all([
-      page.waitForEvent("dialog").then(async (dialog) => {
-        await dialog.dismiss();
-        assert.match(dialog.message(), /放弃未保存/);
-      }),
-      backToPacks(packs),
-    ]);
+    await backToPacks(packs);
+    const confirmation = packs.getByRole("group", { name: "未保存的素材包修改" });
+    await expect(confirmation.getByRole("button", { name: "继续编辑" })).toBeFocused();
+    await confirmation.getByRole("button", { name: "继续编辑" }).click();
     await expect(name).toHaveValue("未保存的编辑");
-    await Promise.all([
-      page.waitForEvent("dialog").then((dialog) => dialog.accept()),
-      backToPacks(packs),
-    ]);
+    await backToPacks(packs);
+    await confirmation.getByRole("button", { name: "放弃修改" }).click();
     await enterNew(packs);
     await expect(name).toHaveValue(draft.name);
     await backToPacks(packs);

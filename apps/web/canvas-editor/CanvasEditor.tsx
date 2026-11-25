@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
+import { canvasLoginPath } from "../auth/return-path";
 import { api, initializeWorkspace, setWorkspace, workspaceURL } from "./api";
 import { CanvasWorkspace } from "./CanvasWorkspace";
 import "./canvas-overrides.css";
@@ -27,7 +28,8 @@ export default function CanvasEditor({ loadingLogo }: { loadingLogo: string }) {
     }
     void load().catch((error) => {
       if (!active) return;
-      if (error.status === 401) location.replace("/studio");
+      if (error.status === 401)
+        location.replace(canvasLoginPath(location.pathname, new URLSearchParams(location.search)));
       else setError(error.message);
     });
     return () => {

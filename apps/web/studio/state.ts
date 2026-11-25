@@ -382,7 +382,15 @@ export function readDraft(state: StudioState): DraftSession {
     sessionStorage.setItem(key, legacy);
     sessionStorage.removeItem(legacyKey);
   }
-  const saved = readStoredDraft(key);
+  return restoreStoredDraft(state, readStoredDraft(key));
+}
+
+export function readDraftBackup(state: StudioState): DraftSession | null {
+  const saved = readStoredDraft(keyFor(state) + "-before-history");
+  return saved ? restoreStoredDraft(state, saved) : null;
+}
+
+function restoreStoredDraft(state: StudioState, saved: StoredDraft | null): DraftSession {
   const storedTypes = saved?.referenceTypes;
   const draft = { ...initialDraft, ...saved?.draft };
   if (saved?.draft && !state.studio_plugins) {
@@ -422,7 +430,16 @@ export function readDraft(state: StudioState): DraftSession {
   return pruneDraftAssets(state, session, savedReferenceType(state, storedTypes));
 }
 export function writeDraft(state: StudioState, session: DraftSession) {
-  const key = keyFor(state);
+  writeStoredDraft(state, session, keyFor(state));
+}
+
+export function writeDraftBackup(state: StudioState, session: DraftSession | null) {
+  const key = keyFor(state) + "-before-history";
+  if (session) writeStoredDraft(state, session, key);
+  else sessionStorage.removeItem(key);
+}
+
+function writeStoredDraft(state: StudioState, session: DraftSession, key: string) {
   const refs = new Set(
     [session, session.suspendedImageDraft, session.suspendedMediaDraft].flatMap(
       (snapshot) => snapshot

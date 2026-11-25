@@ -1,7 +1,7 @@
 /** Start the Studio web app, API and worker on loopback. */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:net";
@@ -163,22 +163,31 @@ try {
   );
   await waitForHealth(`http://127.0.0.1:${port}`, "Next Studio", 60000);
   await mkdir(runtime, { recursive: true });
-  await writeFile(
-    join(runtime, "studio-processes.json"),
-    JSON.stringify(
-      {
-        supervisor: process.pid,
-        api: api.pid,
-        web: web.pid,
-        worker: worker.pid,
-        backend: "nest",
-        port,
-        apiPort,
-      },
-      null,
-      2,
-    ),
-  );
+  const processFile = join(runtime, "studio-processes.json");
+  const pendingFile = `${processFile}.${process.pid}.tmp`;
+  try {
+    await writeFile(
+      pendingFile,
+      JSON.stringify(
+        {
+          supervisor: process.pid,
+          api: api.pid,
+          web: web.pid,
+          worker: worker.pid,
+          backend: "nest",
+          port,
+          apiPort,
+        },
+        null,
+        2,
+      ),
+    );
+    // Readers use the file's existence as a readiness signal.
+    await rename(pendingFile, processFile);
+  } catch (error) {
+    await rm(pendingFile, { force: true }).catch(() => {});
+    throw error;
+  }
   console.log(`Studio on Next.js: ${publicUrl}/studio`);
 } catch (error) {
   console.error((error as Error).message);

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { chromium, expect, type Locator, type Page } from "@playwright/test";
+import type { Job, StudioState } from "../../apps/web/studio/state.js";
 
 async function tabTo(page: Page, tab: Locator) {
   for (let step = 0; step < 30; step++) {
@@ -47,8 +48,30 @@ try {
     viewport: { width: 1280, height: 900 },
     ...(evidence ? { recordVideo: { dir: evidence } } : {}),
   });
+  const page = await context.newPage();
   try {
-    const page = await context.newPage();
+    let newJob = false;
+    const firstId = 987654321;
+    await page.route("**/api/state", async (route) => {
+      const response = await route.fetch();
+      const state: StudioState = await response.json();
+      const job: Job = {
+        id: firstId,
+        owner: state.me.id,
+        author: state.me.name,
+        kind: "video",
+        model: "MiniMax H3",
+        prompt: "轮询期间保持焦点",
+        status: "queued",
+        refs: [],
+        seconds: 5,
+        created: Math.floor(Date.now() / 1000),
+        ratio: "16:9",
+        quality: 480,
+      };
+      const jobs = newJob ? [{ ...job, id: job.id + 1 }, job] : [job];
+      await route.fulfill({ response, json: { ...state, jobs: [...jobs, ...state.jobs] } });
+    });
     await page.goto("/studio");
     const library = page.locator('nav [data-nav="library"]');
     const types = page.getByRole("tablist", { name: "资产类型" });
@@ -114,6 +137,12 @@ try {
       ["ArrowRight", "视频"], ["End", "语音"], ["Home", "视频"],
     ]);
     console.log("Asset library ArrowLeft, ArrowRight, Home and End move focus and selection in both bars");
+    const original = page.getByRole("button", { name: `预览视频 #${firstId}` });
+    await original.focus();
+    newJob = true;
+    await expect(page.getByRole("button", { name: `预览视频 #${firstId + 1}` })).toBeVisible({ timeout: 12_000 });
+    await expect(original).toBeFocused();
+    console.log("Adding a task during polling preserves focus on the existing asset");
 
     await page.locator('nav [data-nav="home"]').click();
     const trigger = page.getByRole("button", { name: "创作类型" });
@@ -134,6 +163,7 @@ try {
     await expect(trigger).toBeFocused();
     console.log("Popover exits inert, reopens from the keyboard and respects a live reduced-motion preference");
   } finally {
+    await page.unrouteAll({ behavior: "wait" });
     await context.close();
   }
 } finally {

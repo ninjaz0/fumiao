@@ -1,6 +1,7 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { Download, Favorite, ReferenceMedia } from "./AssetMedia";
 import {
+  CancelGeneration,
   canEdit,
   duration,
   estimateTime,
@@ -17,6 +18,8 @@ import {
   H3,
   mediaURL,
   modelAvailable,
+  referenceAsset,
+  referenceType,
   type Asset,
   type Job,
   type StudioState,
@@ -64,27 +67,41 @@ function parameters(state: StudioState, job: Job) {
     );
   if (job.kind === "image")
     return `${name} · ${job.quality === 2048 ? "2K" : "1K"} · ${job.image_quality && qualityLabels[job.image_quality]}`;
-  return `MiniMax H3 · ${job.seconds}s · ${job.quality}P`;
+  return [name, job.seconds > 0 && `${job.seconds}s`, job.quality > 0 && `${job.quality}P`]
+    .filter(Boolean).join(" · ");
 }
 
-function Prompt({ job }: { job: Job }) {
+const referenceNames = { Picture: "图片", Video: "视频", Audio: "音频" } as const;
+
+function Prompt({ state, job }: { state: StudioState; job: Job }) {
   const parts: ReactNode[] = [];
+  const assetsByType: Record<keyof typeof referenceNames, Asset[]> = {
+    Picture: [], Video: [], Audio: [],
+  };
+  for (const id of job.refs) {
+    const asset = referenceAsset(state, id);
+    // A missing legacy reference can shift the numbering of any media type.
+    if (!asset) break;
+    assetsByType[referenceType(state, id)].push(asset);
+  }
   let offset = 0;
   let text = "";
-  for (const match of job.prompt.matchAll(/<Picture (\d+)>/g)) {
-    const number = match[1];
-    const id = job.refs[Number(number) - 1];
+  for (const match of job.prompt.matchAll(/<(Picture|Video|Audio) (\d+)>/g)) {
+    const type = match[1] as keyof typeof referenceNames;
+    const number = match[2];
+    const label = referenceNames[type] + number;
+    const asset = assetsByType[type][Number(number) - 1];
     text += job.prompt.slice(offset, match.index);
     offset = match.index + match[0].length;
-    if (!id) {
-      text += "@图片" + number;
+    if (!asset) {
+      text += "@" + label;
       continue;
     }
     parts.push(
       text,
       <span key={match.index} className="inline-reference">
-        <img src={mediaURL(id)} alt="" />
-        {"图片" + number}
+        <ReferenceMedia id={asset.id} kind={asset.kind} />
+        {label}
       </span>,
     );
     text = "";
@@ -206,16 +223,7 @@ export function JobDetail({
       <h2 className="fm-state-change" key={status(job)}>{status(job)}</h2>
       <p data-time-job={job.id}>{timing(job, delta) || job.note}</p>
       {job.status === "queued" && isOwner(state, job) && (
-        <button
-          className="quiet-button"
-          data-act="cancel"
-          data-id={job.id}
-          disabled={cancelling}
-          aria-busy={cancelling}
-          onClick={() => cancel(job.id)}
-        >
-          {cancelling ? "正在取消…" : "取消生成"}
-        </button>
+        <CancelGeneration job={job} pending={cancelling} cancel={cancel} />
       )}
     </div>
   );
@@ -325,7 +333,7 @@ export function JobDetail({
                   : "视频提示词"}
           </div>
           <p className="prompt-text fm-state-change" key={job.id}>
-            {audio ? job.prompt : <Prompt job={job} />}
+            {audio ? job.prompt : <Prompt state={state} job={job} />}
           </p>
           {audio ? (
             <>
@@ -476,7 +484,7 @@ export function JobDetail({
               onClick={() => locate(job)}
             >
               <Icon name="frame" />
-              在生成页定位
+              在资产中定位
             </button>
           )}
         </div>

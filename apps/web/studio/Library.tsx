@@ -80,7 +80,6 @@ export function useLibrary(
   });
   const [selecting, setSelecting] = useState(false);
   const [redraw, setRedraw] = useState(0);
-  const [uploadsVisible, setUploadsVisible] = useState(true);
   const [selected, setSelected] = useState<string[]>([]);
   const [highlight, setHighlight] = useState<number | null>(null);
   const [activity, setActivity] = useState<"favorite" | "download" | null>(
@@ -145,7 +144,6 @@ export function useLibrary(
   }
   function choose(next: LibraryFilter, result: number | null = null) {
     reset();
-    setUploadsVisible(true);
     setRedraw((value) => value + 1);
     setFilter(next);
     setHighlight(result);
@@ -170,12 +168,7 @@ export function useLibrary(
     filter,
     choose,
     redraw,
-    uploadsVisible,
-    showUploads: () => setUploadsVisible(true),
-    redrawLibrary: () => {
-      setUploadsVisible(true);
-      setRedraw((value) => value + 1);
-    },
+    redrawLibrary: () => setRedraw((value) => value + 1),
     selecting,
     start: () => setSelecting(true),
     reset,
@@ -440,8 +433,7 @@ export function Library({
             ))}
         </div>
         <div id="library-grid" key={library.redraw}>
-          {!groups.length &&
-            !(library.uploadsVisible && visibleAssets.length) && (
+          {!groups.length && !visibleAssets.length && (
               <div className="empty-state">
                 {filter.scope === "favorites" ? "暂无收藏" : "暂无相关资产"}
               </div>
@@ -459,7 +451,7 @@ export function Library({
               actions={actions}
             />
           ))}
-          {library.uploadsVisible && visibleAssets.length > 0 && (
+          {visibleAssets.length > 0 && (
             <>
               <h2 className="asset-date">
                 {images

@@ -260,7 +260,7 @@ export function History({
   ...actions
 }: { state: StudioState; delta: number } & CardActions) {
   if (!state.jobs.length)
-    return <div className="empty-state">暂无相关资产</div>;
+    return <div className="empty-state">生成的作品会出现在这里</div>;
   return (
     <div className="asset-grid">
       {state.jobs.slice(0, 8).map((job) => (
@@ -329,16 +329,7 @@ export function Queue({
               <div className="job-actions">
                 {job.status === "queued" &&
                   (job.owner === state.me.id || state.me.role === "admin") && (
-                    <button
-                      className="quiet-button"
-                      data-act="cancel"
-                      data-id={job.id}
-                      disabled={cancelling.has(job.id)}
-                      aria-busy={cancelling.has(job.id)}
-                      onClick={() => cancel(job.id)}
-                    >
-                      {cancelling.has(job.id) ? "正在取消…" : "取消"}
-                    </button>
+                    <CancelGeneration job={job} pending={cancelling.has(job.id)} cancel={cancel} />
                   )}
               </div>
             </div>
@@ -348,5 +339,28 @@ export function Queue({
         )}
       </div>
     </div>
+  );
+}
+
+export function CancelGeneration({
+  job,
+  pending,
+  cancel,
+}: {
+  job: Job;
+  pending: boolean;
+  cancel: (id: number) => void;
+}) {
+  return (
+    <button
+      className="quiet-button"
+      data-act="cancel"
+      data-id={job.id}
+      disabled={pending}
+      aria-busy={pending}
+      onClick={() => cancel(job.id)}
+    >
+      {pending ? "正在取消…" : "取消生成"}
+    </button>
   );
 }

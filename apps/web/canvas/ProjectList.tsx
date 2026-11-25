@@ -95,8 +95,15 @@ function Modal({
     </dialog>
   );
 }
-export default function ProjectList({ studio }: { studio: Studio }) {
+export default function ProjectList({
+  studio,
+  workspaceChanged,
+}: {
+  studio: Studio;
+  workspaceChanged: boolean;
+}) {
   const workspace = String(studio.workspace_id);
+  const workspaceName = studio.workspaces?.find(({ id }) => id === studio.workspace_id)?.name;
   const [projects, setProjects] = useState<Project[]>([]),
     [loading, setLoading] = useState(true),
     [search, setSearch] = useState(""),
@@ -107,6 +114,7 @@ export default function ProjectList({ studio }: { studio: Studio }) {
     [deleting, setDeleting] = useState<Project | null>(null);
   const copying = opening?.kind === "copy" ? opening.id : null;
   const query = search.trim().toLowerCase();
+  const [loadError, setLoadError] = useState("");
   const visibleProjects = query
     ? projects.filter((p) => p.title.trim().toLowerCase().includes(query))
     : projects;
@@ -115,16 +123,18 @@ export default function ProjectList({ studio }: { studio: Studio }) {
     setDeleting(null);
     setDeleteError("");
   };
-  const load = useCallback(
-    () =>
-      api<{ projects: Project[] }>(workspace, "/api/canvases")
-        .then((r) => {
-          setProjects(r.projects);
-        })
-        .catch((e) => setError(e.message))
-        .finally(() => setLoading(false)),
-    [workspace],
-  );
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const result = await api<{ projects: Project[] }>(workspace, "/api/canvases");
+      setProjects(result.projects);
+    } catch (error) {
+      setLoadError((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [workspace]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -173,9 +183,12 @@ export default function ProjectList({ studio }: { studio: Studio }) {
             工作台
           </a>
         </div>
-        <span>{studio.me.nickname || studio.me.name}</span>
+        <span>{[workspaceName, studio.me.nickname || studio.me.name].filter(Boolean).join(" · ")}</span>
       </header>
       <div className="project-list-body">
+        {workspaceChanged && (
+          <p role="status">无法进入原工作区，已打开{workspaceName ? `「${workspaceName}」` : "可访问的工作区"}。</p>
+        )}
         <div className="project-list-heading">
           <h1>画布</h1>
           <PluginImport
@@ -212,20 +225,17 @@ export default function ProjectList({ studio }: { studio: Studio }) {
           </p>
         )}
         {loading ? (
-          <div className="empty">正在加载画布</div>
+          <div className="empty" role="status">正在加载画布…</div>
+        ) : loadError ? (
+          <div className="project-empty">
+            <h2>画布列表暂时无法加载</h2>
+            <p className="error" role="alert">{loadError}</p>
+            <button className="secondary" onClick={() => void load()}>重试</button>
+          </div>
         ) : !projects.length ? (
           <div className="project-empty">
             <LayoutGrid size={40} />
-            <h2>从一张画布开始</h2>
-            <button
-              className="secondary"
-              onClick={() => create()}
-              disabled={!!opening}
-              aria-label="新建画布"
-              aria-busy={opening?.kind === "create"}
-            >
-              {opening?.kind === "create" ? "正在新建…" : "新建画布"}
-            </button>
+            <h2>暂无画布</h2>
           </div>
         ) : !visibleProjects.length ? (
           <div className="project-empty">

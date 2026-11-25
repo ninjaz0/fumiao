@@ -1968,6 +1968,25 @@ export function CanvasWorkspace({
       incoming.some(({node,edge}) => {const source = linkedValue(node,edge,runs); return source.kind === "text" && source.value?.trim();}),
   );
   const pendingRuns = current?.list.filter(job=>['queued','running'].includes(job.status)) || [];
+  const pendingCancellations = useRef(new Set<number>());
+  const [cancellingRuns, setCancellingRuns] = useState<ReadonlySet<number>>(() => new Set());
+  async function cancelRun(id: number) {
+    if (pendingCancellations.current.has(id)) return;
+    pendingCancellations.current.add(id);
+    setCancellingRuns(new Set(pendingCancellations.current));
+    try {
+      await api(`/api/jobs/${id}/cancel`, {});
+      notify("已取消生成，积分已退回");
+      await loadRuns({ silent: true });
+    } catch (error) {
+      notify((error as Error).message);
+      if (error instanceof ApiError && error.status === 409)
+        await loadRuns({ silent: true });
+    } finally {
+      pendingCancellations.current.delete(id);
+      setCancellingRuns(new Set(pendingCancellations.current));
+    }
+  }
   const pendingRun = pendingRuns.length > 0;
   const latestBatch = current?.latest?.batch;
   const visibleCandidates = latestBatch?.count === 2 ? (current?.list.filter(job=>job.batch?.uid===latestBatch.uid)||[]) : pendingRuns;
@@ -1990,6 +2009,27 @@ export function CanvasWorkspace({
     !submitting && !h3Busy &&
     doc.status !== "conflict" &&
     (single.type !== "image" || currentImageEnabled) && availableModel(selectedModel) && creditAvailable;
+  const generationBlock = doc.status === "conflict" ? "请先处理画布保存冲突"
+    : pendingRun ? "当前节点已有生成任务"
+    : submitting ? "正在提交生成…"
+    : h3Busy ? "正在处理参考素材…"
+    : single?.type === "image" && !currentImageEnabled ? "当前空间未开放图片生成"
+    : !availableModel(selectedModel) ? "当前模型暂不可用"
+    : creditPrice == null ? "当前规格尚未定价"
+    : !creditAvailable ? "当前空间积分不足"
+    : "";
+  const generate = () => {
+    if (!canGenerate) return;
+    if (candidateCount === 2) setConfirmCandidates(true);
+    else void submit();
+  };
+  const generateShortcut = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.nativeEvent.isComposing || event.key !== "Enter" || !(event.metaKey || event.ctrlKey))
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    generate();
+  };
   const closeAndLeave = async (url: string) => {
     if (leaveInFlight.current) return;
     leaveInFlight.current = true;
@@ -2009,6 +2049,7 @@ export function CanvasWorkspace({
       setRetryingLeave(false);
     }
   };
+  const openCredits = () => void closeAndLeave("/studio?settings=credits");
   const showComposer =
     single && ["image", "video"].includes(single.type) && !editing;
   const composerOpen = isCanvasComposerOpen(single, editing);
@@ -2735,7 +2776,7 @@ export function CanvasWorkspace({
           {!h3Frames&&<div className="canvas-pack-entry">
             <button className="secondary" onClick={() => setPackPicker(single.id)}><FolderOpen size={15}/>素材包{single.asset_packs?.length ? ` · ${single.asset_packs.length}` : ''}</button>
           </div>}
-          {h3Native?<H3Prompt value={single.prompt} ids={h3Ids} assets={studio.assets} frames={h3Frames} onChange={prompt=>edit(single.id,{prompt},false)} onFocus={doc.begin} onBlur={doc.end}/>:<textarea
+          {h3Native?<H3Prompt value={single.prompt} ids={h3Ids} assets={studio.assets} frames={h3Frames} onChange={prompt=>edit(single.id,{prompt},false)} onFocus={doc.begin} onBlur={doc.end} onKeyDown={generateShortcut}/>:<textarea
             className="composer-prompt"
             aria-label="生成提示词"
             placeholder={`描述你想生成的${single.type === "image" ? "图片" : "视频"}，或连接文本作为参考`}
@@ -2744,6 +2785,7 @@ export function CanvasWorkspace({
             onFocus={doc.begin}
             onChange={(e) => edit(single.id, { prompt: e.target.value }, false)}
             onBlur={doc.end}
+            onKeyDown={generateShortcut}
           />}
           {flowModel?.mode==='extend'&&<label className="cv-flow-source">来源视频<select aria-label="画布续写来源视频" value={single.params.flow_source_job||''} onChange={e=>patchParams({flow_source_job:Number(e.target.value)||null})}><option value="">请选择已完成的 Flow 视频</option>{flowSources.map(j=><option key={j.id} value={j.id}>#{j.id} · {j.prompt.slice(0,42)}</option>)}</select></label>}
           {flowInputError&&<p className="cv-flow-hint" role="status">{flowInputError}</p>}
@@ -2951,14 +2993,8 @@ export function CanvasWorkspace({
               className="generate-button"
               aria-label="生成"
               disabled={!canGenerate}
-              onClick={() => candidateCount === 2 ? setConfirmCandidates(true) : void submit()}
-              title={
-                single.type === "image" && !currentImageEnabled
-                  ? "图片生成已关闭"
-                  : missing
-                    ? "参考内容尚未就绪"
-                    : "生成"
-              }
+              onClick={generate}
+              title={generationBlock || flowInputError || (missing ? "参考内容尚未就绪" : !hasPrompt ? "请输入提示词，或连接文本节点" : "生成")}
             >
               {submitting === single.id ? (
                 <LoaderCircle size={20} className="spin" />
@@ -2967,6 +3003,12 @@ export function CanvasWorkspace({
               )}
             </button>
           </div>
+          {generationBlock && (
+            <div className="composer-message">
+              <span role="status">{generationBlock}</span>
+              {generationBlock === "当前空间积分不足" && <button onClick={openCredits}>去充值</button>}
+            </div>
+          )}
           {sourceChanged && <p className="composer-message">参考或参数已变更，下一次生成会使用新设置。{single.active_job ? '已采用版本保持不变。' : ''}</p>}
           {missing && (
             <div className="composer-message">
@@ -2985,7 +3027,7 @@ export function CanvasWorkspace({
           )}
           {visibleCandidates.map(job=><div className="composer-message" key={job.id}>
             <span>{job.batch?.count===2?`候选 ${job.batch.index} · `:''}{timeLabel(job)||labels[job.status]}</span>
-            {job.status==='queued'&&(job.owner===studio.me.id||studio.me.role==='admin')&&<button onClick={async()=>{try{await api(`/api/jobs/${job.id}/cancel`,{});await fetchRuns()}catch(e){notify((e as Error).message)}}}>取消任务</button>}
+            {job.status==='queued'&&(job.owner===studio.me.id||studio.me.role==='admin')&&<button disabled={cancellingRuns.has(job.id)} onClick={()=>void cancelRun(job.id)}>{cancellingRuns.has(job.id)?"正在取消…":"取消生成"}</button>}
             {job.status==='done'&&job.result&&single.active_job!==job.id&&<button onClick={()=>edit(single.id,{active_job:job.id,use_media:false})}>采用</button>}
             {job.status==='done'&&single.active_job===job.id&&<span>已采用</span>}
           </div>)}
@@ -3206,6 +3248,7 @@ export function CanvasWorkspace({
                 void closeAndLeave(chatSettingsPath(studio));
               }
             }) : undefined}
+            onRecharge={openCredits}
             project={project.id} node={id} nodeTitle={textNode.title}
             onActivityChange={active=>setActiveTextNodes(ids=>active?(ids.includes(id)?ids:[...ids,id]):(ids.includes(id)?ids.filter(n=>n!==id):ids))}
             getContext={async()=>({project:project.id,node:id,expected_revision:await doc.flush(),writeback:true})}
@@ -3496,7 +3539,10 @@ export function CanvasWorkspace({
         </Modal>
       )}
       {aiStoryboard && <Modal title="AI 分镜" wide onClose={() => setAiStoryboard(false)}>
-        <AiStoryboard workspace={project.workspace} userId={studio.me.id} project={project.id} onApply={async shots=>{
+        <AiStoryboard workspace={project.workspace} userId={studio.me.id} project={project.id}
+          onRecharge={openCredits}
+          onConfigureModels={studio.me.role === "admin" ? () => void closeAndLeave(chatSettingsPath(studio)) : undefined}
+          onApply={async shots=>{
           await doc.flush();const current=doc.ref.current.document;
           if(current.nodes.length+shots.length*2>200||current.edges.length+shots.length>600)throw new Error('画布容量不足，请先整理节点');
           const x=current.nodes.length?Math.max(...current.nodes.map(n=>n.x+n.width))+120:0;

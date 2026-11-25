@@ -40,14 +40,14 @@ export function readPrompt(
   for (const child of editor.childNodes) read(child);
   const output = text.replace(/\n+$/, "");
   if (plain) return output;
-  const pictureCount = refs.filter(
-    (ref) => referenceType(state, ref) === "Picture",
-  ).length;
-  if (!pictureCount) return output;
-  return output.replace(/@图片(\d+)/g, (match, digits) => {
+  const names = { 图片: "Picture", 视频: "Video", 音频: "Audio" } as const;
+  const types = refs.map((id) => referenceType(state, id));
+  return output.replace(/@(图片|视频|音频)(\d+)/g, (match, name: keyof typeof names, digits) => {
     const index = Number(digits);
-    return index >= 1 && index <= pictureCount && String(index) === digits
-      ? `<Picture ${index}>`
+    const type = names[name];
+    const count = types.filter((value) => value === type).length;
+    return index >= 1 && index <= count && String(index) === digits
+      ? `<${type} ${index}>`
       : match;
   });
 }
