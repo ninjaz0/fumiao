@@ -820,6 +820,8 @@ export class Executor {
           AND c.plugin_id = 'edge-tts'
           AND c.enabled = TRUE
           AND NOT c.removed
+          AND m.enabled
+          ${hasPackages ? "AND studio_service_selected(m.catalog_id, c.id)" : ""}
         ORDER BY c.id ASC
         LIMIT 1`,
     );

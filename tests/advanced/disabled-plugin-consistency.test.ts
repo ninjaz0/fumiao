@@ -280,6 +280,21 @@ test("estimates report model_paused when the owning plugin is disabled", async (
       reason: "model_paused",
       ahead: 0,
     });
+    await f.p.db.query(
+      `UPDATE plugin_versions
+       SET manifest = jsonb_set(manifest, '{originalSubmission,version}', '"2"')
+       WHERE id = 'muse'`,
+    );
+    const unobservedModel = { kind: "video", model: "muse-video" };
+    assert.deepEqual(
+      (await estimates.read(f.admin, unobservedModel, space)).queue,
+      disabledVideo.queue,
+    );
+    await f.setMuseState("enable");
+    assert.equal(
+      (await estimates.read(f.admin, unobservedModel, space)).queue,
+      null,
+    );
   } finally {
     await f.close();
   }
