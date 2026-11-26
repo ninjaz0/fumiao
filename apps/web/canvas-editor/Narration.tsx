@@ -34,6 +34,7 @@ export function Narration({
   cost,
   unavailableReason,
   audioModels = [],
+  activeModel,
   onChange,
   onEditStart,
   onEditEnd,
@@ -45,6 +46,7 @@ export function Narration({
   cost: number | null;
   unavailableReason: string;
   audioModels?: { id: string; label: string }[];
+  activeModel?: string;
   onChange: (patch: Partial<CanvasNode>, history?: boolean) => void;
   onEditStart?: () => void;
   onEditEnd?: () => void;
@@ -83,6 +85,11 @@ export function Narration({
   const audioStrategy = node.audio_strategy ?? "replace";
   const origGain = node.original_audio_gain ?? 0.35;
   const lines = node.dialogue_lines ?? [];
+  const resolvedNarrationModel =
+    node.narration_model?.trim() ||
+    activeModel ||
+    (audioModels.length === 1 ? audioModels[0].id : "");
+  const isEdgeTts = resolvedNarrationModel === "edge-tts";
 
   const updateLines = (next: DialogueLine[], history = true) => {
     onChange(
@@ -387,19 +394,21 @@ export function Narration({
               onBlur={() => onEditEnd?.()}
             />
           </label>
-          <label>
-            音色描述
-            <input
-              maxLength={300}
-              value={node.narration_instruction || ""}
-              placeholder="清晰自然的普通话，语速适中"
-              onFocus={() => onEditStart?.()}
-              onChange={(e) =>
-                onChange({ narration_instruction: e.target.value }, false)
-              }
-              onBlur={() => onEditEnd?.()}
-            />
-          </label>
+          {!isEdgeTts && (
+            <label>
+              音色描述
+              <input
+                maxLength={300}
+                value={node.narration_instruction || ""}
+                placeholder="清晰自然的普通话，语速适中"
+                onFocus={() => onEditStart?.()}
+                onChange={(e) =>
+                  onChange({ narration_instruction: e.target.value }, false)
+                }
+                onBlur={() => onEditEnd?.()}
+              />
+            </label>
+          )}
           {job?.status === "done" && job.result && (
             <audio
               aria-label="当前旁白"

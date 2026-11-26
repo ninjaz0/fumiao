@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import type { CinematographySpec } from "./types";
 
 const DIMENSIONS: {
@@ -63,10 +64,16 @@ export function CinematographyPanel({
   value,
   onChange,
   compact = false,
+  floating = false,
+  side = "right",
+  onClose,
 }: {
   value?: CinematographySpec | null;
   onChange: (next: CinematographySpec | null) => void;
   compact?: boolean;
+  floating?: boolean;
+  side?: "right" | "left";
+  onClose?: () => void;
 }) {
   const current = value ?? {};
   const setField = (key: keyof CinematographySpec, nextVal: string) => {
@@ -81,21 +88,36 @@ export function CinematographyPanel({
   return (
     <div
       className={
-        "fm-cine-panel" + (compact ? " fm-cine-compact" : "")
+        "fm-cine-panel" +
+        (compact ? " fm-cine-compact" : "") +
+        (floating ? ` fm-cine-popover fm-cine-side-${side}` : "")
       }
       aria-label="导演镜头参数面板"
     >
       <div className="fm-cine-head">
         <strong>导演镜头参数 {activeCount > 0 ? `(${activeCount}/6)` : ""}</strong>
-        {activeCount > 0 && (
-          <button
-            type="button"
-            className="secondary fm-cine-clear"
-            onClick={() => onChange(null)}
-          >
-            清空
-          </button>
-        )}
+        <div className="fm-cine-head-actions">
+          {activeCount > 0 && (
+            <button
+              type="button"
+              className="secondary fm-cine-clear"
+              onClick={() => onChange(null)}
+            >
+              清空
+            </button>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              className="icon-button fm-cine-close"
+              aria-label="关闭导演参数"
+              title="关闭"
+              onClick={onClose}
+            >
+              <X size={15} />
+            </button>
+          )}
+        </div>
       </div>
       <div className="fm-cine-grid">
         {DIMENSIONS.map((dim) => {

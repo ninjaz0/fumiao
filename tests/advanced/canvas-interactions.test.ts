@@ -634,3 +634,68 @@ test("#44 resolveBatchShots filters video nodes, preserves order, deduplicates e
     /notify\(`已将 \$\{addedIds\.length\} 个视频加入镜头列表`\)/,
   );
 });
+
+test("CanvasWorkspace merges multi-select toolbars, deduplicates shot-list views, auto-hides empty proposal dock, and removes hardcoded MiniMax H3", async () => {
+  const root = process.cwd();
+  const workspaceSource = await readFile(
+    join(root, "apps/web/canvas-editor/CanvasWorkspace.tsx"),
+    "utf8",
+  );
+
+  // 1. Single multi-select toolbar: .fm-multi-bar removed, actions merged into .multi-toolbar
+  assert.doesNotMatch(workspaceSource, /fm-multi-bar/);
+  assert.match(
+    workspaceSource,
+    /className="multi-toolbar"[\s\S]*?batchShots\.videoIds\.length > 0[\s\S]*?icon=\{ListVideo\}[\s\S]*?batchShots\.allInShots \? "查看镜头列表" : "加入镜头列表"[\s\S]*?建工作流组[\s\S]*?预检并批量生成/,
+  );
+
+  // 2. Deduplicated shot-list view & top-bar actions
+  assert.doesNotMatch(workspaceSource, /setShotList/);
+  assert.doesNotMatch(workspaceSource, /<Modal\s+title="镜头列表"/);
+  assert.equal(
+    workspaceSource.match(/<ShotList\b/g)?.length ?? 0,
+    1,
+    "ShotList must be mounted in only one place",
+  );
+  assert.equal(
+    workspaceSource.match(/<Composition\b/g)?.length ?? 0,
+    1,
+    "Composition must be mounted in only one place",
+  );
+  assert.match(
+    workspaceSource,
+    /className="fm-view-switch"[\s\S]*?画布[\s\S]*?分屏[\s\S]*?镜头列表/,
+  );
+  assert.doesNotMatch(
+    workspaceSource,
+    /className="global-tools"[\s\S]*?icon=\{ListVideo\}[\s\S]*?<\/header>/,
+  );
+  assert.doesNotMatch(
+    workspaceSource,
+    /className="global-tools"[\s\S]*?icon=\{FolderOpen\}[\s\S]*?label="所有画布"[\s\S]*?<\/header>/,
+  );
+  assert.match(
+    workspaceSource,
+    /className="project-heading"[\s\S]*?label="所有画布"/,
+  );
+  assert.match(
+    workspaceSource,
+    /className="cv-menu project-menu"[\s\S]*?所有画布/,
+  );
+  assert.match(
+    workspaceSource,
+    /setViewMode\(\(m\)\s*=>\s*\(m\s*===\s*"canvas"\s*\?\s*"split"\s*:\s*m\)\)/,
+  );
+
+  // 3. Quietly fetch pending proposals, hide empty Agent dock trigger, and drop legacy skills modal
+  assert.doesNotMatch(workspaceSource, /SkillEditorModal|skillsModal|onOpenSkills/);
+  assert.match(
+    workspaceSource,
+    /\/api\/canvases\/\$\{project\.id\}\/proposals\?workspace=\$\{project\.workspace\}/,
+  );
+  assert.match(workspaceSource, /\(pendingProposals\s*>\s*0\s*\|\|\s*agentDock\)/);
+  assert.match(workspaceSource, /fm-with-agent-dock/);
+
+  // 4. No hardcoded "MiniMax H3" in CanvasWorkspace.tsx
+  assert.doesNotMatch(workspaceSource, /["']MiniMax H3["']/);
+});

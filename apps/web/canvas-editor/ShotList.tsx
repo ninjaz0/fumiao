@@ -10,6 +10,7 @@ import {
   ArrowDown,
   ArrowUp,
   Clapperboard,
+  Crosshair,
   Download,
   Link2,
   Mic,
@@ -247,7 +248,7 @@ export function ShotList({
                       aria-label={`定位镜头 ${index + 1}`}
                       onClick={() => onSelect(shot.id)}
                     >
-                      定位
+                      <Crosshair size={16} />
                     </button>
                   )}
                   {onEditShot && (
@@ -368,6 +369,7 @@ export function ShotList({
                   onChange={(cinematography) =>
                     onEditShot(shot.id, { cinematography })
                   }
+                  onClose={() => setCineNode(null)}
                 />
               )}
 

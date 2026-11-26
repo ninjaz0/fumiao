@@ -131,7 +131,6 @@ import { GridCropModal } from "./GridCropModal";
 import { PrecheckCostModal } from "./PrecheckCostModal";
 import { ReferencePromptInput } from "./ReferencePromptInput";
 import { ProposalDiffPreview } from "./ProposalDiffPreview";
-import { SkillEditorModal } from "./SkillEditorModal";
 import { captureFrame } from "./videoFrame";
 import { VideoThumb } from "./VideoThumb";
 import { canvasVideoThumbnails } from "./videoThumbnails";
@@ -750,7 +749,6 @@ export function CanvasWorkspace({
     [progress, setProgress] = useState<number | null>(null),
     [preview, setPreview] = useState<Preview | null>(null),
     [confirm, setConfirm] = useState<null | (() => void)>(null);
-  const [shotList, setShotList] = useState(false);
   const [viewMode, setViewModeState] = useState<"canvas" | "split" | "list">(() => {
     try {
       const saved = localStorage.getItem("fm-canvas-view-mode");
@@ -760,14 +758,26 @@ export function CanvasWorkspace({
     }
     return "canvas";
   });
-  const setViewMode = useCallback((mode: "canvas" | "split" | "list") => {
-    setViewModeState(mode);
-    try {
-      localStorage.setItem("fm-canvas-view-mode", mode);
-    } catch {
-      // Ignore storage failures.
-    }
-  }, []);
+  const setViewMode = useCallback(
+    (
+      next:
+        | "canvas"
+        | "split"
+        | "list"
+        | ((prev: "canvas" | "split" | "list") => "canvas" | "split" | "list"),
+    ) => {
+      setViewModeState((prev) => {
+        const resolved = typeof next === "function" ? next(prev) : next;
+        try {
+          localStorage.setItem("fm-canvas-view-mode", resolved);
+        } catch {
+          // Ignore storage failures.
+        }
+        return resolved;
+      });
+    },
+    [],
+  );
   const [precheckTarget, setPrecheckTarget] = useState<{
     nodeIds: string[];
     title?: string;
@@ -781,7 +791,28 @@ export function CanvasWorkspace({
   const [showCinePanel, setShowCinePanel] = useState(false);
   const [pendingBgmJobId, setPendingBgmJobId] = useState<number | null>(null);
   const [agentDock, setAgentDock] = useState(false);
-  const [skillsModal, setSkillsModal] = useState(false);
+  const [pendingProposals, setPendingProposals] = useState(0);
+  useEffect(() => {
+    let active = true;
+    const syncProposals = () => {
+      void api<{ proposals?: { status: string }[] }>(
+        `/api/canvases/${project.id}/proposals?workspace=${project.workspace}`,
+      )
+        .then((data) => {
+          if (!active) return;
+          setPendingProposals(
+            (data.proposals ?? []).filter((p) => p.status === "pending").length,
+          );
+        })
+        .catch(() => {});
+    };
+    syncProposals();
+    const timer = setInterval(syncProposals, 15000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [project.id, project.workspace]);
   const [aiStoryboard, setAiStoryboard] = useState(false);
   const [packPicker, setPackPicker] = useState<string | null>(null);
   const [packMedia, setPackMedia] = useState<Record<string,string[]>>({});
@@ -905,7 +936,7 @@ export function CanvasWorkspace({
     [shotIds, nodeById, runsByNode, runById, studioJobByResult],
   );
   const compositionIssue = useMemo(() => {
-    if (!shotList && viewMode === "canvas") return "";
+    if (viewMode === "canvas") return "";
     if (shots.reduce((sum, shot) => sum + shot.seconds, 0) > 900) {
       return "成片最多 15 分钟（900 秒），请减少镜头或缩短旁白";
     }
@@ -932,13 +963,22 @@ export function CanvasWorkspace({
       }
     }
     return "";
-  }, [shotList, shots, shotIds, nodeById, runsByNode, runById]);
+  }, [viewMode, shots, shotIds, nodeById, runsByNode, runById]);
   const compared = compareNode ? nodeById.get(compareNode) : undefined;
   const comparisonRuns = compared ? resolveNodeFromIndex(compared, runsByNode).list.filter((job) => job.status === "done" && job.result) : [];
   const availableModel = (model:string) => !!studio.model_forms?.[model]?.canvas && (studio.model_access || studio.model_policy?.enabled)?.[model] === true && (model !== 'gpt-image-2.6-sunburst' || studio.images.configured) && (studio.model_catalog?.[model]?.provider!=='flow' || Boolean(studio.flow?.configured));
+  const defaultImageModel =
+    (studio.images.default_model && availableModel(studio.images.default_model)
+      ? studio.images.default_model
+      : Object.keys(studio.images.models || {}).find(availableModel)) || "";
+  const defaultVideoModel =
+    Object.keys(studio.video_models || {}).find(availableModel) || "";
   const imagesEnabled = Object.keys(studio.images.models || {}).some(availableModel);
   const rawModelChoices = Object.entries(single?.type==='image' ? studio.images.models || {} : studio.video_models || {}).filter(([model])=>availableModel(model));
-  const requestedModel = single?.params.model || (single?.type === 'image' ? 'gpt-image-2.6-sunburst' : 'MiniMax H3');
+  const requestedModel = single?.params.model || (single?.type === 'image' ? (defaultImageModel || 'gpt-image-2.6-sunburst') : defaultVideoModel);
+  useEffect(() => {
+    setShowCinePanel(false);
+  }, [single?.id]);
   const selectedModel = rawModelChoices.some(([id])=>id===requestedModel) ? requestedModel : FlowPicker.resolve(studio.model_catalog,requestedModel,availableModel,single?.params) || rawModelChoices[0]?.[0] || '';
   const modelChoices = FlowPicker.grouped(Object.fromEntries(rawModelChoices),studio.model_catalog,availableModel,selectedModel,single?.params);
   const flowModel=studio.model_catalog?.[selectedModel]?.provider==='flow'?studio.model_catalog[selectedModel]:null;
@@ -1685,7 +1725,7 @@ export function CanvasWorkspace({
     );
     if (!videoIds.length) return;
     if (!addedIds.length) {
-      setShotList(true);
+      setViewMode((m) => (m === "canvas" ? "split" : m));
       return;
     }
     updateShots((ids) => {
@@ -1774,6 +1814,7 @@ export function CanvasWorkspace({
         title: `${source.title.slice(0, 45)} · ${origin} · ${time} 秒取帧`,
         media_id: asset.id, use_media: true, height: imageHeight,
       };
+      image.params.model = defaultImageModel;
       const placed = [...d.nodes, image];
       const edges = [...d.edges];
       const ordered = [...(d.shots ?? [])];
@@ -1783,7 +1824,10 @@ export function CanvasWorkspace({
         const point = freePosition(placed, image.x + image.width + 180, image.y, 320, 240);
         target = newNode("video", point.x, point.y, 1);
         target.title = "下一镜头";
-        target.params.model = "MiniMax H3";
+        target.params.model =
+          (source.params.model && availableModel(source.params.model)
+            ? source.params.model
+            : defaultVideoModel) || "";
         target.params.ratio = studio.ratios.includes(ratio) ? ratio : "16:9";
         placed.push(target);
         edges.push({ id: crypto.randomUUID(), source: image.id, target: target.id });
@@ -2219,7 +2263,11 @@ export function CanvasWorkspace({
     const document = doc.ref.current.document;
     const target = document.nodes.find(n=>n.id===packPicker);
     if (!target) throw new Error('节点已移除，请重新选择');
-    if (target.type==='video' && target.params.model==='MiniMax H3' && target.params.h3?.mode==='frames')
+    if (
+      target.type === 'video' &&
+      studio.model_forms?.[target.params.model]?.referenceModes &&
+      target.params.h3?.mode === 'frames'
+    )
       throw new Error('首尾帧模式请使用首帧和尾帧选择器');
     const incomingIds = document.edges.filter(e=>e.target===target.id).map(e=>linkedValue(document.nodes.find(n=>n.id===e.source)!,e,runs)).filter(v=>v.kind==="image").map(v=>v.value).filter((id):id is string=>Boolean(id));
     const direct = [...incomingIds,...(target.params.h3_refs||[])];
@@ -2622,7 +2670,7 @@ export function CanvasWorkspace({
         label: `${j.model || "配乐"} · ${(j.prompt || "").slice(0, 18) || "#" + j.id}`,
       })),
   ].filter((item, idx, arr) => arr.findIndex((x) => x.id === item.id) === idx);
-  const handleInheritTailFrame = async (shotId: string, closeModal = false) => {
+  const handleInheritTailFrame = async (shotId: string) => {
     const source = doc.ref.current.document.nodes.find((n) => n.id === shotId);
     if (!source) return;
     await doc.flush();
@@ -2661,7 +2709,7 @@ export function CanvasWorkspace({
       },
     }));
     notify("已抽取尾帧并创建续接镜头");
-    if (closeModal) setShotList(false);
+    if (viewMode === "list") setViewMode("split");
     selectOne(vidNode.id);
     focusNodes([vidNode.id]);
   };
@@ -2701,6 +2749,7 @@ export function CanvasWorkspace({
         cost={price}
         unavailableReason={unavailableReason}
         audioModels={availableAudioModels}
+        activeModel={activeAudio}
         onEditStart={doc.begin}
         onEditEnd={doc.end}
         onChange={(patch, history) => edit(shot.id, patch, history)}
@@ -2933,6 +2982,11 @@ export function CanvasWorkspace({
           >
             <img src="/static/mark.svg" alt="弗淼 AIGC" />
           </a>
+          <IconButton
+            icon={ArrowLeft}
+            label="所有画布"
+            onClick={() => closeAndLeave("/canvas")}
+          />
           <input
             aria-label="画布名称"
             value={doc.value.title}
@@ -2998,7 +3052,10 @@ export function CanvasWorkspace({
             <button
               type="button"
               className={viewMode === "split" ? "active" : ""}
-              onClick={() => setViewMode("split")}
+              onClick={() => {
+                if (window.innerWidth <= 1100 && agentDock) setAgentDock(false);
+                setViewMode("split");
+              }}
               title="画布 + 分镜表双轨分屏"
             >
               <Columns2 size={14} />
@@ -3011,7 +3068,7 @@ export function CanvasWorkspace({
               title="纯分镜表视图"
             >
               <List size={14} />
-              列表
+              镜头列表
             </button>
           </div>
           <IconButton
@@ -3033,55 +3090,31 @@ export function CanvasWorkspace({
             }}
           />
           <IconButton icon={FileText} label="AI 分镜" onClick={() => setAiStoryboard(true)} />
-          <IconButton
-            icon={Sparkles}
-            label="画布 Agent 提案箱"
-            onClick={() => setAgentDock((v) => !v)}
-          />
-          <IconButton
-            icon={ListVideo}
-            label="镜头列表"
-            onClick={() => setShotList(true)}
-          />
-          <IconButton
-            icon={FolderOpen}
-            label="所有画布"
-            onClick={() => closeAndLeave("/canvas")}
-          />
+          {(pendingProposals > 0 || agentDock) && (
+            <button
+              type="button"
+              className={"icon-button fm-agent-trigger" + (agentDock ? " active" : "")}
+              title="画布 Agent 提案箱"
+              aria-label="画布 Agent 提案箱"
+              aria-expanded={agentDock}
+              onClick={() => {
+                setAgentDock((prev) => {
+                  const next = !prev;
+                  if (next && window.innerWidth <= 1100 && viewMode === "split") {
+                    setViewMode("canvas");
+                  }
+                  return next;
+                });
+              }}
+            >
+              <Sparkles size={18} />
+              {pendingProposals > 0 && (
+                <span className="fm-agent-badge fm-number">{pendingProposals}</span>
+              )}
+            </button>
+          )}
         </div>
       </header>
-      {selected.length >= 2 && (
-        <div className="fm-multi-bar" role="toolbar" aria-label="多选批量操作">
-          <span>已选 {selected.length} 个节点</span>
-          <button
-            type="button"
-            className="secondary"
-            onClick={createGroupFromSelection}
-          >
-            <Layers size={14} />
-            建工作流组
-          </button>
-          <button
-            type="button"
-            className="primary"
-            onClick={() => {
-              void doc
-                .flush()
-                .then(() =>
-                  setPrecheckTarget({
-                    nodeIds: selected,
-                    title: `多选批量预检 (${selected.length} 节点)`,
-                    stages: ["image", "video", "narration", "dialogue"],
-                  }),
-                )
-                .catch((e) => notify((e as Error).message));
-            }}
-          >
-            <Play size={14} />
-            预检并批量生成
-          </button>
-        </div>
-      )}
       {menu === "project" && (
         <div className="cv-menu project-menu">
           <button onClick={() => closeAndLeave("/canvas")}>
@@ -3225,7 +3258,7 @@ export function CanvasWorkspace({
           {single.type === "video" && (
             <IconButton icon={ListVideo}
               label={shotIds.includes(single.id) ? "查看镜头列表" : "加入镜头列表"}
-              onClick={() => shotIds.includes(single.id) ? setShotList(true) : addShot(single)} />
+              onClick={() => shotIds.includes(single.id) ? setViewMode((m) => (m === "canvas" ? "split" : m)) : addShot(single)} />
           )}
           {single.type === "image" && current?.media && shots.length > 0 && (
             <IconButton icon={Link2} label="应用参考图到镜头" onClick={() => openSharedReference(single.id)} />
@@ -3311,7 +3344,7 @@ export function CanvasWorkspace({
         </div>
       )}
       {selected.length > 1 && (
-        <div className="multi-toolbar">
+        <div className="multi-toolbar" role="toolbar" aria-label="多选批量操作">
           <span>已选 {selected.length} 个节点</span>
           <IconButton
             icon={Copy}
@@ -3330,7 +3363,9 @@ export function CanvasWorkspace({
               icon={ListVideo}
               label={batchShots.allInShots ? "查看镜头列表" : "加入镜头列表"}
               onClick={() =>
-                batchShots.allInShots ? setShotList(true) : addSelectedShots()
+                batchShots.allInShots
+                  ? setViewMode((m) => (m === "canvas" ? "split" : m))
+                  : addSelectedShots()
               }
             />
           )}
@@ -3339,6 +3374,34 @@ export function CanvasWorkspace({
             label="删除所选节点"
             onClick={removeSelected}
           />
+          <span className="dock-divider" aria-hidden="true" />
+          <button
+            type="button"
+            className="secondary fm-multi-action"
+            onClick={createGroupFromSelection}
+          >
+            <Layers size={14} />
+            建工作流组
+          </button>
+          <button
+            type="button"
+            className="primary fm-multi-action"
+            onClick={() => {
+              void doc
+                .flush()
+                .then(() =>
+                  setPrecheckTarget({
+                    nodeIds: selected,
+                    title: `多选批量预检 (${selected.length} 节点)`,
+                    stages: ["image", "video", "narration", "dialogue"],
+                  }),
+                )
+                .catch((e) => notify((e as Error).message));
+            }}
+          >
+            <Play size={14} />
+            预检并批量生成
+          </button>
         </div>
       )}
       {single?.extension && (
@@ -3508,8 +3571,18 @@ export function CanvasWorkspace({
           {showCinePanel && (
             <CinematographyPanel
               compact
+              floating
+              side={
+                windowSize.w -
+                  ((viewMode === "split" ? Math.min(520, windowSize.w * 0.46) : 0) +
+                    (agentDock ? 400 : 0)) >=
+                1180
+                  ? "right"
+                  : "left"
+              }
               value={single.cinematography}
               onChange={(cinematography) => edit(single.id, { cinematography })}
+              onClose={() => setShowCinePanel(false)}
             />
           )}
           {h3Native?<H3Prompt
@@ -4461,7 +4534,7 @@ export function CanvasWorkspace({
               generation_mode:isGridPreview?'first_frame':options.generationMode,
               ...(options.gridLayout&&!isGridPreview?{grid_layout:options.gridLayout}:{}),
               ...(options.tailChain&&i>0?{tail_inherited:true}:{}),
-              params:{...newNode('video',0,0,1).params,model:'MiniMax H3',seconds:shot.seconds},
+              params:{...newNode('video',0,0,1).params,model:defaultVideoModel,seconds:shot.seconds},
             };
             return {text,gridImage,video};
           });
@@ -4501,61 +4574,15 @@ export function CanvasWorkspace({
         <div className="dialog-actions"><button className="secondary" onClick={() => setConfirmCandidates(false)}>取消</button>
           <button className="primary" disabled={!canGenerate} onClick={() => void submit()}>确认生成 · {candidateCost}</button></div>
       </Modal>}
-      {shotList && (
-        <Modal title="镜头列表" wide onClose={() => setShotList(false)}>
-          <ShotList shots={shots} onMove={moveShot} onExport={exportShots}
-            onEditShot={(id, patch) => edit(id, patch, false)}
-            onBatchPrecheck={(nodeIds) => {
-              void doc
-                .flush()
-                .then(() => {
-                  setShotList(false);
-                  setPrecheckTarget({
-                    nodeIds,
-                    title: `分镜批量预检 (${nodeIds.length} 镜)`,
-                    stages: ["video", "narration", "dialogue"],
-                  });
-                })
-                .catch((e) => notify((e as Error).message));
-            }}
-            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId, true)}
-            composition={
-              <Composition
-                project={project.id}
-                getRevision={doc.flush}
-                ready={shots.length > 0 && !compositionIssue}
-                waitingReason={compositionIssue}
-                audioAssets={compositionAudioAssets}
-                bgm={doc.value.document.bgm ?? null}
-                loudnorm={doc.value.document.loudnorm}
-                defaultBgmPrompt={defaultBgmPrompt}
-                bgmModels={bgmModels}
-                bgmGenerating={bgmGenerating}
-                onGenerateBgm={handleGenerateBgm}
-                onMixChange={(patch) =>
-                  doc.change((d) => ({
-                    ...d,
-                    document: {
-                      ...d.document,
-                      ...("bgm" in patch ? { bgm: patch.bgm } : {}),
-                      ...("loudnorm" in patch ? { loudnorm: patch.loudnorm } : {}),
-                    },
-                  }))
-                }
-              />
-            }
-            renderNarration={renderShotNarration}
-            onRemove={(id) => updateShots((ids) => ids.filter((item) => item !== id))}
-            onSelect={(id) => {
-              setShotList(false);
-              selectOne(id);
-              focusNodes([id]);
-            }} />
-        </Modal>
-      )}
       {showCrop && firstFrame && (
         <Modal title="首帧裁切预览" onClose={() => setShowCrop(false)}>
-          <p>MiniMax H3 会按 {single?.params.ratio} 居中裁切单张参考图，并将它用作首帧。</p>
+          <p>
+            {studio.video_models?.[selectedModel] ||
+              studio.model_catalog?.[selectedModel]?.label ||
+              selectedModel ||
+              "当前视频模型"}{" "}
+            会按 {single?.params.ratio} 居中裁切单张参考图，并将它用作首帧。
+          </p>
           <div className="crop-preview">
             <img src={mediaURL(firstFrame)} alt="生成画幅中的首帧" style={{ aspectRatio: cropRatio }} />
           </div>
@@ -4613,15 +4640,21 @@ export function CanvasWorkspace({
             )}
           </div>
           {frameError && <p className="error" role="alert">{frameError}</p>}
-          {preview.node.type === "video" && availableModel("MiniMax H3") && (
-            <p>暂停在想保留的画面，可提取为图片，或设为 MiniMax H3 下一镜头的首帧。</p>
+          {preview.node.type === "video" && Boolean(defaultVideoModel) && (
+            <p>
+              暂停在想保留的画面，可提取为图片，或设为{" "}
+              {studio.video_models?.[defaultVideoModel] ||
+                studio.model_catalog?.[defaultVideoModel]?.label ||
+                defaultVideoModel}{" "}
+              下一镜头的首帧。
+            </p>
           )}
           <div className="dialog-actions preview-actions">
             {preview.node.type === "video" && <>
               <button className="secondary" disabled={extracting} onClick={() => extractFrame(preview, false)}>
                 {extracting ? "正在提取…" : "提取当前帧"}
               </button>
-              {availableModel("MiniMax H3") && (
+              {Boolean(defaultVideoModel) && (
                 <button className="primary" disabled={extracting} onClick={() => extractFrame(preview, true)}>
                   用作下一镜头首帧
                 </button>
@@ -4654,7 +4687,9 @@ export function CanvasWorkspace({
       {viewMode !== "canvas" && (
         <aside
           className={
-            "fm-docked-storyboard" + (viewMode === "list" ? " fm-full-list" : "")
+            "fm-docked-storyboard" +
+            (viewMode === "list" ? " fm-full-list" : "") +
+            (agentDock ? " fm-with-agent-dock" : "")
           }
           aria-label="分镜表双向同步视图"
         >
@@ -4686,7 +4721,7 @@ export function CanvasWorkspace({
                 )
                 .catch((e) => notify((e as Error).message));
             }}
-            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId, false)}
+            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId)}
             onRemove={(id) =>
               updateShots((ids) => ids.filter((item) => item !== id))
             }
@@ -4884,14 +4919,9 @@ export function CanvasWorkspace({
             void doc.reload();
             notify("提案已批准并落图到当前画布");
           }}
-          onOpenSkills={() => setSkillsModal(true)}
+          onPendingCountChange={setPendingProposals}
           onClose={() => setAgentDock(false)}
         />
-      )}
-      {skillsModal && (
-        <Modal title="工作区技能包 (SKILL.md)" wide onClose={() => setSkillsModal(false)}>
-          <SkillEditorModal workspace={project.workspace} />
-        </Modal>
       )}
       {leaveFailure && (
         <Modal

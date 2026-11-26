@@ -165,9 +165,11 @@ test("Settings*.tsx strip internal ticket codes and raw DB enums while relocatin
   assert.match(skillCard, /启用后将自动注入工作区对话与外部 MCP 上下文/);
   assert.doesNotMatch(skillCard, /`SKILL\.md`|`\.zip`|icon-button|\bF0(?:15|24|34)\b/);
 
-  const skillModal = readRepoFile("apps/web/canvas-editor/SkillEditorModal.tsx");
-  assert.match(skillModal, /from "\.\.\/studio\/SkillEditorCard"/);
-  assert.doesNotMatch(skillModal, /useState\(/);
+  assert.equal(
+    existsSync(join(repoRoot, "apps/web/canvas-editor/SkillEditorModal.tsx")),
+    false,
+    "SkillEditorModal.tsx must be deleted now that workspace skills live in Studio settings",
+  );
 });
 
 test("AssetPacks, asset-packs.css, and AssetDialog remove dead ref-audio slot, replace emoji badges, and unify cross-route pack/field styles", () => {
@@ -238,4 +240,58 @@ test("ProjectList, SeriesTree, dialog.css, and CanvasList demote empty series tr
     canvasListTsx,
     /<button[\s\S]*?className="[^"]*\bbtn\b[^"]*"[\s\S]*?>\s*重试\s*<\/button>/,
   );
+});
+
+test("Canvas editor floats CinematographyPanel, strips neon hexes and raw policy enums, and polishes ShotList, Narration, Composition, and H3Inputs controls", () => {
+  const workspaceTsx = readRepoFile("apps/web/canvas-editor/CanvasWorkspace.tsx");
+  const cineTsx = readRepoFile("apps/web/canvas-editor/CinematographyPanel.tsx");
+  const proposalTsx = readRepoFile("apps/web/canvas-editor/ProposalDiffPreview.tsx");
+  const narrationTsx = readRepoFile("apps/web/canvas-editor/Narration.tsx");
+  const shotListTsx = readRepoFile("apps/web/canvas-editor/ShotList.tsx");
+  const compositionTsx = readRepoFile("apps/web/canvas-editor/Composition.tsx");
+  const h3InputsTsx = readRepoFile("apps/web/canvas-editor/H3Inputs.tsx");
+  const overridesCss = readRepoFile("apps/web/canvas-editor/canvas-overrides.css");
+
+  assert.equal(
+    existsSync(join(repoRoot, "apps/web/canvas-editor/SkillEditorModal.tsx")),
+    false,
+  );
+
+  // ProposalDiffPreview strips Skills button and raw DB enum suffixes
+  assert.doesNotMatch(proposalTsx, /onOpenSkills|BookOpen|\bSkills\b/);
+  assert.doesNotMatch(
+    proposalTsx,
+    /\(plan_only\)|\(propose_and_confirm\)|\(auto_within_budget\)/,
+  );
+
+  // CinematographyPanel supports floating popover with close button
+  assert.match(cineTsx, /fm-cine-popover/);
+  assert.match(cineTsx, /aria-label="关闭导演参数"/);
+  assert.match(workspaceTsx, /<CinematographyPanel[\s\S]*?floating/);
+
+  // canvas-overrides.css drops .fm-multi-bar, removes Tailwind neon hexes, floats .fm-cine-popover, offsets .fm-docked-storyboard, and styles <select> & BGM controls
+  assert.doesNotMatch(overridesCss, /\.fm-multi-bar\b/);
+  assert.doesNotMatch(
+    overridesCss,
+    /#4f7cff|#22c55e|#eab308|#ef4444|#38bdf8|#16a34a/i,
+  );
+  assert.match(overridesCss, /#3686ad|#68a8db/i);
+  assert.match(overridesCss, /\.fm-cine-popover[\s\S]*?position:\s*absolute/);
+  assert.match(overridesCss, /\.fm-cine-popover[\s\S]*?max-width:\s*340px/);
+  assert.match(overridesCss, /\.fm-docked-storyboard\.fm-with-agent-dock[\s\S]*?right:\s*400px/);
+  assert.match(overridesCss, /appearance:\s*none/);
+  assert.match(overridesCss, /\.composition-bgm-gen input\[type="text"\][\s\S]*?border:\s*1px solid var\(--cv-line\)/);
+  assert.match(overridesCss, /\.composition-bgm-gen \.secondary[\s\S]*?border:\s*1px solid var\(--cv-line\)/);
+  assert.match(overridesCss, /\.cv-h3-preview\s*>\s*button/);
+
+  // Narration hides 音色描述 when edge-tts is active
+  assert.match(narrationTsx, /edge-tts[\s\S]*?音色描述|!isEdgeTts\s*&&\s*\(\s*<label>\s*音色描述/);
+
+  // ShotList replaces raw text "定位" in .icon-button with <Crosshair size={16} />
+  assert.doesNotMatch(shotListTsx, /className="icon-button"[\s\S]{0,220}>\s*定位\s*<\/button>/);
+  assert.match(shotListTsx, /title="定位画布节点"[\s\S]*?<Crosshair size=\{16\} \/>/);
+
+  // Composition and H3Inputs keep accessible labels and styled buttons
+  assert.match(compositionTsx, /AI 生成配乐并挂载/);
+  assert.match(h3InputsTsx, /className="secondary"[\s\S]*?关闭预览/);
 });
