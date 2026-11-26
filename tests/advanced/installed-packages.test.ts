@@ -33,6 +33,7 @@ import { OriginalChatSettings } from "@fumiao/original-api/chat-settings.js";
 import { OriginalChats } from "@fumiao/original-api/chats.js";
 import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
 import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
+import { manifestSchema } from "@fumiao/plugin-sdk/index.js";
 import { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
 import { chatProviderFixture } from "../helpers/chat-provider.js";
 const load = async (id: string): Promise<PackageFile> =>
@@ -2585,7 +2586,7 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
     assert.equal(v20.version, "2.0.0");
     assert.equal(v21.version, "2.1.0");
     assert.ok(
-      v21.manifest?.queue?.timingVersions.includes("2.0.0"),
+      manifestSchema.parse(v21.manifest).queue?.timingVersions.includes("2.0.0"),
       "Muse 2.1.0 must retain 2.0.0 in timingVersions so 2.0.0 calibration samples survive upgrade",
     );
     await f.packages.install(f.actor, v20);
