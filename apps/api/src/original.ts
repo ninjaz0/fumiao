@@ -55,6 +55,7 @@ import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
 import { OriginalSeries } from "@fumiao/original-api/series.js";
+import { OriginalScriptDocuments } from "@fumiao/original-api/script-documents.js";
 import {
   authorizeTokenHttpRequest,
   OriginalApiTokens,
@@ -514,6 +515,7 @@ class OriginalApi {
   private storyboardExports: OriginalStoryboardExports;
   private batchPrecheck: OriginalBatchPrecheck;
   private series: OriginalSeries;
+  private scriptDocs: OriginalScriptDocuments;
   private apiTokens: OriginalApiTokens;
   private skills: OriginalSkills;
   private proposals: OriginalCanvasProposals;
@@ -533,6 +535,7 @@ class OriginalApi {
     this.storyboardExports = new OriginalStoryboardExports(identity.p);
     this.batchPrecheck = new OriginalBatchPrecheck(identity.p);
     this.series = new OriginalSeries(identity.p);
+    this.scriptDocs = new OriginalScriptDocuments(identity.p);
     this.apiTokens = new OriginalApiTokens(identity.p);
     this.skills = new OriginalSkills(identity.p);
     this.proposals = new OriginalCanvasProposals(identity.p);
@@ -735,6 +738,50 @@ class OriginalApi {
     @Param("scene") scene: string,
   ) {
     return this.series.removeScene(req.actor, key, ep, scene);
+  }
+  @Get("api/workspace/scripts")
+  listWorkspaceScripts(@Req() req: AuthRequest) {
+    return this.scriptDocs.list(req.actor, this.selected(req));
+  }
+  @Post("api/workspace/scripts")
+  @HttpCode(200)
+  createWorkspaceScript(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.scriptDocs.create(req.actor, body, this.selected(req));
+  }
+  @Post("api/workspace/scripts/suite")
+  @HttpCode(200)
+  createWorkspaceScriptSuite(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.scriptDocs.createSuite(req.actor, body, this.selected(req));
+  }
+  @Post("api/workspace/scripts/search")
+  @HttpCode(200)
+  searchWorkspaceScripts(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.scriptDocs.search(req.actor, body, this.selected(req));
+  }
+  @Post("api/workspace/scripts/replace")
+  @HttpCode(200)
+  replaceWorkspaceScripts(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.scriptDocs.replace(req.actor, body, this.selected(req));
+  }
+  @Get("api/workspace/scripts/:key")
+  getWorkspaceScript(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.scriptDocs.get(req.actor, key, this.selected(req));
+  }
+  @Put("api/workspace/scripts/:key")
+  updateWorkspaceScript(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.scriptDocs.update(req.actor, key, body, this.selected(req));
+  }
+  @Delete("api/workspace/scripts/:key")
+  removeWorkspaceScript(@Req() req: AuthRequest, @Param("key") key: string) {
+    const recursive =
+      new URL(req.originalUrl, "http://localhost").searchParams.get(
+        "recursive",
+      ) === "true";
+    return this.scriptDocs.remove(req.actor, key, recursive, this.selected(req));
   }
   @Put("api/favorites") favorites(
     @Req() req: AuthRequest,

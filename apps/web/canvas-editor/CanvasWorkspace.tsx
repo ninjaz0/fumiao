@@ -84,6 +84,8 @@ import {
   Clapperboard,
   List,
   Sparkles,
+  BookOpen,
+  MessageSquare,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { api, upload, downloadJSON, ApiError, workspaceURL } from "./api";
@@ -140,7 +142,9 @@ import {
 import { GridCropModal } from "./GridCropModal";
 import { PrecheckCostModal } from "./PrecheckCostModal";
 import { ReferencePromptInput } from "./ReferencePromptInput";
-import { ProposalDiffPreview } from "./ProposalDiffPreview";
+import { FloatingCanvasAgent } from "./FloatingCanvasAgent";
+import { ScriptWorkspace } from "./ScriptWorkspace";
+import { scriptApi, type WorkspaceCanvasSummary } from "./script-api";
 import { SkillEditorModal } from "./SkillEditorModal";
 import { captureFrame } from "./videoFrame";
 import { VideoThumb } from "./VideoThumb";
@@ -795,8 +799,35 @@ export function CanvasWorkspace({
   } | null>(null);
   const [showCinePanel, setShowCinePanel] = useState(false);
   const [pendingBgmJobId, setPendingBgmJobId] = useState<number | null>(null);
+  const [surface, setSurface] = useState<"canvas" | "document">("canvas");
+  const [scriptWorkspaceMounted, setScriptWorkspaceMounted] = useState(false);
   const [agentDock, setAgentDock] = useState(false);
+  const [agentTab, setAgentTab] = useState<"chat" | "proposals">("chat");
+  const [agentDockedWidth, setAgentDockedWidth] = useState(0);
+  const [activeScript, setActiveScript] = useState<{
+    id: string;
+    path: string;
+    body_md: string;
+  } | null>(null);
+  const [scriptJumpReq, setScriptJumpReq] = useState<{
+    docId: string;
+    anchor?: string;
+    line?: number;
+    seq: number;
+  } | null>(null);
+  const [projectCanvases, setProjectCanvases] = useState<
+    WorkspaceCanvasSummary[]
+  >([]);
+  const [projectSearch, setProjectSearch] = useState("");
   const [skillsModal, setSkillsModal] = useState(false);
+  useEffect(() => {
+    if (menu !== "project") return;
+    setProjectSearch("");
+    void scriptApi
+      .listCanvases()
+      .then((res) => setProjectCanvases(res.projects))
+      .catch(() => {});
+  }, [menu]);
   const [aiStoryboard, setAiStoryboard] = useState(false);
   const [packPicker, setPackPicker] = useState<string | null>(null);
   const [packMedia, setPackMedia] = useState<Record<string,string[]>>({});
@@ -951,6 +982,8 @@ export function CanvasWorkspace({
   const compared = compareNode ? nodeById.get(compareNode) : undefined;
   const comparisonRuns = compared ? resolveNodeFromIndex(compared, runsByNode).list.filter((job) => job.status === "done" && job.result) : [];
   const availableModel = (model:string) => !!studio.model_forms?.[model]?.canvas && (studio.model_access || studio.model_policy?.enabled)?.[model] === true && (model !== 'gpt-image-2.6-sunburst' || studio.images.configured) && (studio.model_catalog?.[model]?.provider!=='flow' || Boolean(studio.flow?.configured));
+  const defaultImageModel = Object.keys(studio.images.models || {}).find(availableModel) || "";
+  const defaultVideoModel = Object.keys(studio.video_models || {}).find(availableModel) || "";
   const imagesEnabled = Object.keys(studio.images.models || {}).some(availableModel);
   const rawModelChoices = Object.entries(single?.type==='image' ? studio.images.models || {} : studio.video_models || {}).filter(([model])=>availableModel(model));
   const requestedModel = single?.params.model || (single?.type === 'image' ? 'gpt-image-2.6-sunburst' : 'MiniMax H3');
@@ -2005,12 +2038,24 @@ export function CanvasWorkspace({
         }
         return;
       }
+      const targetEl = e.target as HTMLElement | null;
       if (
-        (e.target as HTMLElement | null)?.closest?.(
-          'input,textarea,[contenteditable="true"],dialog',
+        targetEl?.closest?.(
+          'input,textarea,select,[contenteditable="true"],dialog',
         )
       )
         return;
+      if (
+        surface === "document" ||
+        targetEl?.closest?.(".fm-doc-workspace,.fm-floating-agent")
+      ) {
+        if (e.key === "Escape") {
+          setMenu(null);
+          setContext(null);
+          setDownstream(null);
+        }
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
       const viewportShortcut = matchViewportFocusShortcut(e);
       if (e.key === "Escape") {
@@ -2059,7 +2104,16 @@ export function CanvasWorkspace({
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [selected, selectedEdges, runs, studio.jobs, windowSize.w, menu, closeProjectMenu]);
+  }, [
+    selected,
+    selectedEdges,
+    runs,
+    studio.jobs,
+    windowSize.w,
+    menu,
+    closeProjectMenu,
+    surface,
+  ]);
   useEffect(() => {
     const click = (e: PointerEvent) => {
       if (!(e.target as HTMLElement).closest(".cv-menu,.menu-trigger")) {
@@ -2828,8 +2882,14 @@ export function CanvasWorkspace({
     <div
       ref={workspaceRef}
       className="canvas-workspace"
+      data-surface={surface}
       data-composer-open={composerOpen ? "true" : "false"}
       data-selection-toolbar={selectionToolbarOpen ? "true" : "false"}
+      style={
+        {
+          "--fm-agent-width": `${agentDockedWidth}px`,
+        } as React.CSSProperties
+      }
       tabIndex={-1}
       onKeyDown={(e) => {
         const pop = (e.target as HTMLElement).closest(".cv-menu");
@@ -3049,35 +3109,37 @@ export function CanvasWorkspace({
           </button>
         </div>
         <div className="global-tools">
-          <div className="fm-view-switch" role="group" aria-label="画布与分镜表视图切换">
-            <button
-              type="button"
-              className={viewMode === "canvas" ? "active" : ""}
-              onClick={() => setViewMode("canvas")}
-              title="纯画布视图"
-            >
-              <LayoutGrid size={14} />
-              画布
-            </button>
-            <button
-              type="button"
-              className={viewMode === "split" ? "active" : ""}
-              onClick={() => setViewMode("split")}
-              title="画布 + 分镜表双轨分屏"
-            >
-              <Columns2 size={14} />
-              分屏
-            </button>
-            <button
-              type="button"
-              className={viewMode === "list" ? "active" : ""}
-              onClick={() => setViewMode("list")}
-              title="纯分镜表视图"
-            >
-              <List size={14} />
-              列表
-            </button>
-          </div>
+          {surface === "canvas" && (
+            <div className="fm-view-switch" role="group" aria-label="画布与分镜表视图切换">
+              <button
+                type="button"
+                className={viewMode === "canvas" ? "active" : ""}
+                onClick={() => setViewMode("canvas")}
+                title="纯画布视图"
+              >
+                <LayoutGrid size={14} />
+                画布
+              </button>
+              <button
+                type="button"
+                className={viewMode === "split" ? "active" : ""}
+                onClick={() => setViewMode("split")}
+                title="画布 + 分镜表双轨分屏"
+              >
+                <Columns2 size={14} />
+                分屏
+              </button>
+              <button
+                type="button"
+                className={viewMode === "list" ? "active" : ""}
+                onClick={() => setViewMode("list")}
+                title="纯分镜表视图"
+              >
+                <List size={14} />
+                列表
+              </button>
+            </div>
+          )}
           <IconButton
             icon={Search}
             label="搜索节点"
@@ -3098,9 +3160,30 @@ export function CanvasWorkspace({
           />
           <IconButton icon={FileText} label="AI 分镜" onClick={() => setAiStoryboard(true)} />
           <IconButton
+            icon={MessageSquare}
+            label="AI 创作助手"
+            active={agentDock && agentTab === "chat"}
+            onClick={() => {
+              if (agentDock && agentTab === "chat") {
+                setAgentDock(false);
+              } else {
+                setAgentTab("chat");
+                setAgentDock(true);
+              }
+            }}
+          />
+          <IconButton
             icon={Sparkles}
             label="画布 Agent 提案箱"
-            onClick={() => setAgentDock((v) => !v)}
+            active={agentDock && agentTab === "proposals"}
+            onClick={() => {
+              if (agentDock && agentTab === "proposals") {
+                setAgentDock(false);
+              } else {
+                setAgentTab("proposals");
+                setAgentDock(true);
+              }
+            }}
           />
           <IconButton
             icon={ListVideo}
@@ -3110,10 +3193,39 @@ export function CanvasWorkspace({
           <IconButton
             icon={FolderOpen}
             label="所有画布"
-            onClick={() => closeAndLeave(canvasListPath)}
+            onClick={() => void closeAndLeave(canvasListPath)}
           />
         </div>
       </header>
+      <div
+        className="fm-surface-switcher"
+        role="tablist"
+        aria-label="画布与剧本文档切换"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={surface === "canvas"}
+          className={surface === "canvas" ? "active" : ""}
+          onClick={() => setSurface("canvas")}
+        >
+          <LayoutGrid size={14} />
+          画布
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={surface === "document"}
+          className={surface === "document" ? "active" : ""}
+          onClick={() => {
+            setScriptWorkspaceMounted(true);
+            setSurface("document");
+          }}
+        >
+          <BookOpen size={14} />
+          文档
+        </button>
+      </div>
       {selected.length >= 2 && (
         <div className="fm-multi-bar" role="toolbar" aria-label="多选批量操作">
           <span>已选 {selected.length} 个节点</span>
@@ -3147,8 +3259,62 @@ export function CanvasWorkspace({
         </div>
       )}
       {menu === "project" && (
-        <div className="cv-menu project-menu" ref={projectMenu}>
-          <button onClick={() => closeAndLeave(canvasListPath)}>
+        <div
+          className="cv-menu project-menu fm-project-switcher-menu"
+          ref={projectMenu}
+        >
+          <div className="fm-project-switcher-search">
+            <Search size={14} />
+            <input
+              value={projectSearch}
+              placeholder="搜索并切换工作区画布…"
+              aria-label="搜索工作区画布"
+              onChange={(e) => setProjectSearch(e.target.value)}
+            />
+          </div>
+          {projectCanvases.length > 0 && (
+            <>
+              <div
+                className="fm-project-switcher-list"
+                role="listbox"
+                aria-label="工作区画布列表"
+              >
+                {projectCanvases
+                  .filter(
+                    (c) =>
+                      !projectSearch.trim() ||
+                      c.title
+                        .toLowerCase()
+                        .includes(projectSearch.trim().toLowerCase()),
+                  )
+                  .slice(0, 12)
+                  .map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={c.id === project.id ? "active" : ""}
+                      onClick={() => {
+                        if (c.id === project.id) {
+                          setMenu(null);
+                          return;
+                        }
+                        void closeAndLeave("/canvas/" + c.id);
+                      }}
+                    >
+                      <Layers size={14} />
+                      <span>{c.title}</span>
+                      {c.id === project.id ? (
+                        <Check size={13} />
+                      ) : (
+                        <small className="fm-number">{c.count}</small>
+                      )}
+                    </button>
+                  ))}
+              </div>
+              <div className="menu-divider" />
+            </>
+          )}
+          <button onClick={() => void closeAndLeave(canvasListPath)}>
             <LayoutGrid size={16} />
             所有画布
           </button>
@@ -3286,6 +3452,32 @@ export function CanvasWorkspace({
             label="聚焦节点"
             onClick={() => focusNodes([single.id])}
           />
+          {typeof single.extra_params?.script_doc_id === "string" &&
+            Boolean(single.extra_params.script_doc_id) && (
+              <IconButton
+                icon={BookOpen}
+                label="查看源剧本"
+                onClick={() => {
+                  const docId = String(single.extra_params!.script_doc_id);
+                  const line =
+                    typeof single.extra_params?.script_line === "number"
+                      ? single.extra_params.script_line
+                      : undefined;
+                  const anchor =
+                    typeof single.extra_params?.script_anchor === "string"
+                      ? single.extra_params.script_anchor
+                      : undefined;
+                  setScriptWorkspaceMounted(true);
+                  setSurface("document");
+                  setScriptJumpReq((prev) => ({
+                    docId,
+                    anchor,
+                    line,
+                    seq: (prev?.seq ?? 0) + 1,
+                  }));
+                }}
+              />
+            )}
           <span className="menu-trigger">
             <IconButton
               icon={Palette}
@@ -4988,20 +5180,127 @@ export function CanvasWorkspace({
           />
         </Modal>
       )}
-      {agentDock && (
-        <ProposalDiffPreview
-          workspace={project.workspace}
-          projectId={project.id}
-          revision={doc.revision.current}
-          canEditPolicy={studio.me.role === "admin" || project.owner === studio.me.id}
-          onApplied={() => {
-            void doc.reload();
-            notify("提案已批准并落图到当前画布");
+      {(surface === "document" || scriptWorkspaceMounted) && (
+        <ScriptWorkspace
+          active={surface === "document"}
+          canvasId={project.id}
+          canvasTitle={doc.value.title}
+          canvasDoc={doc.value.document}
+          runs={runs}
+          assets={studio.assets}
+          defaultVideoModel={defaultVideoModel}
+          defaultImageModel={defaultImageModel}
+          externalOpenRequest={scriptJumpReq}
+          onActiveScriptChange={setActiveScript}
+          onChangeCanvasDoc={(updater) =>
+            doc.change((d) => ({ ...d, document: updater(d.document) }))
+          }
+          onEditCanvasNode={(nodeId, patch, history) =>
+            edit(nodeId, patch, history)
+          }
+          onFocusCanvasNode={(nodeId) => {
+            setSurface("canvas");
+            selectOne(nodeId);
+            requestAnimationFrame(() => focusNodes([nodeId]));
           }}
-          onOpenSkills={() => setSkillsModal(true)}
-          onClose={() => setAgentDock(false)}
+          onSwitchToCanvas={(focusIds) => {
+            setSurface("canvas");
+            if (focusIds?.length) {
+              setSelected(focusIds);
+              requestAnimationFrame(() => focusNodes(focusIds));
+            }
+          }}
+          onSwitchCanvasProject={(targetCanvasId) => {
+            void closeAndLeave("/canvas/" + targetCanvasId);
+          }}
+          onAssetUploaded={(asset) =>
+            setStudio((s) => ({
+              ...s,
+              assets: [{ ...asset, owner: s.me.id }, ...s.assets],
+            }))
+          }
+          onNotify={notify}
         />
       )}
+      {!agentDock && (
+        <button
+          type="button"
+          className="fm-agent-orb"
+          onClick={() => {
+            setAgentTab("chat");
+            setAgentDock(true);
+          }}
+        >
+          <span className="fm-agent-orb-dot" aria-hidden="true" />
+          AI 创作助手
+        </button>
+      )}
+      <FloatingCanvasAgent
+        visible={agentDock}
+        activeTab={agentTab}
+        onTabChange={setAgentTab}
+        onClose={() => setAgentDock(false)}
+        onDockedWidthChange={setAgentDockedWidth}
+        workspace={project.workspace}
+        userId={initial.me.id}
+        isAdmin={studio.me.role === "admin"}
+        projectId={project.id}
+        revision={doc.revision.current}
+        canEditPolicy={
+          studio.me.role === "admin" || project.owner === studio.me.id
+        }
+        configureHref={
+          studio.me.role === "admin"
+            ? workspaceURL(chatSettingsPath(studio))
+            : undefined
+        }
+        onConfigureModels={
+          studio.me.role === "admin"
+            ? (e) => {
+                if (
+                  e.button === 0 &&
+                  !e.altKey &&
+                  !e.ctrlKey &&
+                  !e.metaKey &&
+                  !e.shiftKey
+                ) {
+                  e.preventDefault();
+                  void closeAndLeave(chatSettingsPath(studio));
+                }
+              }
+            : undefined
+        }
+        onRecharge={openCredits}
+        selectedNode={single}
+        activeScript={activeScript}
+        canvasNodes={doc.value.document.nodes}
+        getCanvasRevision={() => doc.flush()}
+        onApplyChatToCanvas={async (cid, message, mode) => {
+          const revision = await doc.flush();
+          const snapshot = JSON.stringify(doc.ref.current);
+          const result = await chatRequest<Project & { applied_node: string }>(
+            project.workspace,
+            "/api/chats/" + cid + "/apply",
+            {
+              uid: crypto.randomUUID(),
+              message: message.id,
+              project: project.id,
+              expected_revision: revision,
+              mode,
+              ...(mode === "replace" && single?.type === "text"
+                ? { node: single.id, expected_text: single.text }
+                : {}),
+            },
+          );
+          doc.acceptRemote(result, snapshot);
+        }}
+        onProposalApplied={() => {
+          void doc.reload();
+          notify("提案已批准并落图到当前画布");
+        }}
+        onOpenSkills={() => setSkillsModal(true)}
+        onNotify={notify}
+      />
       {skillsModal && (
         <Modal title="工作区技能包 (SKILL.md)" wide onClose={() => setSkillsModal(false)}>
           <SkillEditorModal workspace={project.workspace} />

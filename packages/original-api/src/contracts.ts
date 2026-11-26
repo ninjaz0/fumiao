@@ -50,6 +50,13 @@ import {
   subscriptionPlanCreateFields,
   subscriptionSubscribeFields,
 } from "./wave6-fields.js";
+import {
+  scriptCreateFields,
+  scriptReplaceFields,
+  scriptSearchFields,
+  scriptSuiteFields,
+  scriptUpdateFields,
+} from "./script-fields.js";
 export const identityBodies: Record<string, Fields> = {
   canvasNew: canvasNewFields,
   canvasSave: canvasSaveFields,
@@ -81,6 +88,11 @@ export const identityBodies: Record<string, Fields> = {
   redeemApply: redeemApplyFields,
   subscriptionPlanCreate: subscriptionPlanCreateFields,
   subscriptionSubscribe: subscriptionSubscribeFields,
+  scriptCreate: scriptCreateFields,
+  scriptSuite: scriptSuiteFields,
+  scriptSearch: scriptSearchFields,
+  scriptReplace: scriptReplaceFields,
+  scriptUpdate: scriptUpdateFields,
   canvasShotsDownload: canvasExactRevisionFields,
   storyboardExport: storyboardExportFields,
   estimate: estimateFields,
@@ -398,6 +410,40 @@ export const identityContracts: Contract[] = [
   {
     method: "DELETE",
     path: /^\/api\/series\/([^/]+)\/episodes\/([^/]+)\/scenes\/([^/]+)$/,
+  },
+  { method: "GET", path: /^\/api\/workspace\/scripts$/ },
+  {
+    method: "POST",
+    path: /^\/api\/workspace\/scripts$/,
+    body: "scriptCreate",
+  },
+  {
+    method: "POST",
+    path: /^\/api\/workspace\/scripts\/suite$/,
+    body: "scriptSuite",
+  },
+  {
+    method: "POST",
+    path: /^\/api\/workspace\/scripts\/search$/,
+    body: "scriptSearch",
+  },
+  {
+    method: "POST",
+    path: /^\/api\/workspace\/scripts\/replace$/,
+    body: "scriptReplace",
+    exactIntegers: true,
+  },
+  { method: "GET", path: /^\/api\/workspace\/scripts\/([^/]+)$/ },
+  {
+    method: "PUT",
+    path: /^\/api\/workspace\/scripts\/([^/]+)$/,
+    body: "scriptUpdate",
+    exactIntegers: true,
+  },
+  {
+    method: "DELETE",
+    path: /^\/api\/workspace\/scripts\/([^/]+)$/,
+    booleanQuery: ["recursive"],
   },
   { method: "POST", path: /^\/api\/assets$/ },
   { method: "PUT", path: /^\/api\/me\/avatar$/ },
