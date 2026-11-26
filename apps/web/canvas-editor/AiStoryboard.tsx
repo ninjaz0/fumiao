@@ -25,7 +25,10 @@ export function parseStoryboard(text:string):SuggestedShot[]{
   return {title:r.title,prompt:r.prompt,narration:r.narration,seconds:r.seconds};
  });
 }
-export function AiStoryboard({workspace,userId,project,onApply}:{workspace:number;userId:number;project:string;onApply:(shots:SuggestedShot[],options:StoryboardApplyOptions)=>Promise<void>}){
+export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConfigureModels}:{
+ workspace:number;userId:number;project:string;onApply:(shots:SuggestedShot[],options:StoryboardApplyOptions)=>Promise<void>;
+ onRecharge:()=>void;onConfigureModels?:()=>void;
+}){
  const key=`fm-storyboard-${userId}-${workspace}-${project}`;
  const [draft,setDraft]=useState(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]'));
  const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(draft.shots),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
@@ -34,6 +37,9 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
  const [tailChain,setTailChain]=useState<boolean>(true);
  const [gridLayout,setGridLayout]=useState<'2x2'|'3x3'>('3x3');
  const lastMessage=useRef(draft.message);const pending=useRef<any>(null);
+ const [stopping,setStopping]=useState(false);
+ const stopPending=useRef(false);
+ const [applying,setApplying]=useState(false);
  const req=(path:string,body?:unknown)=>chatRequest(workspace,path,body);
  const updateConfig=(c:any)=>{setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')};
  useEffect(()=>{let active=true;const refresh=()=>req('/api/chat/config').then(c=>{if(active)updateConfig(c)}).catch(e=>{if(active)setError(e.message)});void refresh();const timer=setInterval(()=>void refresh(),10000);try{pending.current=JSON.parse(localStorage.getItem(key+'-pending')||'null')}catch{}return()=>{active=false;clearInterval(timer)}},[workspace]);
@@ -60,6 +66,7 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
  },[cid,workspace]);
  useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:lastMessage.current,shots}))},[shots,key,draft.message]);
  const price=config?.pricing.items.find((p:any)=>p.key===model+'|reply')?.amount;
+ const funded = price != null && config?.credits.available >= price;
  const send=async()=>{
   setBusy(true);setError('');
   try{
@@ -76,6 +83,14 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
    }
    const p=pending.current;setCid(p.cid);setComplete(false);const snapshot=await req('/api/chats/'+p.cid+'/messages',p.body);setRunning(!!snapshot.conversation.active_turn);const reply=[...snapshot.messages].reverse().find((m:any)=>m.role==='assistant');if(reply?.state==='complete'){lastMessage.current=reply.id;setComplete(true);try{setShots(parseStoryboard(reply.content))}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}}
   }catch(e){if((e as any).status && (e as any).status<500){pending.current=null;localStorage.removeItem(key+'-pending');void req('/api/chat/config').then(updateConfig);}setError((e as Error).message)}finally{setBusy(false)}
+ };
+ const stop=async()=>{
+  if(stopPending.current)return;
+  stopPending.current=true;
+  setStopping(true);
+  try{const snapshot=await req('/api/chats/'+cid+'/stop',{});setRunning(!!snapshot.conversation.active_turn)}
+  catch(e){setError((e as Error).message)}
+  finally{stopPending.current=false;setStopping(false)}
  };
  return <div className="ai-storyboard">
   <div className="fm-storyboard-options">
@@ -103,10 +118,19 @@ export function AiStoryboard({workspace,userId,project,onApply}:{workspace:numbe
    </label>
   </div>
   <label>创作需求<textarea value={brief} maxLength={8000} rows={4} disabled={running||busy} placeholder="介绍剧集剧情、角色关系、场景与希望传达的节奏…" onChange={e=>{setBrief(e.target.value);localStorage.setItem(key+'-brief',e.target.value)}}/></label>
-  <div className="storyboard-request"><ModelSelect models={config?.models||{}} value={model} disabled={busy||running} onChange={setModel}/><span>{price==null?'':`文字生成 · ${price}`}</span>{running?<button className="secondary" onClick={()=>void req('/api/chats/'+cid+'/stop',{}).catch(e=>setError(e.message))}>停止</button>:<button className="primary" disabled={busy||!brief.trim()||!model||!config?.models[model]||price==null||config?.credits.available<price} onClick={()=>void send()}>{busy?'提交中…':pending.current?'重试确认':complete&&error?`重新拟定 · ${price}`:'拟定分镜'}</button>}</div>
+  <div className="storyboard-request">{model&&config?.models[model]&&<>
+   <ModelSelect models={config.models} value={model} disabled={busy||running} onChange={setModel}/>
+   {price!=null&&<span className="fm-number">{`文字生成 · ${price} 积分`}</span>}
+  </>}{running?<><span className="fm-state-change" role="status">{stopping?'正在停止…':'正在拟定分镜…'}</span><button className="secondary" disabled={stopping} onClick={()=>void stop()}>停止</button></>:model&&<button className="primary" disabled={busy||!brief.trim()||!config?.models[model]||!funded} onClick={()=>void send()}>{busy?'提交中…':pending.current?'重试确认':complete&&error?'重新拟定':'拟定分镜'}</button>}</div>
+  {!running&&config&&(!model
+   ? <p role="status">当前空间暂无可用对话模型{onConfigureModels
+    ? <button className="secondary" type="button" onClick={onConfigureModels}>前往配置对话模型</button>
+    : "，请联系管理员开通"}</p>
+   : price==null ? <p role="status">当前对话模型尚未定价</p>
+   : !funded && <p role="status">当前空间积分不足<button className="secondary" type="button" onClick={onRecharge}>去充值</button></p>)}
   {error&&<p className="error" role="alert">{error}</p>}
 
-  {!!shots.length&&<><div className="storyboard-proposal">{shots.map((shot,i)=><section key={i}><label>镜头 {i+1}<input value={shot.title} maxLength={80} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,title:e.target.value}:r))}/></label><label>画面<textarea rows={3} value={shot.prompt} maxLength={12000} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,prompt:e.target.value}:r))}/></label><label>旁白<textarea rows={2} value={shot.narration} maxLength={300} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,narration:e.target.value}:r))}/></label><div className="storyboard-seconds" role="group" aria-label={`镜头 ${i+1} 时长`}>{([5,10,15] as const).map(seconds=><button key={seconds} aria-pressed={shot.seconds===seconds} onClick={()=>setShots(rows=>rows.map((r,j)=>j===i?{...r,seconds}:r))}>{seconds}s</button>)}</div></section>)}</div>
-   <div className="dialog-actions"><span>{shots.length} 个镜头 · {shots.reduce((t,s)=>t+s.seconds,0)} 秒</span><button className="primary" disabled={busy||shots.some(s=>!s.title.trim()||!s.prompt.trim())} onClick={async()=>{setBusy(true);try{await onApply(shots,{generationMode,tailChain,gridLayout})}catch(e){setError((e as Error).message)}finally{setBusy(false)}}}>采用分镜，不生成视频</button></div></>}
+  {!!shots.length&&<><div className="storyboard-proposal">{shots.map((shot,i)=><section key={i}><label>镜头 {i+1}<input value={shot.title} maxLength={80} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,title:e.target.value}:r))}/></label><label>画面<textarea rows={3} value={shot.prompt} maxLength={12000} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,prompt:e.target.value}:r))}/></label><label>旁白<textarea rows={2} maxLength={300} value={shot.narration} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,narration:e.target.value}:r))}/></label><div className="storyboard-seconds" role="group" aria-label={`镜头 ${i+1} 时长`}>{([5,10,15] as const).map(seconds=><button key={seconds} aria-pressed={shot.seconds===seconds} onClick={()=>setShots(rows=>rows.map((r,j)=>j===i?{...r,seconds}:r))}>{seconds}s</button>)}</div></section>)}</div>
+   <div className="dialog-actions"><span className="fm-number">{shots.length} 个镜头 · {shots.reduce((t,s)=>t+s.seconds,0)} 秒</span><button className="primary" disabled={busy||shots.some(s=>!s.title.trim()||!s.prompt.trim())} onClick={async()=>{setBusy(true);setApplying(true);try{await onApply(shots,{generationMode,tailChain,gridLayout})}catch(e){setError((e as Error).message)}finally{setBusy(false);setApplying(false)}}}>{applying?'正在加入画布…':'采用分镜，不生成视频'}</button></div></>}
  </div>
 }

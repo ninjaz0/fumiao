@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type MouseEvent } from "react";
+import { reducedMotion } from "../app/motion";
 import { Icon } from "./Icon";
 import { mediaURL, type Asset } from "./state";
 
@@ -116,6 +117,7 @@ export function ReferenceMedia({
 }
 
 export function playPreview(event: MouseEvent<HTMLButtonElement>) {
+  if (reducedMotion()) return;
   void event.currentTarget
     .querySelector("video")
     ?.play()

@@ -80,8 +80,6 @@ export function useLibrary(
   });
   const [selecting, setSelecting] = useState(false);
   const [redraw, setRedraw] = useState(0);
-  const [gridRevision, setGridRevision] = useState(0);
-  const [uploadsVisible, setUploadsVisible] = useState(true);
   const [selected, setSelected] = useState<string[]>([]);
   const [highlight, setHighlight] = useState<number | null>(null);
   const [activity, setActivity] = useState<"favorite" | "download" | null>(
@@ -146,7 +144,6 @@ export function useLibrary(
   }
   function choose(next: LibraryFilter, result: number | null = null) {
     reset();
-    setUploadsVisible(true);
     setRedraw((value) => value + 1);
     setFilter(next);
     setHighlight(result);
@@ -171,18 +168,7 @@ export function useLibrary(
     filter,
     choose,
     redraw,
-    gridRevision,
-    uploadsVisible,
-    showUploads: () => setUploadsVisible(true),
-    redrawLibrary: () => {
-      setUploadsVisible(true);
-      setRedraw((value) => value + 1);
-    },
-    refreshGrid: () => {
-      setUploadsVisible(true);
-      setHighlight(null);
-      setGridRevision((value) => value + 1);
-    },
+    redrawLibrary: () => setRedraw((value) => value + 1),
     selecting,
     start: () => setSelecting(true),
     reset,
@@ -341,7 +327,7 @@ export function Library({
           <div id="selection-toolbar" key={library.redraw}>
             {referencePicking ? (
               <div className="reference-pick-toolbar">
-                <span role="status">{`已添加 ${referencePicking.ids.size} 张图片`}</span>
+                <span className="fm-number" role="status">{`已添加 ${referencePicking.ids.size} 张图片`}</span>
                 <button
                   className="primary"
                   data-act="finish-reference-picking"
@@ -366,7 +352,7 @@ export function Library({
                   <span>{library.count > 0 && <Icon name="check" />}</span>全选
                 </button>
                 <span
-                  className="selection-count"
+                  className="selection-count fm-number"
                   aria-live="polite"
                 >{`已选择 ${keys.length} 项内容`}</span>
                 <div className="bulk-actions">
@@ -446,16 +432,15 @@ export function Library({
               </button>
             ))}
         </div>
-        <div id="library-grid" key={library.redraw + ":" + library.gridRevision}>
-          {!groups.length &&
-            !(library.uploadsVisible && visibleAssets.length) && (
+        <div id="library-grid" key={library.redraw}>
+          {!groups.length && !visibleAssets.length && (
               <div className="empty-state">
                 {filter.scope === "favorites" ? "暂无收藏" : "暂无相关资产"}
               </div>
             )}
-          {groups.map(({ label, jobs }) => (
+          {groups.map(({ key, label, jobs }) => (
             <JobGroup
-              key={jobs[0].id}
+              key={key}
               date={label}
               jobs={jobs}
               state={state}
@@ -466,7 +451,7 @@ export function Library({
               actions={actions}
             />
           ))}
-          {library.uploadsVisible && visibleAssets.length > 0 && (
+          {visibleAssets.length > 0 && (
             <>
               <h2 className="asset-date">
                 {images

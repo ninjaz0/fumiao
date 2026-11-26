@@ -1,15 +1,15 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import {Check,LoaderCircle,Pencil,Trash2,X} from 'lucide-react';
+import {Check,Ellipsis,LoaderCircle,Pencil,Trash2,X} from 'lucide-react';
 
 export type Conversation={id:string;title:string;model:string;revision:number;active_turn:string|null;can_delete:boolean;updated:number};
-type Props={items:Conversation[];loading?:boolean;loadError?:string;selected:string;onChoose:(id:string)=>void;onRename:(item:Conversation,title:string)=>Promise<void>;onDelete:(item:Conversation)=>Promise<void>;onRefresh:()=>Promise<void>};
+type Props={items:Conversation[];loading?:boolean;loadError?:string;selected:string;busy:boolean;onChoose:(id:string)=>void;onRename:(item:Conversation,title:string)=>Promise<void>;onDelete:(item:Conversation)=>Promise<void>;onRefresh:()=>Promise<void>};
 
-export function ConversationList({items,loading,loadError,selected,onChoose,onRename,onDelete,onRefresh}:Props){
+export function ConversationList({items,loading,loadError,selected,busy,onChoose,onRename,onDelete,onRefresh}:Props){
  const [menu,setMenu]=useState<{id:string;x:number;y:number}|null>(null),[editing,setEditing]=useState<{id:string;title:string}|null>(null),[working,setWorking]=useState(''),[error,setError]=useState('');
  const root=useRef<HTMLDivElement>(null),popup=useRef<HTMLDivElement>(null),input=useRef<HTMLInputElement>(null),opener=useRef<HTMLElement|null>(null);
  const target=items.find(item=>item.id===menu?.id);
  const close=(restore=false)=>{setMenu(null);if(restore)opener.current?.focus()};
- const open=(item:Conversation,x:number,y:number,element:HTMLElement)=>{if(working||editing)return;opener.current=element;setError('');setMenu({id:item.id,x,y})};
+ const open=(item:Conversation,x:number,y:number,element:HTMLElement)=>{if(busy||working||editing)return;opener.current=element;setError('');setMenu({id:item.id,x,y})};
  const focusRow=(id:string)=>root.current?.querySelector<HTMLButtonElement>(`[data-conversation="${CSS.escape(id)}"] .fm-chat-conversation-open`)?.focus();
  useLayoutEffect(()=>{
   if(!menu||!popup.current)return;
@@ -20,12 +20,14 @@ export function ConversationList({items,loading,loadError,selected,onChoose,onRe
  },[menu]);
  useEffect(()=>{
   if(!menu)return;
-  const outside=(e:PointerEvent)=>{if(!popup.current?.contains(e.target as Node))close()};
+  const outside=(e:PointerEvent)=>{
+   if(!popup.current?.contains(e.target as Node)&&!opener.current?.contains(e.target as Node))close();
+  };
   const moved=()=>close();
   document.addEventListener('pointerdown',outside);window.addEventListener('resize',moved);window.addEventListener('scroll',moved,true);
   return()=>{document.removeEventListener('pointerdown',outside);window.removeEventListener('resize',moved);window.removeEventListener('scroll',moved,true)};
  },[menu]);
- useEffect(()=>{if(menu&&!target)close()},[menu,target]);
+ useEffect(()=>{if(menu&&(!target||busy))close()},[menu,target,busy]);
  useEffect(()=>{if(editing){input.current?.focus();input.current?.select()}},[editing?.id]);
  const rename=async()=>{
   const item=items.find(c=>c.id===editing?.id);if(!item||!editing?.title.trim()||working)return;
@@ -44,10 +46,18 @@ export function ConversationList({items,loading,loadError,selected,onChoose,onRe
    {editing?.id===item.id?<form className="fm-chat-row-rename" onSubmit={e=>{e.preventDefault();void rename()}} onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();if(!working){setEditing(null);setError('');requestAnimationFrame(()=>focusRow(item.id))}}}}>
     <input ref={input} aria-label="对话名称" value={editing.title} maxLength={80} disabled={!!working} onChange={e=>setEditing({...editing,title:e.target.value})}/>
     <button type="submit" aria-label="保存名称" disabled={!!working||!editing.title.trim()}><Check size={15}/></button><button type="button" aria-label="取消改名" disabled={!!working} onClick={()=>{setEditing(null);setError('');requestAnimationFrame(()=>focusRow(item.id))}}><X size={15}/></button>
-   </form>:<button type="button" className="fm-chat-conversation-open" aria-current={selected===item.id?'page':undefined} onClick={()=>onChoose(item.id)} onKeyDown={e=>{if(e.key==='ContextMenu'||e.key==='F10'&&e.shiftKey){e.preventDefault();const rect=e.currentTarget.getBoundingClientRect();open(item,rect.left+16,rect.bottom+4,e.currentTarget)}}}><span>{item.title}</span>{item.active_turn&&<LoaderCircle size={14} className="fm-chat-spinner" aria-label="正在回复"/>}</button>}
+   </form>:<>
+    <button type="button" className="fm-chat-conversation-open" disabled={busy} aria-current={selected===item.id?'page':undefined} onClick={()=>onChoose(item.id)} onKeyDown={e=>{if(e.key==='ContextMenu'||e.key==='F10'&&e.shiftKey){e.preventDefault();const rect=e.currentTarget.getBoundingClientRect();open(item,rect.left+16,rect.bottom+4,e.currentTarget)}}}><span>{item.title}</span>{item.active_turn&&<LoaderCircle size={14} className="fm-chat-spinner" aria-label="正在回复"/>}</button>
+    <button type="button" className="fm-chat-icon" aria-label={`${item.title}的更多操作`} title="更多操作" aria-haspopup="menu" aria-expanded={menu?.id===item.id} disabled={busy||!!working||!!editing} onClick={e=>{
+     const button=e.currentTarget;
+     if(menu?.id===item.id){close(true);return}
+     const rect=button.getBoundingClientRect();
+     open(item,rect.right-180,rect.bottom+4,button);
+    }}><Ellipsis size={17}/></button>
+   </>}
   </div>)}</div>
   {error&&<div className="fm-chat-history-error" role="alert"><span>{error}</span><button type="button" aria-label="关闭对话操作提示" onClick={()=>setError('')}><X size={14}/></button></div>}
-  {menu&&target&&<div ref={popup} role="menu" aria-label="对话操作" className="fm-chat-context-menu" style={{left:menu.x,top:menu.y}} onContextMenu={e=>e.preventDefault()} onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))close()}} onKeyDown={e=>{
+  {menu&&target&&<div ref={popup} role="menu" aria-label="对话操作" className="fm-chat-context-menu" style={{left:menu.x,top:menu.y}} onContextMenu={e=>e.preventDefault()} onBlur={e=>{if(e.relatedTarget!==opener.current&&!e.currentTarget.contains(e.relatedTarget as Node))close()}} onKeyDown={e=>{
    if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close(true);return}
    if(e.key==='Tab'){e.preventDefault();close(true);return}
    const choices=Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')),index=choices.indexOf(document.activeElement as HTMLButtonElement);

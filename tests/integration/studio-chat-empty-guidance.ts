@@ -38,14 +38,14 @@ export async function verifyChatEmptyGuidance(page: Page) {
     await expect(page.locator(".fm-chat-starters")).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: "对话模型：无模型" }),
-    ).toBeDisabled();
+    ).toBeHidden();
 
     const composer = page.getByRole("textbox", { name: "发送消息" });
     const draft = "未配置模型时保留的测试草稿";
     await composer.fill(draft);
     await expect(
       page.getByRole("button", { name: "发送", exact: true }),
-    ).toBeDisabled();
+    ).toBeHidden();
 
     const configure = empty.getByRole("button", { name: "前往配置对话模型" });
     await expect(configure).toBeVisible();

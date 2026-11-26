@@ -54,9 +54,13 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
  const [turnaroundView,setTurnaroundView]=useState<'sheet'|'front'|'side'|'back'>('sheet');
  const [turnaroundDraft,setTurnaroundDraft]=useState<PackTurnaroundViews>({});
  const [showTurnaroundBind,setShowTurnaroundBind]=useState(false);
+ const [confirmDiscard,setConfirmDiscard]=useState(false);
+ const [uploading,setUploading]=useState(false);
  const newDraft=useRef(draft);
  const mountedRef=useRef(true);
  const fileRef=useRef<HTMLInputElement>(null);
+ const backRef=useRef<HTMLButtonElement>(null);
+ const continueRef=useRef<HTMLButtonElement>(null);
  const loadSeqRef=useRef(0);
  const uploadSeqRef=useRef(0);
  const recentUploadsRef=useRef<{seq:number;asset:{id:string}}[]>([]);
@@ -89,15 +93,19 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
   }
  };
  useEffect(()=>{const controller=new AbortController();void load(controller.signal);return()=>{++loadSeqRef.current;controller.abort()}},[workspace]);
+ useEffect(()=>{if(confirmDiscard)continueRef.current?.focus()},[confirmDiscard]);
+ const leaveEditor=()=>{
+  setEditing(undefined);setError('');setConfirmDiscard(false);
+ };
  const returnToPacks=()=>{
   if(editing===null)newDraft.current=draft;
   else if(editing){
    const dirty=draft.name!==editing.name||draft.purpose!==editing.purpose||draft.description!==editing.description||
     draft.media.length!==editing.media.length||draft.media.some((id,index)=>id!==editing.media[index])||
     JSON.stringify(draft.voice_profile??null)!==JSON.stringify(editing.voice_profile??null);
-   if(dirty&&!window.confirm('放弃未保存的素材包修改？'))return;
+   if(dirty){setConfirmDiscard(true);return}
   }
-  setEditing(undefined);setError('');
+  leaveEditor();
  };
  const save=async()=>{
   setBusy(true);setError('');setNotice('');try{
@@ -109,12 +117,12 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
    await request('/api/asset-packs'+(editing?'/'+editing.id:''),payload,editing?'PUT':'POST');
    if(!mountedRef.current)return;
    if(editing===null)newDraft.current=blank();
-   setEditing(undefined);await load();
+   leaveEditor();await load();
   }catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}
  };
  const upload=async(file?:File)=>{
   if(!file)return;
-  setBusy(true);setError('');try{
+  setBusy(true);setUploading(true);setError('');try{
    const r=await fetch('/api/assets',{method:'POST',headers:{'X-Workspace-Id':String(workspace)},body:file});const a=await r.json();
    if(!r.ok)throw new Error(typeof a.detail==='string'?a.detail:'上传失败');
    if(!mountedRef.current)return;
@@ -122,7 +130,7 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
    recentUploadsRef.current=[{seq,asset:a},...recentUploadsRef.current.filter(entry=>entry.asset.id!==a.id)];
    setAssets(items=>mergeAssetPackAssets(items,[a]));
    setDraft(d=>({...d,media:d.media.includes(a.id)?d.media:[...d.media,a.id].slice(0,9)}));
-  }catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}
+  }catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current){setBusy(false);setUploading(false)}}
  };
  const toggleLock=async(target:Pack)=>{
   setBusy(true);setError('');setNotice('');try{
@@ -177,14 +185,20 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
   {error&&<p role="alert" className="fm-pack-error">{error}</p>}
   {notice&&<p role="status" className="fm-pack-notice">{notice}</p>}
   {editing!==undefined?<>
-   <button className="fm-pack-button" disabled={busy} onClick={returnToPacks}><ArrowLeft size={16}/>返回素材包</button>
+   <button ref={backRef} className="fm-pack-button" disabled={busy} onClick={returnToPacks}><ArrowLeft size={16}/>返回素材包</button>
+   {confirmDiscard&&<div className="fm-pack-delete" role="group" aria-label="未保存的素材包修改">
+    <span>返回后会丢失这次修改。</span>
+    <button ref={continueRef} className="fm-pack-button" onClick={()=>{setConfirmDiscard(false);backRef.current?.focus()}}>继续编辑</button>
+    <button className="fm-pack-button" disabled={busy} onClick={leaveEditor}>放弃修改</button>
+   </div>}
    <div className="fm-pack-fields">
     <label>名称<input value={draft.name} maxLength={60} placeholder="例如：主角 A、展台场景" onChange={e=>setDraft({...draft,name:e.target.value})}/></label>
     <fieldset><legend>用途</legend><div className="fm-pack-purpose">{Object.entries(purposes).map(([key,label])=><button key={key} aria-pressed={draft.purpose===key} onClick={()=>setDraft({...draft,purpose:key})}>{label}</button>)}</div></fieldset>
     <label>说明<textarea value={draft.description} maxLength={2000} rows={3} placeholder="人物特征、服装或场景中需要保留的细节" onChange={e=>setDraft({...draft,description:e.target.value})}/></label>
    </div>
-   <div className="fm-pack-heading"><span>参考图片 · {draft.media.length}/9</span><button className="fm-pack-button" disabled={busy||draft.media.length>=9} onClick={()=>fileRef.current?.click()}><Upload size={16}/>上传图片</button><input ref={fileRef} type="file" hidden accept="image/*,.heic,.heif" onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value='';void upload(file)}}/></div>
-   <div className="fm-pack-images">{assets.map(a=><button key={a.id} disabled={busy} aria-label={'选择参考图 '+a.id.slice(0,6)} aria-pressed={draft.media.includes(a.id)} onClick={()=>toggle(a.id)}><img loading="lazy" src={'/media/'+a.id+'?variant=thumb'} onError={ev=>{ev.currentTarget.src='/media/'+a.id}} alt="参考图"/>{draft.media.includes(a.id)&&<span>{draft.media.indexOf(a.id)+1}</span>}</button>)}</div>
+   <div className="fm-pack-heading"><span>参考图片 · {draft.media.length}/9</span><button className="fm-pack-button" disabled={busy||draft.media.length>=9} onClick={()=>fileRef.current?.click()}><Upload size={16}/>{uploading?'正在上传…':'上传图片'}</button><input ref={fileRef} type="file" hidden accept="image/*,.heic,.heif" onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value='';void upload(file)}}/></div>
+   {draft.media.length>=9&&<p role="status">已选满 9 张，移除一张后可继续添加。</p>}
+   <div className="fm-pack-images">{assets.map(a=><button key={a.id} disabled={busy||draft.media.length>=9&&!draft.media.includes(a.id)} aria-label={'选择参考图 '+a.id.slice(0,6)} aria-pressed={draft.media.includes(a.id)} onClick={()=>toggle(a.id)}><img loading="lazy" src={'/media/'+a.id+'?variant=thumb'} onError={ev=>{ev.currentTarget.src='/media/'+a.id}} alt="参考图"/>{draft.media.includes(a.id)&&<span>{draft.media.indexOf(a.id)+1}</span>}</button>)}</div>
    {!assets.length&&<p>上传图片，建立这个素材包。</p>}
    {draft.purpose==='subject'&&<fieldset className="fm-pack-voice">
     <legend>角色专属声线与参考音频槽（对白自动匹配）</legend>
@@ -198,7 +212,7 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
     </select></label>
     <label>语气与声线描述<input maxLength={300} value={draft.voice_profile?.instruction||''} placeholder="例如：冷静克制的低沉男中音" onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),instruction:e.target.value||undefined}})}/></label>
    </fieldset>}
-   <div className="fm-pack-footer"><button className="fm-pack-primary" disabled={busy||!draft.name.trim()||!draft.media.length} onClick={()=>void save()}>{busy?'保存中…':'保存素材包'}</button></div>
+   <div className="fm-pack-footer"><button className="fm-pack-primary" disabled={busy||!draft.name.trim()||!draft.media.length} onClick={()=>void save()}>{busy&&!uploading?'保存中…':'保存素材包'}</button></div>
   </>:pack?<>
    <div className="fm-pack-detail-heading">
     <button className="fm-pack-button" disabled={busy} aria-label="返回素材包列表" onClick={()=>{setOpened(null);setChosen([]);setShowTurnaroundBind(false);setError('');setNotice('')}}><ArrowLeft size={18}/></button>

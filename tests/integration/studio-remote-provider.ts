@@ -269,10 +269,12 @@ export async function verifyRemoteProvider(
       {},
     );
     await expect(page.locator(".generate-button")).toBeDisabled();
+    await expect(page.locator('.composer [data-menu="format"]')).toBeHidden();
+    await expect(page.locator('.composer [data-menu="duration"]')).toBeHidden();
     await call("/api/canvases", { data: { title: "零插件画布" } });
     await verifyChatEmptyGuidance(page);
     await verifyAdminCanvasEmptyGuidance(page, web);
-    await page.getByRole("button", { name: "去导入插件" }).click();
+    await page.getByRole("button", { name: "前往配置生成模型" }).click();
     await expect(page.locator(".settings-section h2")).toHaveText("插件");
     const settingsSearch = page.getByRole("searchbox", { name: "搜索设置项" });
     await settingsSearch.fill("定价");

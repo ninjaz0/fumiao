@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type KeyboardEventHandler } from "react";
 import { Globe, Lock } from "lucide-react";
 import type { Pack } from "./AssetPacks";
 
@@ -22,6 +22,7 @@ export function ReferencePromptInput({
   onMountPack,
   onFocus,
   onBlur,
+  onKeyDown,
 }: {
   value: string;
   packs: Pack[];
@@ -34,6 +35,7 @@ export function ReferencePromptInput({
   onMountPack?: (pack: Pack) => void;
   onFocus?: () => void;
   onBlur?: () => void;
+  onKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [mentionQuery, setMentionQuery] = useState<{
@@ -134,7 +136,9 @@ export function ReferencePromptInput({
           detectMention(next, e.target.selectionStart ?? next.length);
         }}
         onKeyDown={(e) => {
-          if (!mentionQuery || !candidates.length) return;
+          if (e.nativeEvent.isComposing) return;
+          onKeyDown(e);
+          if (e.defaultPrevented || !mentionQuery || !candidates.length) return;
           if (e.key === "ArrowDown") {
             e.preventDefault();
             setActiveIdx((i) => (i + 1) % candidates.length);

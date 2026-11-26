@@ -220,7 +220,7 @@ export function JobCard({
               : duration(Math.round(job.actual?.duration ?? job.seconds))
             : status(job)}
         </span>
-        {job.kind !== "image" && (
+        {job.kind !== "image" && job.result && (
           <span className="asset-play">
             <Icon name="play" />
           </span>
@@ -246,7 +246,7 @@ export function JobCard({
         )}
       </div>
       {["running", "queued", "done"].includes(job.status) && (
-        <div className="pending-caption" data-time-job={job.id}>
+        <div className="pending-caption fm-number" data-time-job={job.id}>
           {timing(job, delta)}
         </div>
       )}
@@ -260,7 +260,7 @@ export function History({
   ...actions
 }: { state: StudioState; delta: number } & CardActions) {
   if (!state.jobs.length)
-    return <div className="empty-state">暂无相关资产</div>;
+    return <div className="empty-state">生成的作品会出现在这里</div>;
   return (
     <div className="asset-grid">
       {state.jobs.slice(0, 8).map((job) => (
@@ -281,11 +281,13 @@ export function Queue({
   delta,
   detail,
   cancel,
+  cancelling,
 }: {
   state: StudioState;
   delta: number;
   detail: (id: number) => void;
   cancel: (id: number) => void;
+  cancelling: ReadonlySet<number>;
 }) {
   const jobs = state.jobs
     .filter(({ status }) => status === "queued" || status === "running")
@@ -321,28 +323,44 @@ export function Queue({
                 </div>
               </div>
               <div className="job-progress">
-                <span>{status(job)}</span>
+                <span className="fm-state-change" key={status(job)}>{status(job)}</span>
                 <small data-time-job={job.id}>{timing(job, delta)}</small>
               </div>
               <div className="job-actions">
                 {job.status === "queued" &&
                   (job.owner === state.me.id || state.me.role === "admin") && (
-                    <button
-                      className="quiet-button"
-                      data-act="cancel"
-                      data-id={job.id}
-                      onClick={() => cancel(job.id)}
-                    >
-                      取消
-                    </button>
+                    <CancelGeneration job={job} pending={cancelling.has(job.id)} cancel={cancel} />
                   )}
               </div>
             </div>
           ))
         ) : (
-          <div className="empty-state">暂无待处理任务</div>
+          <div className="empty-state" role="status">暂无待处理任务</div>
         )}
       </div>
     </div>
+  );
+}
+
+export function CancelGeneration({
+  job,
+  pending,
+  cancel,
+}: {
+  job: Job;
+  pending: boolean;
+  cancel: (id: number) => void;
+}) {
+  return (
+    <button
+      className="quiet-button"
+      data-act="cancel"
+      data-id={job.id}
+      disabled={pending}
+      aria-busy={pending}
+      onClick={() => cancel(job.id)}
+    >
+      {pending ? "正在取消…" : "取消生成"}
+    </button>
   );
 }

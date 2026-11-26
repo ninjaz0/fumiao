@@ -1,4 +1,11 @@
-import { useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -9,6 +16,7 @@ import {
   Play,
   X,
 } from "lucide-react";
+import { reducedMotion, reducedMotionQuery } from "../app/motion";
 import { CinematographyPanel } from "./CinematographyPanel";
 import type { CanvasGenerationMode, CanvasNode, CinematographySpec } from "./types";
 
@@ -55,6 +63,67 @@ export function ShotList({
   const [exporting, setExporting] = useState(false);
   const [tailBusy, setTailBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const list = useRef<HTMLOListElement>(null);
+  const moveFeedback = useRef<{
+    rows: { row: HTMLElement; top: number }[];
+    focus: HTMLButtonElement | null;
+  } | null>(null);
+  useEffect(() => {
+    const preference = matchMedia(reducedMotionQuery);
+    const sync = ({ matches }: MediaQueryListEvent) => {
+      if (!matches) return;
+      for (const move of list.current?.getAnimations({ subtree: true }) ?? []) {
+        if (move.id === "shot-reorder") move.cancel();
+      }
+    };
+    preference.addEventListener("change", sync);
+    return () => preference.removeEventListener("change", sync);
+  }, []);
+
+  function move(event: MouseEvent<HTMLButtonElement>, id: string, offset: number) {
+    const button = event.currentTarget;
+    const row = button.closest("li");
+    const neighbor = offset < 0 ? row?.previousElementSibling : row?.nextElementSibling;
+    const rows = reducedMotion()
+      ? []
+      : [row, neighbor]
+          .filter((item): item is HTMLElement => item instanceof HTMLElement)
+          .map((item) => ({ row: item, top: item.getBoundingClientRect().top }));
+    moveFeedback.current = { rows, focus: document.activeElement === button ? button : null };
+    onMove(id, offset);
+  }
+
+  useLayoutEffect(() => {
+    const moved = moveFeedback.current;
+    if (!moved) return;
+    moveFeedback.current = null;
+    const button = moved.focus;
+    if (button?.isConnected && (button.disabled || document.activeElement !== button)) {
+      const target = button.disabled
+        ? button.closest("li")?.querySelector<HTMLElement>(".shot-link, .fm-shot-title-input")
+        : button;
+      target?.focus({ preventScroll: true });
+    }
+    if (reducedMotion()) return;
+    for (const { row, top } of moved.rows) {
+      if (!row.isConnected) continue;
+      for (const animation of row.getAnimations()) {
+        if (animation.id === "shot-reorder") animation.cancel();
+      }
+      const distance = top - row.getBoundingClientRect().top;
+      if (!distance) continue;
+      const style = getComputedStyle(row);
+      const timing = style.getPropertyValue("--motion-enter").trim();
+      const duration = Number.parseFloat(timing) * (timing.endsWith("ms") ? 1 : 1000);
+      if (!(duration > 0)) continue;
+      row.animate([{ translate: `0 ${distance}px` }, { translate: "none" }], {
+        id: "shot-reorder",
+        duration,
+        easing: style.getPropertyValue("--motion-ease").trim(),
+      });
+    }
+  }, [shots]);
+
   const ready = shots.filter((s) => s.media).length;
   const allReady = !!shots.length && ready === shots.length;
 
@@ -71,7 +140,7 @@ export function ShotList({
   return (
     <div className={"shot-editor" + (docked ? " fm-shot-docked" : "")}>
       <div className="shot-summary">
-        <span>
+        <span className="fm-number">
           {shots.length
             ? `${ready} / ${shots.length} 个镜头已有视频 · 约 ${Math.round(shots.reduce((t, s) => t + s.seconds, 0) * 10) / 10} 秒`
             : "选中视频节点，加入镜头列表开始编排。"}
@@ -117,7 +186,7 @@ export function ShotList({
       </div>
 
       {!!shots.length && (
-        <ol className="shot-list">
+        <ol className="shot-list" ref={list}>
           {shots.map((shot, index) => (
             <li key={shot.id} className="fm-shot-row">
               <div className="fm-shot-top">
@@ -129,7 +198,7 @@ export function ShotList({
                     onChange={() => toggleCheck(shot.id)}
                   />
                 )}
-                <span className="shot-index">
+                <span className="shot-index fm-number">
                   {String(index + 1).padStart(2, "0")}
                 </span>
                 {onEditShot ? (
@@ -232,7 +301,7 @@ export function ShotList({
                     title="上移"
                     aria-label={`上移镜头 ${index + 1}`}
                     disabled={index === 0 || exporting}
-                    onClick={() => onMove(shot.id, -1)}
+                    onClick={(event) => move(event, shot.id, -1)}
                   >
                     <ArrowUp size={16} />
                   </button>
@@ -241,7 +310,7 @@ export function ShotList({
                     title="下移"
                     aria-label={`下移镜头 ${index + 1}`}
                     disabled={index === shots.length - 1 || exporting}
-                    onClick={() => onMove(shot.id, 1)}
+                    onClick={(event) => move(event, shot.id, 1)}
                   >
                     <ArrowDown size={16} />
                   </button>

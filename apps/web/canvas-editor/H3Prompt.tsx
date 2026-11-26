@@ -1,11 +1,11 @@
-import {useEffect,useMemo,useRef,useState} from 'react';
+import {useEffect,useMemo,useRef,useState,type KeyboardEventHandler} from 'react';
 import {Globe,Lock} from 'lucide-react';
 import type {Asset} from './types';
 import type {Pack} from './AssetPacks';
 import type {MentionCandidate} from './ReferencePromptInput';
 import {h3MediaType,h3TokenKey} from './h3References';
 const escape=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
-export function H3Prompt({value,ids,assets,frames,packs=[],onChange,onMountPack,onFocus,onBlur}:{value:string;ids:string[];assets:Asset[];frames:boolean;packs?:Pack[];onChange:(s:string)=>void;onMountPack?:(pack:Pack)=>void;onFocus:()=>void;onBlur:()=>void}) {
+export function H3Prompt({value,ids,assets,frames,packs=[],onChange,onMountPack,onFocus,onBlur,onKeyDown}:{value:string;ids:string[];assets:Asset[];frames:boolean;packs?:Pack[];onChange:(s:string)=>void;onMountPack?:(pack:Pack)=>void;onFocus:()=>void;onBlur:()=>void;onKeyDown:KeyboardEventHandler<HTMLDivElement>}) {
  const editor=useRef<HTMLDivElement>(null),signature=useRef('');
  const [mentionQuery,setMentionQuery]=useState<string|null>(null);
  const [activeIdx,setActiveIdx]=useState(0);
@@ -63,7 +63,9 @@ export function H3Prompt({value,ids,assets,frames,packs=[],onChange,onMountPack,
  },[value,ids.join(','),frames,assets]);
  return <div className="fm-ref-prompt-wrap">
   <div ref={editor} className="composer-prompt cv-h3-prompt" contentEditable suppressContentEditableWarning role="textbox" aria-label="生成提示词" aria-multiline="true" data-placeholder={frames?'描述画面的运动与首尾帧之间的过渡，键入 @ 引用角色/场景':'描述想生成的视频，键入 @ 引用角色/场景素材包或 @图N'} onFocus={onFocus} onBlur={()=>{setTimeout(()=>setMentionQuery(null),150);onBlur()}} onInput={()=>{const next=read().slice(0,12000);onChange(next);detectMention(next)}} onKeyDown={e=>{
-   if(mentionQuery===null||!candidates.length)return;
+   if(e.nativeEvent.isComposing)return;
+   onKeyDown(e);
+   if(e.defaultPrevented||mentionQuery===null||!candidates.length)return;
    if(e.key==='ArrowDown'){e.preventDefault();setActiveIdx(i=>(i+1)%candidates.length)}
    else if(e.key==='ArrowUp'){e.preventDefault();setActiveIdx(i=>(i-1+candidates.length)%candidates.length)}
    else if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyCandidate(candidates[activeIdx]??candidates[0])}

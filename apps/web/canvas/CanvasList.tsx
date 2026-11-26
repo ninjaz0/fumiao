@@ -1,23 +1,29 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, ApiError, workspaceURL, type Studio } from "./api";
+import { canvasLoginPath } from "../auth/return-path";
+import { api, ApiError, type Studio } from "./api";
 import ProjectList from "./ProjectList";
 import "./dialog.css";
 
 export default function CanvasList({ loadingLogo }: { loadingLogo: string }) {
   const [studio, setStudio] = useState<Studio | null>(null);
+  const [workspaceChanged, setWorkspaceChanged] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [error, setError] = useState<{
-    message: string;
-    workspace: string | null;
-  } | null>(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     let current = true;
     setMounted(true);
     const workspace = new URLSearchParams(location.search).get("workspace");
     api<Studio>(workspace, "/api/state")
+      .catch(async (error: Error) => {
+        if (!(workspace && error instanceof ApiError && [400, 403].includes(error.status)))
+          throw error;
+        const fallback = await api<Studio>(null, "/api/state");
+        if (current) setWorkspaceChanged(true);
+        return fallback;
+      })
       .then((state) => {
         if (!current) return;
         const url = new URL(location.href);
@@ -28,8 +34,8 @@ export default function CanvasList({ loadingLogo }: { loadingLogo: string }) {
       .catch((error: Error) => {
         if (!current) return;
         if (error instanceof ApiError && error.status === 401)
-          location.replace("/studio");
-        else if (error.message) setError({ message: error.message, workspace });
+          location.replace(canvasLoginPath(location.pathname, new URLSearchParams(location.search)));
+        else if (error.message) setError(error.message);
       });
     return () => {
       current = false;
@@ -41,11 +47,11 @@ export default function CanvasList({ loadingLogo }: { loadingLogo: string }) {
       {error ? (
         <main className="canvas-error">
           <h1>画布暂时无法打开</h1>
-          <p>{error.message}</p>
-          <a href={workspaceURL("/canvas", error.workspace)}>返回画布列表</a>
+          <p>{error}</p>
+          <button type="button" onClick={() => location.reload()}>重试</button>
         </main>
       ) : studio ? (
-        <ProjectList studio={studio} />
+        <ProjectList studio={studio} workspaceChanged={workspaceChanged} />
       ) : (
         <div className="canvas-loading">
           <img

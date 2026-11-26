@@ -78,12 +78,14 @@ export function Credits({
   recharge,
   history,
   refresh,
+  rechargePending,
   notify,
 }: {
   state: StudioState;
   recharge: (button: HTMLButtonElement) => void;
   history: (button: HTMLButtonElement) => void;
   refresh?: () => Promise<void>;
+  rechargePending?: "recharge" | "history";
   notify: Notify;
 }) {
   const { credits, workspace_id: workspace } = state;
@@ -340,9 +342,10 @@ export function Credits({
         <button
           className="primary"
           data-act="recharge"
+          disabled={!!rechargePending}
           onClick={(event) => recharge(event.currentTarget)}
         >
-          充值
+          {rechargePending === "recharge" ? "正在加载…" : "充值"}
         </button>
       </div>
       <div className="credit-summary">
@@ -361,9 +364,10 @@ export function Credits({
           <button
             className="quiet-button"
             data-act="recharge-history"
+            disabled={!!rechargePending}
             onClick={(event) => history(event.currentTarget)}
           >
-            充值记录
+            {rechargePending === "history" ? "正在加载…" : "充值记录"}
           </button>
           <input
             type="date"
@@ -589,7 +593,7 @@ export function Credits({
               disabled={busy}
               onClick={(event) => void more(event.currentTarget)}
             >
-              加载更多
+              {busy ? "正在加载…" : "加载更多"}
             </button>
           </div>
         )}
@@ -997,15 +1001,15 @@ export function RechargeOrder({
         >
           前往支付 ↗
         </a>
-        <button
+        {!paid && <button
           ref={check}
           className="profile-secondary"
           id="recharge-check"
           disabled={busy}
           onClick={() => void poll()}
         >
-          刷新支付结果
-        </button>
+          {busy ? "正在查询…" : "刷新支付结果"}
+        </button>}
       </div>
       <p className="recharge-hint">
         {orderHints[order.state] ||

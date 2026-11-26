@@ -382,7 +382,15 @@ export function readDraft(state: StudioState): DraftSession {
     sessionStorage.setItem(key, legacy);
     sessionStorage.removeItem(legacyKey);
   }
-  const saved = readStoredDraft(key);
+  return restoreStoredDraft(state, readStoredDraft(key));
+}
+
+export function readDraftBackup(state: StudioState): DraftSession | null {
+  const saved = readStoredDraft(keyFor(state) + "-before-history");
+  return saved ? restoreStoredDraft(state, saved) : null;
+}
+
+function restoreStoredDraft(state: StudioState, saved: StoredDraft | null): DraftSession {
   const storedTypes = saved?.referenceTypes;
   const draft = { ...initialDraft, ...saved?.draft };
   if (saved?.draft && !state.studio_plugins) {
@@ -422,7 +430,16 @@ export function readDraft(state: StudioState): DraftSession {
   return pruneDraftAssets(state, session, savedReferenceType(state, storedTypes));
 }
 export function writeDraft(state: StudioState, session: DraftSession) {
-  const key = keyFor(state);
+  writeStoredDraft(state, session, keyFor(state));
+}
+
+export function writeDraftBackup(state: StudioState, session: DraftSession | null) {
+  const key = keyFor(state) + "-before-history";
+  if (session) writeStoredDraft(state, session, key);
+  else sessionStorage.removeItem(key);
+}
+
+function writeStoredDraft(state: StudioState, session: DraftSession, key: string) {
   const refs = new Set(
     [session, session.suspendedImageDraft, session.suspendedMediaDraft].flatMap(
       (snapshot) => snapshot
@@ -1732,16 +1749,23 @@ export function composerFeedback(
       ? unpricedReason
       : "当前空间积分不足";
 
+  const limitReason = overLimit
+    ? `超出字数限制：${draft.prompt.length} / ${limit} 字`
+    : "";
+  const promptReason = hasPrompt
+    ? ""
+    : draft.kind === "audio"
+      ? "请输入要朗读的文字"
+      : "请输入提示词";
   const status = options.uploading
     ? "上传中"
     : options.submitting
-      ? ""
+      ? "正在提交…"
       : !available
         ? model || hasPrompt
           ? unavailableReason
           : ""
-        : issue ||
-          (overLimit ? `${draft.prompt.length} / ${limit} 字` : priceReason);
+        : issue || limitReason || priceReason;
 
   const submitReason = options.submitting
     ? "提交中"
@@ -1749,16 +1773,7 @@ export function composerFeedback(
       ? "上传中"
       : !available
         ? unavailableReason
-        : issue ||
-          (overLimit
-            ? `超出字数限制：${draft.prompt.length} / ${limit} 字`
-            : !price.allowed
-              ? priceReason
-              : !hasPrompt
-                ? draft.kind === "audio"
-                  ? "请输入要朗读的文字"
-                  : "请输入提示词"
-                : "");
+        : issue || limitReason || priceReason || promptReason;
 
   return { status, submitReason, priceReason };
 }

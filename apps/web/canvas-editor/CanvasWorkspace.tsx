@@ -121,6 +121,7 @@ import {ChatWorkspace, chatRequest} from "./chat/ChatWorkspace";
 import { chatSettingsPath } from "./chat/guidance";
 import { ShotList } from "./ShotList";
 import { VideoVersions } from "./VideoVersions";
+import { cameraMotion } from "../app/motion";
 import { AiStoryboard } from "./AiStoryboard";
 import { Narration } from "./Narration";
 import { Composition } from "./Composition";
@@ -1528,7 +1529,7 @@ export function CanvasWorkspace({
     const center=force?windowSize.w*0.55:(n.x+n.width/2)*vp.zoom+vp.x;
     const centerX=Math.max(76+n.width*zoom/2,Math.min(center,windowSize.w-24-n.width*zoom/2));
     const nextTop=Math.max(150,Math.min(top,windowSize.h-100-textPanelHeight-n.height*zoom));
-    void flow.setViewport({zoom,x:centerX-(n.x+n.width/2)*zoom,y:nextTop-n.y*zoom},{duration:matchMedia('(prefers-reduced-motion: reduce)').matches?0:180});
+    void flow.setViewport({zoom,x:centerX-(n.x+n.width/2)*zoom,y:nextTop-n.y*zoom},cameraMotion());
   };
   useEffect(()=>{
     if(single?.type!=='text'||editing||!textPanelRef.current)return;
@@ -1559,11 +1560,7 @@ export function CanvasWorkspace({
         x: windowSize.w * 0.55 - (n.x + n.width / 2) * zoom,
         y: Math.max(200, windowSize.h * 0.32) - (n.y + n.height / 2) * zoom,
       },
-      {
-        duration: matchMedia("(prefers-reduced-motion: reduce)").matches
-          ? 0
-          : 200,
-      },
+      cameraMotion(),
     );
   };
   const selectOne = (id: string) => {
@@ -1589,9 +1586,7 @@ export function CanvasWorkspace({
       nodes: targets.map((id) => ({ id })),
       padding: 0.5,
       maxZoom: 1,
-      duration: matchMedia("(prefers-reduced-motion: reduce)").matches
-        ? 0
-        : 220,
+      ...cameraMotion(),
     });
   };
   const add = (
@@ -2269,6 +2264,25 @@ export function CanvasWorkspace({
       incoming.some(({node,edge}) => {const source = linkedValue(node,edge,runs); return source.kind === "text" && source.value?.trim();}),
   );
   const pendingRuns = current?.list.filter(job=>['queued','running'].includes(job.status)) || [];
+  const pendingCancellations = useRef(new Set<number>());
+  const [cancellingRuns, setCancellingRuns] = useState<ReadonlySet<number>>(() => new Set());
+  async function cancelRun(id: number) {
+    if (pendingCancellations.current.has(id)) return;
+    pendingCancellations.current.add(id);
+    setCancellingRuns(new Set(pendingCancellations.current));
+    try {
+      await api(`/api/jobs/${id}/cancel`, {});
+      notify("已取消生成，积分已退回");
+      await loadRuns({ silent: true });
+    } catch (error) {
+      notify((error as Error).message);
+      if (error instanceof ApiError && error.status === 409)
+        await loadRuns({ silent: true });
+    } finally {
+      pendingCancellations.current.delete(id);
+      setCancellingRuns(new Set(pendingCancellations.current));
+    }
+  }
   const pendingRun = pendingRuns.length > 0;
   const latestBatch = current?.latest?.batch;
   const visibleCandidates = latestBatch?.count === 2 ? (current?.list.filter(job=>job.batch?.uid===latestBatch.uid)||[]) : pendingRuns;
@@ -2291,6 +2305,27 @@ export function CanvasWorkspace({
     !submitting && !h3Busy &&
     doc.status !== "conflict" &&
     (single.type !== "image" || currentImageEnabled) && availableModel(selectedModel) && creditAvailable;
+  const generationBlock = doc.status === "conflict" ? "请先处理画布保存冲突"
+    : pendingRun ? "当前节点已有生成任务"
+    : submitting ? "正在提交生成…"
+    : h3Busy ? "正在处理参考素材…"
+    : single?.type === "image" && !currentImageEnabled ? "当前空间未开放图片生成"
+    : !availableModel(selectedModel) ? "当前模型暂不可用"
+    : creditPrice == null ? "当前规格尚未定价"
+    : !creditAvailable ? "当前空间积分不足"
+    : "";
+  const generate = () => {
+    if (!canGenerate) return;
+    if (candidateCount === 2) setConfirmCandidates(true);
+    else void submit();
+  };
+  const generateShortcut = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.nativeEvent.isComposing || event.key !== "Enter" || !(event.metaKey || event.ctrlKey))
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    generate();
+  };
   const closeAndLeave = async (url: string) => {
     if (leaveInFlight.current) return;
     leaveInFlight.current = true;
@@ -2310,6 +2345,7 @@ export function CanvasWorkspace({
       setRetryingLeave(false);
     }
   };
+  const openCredits = () => void closeAndLeave("/studio?settings=credits");
   const showComposer =
     single && ["image", "video"].includes(single.type) && !editing;
   const composerOpen = isCanvasComposerOpen(single, editing);
@@ -2922,7 +2958,7 @@ export function CanvasWorkspace({
               onClick={() => setMenu(menu === "project" ? null : "project")}
             />
           </span>
-          <span className="node-count">节点 {nodes.length}</span>
+          <span className="node-count fm-number">节点 {nodes.length}</span>
           <button
             className={
               "save-state " +
@@ -2936,7 +2972,7 @@ export function CanvasWorkspace({
           >
             {doc.status === "saved" ? (
               <>
-                <Check size={13} />
+                <Check className="fm-state-change" size={13} />
                 已保存
               </>
             ) : doc.status === "saving" || doc.status === "dirty" ? (
@@ -3511,6 +3547,7 @@ export function CanvasWorkspace({
             }}
             onFocus={doc.begin}
             onBlur={doc.end}
+            onKeyDown={generateShortcut}
           />:<ReferencePromptInput
             value={single.prompt}
             packs={availablePacks}
@@ -3528,6 +3565,7 @@ export function CanvasWorkspace({
               }
             }}
             onBlur={doc.end}
+            onKeyDown={generateShortcut}
           />}
           {flowModel?.mode==='extend'&&<label className="cv-flow-source">来源视频<select aria-label="画布续写来源视频" value={single.params.flow_source_job||''} onChange={e=>patchParams({flow_source_job:Number(e.target.value)||null})}><option value="">请选择已完成的 Flow 视频</option>{flowSources.map(j=><option key={j.id} value={j.id}>#{j.id} · {j.prompt.slice(0,42)}</option>)}</select></label>}
           {flowInputError&&<p className="cv-flow-hint" role="status">{flowInputError}</p>}
@@ -3851,14 +3889,8 @@ export function CanvasWorkspace({
               className="generate-button"
               aria-label="生成"
               disabled={!canGenerate}
-              onClick={() => candidateCount === 2 ? setConfirmCandidates(true) : void submit()}
-              title={
-                single.type === "image" && !currentImageEnabled
-                  ? "图片生成已关闭"
-                  : missing
-                    ? "参考内容尚未就绪"
-                    : "生成"
-              }
+              onClick={generate}
+              title={generationBlock || flowInputError || (missing ? "参考内容尚未就绪" : !hasPrompt ? "请输入提示词，或连接文本节点" : "生成")}
             >
               {submitting === single.id ? (
                 <LoaderCircle size={20} className="spin" />
@@ -3867,6 +3899,12 @@ export function CanvasWorkspace({
               )}
             </button>
           </div>
+          {generationBlock && (
+            <div className="composer-message">
+              <span role="status">{generationBlock}</span>
+              {generationBlock === "当前空间积分不足" && <button onClick={openCredits}>去充值</button>}
+            </div>
+          )}
           {sourceChanged && <p className="composer-message">参考或参数已变更，下一次生成会使用新设置。{single.active_job ? '已采用版本保持不变。' : ''}</p>}
           {missing && (
             <div className="composer-message">
@@ -3885,7 +3923,7 @@ export function CanvasWorkspace({
           )}
           {visibleCandidates.map(job=><div className="composer-message" key={job.id}>
             <span>{job.batch?.count===2?`候选 ${job.batch.index} · `:''}{timeLabel(job)||labels[job.status]}</span>
-            {job.status==='queued'&&(job.owner===studio.me.id||studio.me.role==='admin')&&<button onClick={async()=>{try{await api(`/api/jobs/${job.id}/cancel`,{});await fetchRuns()}catch(e){notify((e as Error).message)}}}>取消任务</button>}
+            {job.status==='queued'&&(job.owner===studio.me.id||studio.me.role==='admin')&&<button disabled={cancellingRuns.has(job.id)} onClick={()=>void cancelRun(job.id)}>{cancellingRuns.has(job.id)?"正在取消…":"取消生成"}</button>}
             {job.status==='done'&&job.result&&single.active_job!==job.id&&<button onClick={()=>edit(single.id,{active_job:job.id,use_media:false})}>采用</button>}
             {job.status==='done'&&single.active_job===job.id&&<span>已采用</span>}
           </div>)}
@@ -3962,7 +4000,7 @@ export function CanvasWorkspace({
               <button
                 key={z}
                 onClick={() => {
-                  void flow.zoomTo(z, { duration: 160 });
+                  void flow.zoomTo(z, cameraMotion());
                   setMenu(null);
                 }}
               >
@@ -4106,6 +4144,7 @@ export function CanvasWorkspace({
                 void closeAndLeave(chatSettingsPath(studio));
               }
             }) : undefined}
+            onRecharge={openCredits}
             project={project.id} node={id} nodeTitle={textNode.title}
             onActivityChange={active=>setActiveTextNodes(ids=>active?(ids.includes(id)?ids:[...ids,id]):(ids.includes(id)?ids.filter(n=>n!==id):ids))}
             getContext={async()=>({project:project.id,node:id,expected_revision:await doc.flush(),writeback:true})}
@@ -4396,7 +4435,10 @@ export function CanvasWorkspace({
         </Modal>
       )}
       {aiStoryboard && <Modal title="AI 分镜" wide onClose={() => setAiStoryboard(false)}>
-        <AiStoryboard workspace={project.workspace} userId={studio.me.id} project={project.id} onApply={async (shots, options)=>{
+        <AiStoryboard workspace={project.workspace} userId={studio.me.id} project={project.id}
+          onRecharge={openCredits}
+          onConfigureModels={studio.me.role === "admin" ? () => void closeAndLeave(chatSettingsPath(studio)) : undefined}
+          onApply={async (shots, options)=>{
           await doc.flush();const current=doc.ref.current.document;
           const isGridPreview=options.generationMode==='grid_preview';
           const nodesPerShot=isGridPreview?3:2;

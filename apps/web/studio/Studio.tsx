@@ -87,7 +87,9 @@ import {
   submittedDraft,
   syncDraftReferences,
   readDraft,
+  readDraftBackup,
   writeDraft,
+  writeDraftBackup,
   type Asset,
   type DraftSession,
   type FrameSlot,
@@ -97,6 +99,7 @@ import {
   type Space,
   type StudioState,
 } from "./state";
+import { reducedMotion, scrollMotion } from "../app/motion";
 import "./studio-polish.css";
 
 type Page = Exclude<Destination, "canvas"> | "settings";
@@ -113,24 +116,10 @@ function sameSpace(before: StudioState, after: StudioState | null) {
   );
 }
 
-function animateMove(element: Element, before: DOMRect) {
-  const after = element.getBoundingClientRect();
-  if (!before.width || !after.width || !after.height) return;
-  element.animate(
-    [
-      {
-        transformOrigin: "top left",
-        transform: `translate(${before.left - after.left}px,${before.top - after.top}px) scale(${before.width / after.width},${before.height / after.height})`,
-      },
-      { transformOrigin: "top left", transform: "none" },
-    ],
-    { duration: 260, easing: "cubic-bezier(.22,1,.36,1)" },
-  );
-}
-
 export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const [state, setState] = useState<StudioState | null>(null);
   const [session, setSession] = useState<DraftSession | null>(null);
+  const [hasDraftBackup, setHasDraftBackup] = useState(false);
   const [expired, setExpired] = useState(false);
   const [bootstrapError, setBootstrapError] = useState("");
   const retryBootstrap = useRef(false);
@@ -149,19 +138,18 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   } | null>(null);
   const [detailMenuUsed, setDetailMenuUsed] = useState(false);
   const [dialog, setDialog] = useState<AssetDialogState | null>(null);
-  const [chatVisit, setChatVisit] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
   const [narrowScreen, setNarrowScreen] = useState(false);
   const [menu, setMenu] = useState<StudioMenu | null>(null);
   const [menuShown, setMenuShown] = useState(false);
   const [menuHidden, setMenuHidden] = useState(true);
   const [menuOpenVersion, setMenuOpenVersion] = useState(0);
-  const [sidebarChanged, setSidebarChanged] = useState(false);
   const [accountOpened, setAccountOpened] = useState(false);
   const [toast, setToast] = useState("");
   const [toastVisible, setToastVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [cancelling, setCancelling] = useState<ReadonlySet<number>>(() => new Set());
   const [delta, setDelta] = useState(0);
   const receivedAt = useRef(0);
   const shell = useRef<HTMLDivElement>(null);
@@ -189,12 +177,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     controller: AbortController;
   } | null>(null);
   const leaving = useRef(false);
-  const onLibraryRead = useRef<
-    ((before: StudioState, after: StudioState) => void) | null
-  >(null);
   const assetScroll = useRef(0);
+  const viewVersion = useRef(0);
+  const onLibraryRead = useRef<((before: StudioState, after: StudioState) => void) | null>(null);
   const scrollAfterRender = useRef<(() => void) | null>(null);
-  const animateAfterRender = useRef<(() => void) | null>(null);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -232,9 +218,20 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     setCollapsed(
       settingsPage || localStorage.getItem("fm-sidebar") === "collapsed",
     );
-    setSidebarChanged(true);
   }, [settingsPage, narrowScreen]);
   const ready = !!state && !!session;
+  const showsJobTimes =
+    (page === "home" || page === "library" || page === "queue" || !!detail) &&
+    !!state?.jobs.some((job) => job.status === "running" || job.status === "queued");
+  useEffect(() => {
+    if (!showsJobTimes) return;
+    const update = () => {
+      if (!document.hidden) setDelta((Date.now() - receivedAt.current) / 1000);
+    };
+    update();
+    const clock = window.setInterval(update, 1000);
+    return () => clearInterval(clock);
+  }, [showsJobTimes]);
   const mobileDrawerOpen = narrowScreen && !collapsed;
   const sidebarPopoverOpen =
     !menuHidden &&
@@ -277,17 +274,15 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   useLayoutEffect(() => {
     onLibraryRead.current = (before, after) => {
-      if (page !== "library" || detail) return;
+      if (page !== "library" || detail || library.highlight === null) return;
       const content = ({ jobs, assets, favorites }: StudioState) => [
         jobs.map(({ timing, eta, ...job }) => job),
         assets,
         favorites,
       ];
       if (JSON.stringify(content(before)) !== JSON.stringify(content(after)))
-        library.refreshGrid();
+        library.clearHighlight();
     };
-    animateAfterRender.current?.();
-    animateAfterRender.current = null;
     scrollAfterRender.current?.();
     scrollAfterRender.current = null;
   });
@@ -299,17 +294,19 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }, []);
 
   const closeMenu = useCallback((focus = false) => {
+    if (!anchor.current) return;
     if (focus || popover.current?.contains(document.activeElement))
       menuFocusTarget.current?.focus({ preventScroll: true });
     anchor.current = null;
     menuFocusTarget.current = null;
     setMenuShown(false);
     clearTimeout(menuTimer.current);
-    menuTimer.current = window.setTimeout(() => setMenuHidden(true), 100);
+    if (reducedMotion()) setMenuHidden(true);
+    else menuTimer.current = window.setTimeout(() => setMenuHidden(true), 150);
   }, []);
 
   const refresh = useCallback(
-    async (force = false) => {
+    async () => {
       if (leaving.current) return;
       retryBootstrap.current = false;
       setBootstrapError("");
@@ -353,6 +350,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           );
         }
         const initialDraft = currentDraft.current || readDraft(next);
+        if (!previous) setHasDraftBackup(Boolean(readDraftBackup(next)));
         let livePacks: Map<string, Pack> | null = null;
         if (hasDraftPacks(initialDraft)) {
           try {
@@ -456,7 +454,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         )
           closeMenu();
         workspaceId.current = String(next.workspace_id);
-        if (previous && !force) onLibraryRead.current?.(previous, next);
         setDialog((current) => {
           if (current?.content.kind !== "preview" || !current.content.manage)
             return current;
@@ -465,6 +462,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             ? current
             : null;
         });
+        if (previous) onLibraryRead.current?.(previous, next);
         active.current = next;
         receivedAt.current = Date.now();
         setDelta(0);
@@ -478,6 +476,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           setDialog(null);
           setState(null);
           setSession(null);
+          setHasDraftBackup(false);
           setExpired(true);
         } else if (
           error instanceof ApiError &&
@@ -527,11 +526,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       setNarrowScreen(event.matches);
       if (event.matches) {
         setCollapsed(true);
-        setSidebarChanged(true);
         closeMenu();
       } else {
         setCollapsed(localStorage.getItem("fm-sidebar") === "collapsed");
-        setSidebarChanged(true);
       }
     };
     narrow.addEventListener("change", onNarrow);
@@ -551,16 +548,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       )
         void refresh();
     }, 6000);
-    const clock = window.setInterval(() => {
-      if (active.current && !document.hidden)
-        setDelta((Date.now() - receivedAt.current) / 1000);
-    }, 1000);
     return () => {
       ++stateRead.current;
       pendingStateRead.current?.controller.abort();
       narrow.removeEventListener("change", onNarrow);
       clearInterval(poll);
-      clearInterval(clock);
       clearTimeout(menuTimer.current);
       clearTimeout(toastTimer.current);
     };
@@ -588,12 +580,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     Object.assign(element.style, {
       left: left + "px",
       top: top + "px",
-      transformOrigin: above ? "bottom left" : "top left",
     });
+    element.style.setProperty("--motion-popover-x", beside ? "-4px" : "0px");
+    element.style.setProperty("--motion-popover-y", beside ? "0px" : above ? "4px" : "-4px");
   }, []);
 
   useLayoutEffect(() => {
-    if (!menu || menuHidden || !anchor.current) return;
+    if (!menu || !menuShown || !anchor.current) return;
     positionMenu();
     const element = popover.current;
     if (
@@ -613,7 +606,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         ) ?? element;
       option?.focus({ preventScroll: true });
     }
-    const frame = requestAnimationFrame(() => setMenuShown(true));
     const outside = (event: Event) => {
       const target = event.target as Node;
       if (event.type === "pointerdown") editor.current?.remember();
@@ -627,12 +619,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     document.addEventListener("pointerdown", outside);
     document.addEventListener("scroll", positionMenu, true);
     return () => {
-      cancelAnimationFrame(frame);
       window.removeEventListener("resize", positionMenu);
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("scroll", positionMenu, true);
     };
-  }, [menu, menuHidden, menuOpenVersion, closeMenu, positionMenu]);
+  }, [menu, menuShown, menuOpenVersion, closeMenu, positionMenu]);
 
   function openMenu(kind: StudioMenu, button: HTMLButtonElement, focus = true) {
     if (anchor.current === button) {
@@ -655,7 +646,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (kind === "account") setAccountOpened(true);
     if (kind === "detail-more") setDetailMenuUsed(true);
     setMenuHidden(false);
-    setMenuShown(false);
+    setMenuShown(true);
     setMenu(kind);
     setMenuOpenVersion((version) => version + 1);
   }
@@ -695,6 +686,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   function navigate(destination: Destination | "settings") {
     const space = active.current;
     if (!space || leaving.current) return;
+    if (destination === page && !detail && !referencePicking) {
+      closeMenu();
+      if (mobileDrawerOpen) changeSidebar(true, true);
+      return;
+    }
     setReferencePicking(null);
     if (destination === "canvas") {
       openCanvas();
@@ -703,9 +699,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (page === "library") assetScroll.current = scrollY;
     library.reset();
     if (destination === "library") library.redrawLibrary();
-    transition(null);
-    // The original navigation remounts chat even when it is already selected.
-    if (destination === "chat") setChatVisit((visit) => visit + 1);
+    showDetail(null);
     if (destination === "settings") setSettingsVisit((visit) => visit + 1);
     if (destination.startsWith("plugin:") || page.startsWith("plugin:")) {
       const url = new URL(location.href);
@@ -744,8 +738,6 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     await refresh();
   }, [refresh]);
 
-  const refreshSettings = useCallback(() => refresh(true), [refresh]);
-
   const adminRequest: AdminRequest = useCallback(
     async (path, body, method) => {
       try {
@@ -772,7 +764,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         state={current}
         space={space}
         request={adminRequest}
-        refresh={refreshSettings}
+        refresh={refresh}
         notify={notify}
       />,
       opener,
@@ -793,7 +785,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         summary,
         run: async () => {
           await run();
-          void refreshSettings();
+          void refresh();
         },
       },
       opener,
@@ -801,48 +793,17 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     );
   }
 
-  function transition(next: Detail | null, animate = true) {
+  function showDetail(next: Detail | null) {
+    ++viewVersion.current;
     closeMenu();
     library.clearHighlight();
-    library.showUploads();
     setDetail(next);
     setEditing(false);
     setDetailMenuUsed(false);
-    if (
-      !animate ||
-      matchMedia("(prefers-reduced-motion: reduce)").matches ||
-      !view.current
-    )
-      return;
-    const root = view.current;
-    const oldComposer = root
-      .querySelector(".composer")
-      ?.getBoundingClientRect();
-    const oldVideo = root.querySelector(".detail-video");
-    const videoBox = oldVideo?.getBoundingClientRect();
-    const videoSource = oldVideo?.getAttribute("src");
-    animateAfterRender.current = () => {
-      root.animate([{ opacity: 0.5 }, { opacity: 1 }], {
-        duration: 160,
-        easing: "ease-out",
-      });
-      const video = root.querySelector(".detail-video");
-      if (videoBox && videoSource === video?.getAttribute("src") && video)
-        animateMove(video, videoBox);
-      const composer = root.querySelector(".composer");
-      if (
-        oldComposer &&
-        composer &&
-        oldComposer.top >= 0 &&
-        oldComposer.top < innerHeight
-      )
-        animateMove(composer, oldComposer);
-    };
   }
 
   function changeSidebar(nextCollapsed: boolean, moveFocus: boolean) {
     setCollapsed(nextCollapsed);
-    setSidebarChanged(true);
     localStorage.setItem("fm-sidebar", nextCollapsed ? "collapsed" : "expanded");
     closeMenu();
     if (moveFocus)
@@ -875,6 +836,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }
 
   function selectWorkspace(id: number) {
+    if (id === active.current?.workspace_id) {
+      closeMenu(true);
+      return;
+    }
     if (busy.current.has("upload")) {
       notify("图片正在上传，请稍候切换");
       return;
@@ -891,22 +856,27 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   function openJob(id: number) {
     assetScroll.current = scrollY;
-    transition({ job: id });
+    showDetail({ job: id });
     scrollAfterRender.current = () => scrollTo(0, 0);
   }
 
+  function openCredits() {
+    setSettingsTab("credits");
+    navigate("settings");
+  }
+
   function closeDetail() {
-    transition(null);
+    showDetail(null);
     scrollAfterRender.current = () => scrollTo(0, assetScroll.current);
   }
 
   function setFilter(filter: LibraryFilter) {
-    transition(null);
+    showDetail(null);
     library.choose(filter);
   }
 
   function showResult(id: number, tab: LibraryFilter["tab"], locate = false) {
-    transition(null);
+    showDetail(null);
     setPage("library");
     setReferencePicking(null);
     library.choose({ tab, scope: "history" }, id);
@@ -914,16 +884,41 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       if (locate)
         document
           .getElementById("job-" + id)
-          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+          ?.scrollIntoView({ block: "center", behavior: scrollMotion() });
       else scrollTo(0, 0);
     };
   }
 
   function cancel(id: number) {
     void mutate(`cancel-${id}`, async () => {
-      await api(workspaceId.current, `/api/jobs/${id}/cancel`, {});
-      await refresh(true);
-      library.redrawLibrary();
+      const space = active.current;
+      if (!space) return;
+      setCancelling((current) => new Set([...current, id]));
+      try {
+        await api(workspaceId.current, `/api/jobs/${id}/cancel`, {});
+        if (!sameSpace(space, active.current) || leaving.current) return;
+        const current = active.current!;
+        ++stateRead.current;
+        const next = {
+          ...current,
+          jobs: current.jobs.map((job) =>
+            job.id === id ? { ...job, status: "cancelled" as const, note: "" } : job,
+          ),
+        };
+        active.current = next;
+        setState(next);
+        notify("已取消生成，积分已退回");
+        void refresh();
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) void refresh();
+        throw error;
+      } finally {
+        setCancelling((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+      }
     });
   }
 
@@ -931,16 +926,48 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     const space = active.current;
     const previous = currentDraft.current;
     const job = space?.jobs.find((item) => item.id === id);
-    if (!space || !previous || !job || busy.current.has("upload")) return;
+    if (!space || !previous || !job || busy.current.has("upload") || busy.current.has("submit")) return;
+    if (previous.parent === id && detail && "job" in detail && detail.job === id && editing)
+      return;
     if (!detail) assetScroll.current = scrollY;
     setReferencePicking(null);
-    updateDraft(loadJob(space, previous, job));
-    transition({ job: id });
+    if (previous.parent !== id) {
+      if (!hasDraftBackup && (previous.draft.prompt.trim() || packReferences(previous).length)) {
+        writeDraftBackup(space, previous);
+        setHasDraftBackup(true);
+      }
+      updateDraft(loadJob(space, previous, job));
+    }
+    showDetail({ job: id });
     setEditing(true);
     scrollAfterRender.current = () => {
       scrollTo(0, 0);
       focusEditor();
     };
+  }
+
+  function recoverDraft(space: StudioState) {
+    const backup = readDraftBackup(space);
+    if (!backup) return false;
+    const parentExists = backup.parent === null || space.jobs.some((job) => job.id === backup.parent);
+    updateDraft(parentExists ? backup : { ...backup, parent: null, retainedSeed: null });
+    writeDraftBackup(space, null);
+    setHasDraftBackup(false);
+    return true;
+  }
+
+  function returnToComposer() {
+    showDetail(null);
+    scrollAfterRender.current = () => {
+      scrollTo(0, 0);
+      focusEditor();
+    };
+  }
+
+  function restoreDraft() {
+    const space = active.current;
+    if (!space || busy.current.has("upload") || busy.current.has("submit")) return;
+    if (recoverDraft(space)) returnToComposer();
   }
 
   function imageToVideo(id: number) {
@@ -992,7 +1019,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     { requestId, version: entry.version, target, values },
                   );
                   notify(response.notice);
-                  await refresh(true);
+                  await refresh();
                 },
               },
               anchor.current,
@@ -1020,7 +1047,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   }
 
   function openHomeComposer() {
-    transition(null);
+    showDetail(null);
     setPage("home");
     scrollAfterRender.current = () => {
       scrollTo(0, 0);
@@ -1088,7 +1115,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   function startPicking() {
     if (!referencePicking)
       setReferencePicking({ page, filter: library.filter, scroll: scrollY });
-    transition(null);
+    showDetail(null);
     setPage("library");
     library.choose({ tab: "images", scope: "history" });
     scrollAfterRender.current = () => scrollTo(0, 0);
@@ -1096,7 +1123,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   function finishPicking() {
     if (!referencePicking) return;
-    transition(null);
+    showDetail(null);
     setPage(referencePicking.page);
     library.choose(referencePicking.filter);
     setReferencePicking(null);
@@ -1282,7 +1309,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
               void refresh();
             throw error;
           }
-          await refresh(true);
+          await refresh();
           library.redrawLibrary();
         },
       },
@@ -1319,7 +1346,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           undefined,
           "DELETE",
         );
-        transition(null, false);
+        showDetail(null);
         setPage("library");
       },
     );
@@ -1343,7 +1370,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           "DELETE",
         );
         if (detail && "image" in detail && detail.image === id)
-          transition(null, false);
+          showDetail(null);
       },
       previousPreview ? previousPreview.opener : opener,
       previousPreview
@@ -1446,6 +1473,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       }
     }
     void mutate("submit", async () => {
+      const originalView = viewVersion.current;
+      const keepCreating = page === "home" && !detail && !job;
       setSubmitting(true);
       try {
         let retryId: string | undefined;
@@ -1465,12 +1494,24 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         if (job) retryIds.current.delete(job.id);
         if (!sameSpace(space, active.current) || leaving.current) return;
         const latest = currentDraft.current!;
-        if (!job && latest.submitId === session.submitId) {
-          updateDraft(submittedDraft(latest));
+        const draftUnchanged = latest.submitId === session.submitId;
+        const draftRestored = !job && draftUnchanged && recoverDraft(active.current!);
+        if (!job && draftUnchanged) {
+          if (!draftRestored) updateDraft(submittedDraft(latest));
+          else if (originalView === viewVersion.current && detail) returnToComposer();
         }
-        notify("已加入生成队列");
+        const acceptedDraft = currentDraft.current;
+        notify(draftRestored ? "已加入生成队列，原草稿已恢复" : "已加入生成队列，可继续创作");
         await refresh();
-        if (sameSpace(space, active.current) && !leaving.current)
+        if (
+          !keepCreating &&
+          !draftRestored &&
+          draftUnchanged &&
+          acceptedDraft === currentDraft.current &&
+          originalView === viewVersion.current &&
+          sameSpace(space, active.current) &&
+          !leaving.current
+        )
           showResult(id, resultTab(request.kind));
       } finally {
         setSubmitting(false);
@@ -1631,7 +1672,24 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   const composer = state && session && (
     <Composer
-      managePlugins={() => {setSettingsTab("plugins");setPage("settings");}}
+      managePlugins={() => {
+        const models = [
+          ...Object.keys(state.video_models),
+          ...Object.keys(state.images.models),
+          ...Object.keys(state.audio_models),
+        ].filter((id) => !state.model_catalog[id]?.hidden);
+        const globalPolicy = state.model_policy?.enabled;
+        const teamPolicy = state.team_model_policies?.[String(state.workspace_id)]?.enabled;
+        const globallyAllowed = models.some((id) => globalPolicy?.[id]);
+        const allowedHere = models.some((id) => globalPolicy?.[id] && (!teamPolicy || teamPolicy[id]));
+        if (models.length && globalPolicy && !allowedHere) {
+          modelPreferences.current.scope = globallyAllowed && teamPolicy
+            ? String(state.workspace_id)
+            : "global";
+          setSettingsTab("models");
+        } else setSettingsTab("plugins");
+        navigate("settings");
+      }}
       state={state}
       session={session}
       estimate={estimate}
@@ -1642,7 +1700,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       submit={() => submit()}
       upload={upload}
       menu={
-        menu && !menuHidden && anchor.current && isComposerMenu(menu)
+        menuShown && menu && isComposerMenu(menu)
           ? menu
           : null
       }
@@ -1653,23 +1711,19 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       seenMenus={seenComposerMenus.current}
       referenceContents={referenceContents}
       flowSourceContents={flowSourceContents}
+      restoreDraft={hasDraftBackup ? restoreDraft : undefined}
+      onRecharge={openCredits}
     />
   );
   const favorite = (key: string, saved: boolean) => saveFavorites([key], saved);
 
-  if (expired) return <Auth loadingLogo={loadingLogo} />;
+  if (expired) return <Auth loadingLogo={loadingLogo} expired />;
   return (
     <>
       <div id="app">
         {state && session ? (
           <div
-            className={
-              collapsed
-                ? "shell collapsed"
-                : sidebarChanged
-                  ? "shell"
-                  : "shell "
-            }
+            className={collapsed ? "shell collapsed" : "shell"}
             ref={shell}
           >
             <Sidebar
@@ -1693,7 +1747,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     close={closeDetail}
                     favorite={favorite}
                     cancel={cancel}
-                    pageTo={(id) => transition({ job: id })}
+                    cancelling={cancelling.has(job.id)}
+                    pageTo={(id) => showDetail({ job: id })}
                     locate={(job) =>
                       showResult(job.id, resultTab(job.kind), true)
                     }
@@ -1705,7 +1760,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     composer={editing ? composer : null}
                     more={(button) => openMenu("detail-more", button)}
                     menuOpen={
-                      menu === "detail-more" && !menuHidden && !!anchor.current
+                      menuShown && menu === "detail-more"
                     }
                     menuUsed={detailMenuUsed}
                     notify={notify}
@@ -1733,7 +1788,10 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       {composer}
                     </div>
                     <section className="recent-section">
-                      <HistoryHeading open={() => navigate("library")} />
+                      <HistoryHeading open={state.jobs.length ? () => {
+                        navigate("library");
+                        library.choose({ tab: resultTab(state.jobs[0].kind), scope: "history" });
+                      } : undefined} />
                       <div id="recent-grid">
                         <History
                           state={state}
@@ -1748,7 +1806,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                 ) : page === "chat" ? (
                   <div id="chat-root">
                     <ChatWorkspace
-                      key={`${state.me.id}:${state.workspace_id}:${chatVisit}`}
+                      key={`${state.me.id}:${state.workspace_id}`}
                       userId={state.me.id}
                       workspace={state.workspace_id}
                       isAdmin={state.me.role === "admin"}
@@ -1766,6 +1824,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                           : undefined
                       }
                       openCanvas={followCanvas}
+                      onRecharge={openCredits}
                     />
                   </div>
                 ) : page.startsWith("plugin:") ? (
@@ -1775,7 +1834,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       page={studioPage}
                       client={pageClient}
                       open={openAdminDialog}
-                      refresh={refreshSettings}
+                      refresh={refresh}
                       notify={notify}
                     />
                   ) : <p role="status">此插件页面已不可用</p>
@@ -1787,14 +1846,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     draft={profileDraft}
                     modelPreferences={modelPreferences.current}
                     navigate={(tab) => {
-                      transition(null);
+                      showDetail(null);
                       setSettingsTab(tab);
                       setSettingsVisit((visit) => visit + 1);
                     }}
                     dialogOpen={!!dialog}
                     open={openSettingsDialog}
                     saved={saveProfile}
-                    refresh={refreshSettings}
+                    refresh={refresh}
                     notify={notify}
                     viewLibrary={() => navigate("library")}
                     showWorkspace={showWorkspace}
@@ -1809,6 +1868,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     delta={delta}
                     detail={openJob}
                     cancel={cancel}
+                    cancelling={cancelling}
                   />
                 ) : (
                   <Library
@@ -1824,7 +1884,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                             video: "videos",
                             audio: "audio",
                           } as const;
-                          await refresh(true);
+                          await refresh();
                           if (assets[0])
                             setFilter({
                               tab: tabs[assets[0].kind],
@@ -1860,7 +1920,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       favorite,
                       edit: editJob,
                       job: openJob,
-                      image: (id) => transition({ image: id }),
+                      image: (id) => showDetail({ image: id }),
                       preview: (id, button, manage = true) =>
                         preview(
                           id,
@@ -1939,7 +1999,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         ref={popover}
         tabIndex={-1}
         hidden={menuHidden}
-        inert={mobileDrawerOpen && !sidebarPopoverOpen}
+        inert={!menuShown || (mobileDrawerOpen && !sidebarPopoverOpen)}
         className={
           menu
             ? `popover ${menu === "account" ? "account-menu" : menu}${menuShown ? " open" : ""}`

@@ -120,3 +120,20 @@ test("canvas search ignores surrounding whitespace and letter case", async () =>
   await search.fill("   ");
   await expect(cards).toHaveCount(initialCount);
 });
+
+test("canvas list can recover from a failed request", async () => {
+  let fail = true;
+  await page.route("**/api/canvases", (route) =>
+    fail ? route.fulfill({ status: 503, json: { detail: "暂时无法读取画布" } }) : route.continue(),
+  );
+  try {
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "画布列表暂时无法加载" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "暂无画布" })).toBeHidden();
+    fail = false;
+    await page.getByRole("button", { name: "重试" }).click();
+    await expect(page.getByRole("link", { name: "打开画布 " + title, exact: true })).toBeVisible();
+  } finally {
+    await page.unroute("**/api/canvases");
+  }
+});

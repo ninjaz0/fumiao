@@ -148,6 +148,8 @@ export function Composer({
   seenMenus,
   referenceContents,
   flowSourceContents,
+  restoreDraft,
+  onRecharge,
 }: {
   state: StudioState;
   session: DraftSession;
@@ -167,6 +169,8 @@ export function Composer({
   referenceContents: RefObject<ReferenceDisplay | null>;
   flowSourceContents: RefObject<FlowSourceDisplay | null>;
   managePlugins: () => void;
+  restoreDraft?: () => void;
+  onRecharge: () => void;
 }) {
   const { draft } = session;
   const box = useRef<HTMLElement>(null);
@@ -196,10 +200,20 @@ export function Composer({
   const references = useMemo(() => packReferences(session), [session]);
   const price = quote(state, draft);
   const available = modelAvailable(state, model);
+  const unavailable = Boolean(state.studio_plugins) && !available;
+  const hasAvailableModel = Object.keys(modelsForKind(state, draft.kind)).some(
+    (id) => modelAvailable(state, id),
+  );
+  const hasAnyAvailableModel = creationOptions.some(([kind]) =>
+    Object.keys(modelsForKind(state, kind)).some((id) => modelAvailable(state, id)),
+  );
   const { status, submitReason } = composerFeedback(state, session, {
     uploading,
     submitting,
   });
+  const statusMessage = status || (unavailable && hasAnyAvailableModel && !hasAvailableModel
+    ? "当前类型暂无可用模型，可切换创作类型"
+    : "");
   const ratio = audio
     ? ""
     : frameMode && activeReferences(session).length
@@ -406,7 +420,7 @@ export function Composer({
   }
 
   const layers = references.slice(0, 3).reverse();
-  const extending = flow?.mode === "extend";
+  const extending = !unavailable && flow?.mode === "extend";
   const source = extending
     ? {
         selected: draft.flowSourceJob ?? null,
@@ -657,9 +671,9 @@ export function Composer({
             <span>{creation}</span>
             <Chevron />
           </button>
-          {state.studio_plugins && !Object.keys(modelsForKind(state, draft.kind)).some((id)=>!state.model_catalog[id]?.hidden && state.model_access?.[id]) && (
+          {state.studio_plugins && !hasAvailableModel && (
             state.me.role === "admin"
-              ? <button className="parameter-button" onClick={managePlugins}>去导入插件</button>
+              ? <button className="parameter-button" onClick={managePlugins}>前往配置生成模型</button>
               : <span>请联系管理员开通模型</span>
           )}
           <button
@@ -667,14 +681,15 @@ export function Composer({
             data-menu="image-model"
             aria-label={"选择模型，当前" + modelName}
             aria-expanded={menu === "image-model"}
-            disabled={!model}
+            hidden={unavailable && !hasAvailableModel && !model}
+            disabled={unavailable && !hasAvailableModel}
             onClick={opener("image-model")}
           >
             <Icon name="model" />
             <span>{modelName}{state.studio_plugins && model && !available ? "（已停用）" : ""}</span>
             <Chevron />
           </button>
-          {form?.parameterObject && (
+          {!unavailable && form?.parameterObject && (
             <ParameterFields
               form={form}
               values={draft.params ?? {}}
@@ -688,7 +703,7 @@ export function Composer({
             data-menu="h3-mode"
             aria-label="选择参考模式"
             aria-expanded={menu === "h3-mode"}
-            hidden={!form?.referenceModes || form.referenceModes.length < 2}
+            hidden={unavailable || !form?.referenceModes || form.referenceModes.length < 2}
             disabled={uploading}
             onClick={opener("h3-mode")}
           >
@@ -702,7 +717,7 @@ export function Composer({
             aria-expanded={menu === "format"}
             aria-label="选择比例和分辨率"
             title={title}
-            hidden={audio || !!form?.parameterObject}
+            hidden={unavailable || audio || !!form?.parameterObject}
             disabled={fixed}
             onClick={opener("format")}
           >
@@ -716,7 +731,7 @@ export function Composer({
             aria-expanded={menu === "duration"}
             aria-label={durationName}
             hidden={
-              !!form?.parameterObject || (image && !form?.fields.image_quality)
+              unavailable || !!form?.parameterObject || (image && !form?.fields.image_quality)
             }
             disabled={fixed}
             onClick={opener("duration")}
@@ -743,7 +758,7 @@ export function Composer({
               aria-expanded={
                 seenMenus.has("mention") ? menu === "mention" : undefined
               }
-              hidden={audio || frameMode || form?.references.max === 0}
+              hidden={audio || frameMode || form?.references.max === 0 || !references.length}
               onClick={opener("mention")}
             >
               <Icon name="at" />
@@ -755,7 +770,7 @@ export function Composer({
               aria-expanded={
                 seenMenus.has("advanced") ? menu === "advanced" : undefined
               }
-              hidden={!!form?.parameterObject || !form?.fields.seed}
+              hidden={unavailable || !!form?.parameterObject || !form?.fields.seed}
               onClick={opener("advanced")}
             >
               <Icon name="sliders" />
@@ -763,7 +778,8 @@ export function Composer({
           </div>
           <span className="submit-controls">
             <span
-              className="composer-credit"
+              className="composer-credit fm-number"
+              hidden={unavailable}
               aria-label={model ? price.label : ""}
               title={
                 model
@@ -787,7 +803,7 @@ export function Composer({
                   </>
                 ))}
             </span>
-            <span className="composer-estimate" aria-live="polite" title={hint}>
+            <span className="composer-estimate fm-number" hidden={unavailable} aria-live="polite" title={hint}>
               {estimateLabel}
             </span>
             <button
@@ -796,6 +812,7 @@ export function Composer({
               aria-label={submitReason ? `生成（${submitReason}）` : "生成"}
               title={submitReason || "生成"}
               disabled={!!submitReason}
+              aria-busy={submitting}
               onClick={submit}
             >
               <Icon name="arrow" />
@@ -832,8 +849,19 @@ export function Composer({
         )}
       </div>
       <div className="composer-status" aria-live="polite">
-        {status}
+        {statusMessage && <span className="fm-state-change" key={statusMessage}>{statusMessage}</span>}
       </div>
+      {available && price.amount !== undefined && price.available < price.amount && (
+        <button className="quiet-button" onClick={onRecharge}>去充值</button>
+      )}
+      {restoreDraft && (
+        <div className="composer-draft-recovery">
+          <span role="status">原草稿已暂存</span>
+          <button className="quiet-button" disabled={submitting || uploading} onClick={restoreDraft}>
+            恢复刚才草稿
+          </button>
+        </div>
+      )}
     </section>
   );
 }

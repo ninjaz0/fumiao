@@ -274,13 +274,15 @@ export function MenuContents({
   );
 }
 
-export function HistoryHeading({ open }: { open: () => void }) {
+export function HistoryHeading({ open }: { open?: () => void }) {
   return (
     <div className="section-head">
       <h2>生成历史</h2>
-      <button className="quiet-button" data-nav="library" onClick={open}>
-        查看全部 <Chevron />
-      </button>
+      {open && (
+        <button className="quiet-button" data-nav="library" onClick={open}>
+          打开资产 <Chevron />
+        </button>
+      )}
     </div>
   );
 }
