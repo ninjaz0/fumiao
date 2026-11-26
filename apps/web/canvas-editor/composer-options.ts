@@ -11,7 +11,7 @@ export const GENERATION_MODE_OPTIONS: readonly SelectChoice<CanvasGenerationMode
   [
     { value: "first_frame", label: "标准首帧" },
     { value: "first_last_frame", label: "经典首尾帧" },
-    { value: "omni_ref", label: "全能 @图N 多参考" },
+    { value: "omni_ref", label: "全能参考" },
     { value: "grid_preview", label: "宫格构图预览" },
   ];
 

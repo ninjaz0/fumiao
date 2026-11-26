@@ -58,6 +58,10 @@ test("resolveEffectiveGenerationMode honors explicit mode and falls back cleanly
 test("cinematography helpers count active fields, clear empty values to null, and preserve custom options", () => {
   assert.equal(CINEMATOGRAPHY_DIMENSIONS.length, 6);
   assert.equal(GENERATION_MODE_OPTIONS.length, 4);
+  assert.deepEqual(
+    GENERATION_MODE_OPTIONS.find((opt) => opt.value === "omni_ref"),
+    { value: "omni_ref", label: "全能参考" },
+  );
   assert.equal(GRID_LAYOUT_OPTIONS.length, 2);
   assert.equal(TURNAROUND_VIEW_OPTIONS.length, 4);
 
@@ -108,6 +112,7 @@ test("canvas composer, cinematography panel, shot list, and asset packs use unif
     workspaceSource,
     shotListSource,
     assetPacksSource,
+    aiStoryboardSource,
     overridesCss,
   ] = await Promise.all([
     readFile(join(root, "apps/web/canvas-editor/OptionSelect.tsx"), "utf8"),
@@ -118,11 +123,15 @@ test("canvas composer, cinematography panel, shot list, and asset packs use unif
     readFile(join(root, "apps/web/canvas-editor/CanvasWorkspace.tsx"), "utf8"),
     readFile(join(root, "apps/web/canvas-editor/ShotList.tsx"), "utf8"),
     readFile(join(root, "apps/web/canvas-editor/AssetPacks.tsx"), "utf8"),
+    readFile(join(root, "apps/web/canvas-editor/AiStoryboard.tsx"), "utf8"),
     readFile(
       join(root, "apps/web/canvas-editor/canvas-overrides.css"),
       "utf8",
     ),
   ]);
+
+  assert.doesNotMatch(aiStoryboardSource, /全能 @图N 多参考/);
+  assert.match(aiStoryboardSource, /<option value="omni_ref">全能参考<\/option>/);
 
   // OptionSelect provides accessible listbox + segmented group primitives
   assert.match(optionSelectSource, /aria-haspopup="listbox"/);
