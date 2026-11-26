@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
-import { chromium, expect } from "@playwright/test";
+import { chromium, expect, type Browser } from "@playwright/test";
 import * as esbuild from "esbuild";
 
 test(
@@ -81,8 +81,9 @@ test(
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
 
-    const browser = await chromium.launch({ headless: true });
+    let browser: Browser | undefined;
     try {
+      browser = await chromium.launch({ headless: true });
       const page = await browser.newPage({
         viewport: { width: 1280, height: 800 },
       });
@@ -171,8 +172,11 @@ test(
         .count();
       assert.equal(remainingExpanded, 0);
     } finally {
-      await browser.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      try {
+        await browser?.close();
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     }
   },
 );
