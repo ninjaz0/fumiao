@@ -1588,6 +1588,144 @@ test("createCanvasRunsTracker never regresses when superseded request A resolves
   releaseObsoleteA();
   await reqObsoleteA;
   assert.equal(tracker4.getCurrentRuns().length, 1);
+
+  // 5. ensureFresh enters with NO in-flight request, triggers A itself (which stays permanently unreleased),
+  //    then candidate submission triggers B and B succeeds -> ensureFresh MUST resolve immediately WITHOUT releasing A!
+  const withShortTimeout = <T>(p: Promise<T>, label: string): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`${label} hung waiting on superseded request`)),
+        300,
+      );
+      p.then(
+        (val) => {
+          clearTimeout(timer);
+          resolve(val);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        },
+      );
+    });
+
+  const tracker5 = createCanvasRunsTracker<Job>({
+    reconcile: (_prev, next) => [...next],
+  });
+  assert.equal(tracker5.hasInFlight(), false);
+  let rejectSelfA5!: (err: Error) => void;
+  const gateSelfA5 = new Promise<void>((_resolve, reject) => {
+    rejectSelfA5 = reject;
+  });
+  let selfA5Released = false;
+  const ensure5 = tracker5.ensureFresh(() =>
+    tracker5.runFetch(async () => {
+      await gateSelfA5;
+      selfA5Released = true;
+      return { runs: [], extra: null };
+    }),
+  );
+
+  // Candidate submission finishes while A5 is still hanging and calls fetchRuns() -> B5
+  await tracker5.runFetch(async () => ({
+    runs: [queuedGridJob],
+    extra: null,
+  }));
+  assert.equal(tracker5.hasInFlight(), false);
+  assert.equal(selfA5Released, false);
+
+  // Must resolve WITHOUT releasing A5!
+  const settled5 = await withShortTimeout(
+    ensure5,
+    "ensureFresh(self-triggered A5 superseded by B5)",
+  );
+  assert.equal(selfA5Released, false);
+  assert.equal(settled5.runsKnown, true);
+  assert.equal(settled5.runs.length, 1);
+  assert.equal(settled5.runs[0].id, 5001);
+
+  const syncedSelfASuperseded = syncScriptBreakdownToCanvas(
+    gridInit.document,
+    bd,
+    {
+      generationMode: "omni_ref",
+      runs: settled5.runs,
+      runsKnown: settled5.runsKnown,
+    },
+  );
+  assert.equal(
+    syncedSelfASuperseded.document.nodes.some((n) => n.id === gridNode.id),
+    true,
+    "grid_preview node must be preserved when self-triggered A hangs and concurrent B succeeds",
+  );
+
+  // Even if superseded A5 later rejects, rejection is handled and currentRuns keeps [queuedGridJob]
+  rejectSelfA5(new Error("network socket closed much later"));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(tracker5.getCurrentRuns().length, 1);
+  assert.equal(tracker5.getCurrentRuns()[0].id, 5001);
+
+  // 6. ensureFresh enters with NO in-flight request, triggers A6 itself (which stays unreleased),
+  //    then tracker.reset([]) runs -> ensureFresh MUST wake & resolve immediately WITHOUT releasing A6!
+  const tracker6 = createCanvasRunsTracker<Job>({
+    reconcile: (_prev, next) => [...next],
+  });
+  let rejectSelfA6!: (err: Error) => void;
+  const gateSelfA6 = new Promise<void>((_resolve, reject) => {
+    rejectSelfA6 = reject;
+  });
+  let selfA6Released = false;
+  const ensure6 = tracker6.ensureFresh(() =>
+    tracker6.runFetch(async () => {
+      await gateSelfA6;
+      selfA6Released = true;
+      return { runs: [queuedGridJob], extra: null };
+    }),
+  );
+  tracker6.reset([]);
+  const settled6 = await withShortTimeout(
+    ensure6,
+    "ensureFresh(self-triggered A6 woken by reset)",
+  );
+  assert.equal(selfA6Released, false);
+  assert.equal(settled6.runsKnown, false);
+  assert.equal(settled6.runs.length, 0);
+
+  rejectSelfA6(new Error("aborted after reset"));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(tracker6.getCurrentRuns().length, 0);
+
+  // 7. ensureFresh triggers A7 itself (stays unreleased), newer B7 fails (503) ->
+  //    ensureFresh wakes WITHOUT releasing A7 and marks runsKnown=false!
+  const tracker7 = createCanvasRunsTracker<Job>({
+    reconcile: (_prev, next) => [...next],
+  });
+  let releaseSelfA7!: () => void;
+  const gateSelfA7 = new Promise<void>((resolve) => {
+    releaseSelfA7 = resolve;
+  });
+  let selfA7Released = false;
+  const ensure7 = tracker7.ensureFresh(() =>
+    tracker7.runFetch(async () => {
+      await gateSelfA7;
+      selfA7Released = true;
+      return { runs: [], extra: null };
+    }),
+  );
+  await tracker7.runFetch(
+    async () => {
+      throw new Error("503 B7 failed");
+    },
+    { silent: true },
+  );
+  const settled7 = await withShortTimeout(
+    ensure7,
+    "ensureFresh(self-triggered A7 superseded by failing B7)",
+  );
+  assert.equal(selfA7Released, false);
+  assert.equal(settled7.runsKnown, false);
+  releaseSelfA7();
+  await new Promise((r) => setTimeout(r, 10));
 });
 
 test("runsKnown=false preserves existing grid->video edge when shot references >=9 props/scenes with includeAssets=false or true", () => {

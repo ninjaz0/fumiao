@@ -2278,6 +2278,21 @@ export function createCanvasRunsTracker<J>(options: {
   // Obsolete superseded requests neither block polling nor satisfy ensureFresh!
   let latestWait: Promise<void> | null = null;
   let wakeLatestWait: (() => void) | null = null;
+  const stateChangeWaiters = new Set<() => void>();
+
+  const notifyStateChange = () => {
+    if (stateChangeWaiters.size === 0) return;
+    const waiters = Array.from(stateChangeWaiters);
+    stateChangeWaiters.clear();
+    for (const wake of waiters) {
+      wake();
+    }
+  };
+
+  const waitNextChange = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      stateChangeWaiters.add(resolve);
+    });
 
   const checkAlive = (override?: () => boolean): boolean => {
     if (override && !override()) return false;
@@ -2294,6 +2309,7 @@ export function createCanvasRunsTracker<J>(options: {
     latestWait = null;
     wakeLatestWait = null;
     wake?.();
+    notifyStateChange();
   };
 
   const getCurrentRuns = () => currentRuns;
@@ -2320,14 +2336,15 @@ export function createCanvasRunsTracker<J>(options: {
     latestWait = myWait;
     wakeLatestWait = resolveMyWait;
     prevWake?.();
+    notifyStateChange();
 
-    hooks?.onStart?.();
     let fetchError: unknown;
     let fetchOk = false;
     let rawIncoming: J[] = [];
 
     const task = (async (): Promise<void> => {
       try {
+        hooks?.onStart?.();
         const { runs: incoming, extra } = await fetcher();
         rawIncoming = incoming;
         fetchOk = true;
@@ -2358,6 +2375,7 @@ export function createCanvasRunsTracker<J>(options: {
           hooks?.onFinally?.();
         }
         resolveMyWait();
+        notifyStateChange();
       }
     })();
 
@@ -2380,7 +2398,7 @@ export function createCanvasRunsTracker<J>(options: {
     const entrySeq = seq;
     const latestWasInFlightAtEntry = latestWait !== null;
 
-    while (generation === startGen && latestWait !== null) {
+    while (generation === startGen && checkAlive() && latestWait !== null) {
       await latestWait;
     }
     if (generation !== startGen || !checkAlive()) {
@@ -2396,20 +2414,57 @@ export function createCanvasRunsTracker<J>(options: {
     }
 
     const beforeFreshSeq = seq;
+    let standaloneDone = false;
+    let standaloneOk = false;
+    let standaloneRuns: J[] = [];
+
+    let rawPromise: Promise<J[]> | null = null;
     try {
-      await freshFetch();
+      rawPromise = freshFetch();
     } catch {
-      // Fall through to verify whether a newer concurrent request succeeded or all failed
+      standaloneDone = true;
+      standaloneOk = false;
     }
-    while (generation === startGen && latestWait !== null) {
-      await latestWait;
+
+    // Attach rejection handling immediately so superseded/reset in-flight requests never cause unhandled rejections,
+    // while waiting on wakeable latestWait instead of awaiting rawPromise directly.
+    if (rawPromise !== null) {
+      void rawPromise.then(
+        (res) => {
+          standaloneDone = true;
+          standaloneOk = true;
+          standaloneRuns = res;
+          notifyStateChange();
+        },
+        () => {
+          standaloneDone = true;
+          standaloneOk = false;
+          notifyStateChange();
+        },
+      );
     }
-    if (
-      generation === startGen &&
-      checkAlive() &&
-      seq > beforeFreshSeq &&
-      lastSuccessSeq === seq
-    ) {
+
+    while (generation === startGen && checkAlive()) {
+      if (seq > beforeFreshSeq) {
+        if (latestWait === null) break;
+        await latestWait;
+        continue;
+      }
+      if (standaloneDone) break;
+      await waitNextChange();
+    }
+
+    if (generation !== startGen || !checkAlive()) {
+      return { runs: currentRuns, runsKnown: false };
+    }
+    if (seq > beforeFreshSeq) {
+      return { runs: currentRuns, runsKnown: lastSuccessSeq === seq };
+    }
+    if (standaloneOk) {
+      const nextSeq = ++seq;
+      const nextRuns = options.reconcile(currentRuns, standaloneRuns);
+      currentRuns = nextRuns;
+      lastSuccessSeq = nextSeq;
       return { runs: currentRuns, runsKnown: true };
     }
     return { runs: currentRuns, runsKnown: false };
