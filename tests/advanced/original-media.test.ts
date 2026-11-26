@@ -1172,6 +1172,8 @@ test("official /api/h3/references upload path, parameterized/mixed-case legacy M
     );
     const sameViewFallbackJob = randomUUID(),
       crossViewFallbackJob = randomUUID(),
+      sameBothPopulatedJob = randomUUID(),
+      crossBothPopulatedJob = randomUUID(),
       baseOriginalView = {
         ratio: "16:9",
         quality: 480,
@@ -1188,11 +1190,15 @@ test("official /api/h3/references upload path, parameterized/mixed-case legacy M
       };
     await f.db.query(
       `INSERT INTO jobs(id,public_id,workspace_id,owner_id,model_id,connection_id,plugin_id,plugin_version,config_snapshot,provider_model,kind,input,idempotency_key,request_hash,price,state,result,attempts,original_view)
-       VALUES($1,902,$3,$4,$5,$6,'legacy-archive','1.0.0',$7,'muse-video','video','{"prompt":"same ws fallback"}','legacy-902','legacy-902',1,'completed',NULL,1,$8),
-             ($2,903,$3,$4,$5,$6,'legacy-archive','1.0.0',$7,'muse-video','video','{"prompt":"cross ws fallback"}','legacy-903','legacy-903',1,'completed',NULL,1,$9)`,
+       VALUES($1,902,$5,$6,$7,$8,'legacy-archive','1.0.0',$9,'muse-video','video','{"prompt":"same ws fallback"}','legacy-902','legacy-902',1,'completed',NULL,1,$10),
+             ($2,903,$5,$6,$7,$8,'legacy-archive','1.0.0',$9,'muse-video','video','{"prompt":"cross ws fallback"}','legacy-903','legacy-903',1,'completed',NULL,1,$11),
+             ($3,904,$5,$6,$7,$8,'legacy-archive','1.0.0',$9,'muse-video','video','{"prompt":"same ws uuid+view"}','legacy-904','legacy-904',1,'completed',$12,1,$10),
+             ($4,905,$5,$6,$7,$8,'legacy-archive','1.0.0',$9,'muse-video','video','{"prompt":"cross ws uuid+view"}','legacy-905','legacy-905',1,'completed',$13,1,$11)`,
       [
         sameViewFallbackJob,
         crossViewFallbackJob,
+        sameBothPopulatedJob,
+        crossBothPopulatedJob,
         f.team,
         f.admin.id,
         legacyModel,
@@ -1200,6 +1206,8 @@ test("official /api/h3/references upload path, parameterized/mixed-case legacy M
         f.p.vault.seal({}),
         JSON.stringify({ ...baseOriginalView, result: webmKey }),
         JSON.stringify({ ...baseOriginalView, result: crossKey }),
+        JSON.stringify({ assets: [webmAssetId] }),
+        JSON.stringify({ assets: [crossAssetId] }),
       ],
     );
 
@@ -1222,6 +1230,16 @@ test("official /api/h3/references upload path, parameterized/mixed-case legacy M
     assert.ok(crossWsArchived);
     assert.equal(crossWsArchived.result, crossKey);
     assert.equal(Object.hasOwn(crossWsArchived, "result_mime"), false);
+
+    const sameBothArchived = archived.find((j) => j.id === 904);
+    assert.ok(sameBothArchived);
+    assert.equal(sameBothArchived.result, webmKey);
+    assert.equal(sameBothArchived.result_mime, "video/webm");
+
+    const crossBothArchived = archived.find((j) => j.id === 905);
+    assert.ok(crossBothArchived);
+    assert.equal(crossBothArchived.result, crossKey);
+    assert.equal(Object.hasOwn(crossBothArchived, "result_mime"), false);
   } finally {
     await app.close();
     await f.cleanup();

@@ -36,7 +36,7 @@ export async function attachJobResults(sql: Sql, jobs: Record<string, any>[]) {
   const assets = ids.length
     ? (
         await sql.query(
-          "SELECT id,public_id,mime,metadata FROM assets WHERE id=ANY($1::uuid[])",
+          "SELECT id,public_id,mime,metadata,workspace_id FROM assets WHERE id=ANY($1::uuid[])",
           [ids],
         )
       ).rows
@@ -45,7 +45,10 @@ export async function attachJobResults(sql: Sql, jobs: Record<string, any>[]) {
   for (const job of jobs) {
     const asset = byId.get(first(job));
     job.result_public_id = asset?.public_id ?? null;
-    job.result_mime = asset?.mime ?? null;
+    job.result_mime =
+      asset && job.workspace_id && asset.workspace_id === job.workspace_id
+        ? (asset.mime ?? null)
+        : null;
     job.result_metadata = asset?.metadata ?? null;
   }
 }
