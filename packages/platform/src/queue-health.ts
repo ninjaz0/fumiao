@@ -4,7 +4,7 @@ import { executableJob } from "./retired-jobs.js";
 import { one } from "./db.js";
 import { canonical } from "./plugins.js";
 import { hasStudioPackages } from "./studio-plugin-profile.js";
-import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
+import type { Manifest, ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 import {
   queueHealthSchema,
   type QueueHealth,
@@ -16,22 +16,53 @@ const NON_SUBMISSION_CONFIG_KEYS = new Set([
   "upstreamCostFen",
 ]);
 
+const CREDENTIAL_CONFIG_KEYS = new Set(["apiKey"]);
+
 function normalizeSubmissionBaseUrl(raw: unknown): unknown {
   if (typeof raw !== "string") return raw;
   const trimmed = raw.trim();
   const parsed = URL.parse(trimmed);
   if (!parsed) return trimmed.replace(/\/+$/, "");
+  if (parsed.hostname.endsWith(".") && !parsed.hostname.startsWith("["))
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
   parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
   return parsed.href;
 }
 
-export function sealedConfigKey(
+function projectConfig(
+  opened: unknown,
+  options: {
+    stripCredentials: boolean;
+    manifest?: Pick<Manifest, "configSchema">;
+  },
+): string {
+  if (!opened || typeof opened !== "object" || Array.isArray(opened))
+    return canonical(opened);
+  const schemaProps = options.manifest?.configSchema?.properties as
+    | Record<string, { writeOnly?: boolean }>
+    | undefined;
+  const projected: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(opened)) {
+    if (value === undefined) continue;
+    if (NON_SUBMISSION_CONFIG_KEYS.has(key)) continue;
+    if (
+      options.stripCredentials &&
+      (CREDENTIAL_CONFIG_KEYS.has(key) || schemaProps?.[key]?.writeOnly)
+    )
+      continue;
+    projected[key] =
+      key === "baseUrl" ? normalizeSubmissionBaseUrl(value) : value;
+  }
+  return canonical(projected);
+}
+
+export function healthConfigKey(
   p: Platform,
   sealed: string | null | undefined,
 ): string {
   if (!sealed) return "";
   try {
-    return canonical(p.vault.open(sealed));
+    return projectConfig(p.vault.open(sealed), { stripCredentials: false });
   } catch {
     return sealed;
   }
@@ -40,19 +71,14 @@ export function sealedConfigKey(
 export function submissionEndpointKey(
   p: Platform,
   sealed: string | null | undefined,
+  manifest?: Pick<Manifest, "configSchema">,
 ): string {
   if (!sealed) return "";
   try {
-    const opened = p.vault.open(sealed);
-    if (!opened || typeof opened !== "object" || Array.isArray(opened))
-      return canonical(opened);
-    const projected: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(opened)) {
-      if (NON_SUBMISSION_CONFIG_KEYS.has(key)) continue;
-      projected[key] =
-        key === "baseUrl" ? normalizeSubmissionBaseUrl(value) : value;
-    }
-    return canonical(projected);
+    return projectConfig(p.vault.open(sealed), {
+      stripCredentials: true,
+      manifest,
+    });
   } catch {
     return sealed;
   }
@@ -94,7 +120,7 @@ export class FrozenQueueHealth {
       connection,
       plugin.manifest.id,
       plugin.manifest.version,
-      sealedConfigKey(p, sealedConfig),
+      healthConfigKey(p, sealedConfig),
     ]);
     const now = Date.now();
     const cached = this.recent.get(key);

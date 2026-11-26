@@ -25,7 +25,7 @@ import { artifactCapacity } from "./capacity.js";
 import { JobTiming } from "./timing.js";
 import {
   FrozenQueueHealth,
-  sealedConfigKey,
+  healthConfigKey,
   submissionEndpointKey,
 } from "./queue-health.js";
 import type { QueueHealth, QueueJob } from "@fumiao/plugin-sdk/queue.js";
@@ -338,8 +338,11 @@ export class Executor {
         );
         if (Number(count.total) >= connection.concurrency) return;
         if (plugin.requestCapacity) {
-          const currentConfigKey = sealedConfigKey(p, connection.config);
-          const jobConfigKey = sealedConfigKey(p, job.config_snapshot);
+          const currentConfigKey = healthConfigKey(p, connection.config);
+          const jobConfigKey = healthConfigKey(
+            p,
+            job.config_snapshot ?? connection.config,
+          );
           const superseded =
             Boolean(plugin.queueHealth) &&
             (connection.plugin_version !== job.plugin_version ||
@@ -352,16 +355,36 @@ export class Executor {
                 connection.id,
                 job.config_snapshot,
               );
+          const jobEndpointKey = submissionEndpointKey(
+            p,
+            job.config_snapshot ?? connection.config,
+            plugin.manifest,
+          );
+          const shareAcrossConnections =
+            Boolean(plugin.queueHealth) &&
+            jobEndpointKey !== "" &&
+            jobEndpointKey !== "{}";
+          if (shareAcrossConnections)
+            await sql.query(
+              "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+              [`queue-endpoint:${job.plugin_id}:${jobEndpointKey}`],
+            );
           const active = (
             await sql.query(
-              `SELECT id,provider_model,kind,remote_id,input,config_snapshot FROM jobs j WHERE connection_id=$1 AND state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
-              [connection.id],
+              `SELECT j.id,j.provider_model,j.kind,j.remote_id,j.input,j.config_snapshot,c.config AS connection_config
+               FROM jobs j JOIN connections c ON c.id=j.connection_id
+               WHERE j.plugin_id=$1 AND ($2::boolean OR j.connection_id=$3)
+               AND j.state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
+              [job.plugin_id, shareAcrossConnections, connection.id],
             )
           ).rows;
-          const jobEndpointKey = submissionEndpointKey(p, job.config_snapshot);
           const endpointActive = active.filter(
             (j) =>
-              submissionEndpointKey(p, j.config_snapshot) === jobEndpointKey,
+              submissionEndpointKey(
+                p,
+                j.config_snapshot ?? j.connection_config,
+                plugin.manifest,
+              ) === jobEndpointKey,
           );
           const capacity = plugin.requestCapacity({
             stamp: Date.now() / 1000,

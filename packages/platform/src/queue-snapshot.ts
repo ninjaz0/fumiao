@@ -2,7 +2,7 @@ import type { Platform, Actor } from "./platform.js";
 import type { Sql } from "./db.js";
 import { one } from "./db.js";
 import { forecastQueue } from "./queue.js";
-import { sealedConfigKey, submissionEndpointKey } from "./queue-health.js";
+import { healthConfigKey, submissionEndpointKey } from "./queue-health.js";
 import {
   Estimator,
   elapsedDetail,
@@ -10,6 +10,7 @@ import {
   type Run,
 } from "./timing-math.js";
 import type {
+  Manifest,
   QueueContext,
   QueueJob,
   QueueNode,
@@ -149,21 +150,28 @@ export class QueueForecasts {
     );
     const plans: Record<string, any> = {};
     let candidateEligible: boolean | undefined;
+    const connectionMap = new Map(connections.map((c) => [c.id, c]));
+    const endpointOf = (
+      j: any,
+      manifest?: Pick<Manifest, "configSchema">,
+    ) =>
+      submissionEndpointKey(
+        this.p,
+        j.config_snapshot ?? connectionMap.get(j.connection_id)?.config,
+        manifest,
+      );
+    const healthKeyOf = (j: any) =>
+      healthConfigKey(
+        this.p,
+        j.config_snapshot ?? connectionMap.get(j.connection_id)?.config,
+      );
     for (const connection of connections) {
       const owned = jobs.filter((j) => j.connection_id === connection.id);
-      const currentConfigKey = sealedConfigKey(this.p, connection.config);
-      const currentEndpointKey = submissionEndpointKey(
-        this.p,
-        connection.config,
-      );
+      const currentConfigKey = healthConfigKey(this.p, connection.config);
       const jobConfigKey = (j: any) =>
-        j.config_snapshot !== undefined
-          ? sealedConfigKey(this.p, j.config_snapshot)
+        j.config_snapshot != null
+          ? healthConfigKey(this.p, j.config_snapshot)
           : currentConfigKey;
-      const jobEndpointKey = (j: any) =>
-        j.config_snapshot !== undefined
-          ? submissionEndpointKey(this.p, j.config_snapshot)
-          : currentEndpointKey;
       const toQueueJob = (j: any): QueueJob => ({
         id: Number(j.public_id),
         node: nodePublic.get(j.remote_id) ?? null,
@@ -195,7 +203,7 @@ export class QueueForecasts {
         }));
       const cohortMap = new Map<
         string,
-        { version: string; configKey: string; endpointKey: string }
+        { version: string; configKey: string; sampleJob: any }
       >();
       for (const j of owned) {
         if (
@@ -205,15 +213,14 @@ export class QueueForecasts {
           continue;
         const version = String(j.plugin_version);
         const configKey = jobConfigKey(j);
-        const endpointKey = jobEndpointKey(j);
         const key = JSON.stringify([version, configKey]);
         if (!cohortMap.has(key))
-          cohortMap.set(key, { version, configKey, endpointKey });
+          cohortMap.set(key, { version, configKey, sampleJob: j });
       }
       for (const {
         version: targetVersion,
         configKey: targetConfigKey,
-        endpointKey: targetEndpointKey,
+        sampleJob,
       } of cohortMap.values()) {
         const version = await one(
           sql,
@@ -261,20 +268,106 @@ export class QueueForecasts {
           usesQueueHealth &&
           (targetVersion !== String(connection.plugin_version) ||
             targetConfigKey !== currentConfigKey);
+        const rawHealth =
+          !superseded &&
+          connection.enabled &&
+          connection.queue_health_revision === connection.revision
+            ? connection.queue_health
+            : {};
         let cohortRawJobs: any[];
         let otherEndpointActiveCount = 0;
+        let otherConnSameEndpointActiveCount = 0;
         if (usesQueueHealth) {
-          const sameEndpointActive = owned.filter(
+          const targetEndpointKey = endpointOf(sampleJob, plugin.manifest);
+          const shareAcrossConnections =
+            targetEndpointKey !== "" && targetEndpointKey !== "{}";
+          const samePluginJobs = shareAcrossConnections
+            ? jobs.filter(
+                (j) =>
+                  (j.plugin_id ??
+                    connectionMap.get(j.connection_id)?.plugin_id) ===
+                  connection.plugin_id,
+              )
+            : owned;
+          const sameEndpointActive = samePluginJobs.filter(
             (j) =>
-              j.state !== "queued" && jobEndpointKey(j) === targetEndpointKey,
+              j.state !== "queued" &&
+              endpointOf(j, plugin.manifest) === targetEndpointKey,
           );
+          otherConnSameEndpointActiveCount = sameEndpointActive.filter(
+            (j) => j.connection_id !== connection.id,
+          ).length;
           otherEndpointActiveCount = owned.filter(
             (j) =>
-              j.state !== "queued" && jobEndpointKey(j) !== targetEndpointKey,
+              j.state !== "queued" &&
+              endpointOf(j, plugin.manifest) !== targetEndpointKey,
           ).length;
-          const cohortWaiting = owned.filter(
-            (j) => j.state === "queued" && inCohort(j),
-          );
+          const siblingWaiting: any[] = [];
+          if (shareAcrossConnections && !superseded) {
+            const upstreamCap =
+              typeof rawHealth.capacity === "number" &&
+              Number.isFinite(rawHealth.capacity)
+                ? rawHealth.capacity
+                : 1;
+            const siblingIds = new Set(
+              samePluginJobs
+                .filter(
+                  (j) =>
+                    j.state === "queued" && j.connection_id !== connection.id,
+                )
+                .map((j) => j.connection_id),
+            );
+            for (const sibId of siblingIds) {
+              const sibConn = connectionMap.get(sibId);
+              if (
+                !sibConn?.enabled ||
+                sibConn.queue_health_revision !== sibConn.revision ||
+                !sibConn.queue_health?.ready ||
+                stamp - Number(sibConn.queue_health.checked ?? 0) >= 90
+              )
+                continue;
+              const sibConfigKey = healthConfigKey(this.p, sibConn.config);
+              const sibJobs = samePluginJobs.filter(
+                (j) => j.connection_id === sibId,
+              );
+              const sibDiffEndpointActive = sibJobs.filter(
+                (j) =>
+                  j.state !== "queued" &&
+                  endpointOf(j, plugin.manifest) !== targetEndpointKey,
+              ).length;
+              const sibSameEndpointActive = sibJobs.filter(
+                (j) =>
+                  j.state !== "queued" &&
+                  endpointOf(j, plugin.manifest) === targetEndpointKey,
+              ).length;
+              const sibMaxOnEndpoint =
+                typeof sibConn.concurrency === "number"
+                  ? Math.max(0, sibConn.concurrency - sibDiffEndpointActive)
+                  : Infinity;
+              if (sibMaxOnEndpoint <= 0) continue;
+              const runnableOnSib = sibJobs.filter(
+                (j) =>
+                  j.state === "queued" &&
+                  j.allowed &&
+                  String(j.plugin_version) === targetVersion &&
+                  String(sibConn.plugin_version) === targetVersion &&
+                  healthKeyOf(j) === sibConfigKey &&
+                  endpointOf(j, plugin.manifest) === targetEndpointKey,
+              );
+              siblingWaiting.push(
+                ...(sibMaxOnEndpoint >= upstreamCap
+                  ? runnableOnSib
+                  : runnableOnSib.slice(
+                      0,
+                      Math.max(0, sibMaxOnEndpoint - sibSameEndpointActive),
+                    )),
+              );
+            }
+          }
+          const cohortWaiting = [
+            ...owned.filter((j) => j.state === "queued" && inCohort(j)),
+            ...siblingWaiting,
+          ];
           cohortRawJobs = [...sameEndpointActive, ...cohortWaiting].sort(
             (a, b) => Number(a.public_id) - Number(b.public_id),
           );
@@ -311,12 +404,6 @@ export class QueueForecasts {
             .filter((j) => j.status === "running" && j.remoteId)
             .map((j) => j.remoteId),
         );
-        const rawHealth =
-          !superseded &&
-          connection.enabled &&
-          connection.queue_health_revision === connection.revision
-            ? connection.queue_health
-            : {};
         const external = Array.isArray(rawHealth.tasks)
           ? rawHealth.tasks.filter((t: any) => !ownIds.has(t?.id)).length
           : 0;
@@ -335,10 +422,16 @@ export class QueueForecasts {
           typeof availableConcurrency === "number"
             ? {
                 ...rawHealth,
-                capacity: Math.min(
-                  rawHealth.capacity,
-                  availableConcurrency + external + maintenance,
-                ),
+                capacity:
+                  availableConcurrency === 0
+                    ? 0
+                    : Math.min(
+                        rawHealth.capacity,
+                        availableConcurrency +
+                          otherConnSameEndpointActiveCount +
+                          external +
+                          maintenance,
+                      ),
               }
             : rawHealth;
         const context: QueueContext = {
