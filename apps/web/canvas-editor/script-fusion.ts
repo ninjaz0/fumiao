@@ -2274,7 +2274,10 @@ export function createCanvasRunsTracker<J>(options: {
   let seq = 0;
   let lastSuccessSeq = 0;
   let currentRuns: J[] = [];
-  const activePromises = new Map<number, Promise<void>>();
+  // Only the latest issued request in the current generation counts as "in flight".
+  // Obsolete superseded requests neither block polling nor satisfy ensureFresh!
+  let latestWait: Promise<void> | null = null;
+  let wakeLatestWait: (() => void) | null = null;
 
   const checkAlive = (override?: () => boolean): boolean => {
     if (override && !override()) return false;
@@ -2282,25 +2285,15 @@ export function createCanvasRunsTracker<J>(options: {
     return true;
   };
 
-  const latestInFlight = (): Promise<void> | null => {
-    if (activePromises.size === 0) return null;
-    let maxSeq = -1;
-    let maxPromise: Promise<void> | null = null;
-    for (const [s, p] of activePromises.entries()) {
-      if (s > maxSeq) {
-        maxSeq = s;
-        maxPromise = p;
-      }
-    }
-    return maxPromise;
-  };
-
   const reset = (initialRuns: J[] = []) => {
     generation++;
     seq = 0;
     lastSuccessSeq = 0;
     currentRuns = initialRuns;
-    activePromises.clear();
+    const wake = wakeLatestWait;
+    latestWait = null;
+    wakeLatestWait = null;
+    wake?.();
   };
 
   const getCurrentRuns = () => currentRuns;
@@ -2318,6 +2311,16 @@ export function createCanvasRunsTracker<J>(options: {
   ): Promise<J[]> => {
     const myGen = generation;
     const mySeq = ++seq;
+    // Immediately wake any waiter that was waiting on a now-superseded request
+    const prevWake = wakeLatestWait;
+    let resolveMyWait!: () => void;
+    const myWait = new Promise<void>((resolve) => {
+      resolveMyWait = resolve;
+    });
+    latestWait = myWait;
+    wakeLatestWait = resolveMyWait;
+    prevWake?.();
+
     hooks?.onStart?.();
     let fetchError: unknown;
     let fetchOk = false;
@@ -2349,16 +2352,15 @@ export function createCanvasRunsTracker<J>(options: {
           hooks?.onError?.(err);
         }
       } finally {
-        if (myGen === generation) {
-          activePromises.delete(mySeq);
-          if (mySeq === seq) {
-            hooks?.onFinally?.();
-          }
+        if (myGen === generation && mySeq === seq) {
+          latestWait = null;
+          wakeLatestWait = null;
+          hooks?.onFinally?.();
         }
+        resolveMyWait();
       }
     })();
 
-    activePromises.set(mySeq, task);
     await task;
 
     if (!fetchOk) {
@@ -2376,18 +2378,16 @@ export function createCanvasRunsTracker<J>(options: {
   ): Promise<CanvasRunsSnapshot<J>> => {
     const startGen = generation;
     const entrySeq = seq;
-    const hadInFlightAtEntry = activePromises.size > 0;
+    const latestWasInFlightAtEntry = latestWait !== null;
 
-    while (generation === startGen) {
-      const pending = latestInFlight();
-      if (pending === null) break;
-      await pending;
+    while (generation === startGen && latestWait !== null) {
+      await latestWait;
     }
     if (generation !== startGen || !checkAlive()) {
       return { runs: currentRuns, runsKnown: false };
     }
     if (
-      hadInFlightAtEntry &&
+      latestWasInFlightAtEntry &&
       entrySeq > 0 &&
       lastSuccessSeq === seq &&
       seq >= entrySeq
@@ -2401,10 +2401,8 @@ export function createCanvasRunsTracker<J>(options: {
     } catch {
       // Fall through to verify whether a newer concurrent request succeeded or all failed
     }
-    while (generation === startGen) {
-      const pending = latestInFlight();
-      if (pending === null) break;
-      await pending;
+    while (generation === startGen && latestWait !== null) {
+      await latestWait;
     }
     if (
       generation === startGen &&
@@ -2420,7 +2418,7 @@ export function createCanvasRunsTracker<J>(options: {
   return {
     reset,
     getCurrentRuns,
-    hasInFlight: () => activePromises.size > 0,
+    hasInFlight: () => latestWait !== null,
     runFetch,
     ensureFresh,
   };

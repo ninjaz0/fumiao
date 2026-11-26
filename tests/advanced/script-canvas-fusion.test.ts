@@ -1528,6 +1528,66 @@ test("createCanvasRunsTracker never regresses when superseded request A resolves
     false,
     "pre-reset in-flight request must NOT mark runsKnown=true after reset()",
   );
+
+  // 4. B finishes BEFORE sync starts while superseded old A is STILL hanging:
+  //    - hasInFlight() must be false (obsolete A must NOT block polling!)
+  //    - ensureFresh MUST NOT reuse B's older empty snapshot just because obsolete A is still hanging;
+  //      it must call freshFetch() (picking up collaborator's newly submitted grid job) without waiting on A!
+  const tracker4 = createCanvasRunsTracker<Job>({
+    reconcile: (_prev, next) => [...next],
+  });
+  let releaseObsoleteA!: () => void;
+  const gateObsoleteA = new Promise<void>((resolve) => {
+    releaseObsoleteA = resolve;
+  });
+  const reqObsoleteA = tracker4.runFetch(
+    async () => {
+      await gateObsoleteA;
+      return { runs: [], extra: null };
+    },
+    { silent: true },
+  );
+  // Newer manual refresh B finishes BEFORE sync starts (still empty at that moment)
+  await tracker4.runFetch(async () => ({ runs: [], extra: null }));
+  assert.equal(
+    tracker4.hasInFlight(),
+    false,
+    "superseded hanging poll A must NOT block subsequent polling once newer B finished",
+  );
+
+  // Collaborator / another tab submits grid generation; user clicks sync while obsolete A is still hanging!
+  let freshCalls = 0;
+  const settled4 = await tracker4.ensureFresh(() => {
+    freshCalls++;
+    return tracker4.runFetch(async () => ({
+      runs: [queuedGridJob],
+      extra: null,
+    }));
+  });
+  assert.equal(freshCalls, 1);
+  assert.equal(settled4.runsKnown, true);
+  assert.equal(settled4.runs.length, 1);
+  assert.equal(settled4.runs[0].id, 5001);
+
+  const syncedAfterBBeforeSync = syncScriptBreakdownToCanvas(
+    gridInit.document,
+    bd,
+    {
+      generationMode: "omni_ref",
+      runs: settled4.runs,
+      runsKnown: settled4.runsKnown,
+    },
+  );
+  assert.equal(
+    syncedAfterBBeforeSync.document.nodes.some((n) => n.id === gridNode.id),
+    true,
+    "grid_preview node must be preserved via freshFetch even when superseded A was still pending",
+  );
+
+  // Finally release obsolete A and verify currentRuns still retains [queuedGridJob]
+  releaseObsoleteA();
+  await reqObsoleteA;
+  assert.equal(tracker4.getCurrentRuns().length, 1);
 });
 
 test("runsKnown=false preserves existing grid->video edge when shot references >=9 props/scenes with includeAssets=false or true", () => {
