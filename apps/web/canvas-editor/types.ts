@@ -552,3 +552,29 @@ export function resolveBatchShots(
     allInShots: videoIds.length > 0 && addedIds.length === 0,
   };
 }
+
+export type CinePopoverSide = "right" | "left" | "top";
+
+export function resolveCinePopoverSide(input: {
+  composerLeft: number;
+  composerWidth?: number;
+  windowWidth: number;
+  dockedWidth?: number;
+  viewMode?: "canvas" | "split" | "list";
+  agentDock?: boolean;
+}): CinePopoverSide {
+  const composerWidth = input.composerWidth ?? 520;
+  const dockedWidth =
+    input.dockedWidth ??
+    (input.viewMode === "split" ? Math.min(520, input.windowWidth * 0.46) : 0) +
+      (input.agentDock ? 400 : 0);
+  const rightLimit = input.windowWidth - dockedWidth - 12;
+  const leftLimit = 76;
+  if (input.composerLeft + composerWidth + 352 <= rightLimit) {
+    return "right";
+  }
+  if (input.composerLeft - 352 >= leftLimit) {
+    return "left";
+  }
+  return "top";
+}

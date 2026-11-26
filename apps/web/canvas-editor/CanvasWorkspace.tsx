@@ -106,9 +106,11 @@ import {
   isCanvasComposerOpen,
   hasCanvasSelectionToolbar,
   resolveBatchShots,
+  resolveCinePopoverSide,
   linkedValue,
   type CanvasClipboard,
   type CanvasNode,
+  type CinematographySpec,
   type Kind,
   type Project,
   type Job,
@@ -433,6 +435,56 @@ const ZoomCheck = memo(function ZoomCheck({ target }: { target: number }) {
   return Math.abs(zoom - target) < 0.01 ? <Check size={14} /> : null;
 });
 
+const FloatingCinematographyPopover = memo(function FloatingCinematographyPopover({
+  anchorNode,
+  panelHeight,
+  windowSize,
+  viewMode,
+  agentDock,
+  mediaPanelRef,
+  value,
+  onChange,
+  onClose,
+}: {
+  anchorNode: Pick<CanvasNode, "x" | "y" | "width" | "height" | "type">;
+  panelHeight: number;
+  windowSize: { w: number; h: number };
+  viewMode: "canvas" | "split" | "list";
+  agentDock: boolean;
+  mediaPanelRef: React.RefObject<HTMLElement | null>;
+  value?: CinematographySpec | null;
+  onChange: (next: CinematographySpec | null) => void;
+  onClose: () => void;
+}) {
+  const viewport = useViewport();
+  const computedComposer = computeOverlayPositions({
+    viewport,
+    windowSize,
+    node: anchorNode,
+    panelHeight,
+  }).composer;
+  const rect = mediaPanelRef.current?.getBoundingClientRect();
+  const composerLeft = computedComposer?.left ?? rect?.left ?? 76;
+  const composerWidth = rect && rect.width > 0 ? rect.width : 520;
+  const side = resolveCinePopoverSide({
+    composerLeft,
+    composerWidth,
+    windowWidth: windowSize.w,
+    viewMode,
+    agentDock,
+  });
+  return (
+    <CinematographyPanel
+      compact
+      floating
+      side={side}
+      value={value}
+      onChange={onChange}
+      onClose={onClose}
+    />
+  );
+});
+
 type ContextValue = {
   edit: (id: string, patch: Partial<CanvasNode>, history?: boolean) => void;
   begin: () => void;
@@ -749,6 +801,7 @@ export function CanvasWorkspace({
     [progress, setProgress] = useState<number | null>(null),
     [preview, setPreview] = useState<Preview | null>(null),
     [confirm, setConfirm] = useState<null | (() => void)>(null);
+  const [agentDock, setAgentDock] = useState(false);
   const [viewMode, setViewModeState] = useState<"canvas" | "split" | "list">(() => {
     try {
       const saved = localStorage.getItem("fm-canvas-view-mode");
@@ -758,6 +811,8 @@ export function CanvasWorkspace({
     }
     return "canvas";
   });
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
   const setViewMode = useCallback(
     (
       next:
@@ -766,15 +821,22 @@ export function CanvasWorkspace({
         | "list"
         | ((prev: "canvas" | "split" | "list") => "canvas" | "split" | "list"),
     ) => {
-      setViewModeState((prev) => {
-        const resolved = typeof next === "function" ? next(prev) : next;
-        try {
-          localStorage.setItem("fm-canvas-view-mode", resolved);
-        } catch {
-          // Ignore storage failures.
-        }
-        return resolved;
-      });
+      const resolved =
+        typeof next === "function" ? next(viewModeRef.current) : next;
+      viewModeRef.current = resolved;
+      setViewModeState(resolved);
+      if (
+        resolved === "split" &&
+        typeof window !== "undefined" &&
+        window.innerWidth <= 1100
+      ) {
+        setAgentDock(false);
+      }
+      try {
+        localStorage.setItem("fm-canvas-view-mode", resolved);
+      } catch {
+        // Ignore storage failures.
+      }
     },
     [],
   );
@@ -790,7 +852,6 @@ export function CanvasWorkspace({
   } | null>(null);
   const [showCinePanel, setShowCinePanel] = useState(false);
   const [pendingBgmJobId, setPendingBgmJobId] = useState<number | null>(null);
-  const [agentDock, setAgentDock] = useState(false);
   const [pendingProposals, setPendingProposals] = useState(0);
   useEffect(() => {
     let active = true;
@@ -3052,10 +3113,7 @@ export function CanvasWorkspace({
             <button
               type="button"
               className={viewMode === "split" ? "active" : ""}
-              onClick={() => {
-                if (window.innerWidth <= 1100 && agentDock) setAgentDock(false);
-                setViewMode("split");
-              }}
+              onClick={() => setViewMode("split")}
               title="画布 + 分镜表双轨分屏"
             >
               <Columns2 size={14} />
@@ -3569,17 +3627,13 @@ export function CanvasWorkspace({
             )}
           </div>
           {showCinePanel && (
-            <CinematographyPanel
-              compact
-              floating
-              side={
-                windowSize.w -
-                  ((viewMode === "split" ? Math.min(520, windowSize.w * 0.46) : 0) +
-                    (agentDock ? 400 : 0)) >=
-                1180
-                  ? "right"
-                  : "left"
-              }
+            <FloatingCinematographyPopover
+              anchorNode={single}
+              panelHeight={panelHeight}
+              windowSize={windowSize}
+              viewMode={viewMode}
+              agentDock={agentDock}
+              mediaPanelRef={mediaPanelRef}
               value={single.cinematography}
               onChange={(cinematography) => edit(single.id, { cinematography })}
               onClose={() => setShowCinePanel(false)}

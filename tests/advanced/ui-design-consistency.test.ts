@@ -217,6 +217,41 @@ test("AssetPacks, asset-packs.css, and AssetDialog remove dead ref-audio slot, r
   );
 });
 
+test("asset-packs.css replaces emerald green .fm-pack-notice colors with Fumiao ocean-blue light and dark tokens", () => {
+  const packsCss = readRepoFile("apps/web/studio/asset-packs.css");
+
+  assert.doesNotMatch(packsCss, /#15803d/i);
+  assert.doesNotMatch(packsCss, /#4ade80/i);
+  assert.doesNotMatch(packsCss, /34,\s*197,\s*94/);
+  assert.doesNotMatch(packsCss, /22,\s*163,\s*74/);
+
+  assert.match(
+    packsCss,
+    /\.fm-packs\s+\.fm-pack-notice\s*\{[\s\S]*?background:\s*rgba\(54,\s*134,\s*173,\s*0\.12\);[\s\S]*?color:\s*#3686ad;/i,
+  );
+  assert.match(
+    packsCss,
+    /:root\[data-theme="dark"\]\s+\.fm-packs\s+\.fm-pack-notice\s*\{[\s\S]*?background:\s*rgba\(104,\s*168,\s*219,\s*0\.16\);[\s\S]*?color:\s*#68a8db;/i,
+  );
+});
+
+test("CinematographyPanel and canvas-overrides.css support right, left, and top viewport-bounded floating placement", () => {
+  const cineTsx = readRepoFile("apps/web/canvas-editor/CinematographyPanel.tsx");
+  const overridesCss = readRepoFile("apps/web/canvas-editor/canvas-overrides.css");
+  const workspaceTsx = readRepoFile("apps/web/canvas-editor/CanvasWorkspace.tsx");
+
+  assert.match(cineTsx, /side\?:\s*"right"\s*\|\s*"left"\s*\|\s*"top"/);
+  assert.match(
+    overridesCss,
+    /\.fm-cine-popover\.fm-cine-side-top\s*\{[\s\S]*?left:\s*auto;[\s\S]*?right:\s*0;[\s\S]*?bottom:\s*calc\(100%\s*\+\s*10px\);[\s\S]*?max-height:\s*min\(360px,\s*calc\(100dvh\s*-\s*220px\)\);/,
+  );
+  assert.match(workspaceTsx, /resolveCinePopoverSide\(/);
+  assert.doesNotMatch(
+    workspaceTsx,
+    /\(agentDock\s*\?\s*400\s*:\s*0\)\)\s*>=\s*1180/,
+  );
+});
+
 test("ProjectList, SeriesTree, dialog.css, and CanvasList demote empty series tree, expose editable bible, fix 5-item ep-form grid, and style retry button", () => {
   const projectListTsx = readRepoFile("apps/web/canvas/ProjectList.tsx");
   const seriesTreeTsx = readRepoFile("apps/web/canvas/SeriesTree.tsx");

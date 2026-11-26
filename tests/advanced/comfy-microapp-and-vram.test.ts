@@ -469,6 +469,14 @@ test("Platform embeds complete ComfyUI worker.py without example-node-pool depen
     true,
     "packages/platform/src/comfy-worker/worker.py must exist",
   );
+  assert.equal(
+    Buffer.compare(
+      readFileSync(builtinWorkerPath),
+      readFileSync(resolve(repoRoot, "plugins/example-node-pool/client/worker.py")),
+    ),
+    0,
+    "packages/platform/src/comfy-worker/worker.py must remain byte-identical to plugins/example-node-pool/client/worker.py",
+  );
   const workerSource = readFileSync(builtinWorkerPath, "utf8");
   assert.match(workerSource, /class ComfyWorkerController:/);
   assert.match(workerSource, /def poll_once\(self\)/);

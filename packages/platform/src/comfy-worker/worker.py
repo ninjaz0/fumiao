@@ -246,7 +246,7 @@ class ComfyWorkerController:
 
 
 def _main():
-    plugin_id = os.environ.get("FUMIAO_PLUGIN_ID", "comfy-node-pool")
+    plugin_id = os.environ.get("FUMIAO_PLUGIN_ID", "example-node-pool")
     site = os.environ["FUMIAO_SITE"].rstrip("/") + "/agent/" + plugin_id
     comfy = os.environ.get("COMFY_URL", "http://127.0.0.1:8188").rstrip("/")
     credential = Path("credential")

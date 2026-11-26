@@ -527,10 +527,18 @@
 .fm-cine-popover.fm-cine-side-left {
   right: calc(100% + 12px);
 }
+.fm-cine-popover.fm-cine-side-top {
+  left: auto;
+  right: 0;
+  bottom: calc(100% + 10px);
+  max-height: min(360px, calc(100dvh - 220px));
+  overflow: auto;
+}
 @media (max-width: 960px) {
   .fm-cine-popover,
   .fm-cine-popover.fm-cine-side-right,
-  .fm-cine-popover.fm-cine-side-left {
+  .fm-cine-popover.fm-cine-side-left,
+  .fm-cine-popover.fm-cine-side-top {
     position: fixed;
     left: auto;
     right: 12px;

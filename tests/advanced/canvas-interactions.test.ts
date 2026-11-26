@@ -14,6 +14,7 @@ import {
   newNode,
   nextContextSelection,
   resolveBatchShots,
+  resolveCinePopoverSide,
   resolveFocusTargets,
   resolveHistoryModalState,
   resolvePasteOffset,
@@ -698,4 +699,135 @@ test("CanvasWorkspace merges multi-select toolbars, deduplicates shot-list views
 
   // 4. No hardcoded "MiniMax H3" in CanvasWorkspace.tsx
   assert.doesNotMatch(workspaceSource, /["']MiniMax H3["']/);
+});
+
+test("resolveCinePopoverSide bounds floating CinematographyPanel within unobstructed canvas viewport across right, left, and top placements", () => {
+  // Roomy center in Canvas View -> fits cleanly on the right (460 + 520 + 352 = 1332 <= 1428)
+  assert.equal(
+    resolveCinePopoverSide({
+      composerLeft: 460,
+      composerWidth: 520,
+      windowWidth: 1440,
+      viewMode: "canvas",
+      agentDock: false,
+    }),
+    "right",
+  );
+
+  // Right-edge node in Canvas View -> right would clip (896 + 520 + 352 = 1768 > 1428), left fits (896 - 352 = 544 >= 76)
+  assert.equal(
+    resolveCinePopoverSide({
+      composerLeft: 896,
+      composerWidth: 520,
+      windowWidth: 1440,
+      viewMode: "canvas",
+      agentDock: false,
+    }),
+    "left",
+  );
+
+  // Left-edge node in Split View -> right clips into docked storyboard (76 + 520 + 352 = 948 > 908)
+  // AND left would clip offscreen at x = -276px (76 - 352 = -276 < 76) -> falls back to "top"
+  assert.equal(
+    resolveCinePopoverSide({
+      composerLeft: 76,
+      composerWidth: 520,
+      windowWidth: 1440,
+      viewMode: "split",
+      agentDock: false,
+    }),
+    "top",
+  );
+
+  // Split View with composer shifted right enough for left placement (440 - 352 = 88 >= 76)
+  assert.equal(
+    resolveCinePopoverSide({
+      composerLeft: 440,
+      composerWidth: 520,
+      windowWidth: 1440,
+      viewMode: "split",
+      agentDock: false,
+    }),
+    "left",
+  );
+
+  // Wide 1920px Split View with left-side node -> right fits cleanly before docked storyboard (100 + 520 + 352 = 972 <= 1388)
+  assert.equal(
+    resolveCinePopoverSide({
+      composerLeft: 100,
+      composerWidth: 520,
+      windowWidth: 1920,
+      viewMode: "split",
+      agentDock: false,
+    }),
+    "right",
+  );
+
+  // Agent dock open in Canvas View reduces rightLimit (1440 - 400 - 12 = 1028), flipping center composer to "left"
+  assert.equal(
+    resolveCinePopoverSide({
+      composerLeft: 460,
+      composerWidth: 520,
+      windowWidth: 1440,
+      viewMode: "canvas",
+      agentDock: true,
+    }),
+    "left",
+  );
+
+  // Exact boundary checks for rightLimit and leftLimit = 76
+  assert.equal(
+    resolveCinePopoverSide({
+      composerLeft: 556,
+      composerWidth: 520,
+      windowWidth: 1440,
+      dockedWidth: 0,
+    }),
+    "right", // 556 + 520 + 352 === 1428 === 1440 - 12
+  );
+  assert.equal(
+    resolveCinePopoverSide({
+      composerLeft: 428,
+      composerWidth: 520,
+      windowWidth: 1024,
+      dockedWidth: 0,
+    }),
+    "left", // right fails (1300 > 1012), left hits exact 428 - 352 === 76
+  );
+  assert.equal(
+    resolveCinePopoverSide({
+      composerLeft: 427,
+      composerWidth: 520,
+      windowWidth: 1024,
+      dockedWidth: 0,
+    }),
+    "top", // 427 - 352 = 75 < 76 -> "top"
+  );
+});
+
+test("CanvasWorkspace centralizes <= 1100px agentDock mutual exclusion inside setViewMode for every split transition", async () => {
+  const root = process.cwd();
+  const workspaceSource = await readFile(
+    join(root, "apps/web/canvas-editor/CanvasWorkspace.tsx"),
+    "utf8",
+  );
+
+  const setViewModeMatch = workspaceSource.match(
+    /const setViewMode = useCallback\([\s\S]*?\n  \);/,
+  );
+  assert.ok(setViewModeMatch, "CanvasWorkspace.tsx must define setViewMode via useCallback");
+  const setViewModeBody = setViewModeMatch[0];
+
+  assert.match(
+    setViewModeBody,
+    /resolved\s*===\s*"split"\s*&&\s*typeof window\s*!==\s*"undefined"\s*&&\s*window\.innerWidth\s*<=\s*1100[\s\S]*?setAgentDock\(false\)/,
+    "setViewMode must dismiss agentDock whenever resolved === 'split' on <= 1100px viewports",
+  );
+
+  // Every view mode change must route through setViewMode rather than bypassing setViewModeState directly
+  assert.equal(
+    workspaceSource.match(/\bsetViewModeState\(/g)?.length ?? 0,
+    1,
+    "setViewModeState must only be called inside setViewMode",
+  );
 });

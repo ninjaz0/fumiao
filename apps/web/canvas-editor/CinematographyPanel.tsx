@@ -72,7 +72,7 @@ export function CinematographyPanel({
   onChange: (next: CinematographySpec | null) => void;
   compact?: boolean;
   floating?: boolean;
-  side?: "right" | "left";
+  side?: "right" | "left" | "top";
   onClose?: () => void;
 }) {
   const current = value ?? {};
