@@ -158,8 +158,8 @@ export class OriginalStateRecords {
       extraPublicIds.length
         ? (
             await sql.query(
-              "SELECT public_id, mime FROM assets WHERE public_id=ANY($1::text[])",
-              [extraPublicIds],
+              "SELECT public_id, mime FROM assets WHERE workspace_id=$1 AND public_id=ANY($2::text[])",
+              [workspace, extraPublicIds],
             )
           ).rows.map((r) => [r.public_id as string, r.mime as string])
         : [],

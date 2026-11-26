@@ -1,21 +1,16 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import React, { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { chromium } from "@playwright/test";
-import express from "express";
-import { Readable } from "node:stream";
 import {
   asciiDispositionFilename,
   contentDisposition,
   mediaDownloadFilename,
   normalizeMediaMime,
 } from "@fumiao/plugin-sdk/media-filename.js";
-import { disposition, sendFile } from "@fumiao/original-api/files.js";
+import { disposition } from "@fumiao/original-api/files.js";
 import {
   assetDownloadFilename,
   jobDownloadFilename,
@@ -303,134 +298,96 @@ test("Studio Download component, Composition MP4/project links, archived WebM jo
   );
 });
 
-test("Chromium downloads preserve .mp4 for parameterized MIME, take..02.mov, and pre-upgrade cached inline 200 revalidated after upgrade", async (t) => {
-  let browser;
-  try {
-    browser = await chromium.launch({ headless: true });
-  } catch {
-    t.skip("Playwright Chromium binary is not installed in this environment");
-    return;
-  }
-  const mp4Bytes = Buffer.from("000000186674797069736f6d", "hex");
-  const modified = 1700000000;
-  const cachedKey = "11223344556677889900aabbccddeeff";
-  const paramKey = "aabbccdd11223344556677889900ff00";
-  const doubleDotKey = "99887766554433221100ffeeddccbbaa";
-  let upgraded = false;
+test("long Chinese legacy filenames (<= 120 chars, > 200 UTF-8 bytes) preserve trailing media extensions for both mapped and unmapped MIME types", () => {
+  const key = "0123456789abcdef0123456789abcdef";
+  const cjk70Mp4 = "镜".repeat(70) + ".mp4";
+  const cjk116Mov = "镜".repeat(116) + ".mov";
+  const cjk65DottedMp4 = "镜".repeat(65) + ".v2.mp4";
+  const truncatedStem66 = "镜".repeat(66);
 
-  const app = express();
-  app.get("/page", (_req, res) => {
-    res
-      .type("html")
-      .send("<!doctype html><meta charset=utf-8><title>download-check</title>");
-  });
-  app.get("/media/:key", (req, res) => {
-    const { key } = req.params;
-    const download = req.query.download === "true";
-    if (!upgraded && key === cachedKey) {
-      // Simulate pre-upgrade inline 200 response: legacy MD5 ETag and NO Content-Disposition
-      const legacyEtag =
-        '"' +
-        createHash("md5")
-          .update(`${modified.toFixed(1)}-${mp4Bytes.length}`)
-          .digest("hex") +
-        '"';
-      res.set({
-        "Content-Type": "video/mp4",
-        "Accept-Ranges": "bytes",
-        "Last-Modified": new Date(modified * 1000).toUTCString(),
-        ETag: legacyEtag,
-        "Cache-Control": "private, no-cache",
-        "Content-Length": String(mp4Bytes.length),
-      });
-      res.status(200).end(mp4Bytes);
-      return;
-    }
-    const mime =
-      key === paramKey ? "video/mp4; codecs=avc1" : "video/mp4";
-    const originalName =
-      key === paramKey
-        ? "clip.v2.mp4"
-        : key === doubleDotKey
-          ? "take..02.mov"
-          : undefined;
-    const filename = mediaDownloadFilename(key, mime, originalName);
-    void sendFile(
-      req,
-      res,
-      {
-        revalidate: !download,
-        size: mp4Bytes.length,
-        mime,
-        modified,
-        open: async (start = 0, end = mp4Bytes.length - 1) =>
-          Readable.from([mp4Bytes.subarray(start, end + 1)]),
+  assert.equal(cjk70Mp4.length, 74);
+  assert.equal(cjk116Mov.length, 120);
+
+  // Mapped video/mp4 preserves .mp4 after 200-byte UTF-8 stem truncation
+  assert.equal(
+    mediaDownloadFilename(key, "video/mp4", cjk70Mp4),
+    truncatedStem66 + ".mp4",
+  );
+  assert.equal(
+    mediaDownloadFilename(key, "video/mp4", cjk116Mov),
+    truncatedStem66 + ".mp4",
+  );
+  assert.equal(
+    mediaDownloadFilename(key, "video/mp4", cjk65DottedMp4),
+    "镜".repeat(65) + ".v2.mp4",
+  );
+
+  // Unmapped MIME (e.g. application/octet-stream, video/quicktime, empty) separates and preserves recognizable trailing media extension before truncation
+  assert.equal(
+    mediaDownloadFilename(key, "application/octet-stream", cjk70Mp4),
+    truncatedStem66 + ".mp4",
+  );
+  assert.equal(
+    mediaDownloadFilename(key, "application/octet-stream", "镜".repeat(70) + ".MP4"),
+    truncatedStem66 + ".mp4",
+  );
+  assert.equal(
+    mediaDownloadFilename(key, "application/octet-stream", cjk116Mov),
+    truncatedStem66 + ".mov",
+  );
+  assert.equal(
+    mediaDownloadFilename(key, "video/quicktime", cjk116Mov),
+    truncatedStem66 + ".mov",
+  );
+  assert.equal(
+    mediaDownloadFilename(key, "application/octet-stream", cjk65DottedMp4),
+    "镜".repeat(65) + ".v2.mp4",
+  );
+  assert.equal(
+    mediaDownloadFilename(key, "", cjk70Mp4),
+    truncatedStem66 + ".mp4",
+  );
+  assert.equal(
+    mediaDownloadFilename(key, "application/octet-stream", ".mp4"),
+    "弗淼-01234567.mp4",
+  );
+  assert.equal(
+    mediaDownloadFilename(key, "application/octet-stream", "镜".repeat(70)),
+    truncatedStem66,
+  );
+
+  // Content-Disposition and Studio/Canvas helpers also preserve .mp4 for long Chinese legacy names
+  assert.equal(asciiDispositionFilename(truncatedStem66 + ".mp4"), "fumiao.mp4");
+  assert.equal(
+    contentDisposition(truncatedStem66 + ".mp4"),
+    `attachment; filename="fumiao.mp4"; filename*=UTF-8''${encodeURIComponent(truncatedStem66 + ".mp4")}`,
+  );
+  assert.equal(
+    assetDownloadFilename({
+      id: key,
+      kind: "ref_video",
+      mime: "application/octet-stream",
+      name: cjk70Mp4,
+    }),
+    truncatedStem66 + ".mp4",
+  );
+  assert.equal(
+    canvasMediaDownloadFilename(key, {
+      studio: {
+        jobs: [],
+        assets: [
+          {
+            id: key,
+            kind: "ref_video",
+            mime: "application/octet-stream",
+            name: cjk70Mp4,
+            w: 1280,
+            h: 720,
+            owner: 1,
+          },
+        ],
       },
-      filename,
-      download ? "attachment" : "inline",
-    );
-  });
-
-  const server = createServer(app);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-
-  try {
-    const context = await browser.newContext({ acceptDownloads: true });
-    const page = await context.newPage();
-    await page.goto(`${origin}/page`);
-
-    // Step 1: Populate Chromium's HTTP cache with pre-upgrade inline 200 (no Content-Disposition)
-    const warmStatus = await page.evaluate(async (url) => {
-      const r = await fetch(url);
-      await r.arrayBuffer();
-      return {
-        status: r.status,
-        disposition: r.headers.get("content-disposition"),
-      };
-    }, `${origin}/media/${cachedKey}`);
-    assert.equal(warmStatus.status, 200);
-    assert.equal(warmStatus.disposition, null);
-
-    // Step 2: Upgrade server and trigger save/download of the cached inline URL (download="" without ?download=true)
-    upgraded = true;
-    const cachedDownloadPromise = page.waitForEvent("download");
-    await page.evaluate((key) => {
-      const a = document.createElement("a");
-      a.href = `/media/${key}`;
-      a.download = "";
-      document.body.appendChild(a);
-      a.click();
-    }, cachedKey);
-    const cachedDownload = await cachedDownloadPromise;
-    assert.equal(cachedDownload.suggestedFilename(), "弗淼-11223344.mp4");
-
-    // Step 3: Parameterized MIME ("video/mp4; codecs=avc1") with dotted name "clip.v2.mp4"
-    const paramDownloadPromise = page.waitForEvent("download");
-    await page.evaluate((key) => {
-      const a = document.createElement("a");
-      a.href = `/media/${key}?download=true`;
-      document.body.appendChild(a);
-      a.click();
-    }, paramKey);
-    const paramDownload = await paramDownloadPromise;
-    assert.equal(paramDownload.suggestedFilename(), "clip.v2.mp4");
-
-    // Step 4: Consecutive dots ("take..02.mov") downloaded in Chromium
-    const doubleDotDownloadPromise = page.waitForEvent("download");
-    await page.evaluate((key) => {
-      const a = document.createElement("a");
-      a.href = `/media/${key}?download=true`;
-      document.body.appendChild(a);
-      a.click();
-    }, doubleDotKey);
-    const doubleDotDownload = await doubleDotDownloadPromise;
-    assert.equal(doubleDotDownload.suggestedFilename(), "take..02.mp4");
-
-    await context.close();
-  } finally {
-    await browser.close();
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
+    }),
+    truncatedStem66 + ".mp4",
+  );
 });

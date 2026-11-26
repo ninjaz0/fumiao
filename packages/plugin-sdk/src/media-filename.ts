@@ -19,10 +19,38 @@ const MEDIA_EXTENSIONS: Record<string, string> = {
 };
 
 const KNOWN_AV_EXT_RE =
-  /\.(?:mp4|mov|webm|m4v|mkv|avi|flv|wmv|mpe?g|3gp|ogv|m2?ts|ts|qt|wav|mp3|m4a|aac|ogg|oga|opus|flac|wma|aiff?|amr|weba)$/i;
+  /\.(?:mp4|mov|webm|m4v|mkv|avi|flv|wmv|mpe?g|3gp|3g2|ogv|m2?ts|mts|ts|qt|vob|asf|rm|rmvb|divx|f4v|wav|mp3|m4a|m4b|aac|ogg|oga|opus|flac|wma|aiff?|amr|caf|weba|ac3|eac3|dts|alac|ape|midi?)$/i;
 
 const KNOWN_IMAGE_EXT_RE =
-  /\.(?:png|jpe?g|webp|gif|avif|hei[cf]|bmp|tiff?)$/i;
+  /\.(?:png|jpe?g|jfif|webp|gif|avif|hei[cf]|bmp|tiff?|svg|ico|apng)$/i;
+
+const KNOWN_EXPORT_EXT_RE = /\.(?:zip|fcpxml|edl)$/i;
+
+function splitKnownMediaExtension(
+  cleaned: string,
+  normalizedMime: string,
+  mappedExt: string,
+): { rawStem: string; targetExt: string } {
+  if (mappedExt) {
+    const match = normalizedMime.startsWith("image/")
+      ? (cleaned.match(KNOWN_IMAGE_EXT_RE) ?? cleaned.match(KNOWN_AV_EXT_RE))
+      : KNOWN_EXPORT_EXT_RE.test(mappedExt)
+        ? cleaned.match(KNOWN_EXPORT_EXT_RE)
+        : cleaned.match(KNOWN_AV_EXT_RE);
+    return {
+      rawStem: match ? cleaned.slice(0, -match[0].length) : cleaned,
+      targetExt: mappedExt,
+    };
+  }
+  const match =
+    cleaned.match(KNOWN_AV_EXT_RE) ??
+    cleaned.match(KNOWN_IMAGE_EXT_RE) ??
+    cleaned.match(KNOWN_EXPORT_EXT_RE);
+  return {
+    rawStem: match ? cleaned.slice(0, -match[0].length) : cleaned,
+    targetExt: match ? match[0].toLowerCase() : "",
+  };
+}
 
 function truncateUtf8(text: string, maxBytes: number): string {
   const encoder = new TextEncoder();
@@ -59,28 +87,29 @@ export function mediaDownloadFilename(
   originalName?: string | null,
 ): string {
   const normalizedMime = normalizeMediaMime(mime);
-  const ext = mediaExtension(normalizedMime);
-  const fallback = "弗淼-" + key.slice(0, 8) + ext;
-  if (!originalName) return fallback;
+  const mappedExt = mediaExtension(normalizedMime);
+  const defaultFallback = "弗淼-" + key.slice(0, 8) + mappedExt;
+  if (!originalName) return defaultFallback;
   const cleaned = originalName
     .replace(/[\u0000-\u001f\u007f-\u009f"]+/g, "")
     .trim()
     .replace(/^(?:\.+[/\\])+/g, "")
     .replace(/^[/\\]+|[/\\]+$/g, "")
     .replace(/[/\\]+/g, "_")
-    .replace(/\.+$/g, "");
-  if (!cleaned) return fallback;
-  const withoutKnownExt = !ext
-    ? cleaned
-    : normalizedMime.startsWith("image/")
-      ? cleaned.replace(KNOWN_IMAGE_EXT_RE, "").replace(KNOWN_AV_EXT_RE, "")
-      : cleaned.replace(KNOWN_AV_EXT_RE, "");
+    .replace(/[.\s]+$/g, "");
+  if (!cleaned) return defaultFallback;
+  const { rawStem, targetExt } = splitKnownMediaExtension(
+    cleaned,
+    normalizedMime,
+    mappedExt,
+  );
+  const fallback = "弗淼-" + key.slice(0, 8) + targetExt;
   const stem = truncateUtf8(
-    withoutKnownExt.replace(/^[.\s]+|[.\s]+$/g, ""),
+    rawStem.replace(/^[.\s]+|[.\s]+$/g, ""),
     200,
   ).replace(/^[.\s]+|[.\s]+$/g, "");
   if (!stem) return fallback;
-  return stem + ext;
+  return stem + targetExt;
 }
 
 function sanitizeDispositionValue(filename: string): string {

@@ -986,6 +986,68 @@ test("official /api/h3/references upload path, parameterized/mixed-case legacy M
       await res.arrayBuffer();
     }
 
+    // 2b. Long Chinese legacy reference names (<= 120 chars, > 200 UTF-8 bytes) keep suffix for video/mp4 and unmapped MIME
+    for (const longCase of [
+      {
+        mime: "video/mp4",
+        name: "镜".repeat(70) + ".mp4",
+        ascii: "fumiao.mp4",
+        utf8: "镜".repeat(66) + ".mp4",
+      },
+      {
+        mime: "application/octet-stream",
+        name: "镜".repeat(70) + ".mp4",
+        ascii: "fumiao.mp4",
+        utf8: "镜".repeat(66) + ".mp4",
+      },
+      {
+        mime: "video/mp4",
+        name: "镜".repeat(116) + ".mov",
+        ascii: "fumiao.mp4",
+        utf8: "镜".repeat(66) + ".mp4",
+      },
+      {
+        mime: "application/octet-stream",
+        name: "镜".repeat(116) + ".mov",
+        ascii: "fumiao.mov",
+        utf8: "镜".repeat(66) + ".mov",
+      },
+    ]) {
+      const id = randomUUID(),
+        key = randomUUID().replaceAll("-", ""),
+        objectKey = "legacy-long-cjk-" + randomUUID();
+      await f.p.storage.put(objectKey, mp4Bytes, longCase.mime);
+      await f.db.query(
+        "INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,original_kind,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,'ready','ref_video','{}')",
+        [id, key, f.team, f.admin.id, objectKey, longCase.mime, mp4Bytes.length],
+      );
+      await f.db.query(
+        "INSERT INTO asset_reference_media(asset_id,seconds,fps,has_audio,name) VALUES($1,4,24,true,$2)",
+        [id, longCase.name],
+      );
+
+      const expectedTail = `; filename="${longCase.ascii}"; filename*=UTF-8''${encodeURIComponent(longCase.utf8)}`;
+      const dlRes = await fetch(`${base}/media/${key}?download=true`, {
+        headers: cookie,
+      });
+      assert.equal(dlRes.status, 200);
+      assert.equal(
+        dlRes.headers.get("content-disposition"),
+        "attachment" + expectedTail,
+      );
+      await dlRes.arrayBuffer();
+
+      const inlineRes = await fetch(`${base}/media/${key}`, {
+        headers: cookie,
+      });
+      assert.equal(inlineRes.status, 200);
+      assert.equal(
+        inlineRes.headers.get("content-disposition"),
+        "inline" + expectedTail,
+      );
+      await inlineRes.arrayBuffer();
+    }
+
     // 3. Pre-upgrade cached ETag does NOT short-circuit to dispositionless 304, and 304 carries Content-Disposition
     const cacheId = randomUUID(),
       cacheKey = randomUUID().replaceAll("-", ""),
@@ -1090,6 +1152,57 @@ test("official /api/h3/references upload path, parameterized/mixed-case legacy M
         }),
       ],
     );
+    const otherWorkspace = (
+      await one(
+        f.db,
+        "SELECT id FROM workspaces WHERE owner_id=$1 AND kind='personal'",
+        [f.member.id],
+      )
+    ).id as string;
+    const crossAssetId = randomUUID(),
+      crossKey = "b".repeat(32);
+    await f.p.storage.put(
+      "cross-" + crossAssetId,
+      Buffer.from("1a45dfa3", "hex"),
+      "video/webm",
+    );
+    await f.db.query(
+      "INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,original_kind,metadata) VALUES($1,$2,$3,$4,$5,'video/webm',4,'ready','video','{}')",
+      [crossAssetId, crossKey, otherWorkspace, f.member.id, "cross-" + crossAssetId],
+    );
+    const sameViewFallbackJob = randomUUID(),
+      crossViewFallbackJob = randomUUID(),
+      baseOriginalView = {
+        ratio: "16:9",
+        quality: 480,
+        seconds: 5,
+        sampling_steps: 20,
+        seed: 1,
+        width: 864,
+        height: 480,
+        image_quality: null,
+        audio_settings: {},
+        h3_inputs: {},
+        actual: {},
+        refs: [],
+      };
+    await f.db.query(
+      `INSERT INTO jobs(id,public_id,workspace_id,owner_id,model_id,connection_id,plugin_id,plugin_version,config_snapshot,provider_model,kind,input,idempotency_key,request_hash,price,state,result,attempts,original_view)
+       VALUES($1,902,$3,$4,$5,$6,'legacy-archive','1.0.0',$7,'muse-video','video','{"prompt":"same ws fallback"}','legacy-902','legacy-902',1,'completed',NULL,1,$8),
+             ($2,903,$3,$4,$5,$6,'legacy-archive','1.0.0',$7,'muse-video','video','{"prompt":"cross ws fallback"}','legacy-903','legacy-903',1,'completed',NULL,1,$9)`,
+      [
+        sameViewFallbackJob,
+        crossViewFallbackJob,
+        f.team,
+        f.admin.id,
+        legacyModel,
+        legacyConn,
+        f.p.vault.seal({}),
+        JSON.stringify({ ...baseOriginalView, result: webmKey }),
+        JSON.stringify({ ...baseOriginalView, result: crossKey }),
+      ],
+    );
+
     const archived = await new OriginalStateRecords().archivedJobs(
       f.db,
       f.team,
@@ -1099,6 +1212,16 @@ test("official /api/h3/references upload path, parameterized/mixed-case legacy M
     assert.ok(archivedWebm);
     assert.equal(archivedWebm.result, webmKey);
     assert.equal(archivedWebm.result_mime, "video/webm");
+
+    const sameWsArchived = archived.find((j) => j.id === 902);
+    assert.ok(sameWsArchived);
+    assert.equal(sameWsArchived.result, webmKey);
+    assert.equal(sameWsArchived.result_mime, "video/webm");
+
+    const crossWsArchived = archived.find((j) => j.id === 903);
+    assert.ok(crossWsArchived);
+    assert.equal(crossWsArchived.result, crossKey);
+    assert.equal(Object.hasOwn(crossWsArchived, "result_mime"), false);
   } finally {
     await app.close();
     await f.cleanup();
