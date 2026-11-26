@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "id": "fcpxml-exporter",
+  "label": "专业 NLE 工程导出（FCPXML / EDL）",
+  "version": "1.2.0",
+  "adapterVersion": "1.2.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": ["media"],
+    "exporters": [
+      {
+        "id": "bundle-zip",
+        "title": "FCPXML 1.11 工程包 ZIP",
+        "outputKind": "project",
+        "mime": "application/zip",
+        "fileExtension": "zip",
+        "programFile": "export-zip.js"
+      },
+      {
+        "id": "xml",
+        "title": "FCPXML 1.11 工程文件",
+        "outputKind": "project",
+        "mime": "application/xml",
+        "fileExtension": "fcpxml",
+        "programFile": "export-xml.js"
+      },
+      {
+        "id": "edl",
+        "title": "CMX 3600 EDL 剪辑表",
+        "outputKind": "project",
+        "mime": "text/plain",
+        "fileExtension": "edl",
+        "programFile": "export-edl.js"
+      }
+    ],
+    "settingsPages": []
+  }
+}

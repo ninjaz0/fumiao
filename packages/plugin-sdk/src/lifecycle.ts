@@ -65,6 +65,17 @@ export const requestDispositionSchema = z.discriminatedUnion("action", [
       note,
       interrupted: z.boolean().optional(),
       uncertain: z.boolean().optional(),
+      reason: z
+        .enum([
+          "rate_limit",
+          "upstream_5xx",
+          "moderation_blocked",
+          "invalid_input",
+          "unknown",
+        ])
+        .optional(),
+      certainty: z.enum(["rejected", "uncertain"]).optional(),
+      billable: z.boolean().optional(),
     })
     .strict(),
 ]);

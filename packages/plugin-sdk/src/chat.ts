@@ -11,6 +11,10 @@ export const chatPolicySchema = z
           .max(256 * 1024),
         tools: z.literal(true).optional(),
         origins: z.array(z.string().min(1).max(200)).min(1).max(16),
+        allowedHeaders: z
+          .array(z.string().regex(/^[A-Za-z][A-Za-z0-9-]{0,63}$/))
+          .max(8)
+          .optional(),
       })
       .strict()
       .optional(),

@@ -10,6 +10,7 @@ import {
   type ChatChunk,
 } from "@fumiao/plugin-sdk/index.js";
 import { chatToolStream } from "./chat-tool-stream.js";
+import { turnTools } from "./chat-tools.js";
 import type { ChatExecution } from "./chat-execution.js";
 
 function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -95,7 +96,7 @@ export class ChatRuntime {
     heartbeat.unref();
     try {
       signal.throwIfAborted();
-      const messages = chatContext(claim.rows);
+      const messages = chatContext(claim.rows, claim.skills);
       if (!(await this.store.start(id, lease))) return;
       const plugin = await this.store.p.registry.resolve(
         this.store.p.db,
@@ -111,7 +112,11 @@ export class ChatRuntime {
       );
       timer.unref();
       const request = { model: turn.model, messages, config, signal };
-      const stream = plugin.manifest.chat?.sandbox?.tools
+      const useTools =
+        Boolean(plugin.manifest.chat?.sandbox?.tools) ||
+        (Boolean(plugin.manifest.chat) &&
+          (await turnTools(this.store.p.db, id)).size > 0);
+      const stream = useTools
         ? chatToolStream(this.store, id, lease, plugin, request)
         : plugin.chatStream(request);
       iterator = stream[Symbol.asyncIterator]();

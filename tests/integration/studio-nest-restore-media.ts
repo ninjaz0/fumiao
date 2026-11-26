@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
@@ -11,10 +12,10 @@ import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { one } from "@fumiao/platform/db.js";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
 import { QueueHealthPoller } from "@fumiao/platform/queue-health.js";
+import { StudioPackages } from "@fumiao/platform/studio-packages.js";
 import { flowCanvas } from "@fumiao/plugin-flow/canvas.js";
 import { flowCanvasRuns } from "@fumiao/plugin-flow/canvas-runs.js";
 import { flowText } from "@fumiao/plugin-flow/text.js";
-import { gpuText } from "@fumiao/plugin-gpu/text.js";
 import { museText } from "@fumiao/plugin-muse/text.js";
 import { wavFixture } from "../helpers/timing.js";
 import type { StudioClient } from "./studio-nest-restore.js";
@@ -213,7 +214,7 @@ function pairedNode(client: StudioClient, secret: string) {
   ) {
     const audio = body instanceof Uint8Array;
     return client.json(
-      await client.request("/agent/" + path, method, body, {
+      await client.request("/agent/gpu/" + path, method, body, {
         cookie: "",
         authorization: "Bearer " + secret,
         ...(ticket ? { "x-job-ticket": ticket } : {}),
@@ -234,7 +235,13 @@ function pairedNode(client: StudioClient, secret: string) {
     ready: () =>
       call("heartbeat", "POST", { stage: "ready", ready_models: [voice] }),
     beat: async (ticket: string) =>
-      (await call("heartbeat", "POST", { stage: "busy", ticket })).held,
+      (
+        await call("heartbeat", "POST", {
+          stage: "busy",
+          ticket,
+          ready_models: [voice],
+        })
+      ).held,
     receipt: (job: Job, ticket: string, status = 200) =>
       call(path(job, "receipt"), "GET", undefined, ticket, status),
     deliver: (job: Job, ticket: string, status = 200) =>
@@ -248,6 +255,26 @@ export async function prepareStudioMediaRestore(
   admin: Actor,
   provider: Awaited<ReturnType<typeof mediaProviderFixture>>,
 ) {
+  const gpuPackage = JSON.parse(
+    await readFile("plugins/gpu/gpu.fmplugin.json", "utf8"),
+  );
+  const pkgs = new StudioPackages(source);
+  await pkgs.install(admin, gpuPackage);
+  const installedGpu = await one(
+    source.db,
+    "SELECT revision, enabled FROM studio_packages WHERE id=$1",
+    [gpuPackage.id],
+  );
+  if (installedGpu && !installedGpu.enabled) {
+    await pkgs.change(
+      admin,
+      gpuPackage.id,
+      Number(installedGpu.revision),
+      "enable",
+    );
+  }
+  const gpuRelease = { manifest: gpuPackage.manifest };
+
   for (const [model, price] of [
     ["muse-image", 2],
     [flowModel, 3],
@@ -299,7 +326,6 @@ export async function prepareStudioMediaRestore(
       async () => (provider.calls(false).includes(call) ? true : undefined),
       25_000,
     );
-  await enable(gpuText, "Restore ordinary GPU");
 
   async function flowJob(plugin: typeof flowText, name: string, call: string) {
     // Flow serializes generation per connection and Studio projects one
@@ -337,10 +363,11 @@ export async function prepareStudioMediaRestore(
   );
 
   async function enroll(name: string) {
-    const { command } = await client.write("/api/pairs", {
-      name,
-      models: [voice],
-    });
+    const pair = await client.write(
+      "/api/plugins/gpu/pages/nodes/actions/pair",
+      { payload: { name, models: [voice] } },
+    );
+    const command = String(pair.result?.value ?? pair.command ?? "");
     const code = / ([A-Za-z0-9_-]{43})$/.exec(command)?.[1];
     assert.ok(code);
     const secret = token();
@@ -360,7 +387,7 @@ export async function prepareStudioMediaRestore(
     await node.ready();
     const assignment = await node.claim();
     assert.equal(assignment?.id, job.id);
-    assert.equal(assignment.attempts, attempts);
+    assert.equal(assignment.instruction?.attempts ?? assignment.attempts, attempts);
     assert.match(assignment.ticket, /^[A-Za-z0-9_-]+$/);
     return assignment.ticket as string;
   };
@@ -446,7 +473,7 @@ export async function prepareStudioMediaRestore(
     },
     {
       job: live,
-      plugin: gpuText,
+      plugin: gpuRelease,
       checkpoint: "running",
       ticket: liveTicket,
       output: { bytes: wav, mime: "audio/wav" },
@@ -454,7 +481,7 @@ export async function prepareStudioMediaRestore(
     },
     {
       job: expired,
-      plugin: gpuText,
+      plugin: gpuRelease,
       checkpoint: "running",
       ticket: expiredTicket,
       output: { bytes: wav, mime: "audio/wav" },
@@ -462,7 +489,7 @@ export async function prepareStudioMediaRestore(
     },
     {
       job: exhausted,
-      plugin: gpuText,
+      plugin: gpuRelease,
       checkpoint: "running",
       ticket: exhaustedTicket,
       note: "实例连续中断，请重新生成",
@@ -547,7 +574,7 @@ export async function prepareStudioMediaRestore(
       const liveAssignment = await liveAgent.claim();
       assert.equal(liveAssignment.id, live.id);
       assert.equal(liveAssignment.ticket, liveTicket);
-      assert.equal(liveAssignment.attempts, 1);
+      assert.equal(liveAssignment.instruction?.attempts ?? liveAssignment.attempts, 1);
       assert.deepEqual(await liveAgent.receipt(live, liveTicket), {
         delivered: false,
       });

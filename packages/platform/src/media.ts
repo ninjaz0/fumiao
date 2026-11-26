@@ -58,7 +58,10 @@ export async function inspectMedia(
     requireValue(
       kind === "video"
         ? format.includes("mp4")
-        : format.includes("wav") || format.includes("mp3"),
+        : format.includes("wav") ||
+            format.includes("mp3") ||
+            format.includes("flac") ||
+            format.includes("ogg"),
       400,
       "媒体封装格式不支持",
     );
@@ -68,7 +71,11 @@ export async function inspectMedia(
           ? "video/mp4"
           : format.includes("wav")
             ? "audio/wav"
-            : "audio/mpeg",
+            : format.includes("flac")
+              ? "audio/flac"
+              : format.includes("ogg")
+                ? "audio/ogg"
+                : "audio/mpeg",
       duration: Number(value.format.duration),
       width: stream.width,
       height: stream.height,

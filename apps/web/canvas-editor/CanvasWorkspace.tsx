@@ -1,6 +1,11 @@
 import type { CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
 import { PluginNodeForm, PluginNodePorts, PluginNodeOutputs } from "./PluginNode";
-import { matches, normalizeForm } from "@fumiao/plugin-sdk/model-form";
+import {
+  evaluateFormConstraints,
+  matches,
+  normalizeForm,
+  type FormValues,
+} from "@fumiao/plugin-sdk/model-form";
 import React, {
   createContext,
   memo,
@@ -72,6 +77,11 @@ import {
   AtSign,
   Settings2,
   AlertCircle,
+  Layers,
+  Crop,
+  Clapperboard,
+  List,
+  Sparkles,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { api, upload, downloadJSON, ApiError, workspaceURL } from "./api";
@@ -104,6 +114,8 @@ import {
   type Job,
   type Studio,
   type Params,
+  type CanvasGenerationMode,
+  type PrecheckStage,
 } from "./types";
 import {ChatWorkspace, chatRequest} from "./chat/ChatWorkspace";
 import { chatSettingsPath } from "./chat/guidance";
@@ -114,6 +126,12 @@ import { AiStoryboard } from "./AiStoryboard";
 import { Narration } from "./Narration";
 import { Composition } from "./Composition";
 import { AssetPacks, type Pack } from "./AssetPacks";
+import { CinematographyPanel } from "./CinematographyPanel";
+import { GridCropModal } from "./GridCropModal";
+import { PrecheckCostModal } from "./PrecheckCostModal";
+import { ReferencePromptInput } from "./ReferencePromptInput";
+import { ProposalDiffPreview } from "./ProposalDiffPreview";
+import { SkillEditorModal } from "./SkillEditorModal";
 import { captureFrame } from "./videoFrame";
 import { VideoThumb } from "./VideoThumb";
 import { canvasVideoThumbnails } from "./videoThumbnails";
@@ -136,6 +154,7 @@ const icons: Record<Kind, LucideIcon> = {
   video: Film,
   sticky: StickyNote,
   plugin: Settings2,
+  group: Layers,
 };
 function freePosition(
   nodes: CanvasNode[],
@@ -171,6 +190,13 @@ const labels: Record<string, string> = {
   failed: "生成失败",
   cancelled: "已取消",
 };
+const BGM_ACTIVE_STATUSES = new Set([
+  "queued",
+  "dispatching",
+  "running",
+  "finalizing",
+  "uncertain",
+]);
 const colors = ["none", "mint", "blue", "purple", "orange", "yellow"];
 const colorNames = ["无标签", "青绿", "蓝色", "紫色", "橙色", "黄色"];
 const mediaURL = (id: string) => "/media/" + id;
@@ -343,6 +369,8 @@ const CanvasViewportEffects = memo(function CanvasViewportEffects({
         "--cv-grid-gap",
         `${computeGridGap(viewport.zoom)}px`,
       );
+      el.dataset.lod =
+        viewport.zoom < 0.35 ? "low" : viewport.zoom < 0.7 ? "med" : "high";
     }
     el.style.setProperty("--cv-grid-x", `${viewport.x}px`);
     el.style.setProperty("--cv-grid-y", `${viewport.y}px`);
@@ -415,6 +443,8 @@ type ContextValue = {
   preview: (node: CanvasNode) => void;
   beginEditing: (id: string) => void;
   setEditing: (id: string | null) => void;
+  rerunGroup: (groupId: string) => void;
+  ungroup: (groupId: string) => void;
 };
 const NodeContext = createContext<ContextValue>(null!);
 type NodeData = {
@@ -423,16 +453,76 @@ type NodeData = {
   item: CanvasNode;
   media: string | null;
   run?: Job;
+  childCount?: number;
 };
 type RFNode = FlowNode<NodeData, "content">;
 const ContentNode = memo(function ContentNode({
   data,
   selected,
 }: NodeProps<RFNode>) {
-  const { item: n, media, run, editing } = data,
+  const { item: n, media, run, editing, childCount } = data,
     ctx = useContext(NodeContext),
     Icon = icons[n.type],
-    isText = n.type === "text" || n.type === "sticky";
+    isText = n.type === "text" || n.type === "sticky",
+    isGroup = n.type === "group";
+  if (isGroup) {
+    return (
+      <div
+        className={
+          "content-node kind-group fm-group-node" +
+          (selected ? " selected" : "") +
+          " tag-" +
+          n.color
+        }
+      >
+        <NodeResizer
+          isVisible={selected}
+          minWidth={260}
+          minHeight={180}
+          maxWidth={3200}
+          maxHeight={3200}
+          onResizeStart={ctx.begin}
+          onResizeEnd={ctx.end}
+        />
+        <div className="node-title fm-group-header">
+          <Layers size={14} />
+          <input
+            className="nodrag"
+            aria-label={"工作流组名称 " + n.title}
+            value={n.title}
+            maxLength={80}
+            onFocus={ctx.begin}
+            onChange={(e) => ctx.edit(n.id, { title: e.target.value }, false)}
+            onBlur={ctx.end}
+          />
+          <span className="fm-group-badge">{childCount ?? 0} 节点</span>
+          <button
+            type="button"
+            className="nodrag fm-group-btn"
+            title="预检并局部重跑该工作流组"
+            onClick={(e) => {
+              e.stopPropagation();
+              ctx.rerunGroup(n.id);
+            }}
+          >
+            <Play size={12} />
+            局部重跑
+          </button>
+          <button
+            type="button"
+            className="nodrag fm-group-btn"
+            title="解散工作流组（保留子节点）"
+            onClick={(e) => {
+              e.stopPropagation();
+              ctx.ungroup(n.id);
+            }}
+          >
+            解散
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div
       className={
@@ -510,7 +600,13 @@ const ContentNode = memo(function ContentNode({
         ) : media ? (
           n.type === "image" ? (
             <img
-              src={mediaURL(media)}
+              src={mediaURL(media) + "?variant=thumb"}
+              onError={(ev) => {
+                if (!ev.currentTarget.dataset.fallback) {
+                  ev.currentTarget.dataset.fallback = "1";
+                  ev.currentTarget.src = mediaURL(media);
+                }
+              }}
               alt={n.title}
               draggable={false}
               loading="lazy"
@@ -655,10 +751,42 @@ export function CanvasWorkspace({
     [preview, setPreview] = useState<Preview | null>(null),
     [confirm, setConfirm] = useState<null | (() => void)>(null);
   const [shotList, setShotList] = useState(false);
+  const [viewMode, setViewModeState] = useState<"canvas" | "split" | "list">(() => {
+    try {
+      const saved = localStorage.getItem("fm-canvas-view-mode");
+      if (saved === "canvas" || saved === "split" || saved === "list") return saved;
+    } catch {
+      // Ignore storage failures in restricted contexts.
+    }
+    return "canvas";
+  });
+  const setViewMode = useCallback((mode: "canvas" | "split" | "list") => {
+    setViewModeState(mode);
+    try {
+      localStorage.setItem("fm-canvas-view-mode", mode);
+    } catch {
+      // Ignore storage failures.
+    }
+  }, []);
+  const [precheckTarget, setPrecheckTarget] = useState<{
+    nodeIds: string[];
+    title?: string;
+    stages?: PrecheckStage[];
+  } | null>(null);
+  const [gridCropTarget, setGridCropTarget] = useState<{
+    nodeId: string;
+    mediaId: string;
+    layout: "2x2" | "3x3";
+  } | null>(null);
+  const [showCinePanel, setShowCinePanel] = useState(false);
+  const [pendingBgmJobId, setPendingBgmJobId] = useState<number | null>(null);
+  const [agentDock, setAgentDock] = useState(false);
+  const [skillsModal, setSkillsModal] = useState(false);
   const [aiStoryboard, setAiStoryboard] = useState(false);
   const [packPicker, setPackPicker] = useState<string | null>(null);
   const [packMedia, setPackMedia] = useState<Record<string,string[]>>({});
-  useEffect(()=>{let active=true;void api('/api/asset-packs').then(data=>{if(active)setPackMedia(Object.fromEntries(data.packs.map((p:{id:string;media:string[]})=>[p.id,p.media])))}).catch(()=>{});return()=>{active=false}},[project.id]);
+  const [availablePacks, setAvailablePacks] = useState<Pack[]>([]);
+  useEffect(()=>{let active=true;void api<{packs:Pack[]}>('/api/asset-packs').then(data=>{if(active){setAvailablePacks(data.packs);setPackMedia(Object.fromEntries(data.packs.map((p)=> [p.id,p.media])))}}).catch(()=>{});return()=>{active=false}},[project.id]);
   const [candidateCount, setCandidateCount] = useState<1 | 2>(1);
   const [confirmCandidates, setConfirmCandidates] = useState(false);
   const [compareNode, setCompareNode] = useState<string | null>(null);
@@ -763,6 +891,9 @@ export function CanvasWorkspace({
             title: node.title,
             media,
             adopted: node.active_job,
+            prompt: node.prompt,
+            generation_mode: node.generation_mode,
+            cinematography: node.cinematography ?? null,
             seconds: Math.max(
               videoSeconds(source) || node.params.seconds,
               voice?.status === "done" ? voice.actual?.duration || 0 : 0,
@@ -774,9 +905,9 @@ export function CanvasWorkspace({
     [shotIds, nodeById, runsByNode, runById, studioJobByResult],
   );
   const compositionIssue = useMemo(() => {
-    if (!shotList) return "";
-    if (shots.reduce((sum, shot) => sum + shot.seconds, 0) > 300) {
-      return "成片最多 5 分钟，请减少镜头或缩短旁白";
+    if (!shotList && viewMode === "canvas") return "";
+    if (shots.reduce((sum, shot) => sum + shot.seconds, 0) > 900) {
+      return "成片最多 15 分钟（900 秒），请减少镜头或缩短旁白";
     }
     for (let index = 0; index < shotIds.length; index++) {
       const node = nodeById.get(shotIds[index]);
@@ -814,6 +945,65 @@ export function CanvasWorkspace({
   const flowParameters=flowModel?.family?FlowPicker.options(studio.model_catalog,selectedModel,availableModel):null;
   const form = studio.model_forms?.[selectedModel];
   const fields = form?.fields;
+  const BUILTIN_CANVAS_PARAM_KEYS = useMemo(
+    () =>
+      new Set([
+        "ratio",
+        "resolution",
+        "seconds",
+        "quality",
+        "image_quality",
+        "seed",
+        "sampling_steps",
+        "fast_mode",
+        "flow_source_job",
+      ]),
+    [],
+  );
+  const customFormFields = useMemo(
+    () =>
+      Object.entries(fields ?? {}).filter(
+        ([k]) => !BUILTIN_CANVAS_PARAM_KEYS.has(k),
+      ),
+    [fields, BUILTIN_CANVAS_PARAM_KEYS],
+  );
+  const formConstraints = useMemo(() => {
+    if (!form || !single) return undefined;
+    const vals: FormValues = {
+      ratio: single.params.ratio,
+      resolution: single.params.resolution,
+      seconds: single.params.seconds,
+      quality: single.params.quality,
+      image_quality: single.params.image_quality,
+      fast_mode: Boolean(single.params.fast_mode),
+      sampling_steps: single.params.sampling_steps,
+    };
+    for (const [k, field] of Object.entries(form.fields)) {
+      if (BUILTIN_CANVAS_PARAM_KEYS.has(k)) continue;
+      const raw = single.extra_params?.[k];
+      if (
+        typeof raw === "string" ||
+        typeof raw === "number" ||
+        typeof raw === "boolean"
+      ) {
+        vals[k] = raw;
+      } else if (field.default !== undefined) {
+        vals[k] = field.default;
+      }
+    }
+    return evaluateFormConstraints(form, vals);
+  }, [
+    form,
+    BUILTIN_CANVAS_PARAM_KEYS,
+    single?.params.ratio,
+    single?.params.resolution,
+    single?.params.seconds,
+    single?.params.quality,
+    single?.params.image_quality,
+    single?.params.fast_mode,
+    single?.params.sampling_steps,
+    single?.extra_params,
+  ]);
   const stepsOptions = (fields?.sampling_steps?.enum ?? []).map(Number).filter(v=>v!==form?.fastSteps) as Params["sampling_steps"][];
   useEffect(()=>{
     if (!single || !['image','video'].includes(single.type) || !selectedModel) return;
@@ -968,14 +1158,50 @@ export function CanvasWorkspace({
   );
   useEffect(()=>{
     if(doc.status==='conflict')return;
-    const updates=new Map<string,number>();
+    const narrationUpdates=new Map<string,number>();
+    const dialogueUpdates=new Map<string,Map<string,number>>();
     for(const node of doc.value.document.nodes){
-      if(!node.narration_pending)continue;
-      const job=runById.get(node.narration_pending);
-      if(job?.status==='done'&&job.result&&job.prompt.trim()===(node.narration_text||'').trim()&&
-         (job.inputs?.instruction||'').trim()===(node.narration_instruction||'').trim())updates.set(node.id,job.id);
+      if(node.narration_pending){
+        const job=runById.get(node.narration_pending);
+        if(job?.status==='done'&&job.result&&job.prompt.trim()===(node.narration_text||'').trim()&&
+           (job.inputs?.instruction||'').trim()===(node.narration_instruction||'').trim()){
+          narrationUpdates.set(node.id,job.id);
+        }
+      }
+      if(node.dialogue_lines?.length){
+        for(const line of node.dialogue_lines){
+          if(!line.audio_pending)continue;
+          const job=runById.get(line.audio_pending);
+          if(job?.status==='done'&&job.result){
+            let map=dialogueUpdates.get(node.id);
+            if(!map){map=new Map();dialogueUpdates.set(node.id,map);}
+            map.set(line.id,job.id);
+          }
+        }
+      }
     }
-    if(updates.size)doc.change(d=>({...d,document:{...d.document,nodes:d.document.nodes.map(n=>updates.has(n.id)?{...n,narration_job:updates.get(n.id)!,narration_pending:null}:n)}}));
+    if(narrationUpdates.size||dialogueUpdates.size){
+      doc.change(d=>({
+        ...d,
+        document:{
+          ...d.document,
+          nodes:d.document.nodes.map(n=>{
+            const nextNarr=narrationUpdates.get(n.id);
+            const nextDlg=dialogueUpdates.get(n.id);
+            if(!nextNarr&&!nextDlg)return n;
+            return {
+              ...n,
+              ...(nextNarr?{narration_job:nextNarr,narration_pending:null}:{}),
+              ...(nextDlg&&n.dialogue_lines?{
+                dialogue_lines:n.dialogue_lines.map(l=>
+                  nextDlg.has(l.id)?{...l,audio_job:nextDlg.get(l.id)!,audio_pending:null}:l
+                ),
+              }:{}),
+            };
+          }),
+        },
+      }));
+    }
   },[runById,doc.value.document.nodes,doc.status]);
   const beginEditing = useCallback(
     (id: string) => {
@@ -1004,9 +1230,69 @@ export function CanvasWorkspace({
       },
       beginEditing,
       setEditing,
+      rerunGroup: (groupId: string) => {
+        const group = doc.ref.current.document.nodes.find((n) => n.id === groupId);
+        void doc
+          .flush()
+          .then(() => {
+            setPrecheckTarget({
+              nodeIds: [groupId],
+              title: `工作流组预检 · ${group?.title || "未命名组"}`,
+              stages: ["image", "video", "narration", "dialogue"],
+            });
+          })
+          .catch((e) => notify((e as Error).message));
+      },
+      ungroup: (groupId: string) => {
+        doc.change((d) => ({
+          ...d,
+          document: {
+            ...d.document,
+            nodes: d.document.nodes
+              .filter((n) => n.id !== groupId)
+              .map((n) => (n.parent_id === groupId ? { ...n, parent_id: null } : n)),
+          },
+        }));
+        setSelected((cur) => cur.filter((id) => id !== groupId));
+        notify("已解散工作流组");
+      },
     }),
-    [edit, doc.begin, doc.end, beginEditing],
+    [edit, doc.begin, doc.end, beginEditing, doc.ref, doc.flush, doc.change],
   );
+  const createGroupFromSelection = useCallback(() => {
+    const picked = doc.ref.current.document.nodes.filter(
+      (n) => selected.includes(n.id) && n.type !== "group",
+    );
+    if (picked.length < 2) {
+      notify("请先框选或 Shift 多选至少 2 个节点");
+      return;
+    }
+    const pad = 44;
+    const minX = Math.min(...picked.map((n) => n.x)) - pad;
+    const minY = Math.min(...picked.map((n) => n.y)) - pad - 24;
+    const maxX = Math.max(...picked.map((n) => n.x + n.width)) + pad;
+    const maxY = Math.max(...picked.map((n) => n.y + n.height)) + pad;
+    const groupCount =
+      doc.ref.current.document.nodes.filter((n) => n.type === "group").length + 1;
+    const group = newNode("group", minX, minY, groupCount);
+    group.width = Math.min(3200, Math.max(260, Math.round(maxX - minX)));
+    group.height = Math.min(3200, Math.max(180, Math.round(maxY - minY)));
+    const pickedIds = new Set(picked.map((n) => n.id));
+    doc.change((d) => ({
+      ...d,
+      document: {
+        ...d.document,
+        nodes: [
+          group,
+          ...d.document.nodes.map((n) =>
+            pickedIds.has(n.id) ? { ...n, parent_id: group.id } : n,
+          ),
+        ],
+      },
+    }));
+    setSelected([group.id]);
+    notify(`已创建「${group.title}」（包含 ${picked.length} 个节点）`);
+  }, [doc, selected]);
   const videoPort = useMemo(
     () =>
       !!studio.canvas_nodes?.some((n) =>
@@ -1021,11 +1307,18 @@ export function CanvasWorkspace({
     const prevCache = rfNodeCacheRef.current;
     const nextCache = new Map<string, RFNode>();
     let loadedImage = false;
+    const childCounts = new Map<string, number>();
+    for (const node of doc.value.document.nodes) {
+      if (node.parent_id) {
+        childCounts.set(node.parent_id, (childCounts.get(node.parent_id) ?? 0) + 1);
+      }
+    }
     const list = doc.value.document.nodes.map((n) => {
       const resolved = resolveNodeFromIndex(n, runsByNode);
       if (n.type === "image" && resolved.media) loadedImage = true;
       const isSelected = selectedSet.has(n.id);
       const isEditing = editing === n.id;
+      const childCount = n.type === "group" ? (childCounts.get(n.id) ?? 0) : undefined;
       const prev = prevCache.get(n.id);
       if (
         prev &&
@@ -1034,6 +1327,7 @@ export function CanvasWorkspace({
         prev.data.run === resolved.run &&
         prev.data.videoPort === videoPort &&
         prev.data.editing === isEditing &&
+        prev.data.childCount === childCount &&
         prev.selected === isSelected
       ) {
         nextCache.set(n.id, prev);
@@ -1043,12 +1337,14 @@ export function CanvasWorkspace({
         id: n.id,
         type: "content" as const,
         position: { x: n.x, y: n.y },
+        zIndex: n.type === "group" ? -1 : 0,
         data: {
           item: n,
           videoPort,
           editing: isEditing,
           media: resolved.media,
           run: resolved.run,
+          childCount,
         },
         handles: buildNodeHandles(n, videoPort),
         measured: { width: n.width, height: n.height },
@@ -2126,6 +2422,31 @@ export function CanvasWorkspace({
       if(!model)return;
       const spec=studio.model_catalog[model];
       params={...params,model,ratio:spec.ratio!,seconds:spec.seconds!,flow_source_job:spec.mode==='extend'&&spec.ratio===single.params.ratio?params.flow_source_job||null:null};
+    } else if (form) {
+      const editedKey = Object.keys(patch).find((k) => k in form.fields);
+      if (editedKey) {
+        const normalized = normalizeForm(
+          form,
+          {
+            ratio: params.ratio,
+            resolution: params.resolution,
+            seconds: params.seconds,
+            quality: params.quality,
+            image_quality: params.image_quality,
+            fast_mode: Boolean(params.fast_mode),
+            sampling_steps: params.sampling_steps,
+          },
+          editedKey,
+        );
+        params = {
+          ...params,
+          ratio: String(normalized.ratio ?? params.ratio),
+          seconds: Number(normalized.seconds ?? params.seconds),
+          resolution: (normalized.resolution ?? params.resolution) as Params["resolution"],
+          quality: (normalized.quality ?? params.quality) as Params["quality"],
+          image_quality: (normalized.image_quality ?? params.image_quality) as Params["image_quality"],
+        };
+      }
     }
     edit(single.id, {params});
   };
@@ -2137,12 +2458,23 @@ export function CanvasWorkspace({
   const chooseH3Mode=(mode:'reference'|'frames')=>{
     if(!single)return;
     if(mode==='frames' && single.asset_packs?.length){notify('请先将素材包图片放入画布并取消素材包，再选择首尾帧');return;}
-    if(mode==='reference'){patchParams({h3:{mode,video_audio:[]},h3_refs:[...new Set([...(single.params.h3_refs||[]),h3Options.first_frame,h3Options.last_frame].filter((k):k is string=>Boolean(k)))]});setMenu(null);return;}
+    if(mode==='reference'){
+      edit(single.id,{
+        generation_mode:'omni_ref',
+        params:{
+          ...single.params,
+          h3:{mode,video_audio:[]},
+          h3_refs:[...new Set([...(single.params.h3_refs||[]),h3Options.first_frame,h3Options.last_frame].filter((k):k is string=>Boolean(k)))],
+        },
+      });
+      setMenu(null);
+      return;
+    }
     const images=h3Ids.filter(k=>mediaType(studio.assets.find(a=>a.id===k))==='Picture');
     let last=images[1]||null;const a=studio.assets.find(a=>a.id===images[0]),b=studio.assets.find(a=>a.id===last);
     if(a&&b&&Math.abs(Math.log((a.w/a.h)/(b.w/b.h)))>.035)last=null;
     const options={mode,first_frame:images[0]||null,last_frame:last,video_audio:[]};
-    edit(single.id,{prompt:remapH3Prompt(single.prompt,h3Ids,h3Ids,studio.assets,options),params:{...single.params,h3:options}});setMenu(null);
+    edit(single.id,{generation_mode:'first_last_frame',prompt:remapH3Prompt(single.prompt,h3Ids,h3Ids,studio.assets,options),params:{...single.params,h3:options}});setMenu(null);
   };
   // The public editor records conversion as a separate undoable document edit.
   useEffect(() => {
@@ -2173,6 +2505,265 @@ export function CanvasWorkspace({
             ),
         )
       : [];
+  const bgmRuns = useMemo(
+    () => runs.filter((r) => r.canvas_node === "bgm:project"),
+    [runs],
+  );
+  const latestBgmRun = bgmRuns[0] ?? null;
+  const activeBgmRun =
+    bgmRuns.find((r) => BGM_ACTIVE_STATUSES.has(r.status)) ?? null;
+  const bgmGenerating =
+    Boolean(activeBgmRun) ||
+    (pendingBgmJobId !== null &&
+      !bgmRuns.some(
+        (r) => r.id === pendingBgmJobId && !BGM_ACTIVE_STATUSES.has(r.status),
+      ));
+  const appliedBgmJobsRef = useRef<Set<number>>(new Set());
+  const notifiedBgmFailedRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    const candidate =
+      latestBgmRun ??
+      (pendingBgmJobId !== null
+        ? (studio.jobs.find((j) => j.id === pendingBgmJobId) ?? null)
+        : null);
+    if (!candidate) return;
+    if (BGM_ACTIVE_STATUSES.has(candidate.status)) {
+      if (pendingBgmJobId !== candidate.id) setPendingBgmJobId(candidate.id);
+      return;
+    }
+    const wasPending = pendingBgmJobId === candidate.id;
+    if (wasPending) setPendingBgmJobId(null);
+    if (candidate.status === "done" && candidate.result) {
+      const currentDoc = doc.ref.current.document;
+      if (
+        currentDoc.bgm_applied_job === candidate.id ||
+        appliedBgmJobsRef.current.has(candidate.id)
+      ) {
+        return;
+      }
+      appliedBgmJobsRef.current.add(candidate.id);
+      doc.change((d) => ({
+        ...d,
+        document: {
+          ...d.document,
+          bgm_applied_job: candidate.id,
+          bgm: {
+            asset_id: candidate.result!,
+            volume: d.document.bgm?.volume ?? 0.35,
+            ducking: d.document.bgm?.ducking ?? true,
+            loop: d.document.bgm?.loop ?? true,
+          },
+        },
+      }));
+      void doc.flush().catch(() => {});
+      notify("AI 配乐已生成并自动挂载至背景音乐轨");
+    } else if (
+      ["failed", "cancelled"].includes(candidate.status) &&
+      wasPending &&
+      !notifiedBgmFailedRef.current.has(candidate.id)
+    ) {
+      notifiedBgmFailedRef.current.add(candidate.id);
+      notify(candidate.note || "AI 配乐生成失败，请重试");
+    }
+  }, [latestBgmRun, pendingBgmJobId, studio.jobs, doc.change, doc.flush, doc.ref]);
+
+  const availableAudioModels = Object.entries(studio.model_catalog)
+    .filter(([id, spec]) => spec.kind === "audio" && availableModel(id))
+    .map(([id, spec]) => ({ id, label: spec.label || id }));
+  const isBgmMusicModel = (
+    id: string,
+    spec?: { kind?: string; provider?: string },
+  ) =>
+    spec?.kind === "audio" &&
+    (spec.provider === "bgm-generator" ||
+      ["bgm-v1", "suno-v4", "udio-v1.5", "musicgen-large"].includes(id) ||
+      (typeof spec.provider === "string" &&
+        /(?:^|[-_])(bgm|music)(?:$|[-_])/i.test(spec.provider)));
+  const bgmModels = availableAudioModels.filter((m) =>
+    isBgmMusicModel(m.id, studio.model_catalog[m.id]),
+  );
+  const defaultBgmPrompt = shots.length
+    ? `为以下分镜创作背景配乐：${shots
+        .slice(0, 4)
+        .map((s) => s.title || s.prompt.slice(0, 20))
+        .filter(Boolean)
+        .join(" / ")}，电影感器乐配乐`
+    : "电影感器乐背景配乐，情绪层次丰富";
+  const handleGenerateBgm = async (opts: { prompt: string; model?: string }) => {
+    const model = opts.model || bgmModels[0]?.id;
+    if (!model) throw new Error("暂无可用的 AI 配乐模型");
+    const res = await api<{ id: number }>(`/api/canvases/${project.id}/bgm`, {
+      uid: crypto.randomUUID(),
+      model,
+      prompt: opts.prompt.slice(0, 300),
+      instruction: "background music soundtrack",
+      price_revision: studio.pricing.revision,
+    });
+    setPendingBgmJobId(res.id);
+    await fetchRuns();
+  };
+  const compositionAudioAssets = [
+    ...bgmRuns
+      .filter((r) => r.status === "done" && r.result)
+      .map((r) => ({
+        id: r.result!,
+        label: `${r.model || "配乐"} · ${(r.prompt || "").slice(0, 18) || "#" + r.id}`,
+      })),
+    ...studio.assets
+      .filter((a) => a.kind === "audio" || a.kind === "ref_audio")
+      .map((a) => ({
+        id: a.id,
+        label: a.name || `音频 ${a.id.slice(0, 6)}`,
+      })),
+    ...studio.jobs
+      .filter((j) => j.kind === "audio" && j.status === "done" && j.result)
+      .map((j) => ({
+        id: j.result!,
+        label: `${j.model || "配乐"} · ${(j.prompt || "").slice(0, 18) || "#" + j.id}`,
+      })),
+  ].filter((item, idx, arr) => arr.findIndex((x) => x.id === item.id) === idx);
+  const handleInheritTailFrame = async (shotId: string, closeModal = false) => {
+    const source = doc.ref.current.document.nodes.find((n) => n.id === shotId);
+    if (!source) return;
+    await doc.flush();
+    const res = await api<{ asset_id: string; width: number; height: number }>(
+      `/api/canvases/${project.id}/nodes/${shotId}/tail-frame`,
+      {},
+    );
+    const nextIdx = doc.ref.current.document.nodes.length + 1;
+    const imgNode = newNode("image", source.x + source.width + 64, source.y, nextIdx);
+    imgNode.title = `${source.title || "镜头"} · 尾帧`;
+    imgNode.media_id = res.asset_id;
+    imgNode.use_media = true;
+    const vidNode = newNode("video", imgNode.x + imgNode.width + 64, source.y, nextIdx + 1);
+    vidNode.title = `${source.title || "镜头"} 续镜`;
+    vidNode.tail_inherited = true;
+    vidNode.generation_mode = "first_last_frame";
+    vidNode.params = {
+      ...source.params,
+      h3: {
+        mode: "frames",
+        first_frame: res.asset_id,
+        last_frame: null,
+        video_audio: [],
+      },
+    };
+    doc.change((d) => ({
+      ...d,
+      document: {
+        ...d.document,
+        nodes: [...d.document.nodes, imgNode, vidNode],
+        edges: [
+          ...d.document.edges,
+          { id: crypto.randomUUID(), source: imgNode.id, target: vidNode.id },
+        ],
+        shots: [...(d.document.shots ?? []), vidNode.id],
+      },
+    }));
+    notify("已抽取尾帧并创建续接镜头");
+    if (closeModal) setShotList(false);
+    selectOne(vidNode.id);
+    focusNodes([vidNode.id]);
+  };
+  const renderShotNarration = (shot: { id: string }) => {
+    const node = doc.value.document.nodes.find((n) => n.id === shot.id);
+    if (!node) return null;
+    const preferred = node.narration_model?.trim();
+    const audioCandidates = [
+      ...(preferred ? [preferred] : []),
+      "breeze-tts-2",
+      "tts-1",
+      "gpt-4o-mini-tts",
+      "local-tts-compat",
+      "edge-tts",
+    ];
+    const activeAudio =
+      audioCandidates.find((m) => availableModel(m)) ??
+      availableAudioModels[0]?.id ??
+      "";
+    const priceItem = activeAudio
+      ? studio.pricing.items.find((p) => p.key.startsWith(activeAudio + "|"))
+      : undefined;
+    const price = !activeAudio
+      ? null
+      : (priceItem?.amount ?? (activeAudio === "edge-tts" ? 0 : null));
+    const unavailableReason = !activeAudio
+      ? "当前空间未开放语音模型"
+      : price === null
+        ? "语音生成尚未定价"
+        : studio.credits.available < price
+          ? "当前空间积分不足"
+          : "";
+    return (
+      <Narration
+        node={node}
+        runs={runs}
+        cost={price}
+        unavailableReason={unavailableReason}
+        audioModels={availableAudioModels}
+        onEditStart={doc.begin}
+        onEditEnd={doc.end}
+        onChange={(patch, history) => edit(shot.id, patch, history)}
+        onGenerate={async () => {
+          const rev = await doc.flush();
+          const key = `fm-canvas-voice-${studio.me.id}-${project.id}-${shot.id}`;
+          let pending;
+          try {
+            pending = JSON.parse(localStorage.getItem(key) || "null");
+          } catch {}
+          if (!pending) {
+            pending = {
+              uid: crypto.randomUUID(),
+              expected_revision: rev,
+              price_revision: studio.pricing.revision,
+            };
+            localStorage.setItem(key, JSON.stringify(pending));
+          }
+          try {
+            const result = await api(
+              `/api/canvases/${project.id}/nodes/${shot.id}/narration`,
+              pending,
+            );
+            edit(shot.id, { narration_pending: result.id });
+            await doc.flush();
+            localStorage.removeItem(key);
+            await fetchRuns();
+          } catch (e) {
+            if (e instanceof ApiError && e.status < 500)
+              localStorage.removeItem(key);
+            throw e;
+          }
+        }}
+        onGenerateDialogue={async (lineId) => {
+          const rev = await doc.flush();
+          const result = await api<{ items: { line_id: string; id: number }[] }>(
+            `/api/canvases/${project.id}/nodes/${shot.id}/dialogue`,
+            {
+              uid: crypto.randomUUID(),
+              expected_revision: rev,
+              price_revision: studio.pricing.revision,
+              ...(lineId ? { line_id: lineId } : {}),
+            },
+          );
+          const idMap = new Map(result.items.map((it) => [it.line_id, it.id]));
+          const current = doc.ref.current.document.nodes.find(
+            (n) => n.id === shot.id,
+          );
+          if (current?.dialogue_lines?.length) {
+            // F027 (#9): Write ONLY audio_pending on submission; preserve previous
+            // valid audio_job until the new run actually completes with an output asset.
+            edit(shot.id, {
+              dialogue_lines: current.dialogue_lines.map((l) =>
+                idMap.has(l.id) ? { ...l, audio_pending: idMap.get(l.id)! } : l,
+              ),
+            });
+            await doc.flush();
+          }
+          await fetchRuns();
+        }}
+      />
+    );
+  };
   return (
     <div
       ref={workspaceRef}
@@ -2394,6 +2985,35 @@ export function CanvasWorkspace({
           </button>
         </div>
         <div className="global-tools">
+          <div className="fm-view-switch" role="group" aria-label="画布与分镜表视图切换">
+            <button
+              type="button"
+              className={viewMode === "canvas" ? "active" : ""}
+              onClick={() => setViewMode("canvas")}
+              title="纯画布视图"
+            >
+              <LayoutGrid size={14} />
+              画布
+            </button>
+            <button
+              type="button"
+              className={viewMode === "split" ? "active" : ""}
+              onClick={() => setViewMode("split")}
+              title="画布 + 分镜表双轨分屏"
+            >
+              <Columns2 size={14} />
+              分屏
+            </button>
+            <button
+              type="button"
+              className={viewMode === "list" ? "active" : ""}
+              onClick={() => setViewMode("list")}
+              title="纯分镜表视图"
+            >
+              <List size={14} />
+              列表
+            </button>
+          </div>
           <IconButton
             icon={Search}
             label="搜索节点"
@@ -2414,6 +3034,11 @@ export function CanvasWorkspace({
           />
           <IconButton icon={FileText} label="AI 分镜" onClick={() => setAiStoryboard(true)} />
           <IconButton
+            icon={Sparkles}
+            label="画布 Agent 提案箱"
+            onClick={() => setAgentDock((v) => !v)}
+          />
+          <IconButton
             icon={ListVideo}
             label="镜头列表"
             onClick={() => setShotList(true)}
@@ -2425,6 +3050,38 @@ export function CanvasWorkspace({
           />
         </div>
       </header>
+      {selected.length >= 2 && (
+        <div className="fm-multi-bar" role="toolbar" aria-label="多选批量操作">
+          <span>已选 {selected.length} 个节点</span>
+          <button
+            type="button"
+            className="secondary"
+            onClick={createGroupFromSelection}
+          >
+            <Layers size={14} />
+            建工作流组
+          </button>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => {
+              void doc
+                .flush()
+                .then(() =>
+                  setPrecheckTarget({
+                    nodeIds: selected,
+                    title: `多选批量预检 (${selected.length} 节点)`,
+                    stages: ["image", "video", "narration", "dialogue"],
+                  }),
+                )
+                .catch((e) => notify((e as Error).message));
+            }}
+          >
+            <Play size={14} />
+            预检并批量生成
+          </button>
+        </div>
+      )}
       {menu === "project" && (
         <div className="cv-menu project-menu">
           <button onClick={() => closeAndLeave("/canvas")}>
@@ -2773,22 +3430,245 @@ export function CanvasWorkspace({
             </div>
           )}
           {h3Native&&<H3Inputs key={single.id} options={h3Options} ids={h3Ids} assets={studio.assets} onChange={updateH3} onAsset={a=>setStudio(s=>({...s,assets:[{...a,owner:s.me.id},...s.assets]}))} onMention={token=>edit(single.id,{prompt:single.prompt+token+' '})} onBusy={setH3Busy}/>}
-          {!h3Frames&&<div className="canvas-pack-entry">
-            <button className="secondary" onClick={() => setPackPicker(single.id)}><FolderOpen size={15}/>素材包{single.asset_packs?.length ? ` · ${single.asset_packs.length}` : ''}</button>
-          </div>}
-          {h3Native?<H3Prompt value={single.prompt} ids={h3Ids} assets={studio.assets} frames={h3Frames} onChange={prompt=>edit(single.id,{prompt},false)} onFocus={doc.begin} onBlur={doc.end} onKeyDown={generateShortcut}/>:<textarea
-            className="composer-prompt"
-            aria-label="生成提示词"
-            placeholder={`描述你想生成的${single.type === "image" ? "图片" : "视频"}，或连接文本作为参考`}
+          <div className="fm-composer-wave3-bar">
+            {!h3Frames&&<div className="canvas-pack-entry">
+              <button className="secondary" onClick={() => setPackPicker(single.id)}><FolderOpen size={15}/>素材包{single.asset_packs?.length ? ` · ${single.asset_packs.length}` : ''}</button>
+            </div>}
+            <select
+              className="fm-mode-select"
+              aria-label="分镜生成链路"
+              value={
+                single.generation_mode ??
+                (h3Native
+                  ? h3Frames
+                    ? "first_last_frame"
+                    : "omni_ref"
+                  : single.type === "video"
+                    ? "first_last_frame"
+                    : "first_frame")
+              }
+              onChange={(e) => {
+                const mode = e.target.value as CanvasGenerationMode;
+                if (h3Native && mode === "omni_ref") {
+                  chooseH3Mode("reference");
+                  return;
+                }
+                if (h3Native && mode === "first_last_frame") {
+                  chooseH3Mode("frames");
+                  return;
+                }
+                edit(single.id, {
+                  generation_mode: mode,
+                  ...(mode === "grid_preview" ? { grid_layout: single.grid_layout ?? "3x3" } : {}),
+                });
+              }}
+            >
+              <option value="first_frame">标准首帧</option>
+              <option value="first_last_frame">经典首尾帧</option>
+              <option value="omni_ref">全能 @图N 多参考</option>
+              <option value="grid_preview">宫格构图预览</option>
+            </select>
+            {single.generation_mode === "grid_preview" && (
+              <select
+                className="fm-mode-select"
+                aria-label="宫格规格"
+                value={single.grid_layout ?? "3x3"}
+                onChange={(e) => edit(single.id, { grid_layout: e.target.value as "2x2" | "3x3" })}
+              >
+                <option value="2x2">2×2</option>
+                <option value="3x3">3×3</option>
+              </select>
+            )}
+            <button
+              type="button"
+              className={"secondary" + (showCinePanel ? " active" : "")}
+              onClick={() => setShowCinePanel((v) => !v)}
+            >
+              <Clapperboard size={14} />
+              导演参数
+              {single.cinematography && Object.values(single.cinematography).some(Boolean) ? " ●" : ""}
+            </button>
+            {single.type === "image" && current?.media && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() =>
+                  setGridCropTarget({
+                    nodeId: single.id,
+                    mediaId: current.media!,
+                    layout: single.grid_layout ?? "3x3",
+                  })
+                }
+              >
+                <Crop size={14} />
+                宫格裁切
+              </button>
+            )}
+          </div>
+          {showCinePanel && (
+            <CinematographyPanel
+              compact
+              value={single.cinematography}
+              onChange={(cinematography) => edit(single.id, { cinematography })}
+            />
+          )}
+          {h3Native?<H3Prompt
             value={single.prompt}
-            maxLength={12000}
+            ids={h3Ids}
+            assets={studio.assets}
+            frames={h3Frames}
+            packs={availablePacks}
+            onChange={prompt=>edit(single.id,{prompt},false)}
+            onMountPack={(pack) => {
+              const existing = single.asset_packs ?? [];
+              const nextPacks = existing.some((p) => p.id === pack.id)
+                ? existing
+                : [...existing, { id: pack.id, revision: pack.revision, name: pack.name }];
+              setPackMedia((prev) => ({ ...prev, [pack.id]: pack.media }));
+              if (h3Frames) {
+                edit(single.id, {
+                  generation_mode: "omni_ref",
+                  asset_packs: nextPacks,
+                  params: {
+                    ...single.params,
+                    h3: { mode: "reference", video_audio: [] },
+                    h3_refs: [
+                      ...new Set([
+                        ...(single.params.h3_refs || []),
+                        h3Options.first_frame,
+                        h3Options.last_frame,
+                      ].filter((k): k is string => Boolean(k))),
+                    ],
+                  },
+                });
+              } else {
+                edit(single.id, { asset_packs: nextPacks });
+              }
+            }}
             onFocus={doc.begin}
-            onChange={(e) => edit(single.id, { prompt: e.target.value }, false)}
+            onBlur={doc.end}
+            onKeyDown={generateShortcut}
+          />:<ReferencePromptInput
+            value={single.prompt}
+            packs={availablePacks}
+            refImages={referenceMedia.filter((id): id is string => Boolean(id))}
+            placeholder={`描述你想生成的${single.type === "image" ? "图片" : "视频"}，键入 @ 引用角色/场景素材包或 @图N`}
+            onFocus={doc.begin}
+            onChange={(prompt) => edit(single.id, { prompt }, false)}
+            onMountPack={(pack) => {
+              const existing = single.asset_packs ?? [];
+              setPackMedia((prev) => ({ ...prev, [pack.id]: pack.media }));
+              if (!existing.some((p) => p.id === pack.id)) {
+                edit(single.id, {
+                  asset_packs: [...existing, { id: pack.id, revision: pack.revision, name: pack.name }],
+                });
+              }
+            }}
             onBlur={doc.end}
             onKeyDown={generateShortcut}
           />}
           {flowModel?.mode==='extend'&&<label className="cv-flow-source">来源视频<select aria-label="画布续写来源视频" value={single.params.flow_source_job||''} onChange={e=>patchParams({flow_source_job:Number(e.target.value)||null})}><option value="">请选择已完成的 Flow 视频</option>{flowSources.map(j=><option key={j.id} value={j.id}>#{j.id} · {j.prompt.slice(0,42)}</option>)}</select></label>}
           {flowInputError&&<p className="cv-flow-hint" role="status">{flowInputError}</p>}
+          {(customFormFields.length > 0 || formConstraints?.references.reason) && (
+            <div className="fm-dynamic-form-fields" role="group" aria-label="模型专属参数">
+              {customFormFields.map(([key, field]) => {
+                const state = formConstraints?.fields[key];
+                if (state && !state.visible) return null;
+                const currentVal = single.extra_params?.[key] ?? field.default ?? "";
+                const updateExtra = (nextVal: string | number | boolean) =>
+                  edit(single.id, {
+                    extra_params: { ...(single.extra_params ?? {}), [key]: nextVal },
+                  });
+                const fieldTitle = field.title || key;
+                if (field.type === "boolean") {
+                  return (
+                    <label key={key} className="fm-dynamic-field-check" title={state?.disabledReason}>
+                      <input
+                        type="checkbox"
+                        aria-label={fieldTitle}
+                        disabled={Boolean(state?.disabled)}
+                        checked={Boolean(currentVal)}
+                        onChange={(e) => updateExtra(e.target.checked)}
+                      />
+                      <span>{fieldTitle}</span>
+                    </label>
+                  );
+                }
+                if (field.enum?.length) {
+                  return (
+                    <label key={key} className="fm-dynamic-field" title={state?.disabledReason}>
+                      <span>{fieldTitle}</span>
+                      <select
+                        aria-label={fieldTitle}
+                        disabled={Boolean(state?.disabled)}
+                        value={String(currentVal)}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const matched = field.enum!.find((opt) => String(opt) === raw);
+                          updateExtra(matched !== undefined ? matched : raw);
+                        }}
+                      >
+                        {field.enum.map((opt) => {
+                          const optReason =
+                            state?.disabledOptions[JSON.stringify(opt)] ??
+                            state?.incompatibleOptions[JSON.stringify(opt)];
+                          return (
+                            <option
+                              key={String(opt)}
+                              value={String(opt)}
+                              disabled={Boolean(optReason)}
+                            >
+                              {field.optionLabels?.[String(opt)] ?? String(opt)}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </label>
+                  );
+                }
+                if (field.type === "number" || field.type === "integer") {
+                  return (
+                    <label key={key} className="fm-dynamic-field" title={state?.disabledReason}>
+                      <span>{fieldTitle}</span>
+                      <input
+                        type="number"
+                        aria-label={fieldTitle}
+                        disabled={Boolean(state?.disabled)}
+                        min={field.minimum}
+                        max={field.maximum}
+                        step={field.type === "integer" ? 1 : 0.1}
+                        value={currentVal === "" ? "" : Number(currentVal)}
+                        onChange={(e) => {
+                          const num = Number(e.target.value);
+                          if (Number.isFinite(num)) {
+                            updateExtra(field.type === "integer" ? Math.round(num) : num);
+                          }
+                        }}
+                      />
+                    </label>
+                  );
+                }
+                return (
+                  <label key={key} className="fm-dynamic-field" title={state?.disabledReason}>
+                    <span>{fieldTitle}</span>
+                    <input
+                      type="text"
+                      aria-label={fieldTitle}
+                      disabled={Boolean(state?.disabled)}
+                      maxLength={field.maxLength}
+                      value={String(currentVal)}
+                      onChange={(e) => updateExtra(e.target.value)}
+                    />
+                  </label>
+                );
+              })}
+              {formConstraints?.references.reason && (
+                <small className="fm-dynamic-ref-hint" role="status">
+                  参考图槽位 ({formConstraints.references.min}–{formConstraints.references.max})：{formConstraints.references.reason}
+                </small>
+              )}
+            </div>
+          )}
           <div className="composer-bottom">
             <div className="parameter-wrap menu-trigger" onKeyDown={modelKeys}>
               <button ref={modelButtonRef} className={"parameter" + (!availableModel(selectedModel) ? " model-unavailable" : "")} disabled={!selectedModel} aria-label="选择模型" aria-haspopup="listbox" aria-controls="canvas-model-options" aria-expanded={menu === "model"} onClick={() => menu === "model" ? closeModelMenu() : setMenu("model")}>
@@ -2822,10 +3702,13 @@ export function CanvasWorkspace({
                   {flowParameters&&flowParameters.modes.length>1&&<><span className="menu-label">生成方式</span><div className="resolution-options" role="group" aria-label="生成方式">{flowParameters.modes.map(mode=><button key={mode} className={flowModel?.mode===mode?'active':''} onClick={()=>patchParams({},mode)}>{FlowPicker.modeLabels[mode]}</button>)}</div></>}
                   <span className="menu-label">选择比例</span>
                   <div className="ratio-options">
-                    {(flowParameters?.ratios ?? fields?.ratio?.enum?.map(String) ?? []).map((r) => (
+                    {(flowParameters?.ratios ?? fields?.ratio?.enum?.map(String) ?? []).map((r) => {
+                      const ratioDisabledReason = formConstraints?.fields.ratio?.disabledOptions[JSON.stringify(r)];
+                      return (
                       <button
                         key={r}
-                        disabled={h3Frames&&referenceMedia.length>0}
+                        disabled={(h3Frames&&referenceMedia.length>0) || Boolean(ratioDisabledReason)}
+                        title={ratioDisabledReason}
                         className={single.params.ratio === r ? "active" : ""}
                         onClick={() => patchParams({ ratio: r })}
                       >
@@ -2835,14 +3718,20 @@ export function CanvasWorkspace({
                         />
                         {r}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                   {!muse && !flowModel && <><span className="menu-label">选择分辨率</span>
                   <div className="resolution-options">
                     {((single.type === "image" ? fields?.resolution : fields?.quality)?.enum ?? []).map(
-                      (v) => (
+                      (v) => {
+                        const resField = single.type === "image" ? "resolution" : "quality";
+                        const resDisabledReason = formConstraints?.fields[resField]?.disabledOptions[JSON.stringify(v)];
+                        return (
                         <button
                           key={String(v)}
+                          disabled={Boolean(resDisabledReason)}
+                          title={resDisabledReason}
                           className={
                             (single.type === "image"
                               ? single.params.resolution
@@ -2861,7 +3750,8 @@ export function CanvasWorkspace({
                           {v}
                           {single.type === "video" ? "P" : ""}
                         </button>
-                      ),
+                        );
+                      },
                     )}
                   </div></>}
                 </div>
@@ -2893,9 +3783,14 @@ export function CanvasWorkspace({
                   {(single.type === "image"
                     ? fields?.image_quality?.enum ?? []
                     : flowParameters?.seconds ?? fields?.seconds?.enum ?? []
-                  ).map((v) => (
+                  ).map((v) => {
+                    const durField = single.type === "image" ? "image_quality" : "seconds";
+                    const durDisabledReason = formConstraints?.fields[durField]?.disabledOptions[JSON.stringify(v)];
+                    return (
                     <button
                       key={String(v)}
+                      disabled={Boolean(durDisabledReason)}
+                      title={durDisabledReason}
                       onClick={() => {
                         patchParams(
                           single.type === "image"
@@ -2914,7 +3809,8 @@ export function CanvasWorkspace({
                         ? single.params.image_quality
                         : single.params.seconds) === v && <Check size={14} />}
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>}
@@ -3542,13 +4438,55 @@ export function CanvasWorkspace({
         <AiStoryboard workspace={project.workspace} userId={studio.me.id} project={project.id}
           onRecharge={openCredits}
           onConfigureModels={studio.me.role === "admin" ? () => void closeAndLeave(chatSettingsPath(studio)) : undefined}
-          onApply={async shots=>{
+          onApply={async (shots, options)=>{
           await doc.flush();const current=doc.ref.current.document;
-          if(current.nodes.length+shots.length*2>200||current.edges.length+shots.length>600)throw new Error('画布容量不足，请先整理节点');
+          const isGridPreview=options.generationMode==='grid_preview';
+          const nodesPerShot=isGridPreview?3:2;
+          const edgesPerShot=isGridPreview?2:1;
+          if(current.nodes.length+shots.length*nodesPerShot>400||current.edges.length+shots.length*edgesPerShot>1200)throw new Error('画布容量不足（最多 400 节点 / 1200 连线），请先整理节点');
           const x=current.nodes.length?Math.max(...current.nodes.map(n=>n.x+n.width))+120:0;
-          const created=shots.map((shot,i)=>({text:{...newNode('text',x+i*400,0,i+1),title:shot.title+' · 文案',text:shot.prompt},video:{...newNode('video',x+i*400,330,i+1),title:shot.title,narration_text:shot.narration,params:{...newNode('video',0,0,1).params,model:'MiniMax H3',seconds:shot.seconds}}}));
-          doc.change(d=>({...d,document:{...d.document,nodes:[...d.document.nodes,...created.flatMap(n=>[n.text,n.video])],edges:[...d.document.edges,...created.map(n=>({id:crypto.randomUUID(),source:n.text.id,target:n.video.id}))],shots:[...(d.document.shots||[]),...created.map(n=>n.video.id)]}}));
-          setAiStoryboard(false);setSelected([created[0].video.id]);requestAnimationFrame(()=>focusNodes(created.map(n=>n.video.id)));notify('已加入分镜，可编辑后再生成');
+          const created=shots.map((shot,i)=>{
+            const text={...newNode('text',x+i*420,0,i+1),title:shot.title+' · 文案',text:shot.prompt};
+            const gridImage=isGridPreview?{
+              ...newNode('image',x+i*420,280,i+1),
+              title:shot.title+' · 宫格预览',
+              prompt:shot.prompt,
+              generation_mode:'grid_preview' as const,
+              grid_layout:(options.gridLayout??'3x3') as '2x2'|'3x3',
+            }:null;
+            const video={
+              ...newNode('video',x+i*420,isGridPreview?580:330,i+1),
+              title:shot.title,
+              narration_text:shot.narration,
+              generation_mode:isGridPreview?'first_frame':options.generationMode,
+              ...(options.gridLayout&&!isGridPreview?{grid_layout:options.gridLayout}:{}),
+              ...(options.tailChain&&i>0?{tail_inherited:true}:{}),
+              params:{...newNode('video',0,0,1).params,model:'MiniMax H3',seconds:shot.seconds},
+            };
+            return {text,gridImage,video};
+          });
+          doc.change(d=>({
+            ...d,
+            document:{
+              ...d.document,
+              nodes:[...d.document.nodes,...created.flatMap(n=>n.gridImage?[n.text,n.gridImage,n.video]:[n.text,n.video])],
+              edges:[
+                ...d.document.edges,
+                ...created.flatMap(n=>n.gridImage
+                  ? [
+                      {id:crypto.randomUUID(),source:n.text.id,target:n.gridImage.id},
+                      {id:crypto.randomUUID(),source:n.gridImage.id,target:n.video.id},
+                    ]
+                  : [{id:crypto.randomUUID(),source:n.text.id,target:n.video.id}]),
+              ],
+              shots:[...(d.document.shots||[]),...created.map(n=>n.video.id)],
+            },
+          }));
+          setAiStoryboard(false);
+          const firstFocus=created[0].gridImage?created[0].gridImage.id:created[0].video.id;
+          setSelected([firstFocus]);
+          requestAnimationFrame(()=>focusNodes(created.map(n=>n.gridImage?n.gridImage.id:n.video.id)));
+          notify(isGridPreview?`已加入 ${shots.length} 个宫格预览图 + 视频分镜，可先低成本生图并裁切首帧`:`已加入 ${shots.length} 个分镜，可编辑后再生成`);
         }}/>
       </Modal>}
       {packPicker && <Modal title="素材包" wide onClose={() => setPackPicker(null)}>
@@ -3566,21 +4504,47 @@ export function CanvasWorkspace({
       {shotList && (
         <Modal title="镜头列表" wide onClose={() => setShotList(false)}>
           <ShotList shots={shots} onMove={moveShot} onExport={exportShots}
-            composition={<Composition project={project.id} getRevision={doc.flush} ready={shots.length > 0 && !compositionIssue} waitingReason={compositionIssue} />}
-            renderNarration={shot=>{
-              const node=doc.value.document.nodes.find(n=>n.id===shot.id)!;
-              const price=studio.pricing.items.find(p=>p.key==='breeze-tts-2|standard')?.amount??null;
-              return <Narration node={node} runs={runs} cost={price} unavailableReason={!availableModel('breeze-tts-2')?'当前空间未开放语音模型':price===null?'语音生成尚未定价':studio.credits.available<price?'当前空间积分不足':''}
-                onEditStart={doc.begin}
-                onEditEnd={doc.end}
-                onChange={(patch,history)=>edit(shot.id,patch,history)} onGenerate={async()=>{
-                  const rev=await doc.flush();const key=`fm-canvas-voice-${studio.me.id}-${project.id}-${shot.id}`;
-                  let pending;try{pending=JSON.parse(localStorage.getItem(key)||'null')}catch{}
-                  if(!pending){pending={uid:crypto.randomUUID(),expected_revision:rev,price_revision:studio.pricing.revision};localStorage.setItem(key,JSON.stringify(pending));}
-                  try{const result=await api(`/api/canvases/${project.id}/nodes/${shot.id}/narration`,pending);edit(shot.id,{narration_pending:result.id});await doc.flush();localStorage.removeItem(key);await fetchRuns();}
-                  catch(e){if(e instanceof ApiError&&e.status<500)localStorage.removeItem(key);throw e}
-                }}/>
+            onEditShot={(id, patch) => edit(id, patch, false)}
+            onBatchPrecheck={(nodeIds) => {
+              void doc
+                .flush()
+                .then(() => {
+                  setShotList(false);
+                  setPrecheckTarget({
+                    nodeIds,
+                    title: `分镜批量预检 (${nodeIds.length} 镜)`,
+                    stages: ["video", "narration", "dialogue"],
+                  });
+                })
+                .catch((e) => notify((e as Error).message));
             }}
+            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId, true)}
+            composition={
+              <Composition
+                project={project.id}
+                getRevision={doc.flush}
+                ready={shots.length > 0 && !compositionIssue}
+                waitingReason={compositionIssue}
+                audioAssets={compositionAudioAssets}
+                bgm={doc.value.document.bgm ?? null}
+                loudnorm={doc.value.document.loudnorm}
+                defaultBgmPrompt={defaultBgmPrompt}
+                bgmModels={bgmModels}
+                bgmGenerating={bgmGenerating}
+                onGenerateBgm={handleGenerateBgm}
+                onMixChange={(patch) =>
+                  doc.change((d) => ({
+                    ...d,
+                    document: {
+                      ...d.document,
+                      ...("bgm" in patch ? { bgm: patch.bgm } : {}),
+                      ...("loudnorm" in patch ? { loudnorm: patch.loudnorm } : {}),
+                    },
+                  }))
+                }
+              />
+            }
+            renderNarration={renderShotNarration}
             onRemove={(id) => updateShots((ids) => ids.filter((item) => item !== id))}
             onSelect={(id) => {
               setShotList(false);
@@ -3685,6 +4649,248 @@ export function CanvasWorkspace({
               重新载入
             </button>
           </div>
+        </Modal>
+      )}
+      {viewMode !== "canvas" && (
+        <aside
+          className={
+            "fm-docked-storyboard" + (viewMode === "list" ? " fm-full-list" : "")
+          }
+          aria-label="分镜表双向同步视图"
+        >
+          <div className="fm-docked-head">
+            <strong>分镜表 · 实时双向同步 ({shots.length} 镜)</strong>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setViewMode("canvas")}
+            >
+              返回纯画布
+            </button>
+          </div>
+          <ShotList
+            docked
+            shots={shots}
+            onMove={moveShot}
+            onExport={exportShots}
+            onEditShot={(id, patch) => edit(id, patch, false)}
+            onBatchPrecheck={(nodeIds) => {
+              void doc
+                .flush()
+                .then(() =>
+                  setPrecheckTarget({
+                    nodeIds,
+                    title: `分镜批量预检 (${nodeIds.length} 镜)`,
+                    stages: ["video", "narration", "dialogue"],
+                  }),
+                )
+                .catch((e) => notify((e as Error).message));
+            }}
+            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId, false)}
+            onRemove={(id) =>
+              updateShots((ids) => ids.filter((item) => item !== id))
+            }
+            onSelect={(id) => {
+              if (viewMode === "list") setViewMode("split");
+              selectOne(id);
+              focusNodes([id]);
+            }}
+            composition={
+              <Composition
+                project={project.id}
+                getRevision={doc.flush}
+                ready={shots.length > 0 && !compositionIssue}
+                waitingReason={compositionIssue}
+                audioAssets={compositionAudioAssets}
+                bgm={doc.value.document.bgm ?? null}
+                loudnorm={doc.value.document.loudnorm}
+                defaultBgmPrompt={defaultBgmPrompt}
+                bgmModels={bgmModels}
+                bgmGenerating={bgmGenerating}
+                onGenerateBgm={handleGenerateBgm}
+                onMixChange={(patch) =>
+                  doc.change((d) => ({
+                    ...d,
+                    document: {
+                      ...d.document,
+                      ...("bgm" in patch ? { bgm: patch.bgm } : {}),
+                      ...("loudnorm" in patch ? { loudnorm: patch.loudnorm } : {}),
+                    },
+                  }))
+                }
+              />
+            }
+            renderNarration={renderShotNarration}
+          />
+        </aside>
+      )}
+      {precheckTarget && (
+        <Modal
+          title={precheckTarget.title || "批量生成预检与积分确认"}
+          wide
+          onClose={() => setPrecheckTarget(null)}
+        >
+          <PrecheckCostModal
+            workspace={project.workspace}
+            projectId={project.id}
+            revision={doc.revision.current}
+            nodeIds={precheckTarget.nodeIds}
+            title={precheckTarget.title}
+            initialStages={precheckTarget.stages}
+            onSubmitted={async (res) => {
+              // F010/F027 (#9): Write back submitted narration_pending & dialogue_lines[].audio_pending
+              // so completed batch audio jobs promote cleanly for playback and storyboard export.
+              const narrMap = new Map<string, number>();
+              const dlgMap = new Map<string, Map<string, number>>();
+              for (const item of res.submitted) {
+                if (item.stage === "narration") {
+                  narrMap.set(item.node, item.job_id);
+                } else if (item.stage === "dialogue" && item.line_id) {
+                  let byLine = dlgMap.get(item.node);
+                  if (!byLine) {
+                    byLine = new Map();
+                    dlgMap.set(item.node, byLine);
+                  }
+                  byLine.set(item.line_id, item.job_id);
+                }
+              }
+              if (narrMap.size || dlgMap.size) {
+                doc.change((d) => ({
+                  ...d,
+                  document: {
+                    ...d.document,
+                    nodes: d.document.nodes.map((n) => {
+                      const nextNarr = narrMap.get(n.id);
+                      const nextDlg = dlgMap.get(n.id);
+                      if (!nextNarr && !nextDlg) return n;
+                      return {
+                        ...n,
+                        ...(nextNarr ? { narration_pending: nextNarr } : {}),
+                        ...(nextDlg && n.dialogue_lines
+                          ? {
+                              dialogue_lines: n.dialogue_lines.map((l) =>
+                                nextDlg.has(l.id)
+                                  ? { ...l, audio_pending: nextDlg.get(l.id)! }
+                                  : l,
+                              ),
+                            }
+                          : {}),
+                      };
+                    }),
+                  },
+                }));
+                await doc.flush();
+              }
+              await fetchRuns();
+              notify(
+                `已提交 ${res.submitted.length} 项任务（跳过 ${res.skipped.length} 项），合计冻结 ${res.total_credits} 积分`,
+              );
+            }}
+            onClose={() => setPrecheckTarget(null)}
+          />
+        </Modal>
+      )}
+      {gridCropTarget && (
+        <Modal
+          title="宫格构图单格裁切"
+          wide
+          onClose={() => setGridCropTarget(null)}
+        >
+          <GridCropModal
+            mediaId={gridCropTarget.mediaId}
+            defaultLayout={gridCropTarget.layout}
+            onCrop={async (opts) => {
+              await doc.flush();
+              const res = await api<{
+                asset_id: string;
+                width: number;
+                height: number;
+              }>(
+                `/api/canvases/${project.id}/nodes/${gridCropTarget.nodeId}/grid-crop`,
+                opts,
+              );
+              const src = doc.ref.current.document.nodes.find(
+                (n) => n.id === gridCropTarget.nodeId,
+              );
+              const downstreamVideos = doc.ref.current.document.edges
+                .filter((e) => e.source === gridCropTarget.nodeId)
+                .map((e) =>
+                  doc.ref.current.document.nodes.find((n) => n.id === e.target),
+                )
+                .filter((n): n is CanvasNode => Boolean(n && n.type === "video"));
+              const nextIdx = doc.ref.current.document.nodes.length + 1;
+              const cropped = newNode(
+                "image",
+                (src?.x ?? 0) + (src?.width ?? 320) + 64,
+                src?.y ?? 0,
+                nextIdx,
+              );
+              cropped.title = `${src?.title || "宫格"} · 格#${opts.row * opts.cols + opts.col + 1}`;
+              cropped.media_id = res.asset_id;
+              cropped.use_media = true;
+              const downstreamIds = new Set(downstreamVideos.map((v) => v.id));
+              doc.change((d) => ({
+                ...d,
+                document: {
+                  ...d.document,
+                  nodes: [
+                    ...d.document.nodes.map((n) =>
+                      downstreamIds.has(n.id)
+                        ? {
+                            ...n,
+                            params: {
+                              ...n.params,
+                              h3: {
+                                mode: "frames" as const,
+                                first_frame: res.asset_id,
+                                last_frame: n.params.h3?.last_frame ?? null,
+                                video_audio: n.params.h3?.video_audio ?? [],
+                              },
+                            },
+                          }
+                        : n,
+                    ),
+                    cropped,
+                  ],
+                  edges: [
+                    ...d.document.edges,
+                    ...downstreamVideos.map((v) => ({
+                      id: crypto.randomUUID(),
+                      source: cropped.id,
+                      target: v.id,
+                    })),
+                  ],
+                },
+              }));
+              setSelected([cropped.id]);
+              focusNodes([cropped.id]);
+              notify(
+                downstreamVideos.length
+                  ? `已裁切单格并设为 ${downstreamVideos.length} 个下游视频分镜的首帧`
+                  : "已裁切单格为独立参考图 / 首帧节点",
+              );
+            }}
+            onClose={() => setGridCropTarget(null)}
+          />
+        </Modal>
+      )}
+      {agentDock && (
+        <ProposalDiffPreview
+          workspace={project.workspace}
+          projectId={project.id}
+          revision={doc.revision.current}
+          canEditPolicy={studio.me.role === "admin" || project.owner === studio.me.id}
+          onApplied={() => {
+            void doc.reload();
+            notify("提案已批准并落图到当前画布");
+          }}
+          onOpenSkills={() => setSkillsModal(true)}
+          onClose={() => setAgentDock(false)}
+        />
+      )}
+      {skillsModal && (
+        <Modal title="工作区技能包 (SKILL.md)" wide onClose={() => setSkillsModal(false)}>
+          <SkillEditorModal workspace={project.workspace} />
         </Modal>
       )}
       {leaveFailure && (

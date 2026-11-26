@@ -671,7 +671,7 @@ export function Composer({
             <span>{creation}</span>
             <Chevron />
           </button>
-          {state.studio_plugins && !hasAnyAvailableModel && (
+          {state.studio_plugins && !hasAvailableModel && (
             state.me.role === "admin"
               ? <button className="parameter-button" onClick={managePlugins}>前往配置生成模型</button>
               : <span>请联系管理员开通模型</span>

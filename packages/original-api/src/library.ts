@@ -9,6 +9,7 @@ import {
   requireValue,
   DomainError,
 } from "@fumiao/platform/security.js";
+import { collectDerivativeObjectKeys } from "@fumiao/platform/derivatives.js";
 import { OriginalIdentity } from "./identity.js";
 import { OriginalMedia } from "./media.js";
 import { parseBody } from "./validation.js";
@@ -74,6 +75,9 @@ export class OriginalLibrary {
     throw new DomainError(400, "资产标识无效");
   }
   async access(sql: Sql, user: Actor, item: Selection, workspace: string) {
+    if (user.tokenWorkspaceId && workspace !== user.tokenWorkspaceId) {
+      throw new DomainError(403, "API Token 无权跨工作区访问该对象");
+    }
     requireValue(
       item.row.workspace_id === workspace,
       404,
@@ -384,12 +388,19 @@ export class OriginalLibrary {
         "DELETE FROM document_assets WHERE asset_id=ANY($1::uuid[])",
         [assets.map((a) => a.id)],
       );
+      const derivObjects = await collectDerivativeObjectKeys(
+        sql,
+        assets.map((a) => a.id),
+      );
       await sql.query("DELETE FROM assets WHERE id=ANY($1::uuid[])", [
         assets.map((a) => a.id),
       ]);
       return {
         deleted: entries.size,
-        objects: assets.map((a) => a.object_key as string),
+        objects: [
+          ...assets.map((a) => a.object_key as string),
+          ...derivObjects,
+        ],
       };
     });
     for (const object of outcome.objects) await this.p.storage.remove(object);

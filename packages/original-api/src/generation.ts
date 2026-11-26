@@ -16,7 +16,7 @@ import {
   executableJob,
   ordinaryFlowSource,
 } from "@fumiao/platform/retired-jobs.js";
-import { acceptTask } from "@fumiao/platform/accept.js";
+import { acceptTask, type AcceptTaskMeta } from "@fumiao/platform/accept.js";
 import { saveSubmissionForecast } from "@fumiao/platform/submission-forecast.js";
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
 import { OriginalLibrary } from "./library.js";
@@ -84,6 +84,7 @@ export class OriginalGeneration {
     value: OriginalDraft,
     selected?: string,
     priceRevision: number | bigint | null = value.price_revision,
+    meta?: AcceptTaskMeta,
   ) {
     const draft = structuredClone(value);
     try {
@@ -401,6 +402,11 @@ export class OriginalGeneration {
         hash(canonical(draft)),
         quote,
         snapshots,
+        {
+          projectId: meta?.projectId ?? null,
+          nodeId: meta?.nodeId ?? null,
+          executionKey: meta?.executionKey ?? uid,
+        },
       );
       const row = await one(
         sql,

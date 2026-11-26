@@ -185,7 +185,10 @@ export function draftEquals(a: Draft, b: Draft): boolean {
   if (
     da.schemaVersion !== db.schemaVersion ||
     da.nodes.length !== db.nodes.length ||
-    da.edges.length !== db.edges.length
+    da.edges.length !== db.edges.length ||
+    da.loudnorm !== db.loudnorm ||
+    da.bgm_applied_job !== db.bgm_applied_job ||
+    !shallowJobValueEqual(da.bgm ?? null, db.bgm ?? null)
   ) {
     return false;
   }

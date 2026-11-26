@@ -23,12 +23,23 @@ import { JobTiming } from "./timing.js";
 import { FrozenQueueHealth } from "./queue-health.js";
 import type { QueueHealth, QueueJob } from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
+import { hasTailChainTable, wakeTailFrameChildren } from "./tail-frame.js";
+import { ensureDerivativeQueued } from "./derivatives.js";
+import {
+  isModerationRejectionMessage,
+  recordCompletedJobCost,
+  tryModerationEquivalentFallback,
+  tryModerationRewrite,
+} from "./moderation-rewrite.js";
 class ReferenceUnavailable extends Error {}
 
 export class Executor {
   private readonly frozenHealth = new FrozenQueueHealth();
   constructor(private platform: Platform) {}
   async queueReady() {
+    const tailGuard = (await hasTailChainTable(this.platform.db))
+      ? "AND NOT EXISTS (SELECT 1 FROM job_tail_chains tc WHERE tc.child_job_id=j.id)"
+      : "";
     return (
       await this.platform.db
         .query(`SELECT j.id FROM jobs j LEFT JOIN outbox o ON o.job_id=j.id
@@ -40,6 +51,7 @@ export class Executor {
       AND NOT c.fmworker_resource_driver AND NOT (v.manifest ? 'fmworkerResources')
       AND ${executableJob}
       AND j.lease_token IS NULL AND (o.available_at IS NULL OR o.available_at<=now())
+      ${tailGuard}
       AND (j.request_retry_at IS NULL OR j.request_retry_at<=now())
       AND NOT (j.state='queued' AND j.kind='image' AND COALESCE((v.manifest->'requestLifecycle'->>'honorImageEnabled')::boolean,false) AND NOT (SELECT image_enabled FROM original_state_settings))
       ORDER BY COALESCE(o.available_at,j.created_at),j.id LIMIT 100`)
@@ -260,6 +272,15 @@ export class Executor {
       }
       let referenceAssets;
       if (job.state === "queued") {
+        if (
+          (await hasTailChainTable(sql)) &&
+          (await one(
+            sql,
+            "SELECT 1 FROM job_tail_chains WHERE child_job_id=$1",
+            [job.id],
+          ))
+        )
+          return;
         if (!connection.enabled) return;
         if (
           policy?.version === 3 &&
@@ -656,14 +677,31 @@ export class Executor {
                   interrupted: stage === "submit" && lifecycle.version === 1,
                   uncertain: stage === "submit" && lifecycle.version === 1,
                 };
+        let settledFailed = false;
         await p.db.transaction(async (sql) => {
           const current = await one(
             sql,
             "SELECT * FROM jobs WHERE id=$1 AND lease_token=$2 FOR UPDATE",
             [id, job.lease_token],
           );
-          if (current) await this.requestOutcome(sql, current, outcome);
+          if (current) {
+            settledFailed = await this.requestOutcome(sql, current, outcome);
+          }
         });
+        if (settledFailed) {
+          await wakeTailFrameChildren(
+            p,
+            {
+              id: String(job.id),
+              workspace_id: String(job.workspace_id),
+              owner_id: String(job.owner_id),
+              kind: String(job.kind),
+            },
+            "failed",
+            undefined,
+            AbortSignal.timeout(30_000),
+          ).catch(() => {});
+        }
         return;
       }
       if (
@@ -671,9 +709,50 @@ export class Executor {
         error.certainty === "rejected" &&
         !job.remote_id &&
         !job.receipt
-      )
-        await this.finish(job, "failed", undefined, error.message);
-      else
+      ) {
+        const recovered = await p.db.transaction(async (sql) => {
+          const current = await one(
+            sql,
+            "SELECT * FROM jobs WHERE id=$1 AND lease_token=$2 FOR UPDATE",
+            [id, job.lease_token],
+          );
+          if (!current) return false;
+          if (await this.tryAudioFallbackToEdgeTts(sql, current, error.message)) {
+            return true;
+          }
+          if (isModerationRejectionMessage(error.message)) {
+            const modOutcome: RequestDisposition = {
+              action: "fail",
+              reason: "moderation_blocked",
+              certainty: "rejected",
+              billable: false,
+              note: error.message,
+            };
+            if (await tryModerationRewrite(sql, current as any, modOutcome)) {
+              await new JobTiming(p).end(sql, current, "interrupted");
+              return true;
+            }
+            let preferredFallback: string | undefined;
+            try {
+              const cfg = p.vault.open(current.config_snapshot) as Record<string, unknown>;
+              if (typeof cfg?.fallbackModel === "string") preferredFallback = cfg.fallbackModel;
+            } catch {}
+            if (
+              await tryModerationEquivalentFallback(
+                sql,
+                current as any,
+                modOutcome,
+                preferredFallback,
+              )
+            ) {
+              await new JobTiming(p).end(sql, current, "interrupted");
+              return true;
+            }
+          }
+          return false;
+        });
+        if (!recovered) await this.finish(job, "failed", undefined, error.message);
+      } else
         await p.db.transaction(async (sql) => {
           const current = await one(
             sql,
@@ -681,6 +760,8 @@ export class Executor {
             [id, job.lease_token],
           );
           if (!current) return;
+          // Never auto-fallback paid commercial providers on ambiguous/generic errors:
+          // lack of remote_id/receipt does not prove the upstream did not accept or bill.
           await new JobTiming(p).end(sql, current, "interrupted");
           await sql.query(
             `UPDATE jobs SET state=CASE WHEN receipt IS NOT NULL THEN 'finalizing' WHEN remote_id IS NOT NULL THEN 'running' ELSE 'uncertain' END,
@@ -693,7 +774,138 @@ export class Executor {
       clearTimeout(deadline);
     }
   }
-  private async requestOutcome(sql: Sql, job: any, value: RequestDisposition) {
+  /**
+   * F029 + Q3: Real runtime audio failure fallback to free built-in Edge TTS.
+   * Only fires before upstream acceptance/artifacts (`!remote_id && !receipt`),
+   * releases any commercial credit hold atomically (zero double charge), and
+   * switches the job to enabled `edge-tts` at 0 credits.
+   */
+  private async tryAudioFallbackToEdgeTts(
+    sql: Sql,
+    job: any,
+    reason: string,
+  ): Promise<boolean> {
+    if (
+      job.kind !== "audio" ||
+      job.provider_model === "edge-tts" ||
+      job.plugin_id === "bgm-generator" ||
+      ["bgm-v1", "suno-v4", "udio-v1.5", "musicgen-large"].includes(
+        String(job.provider_model || ""),
+      ) ||
+      job.remote_id ||
+      job.receipt
+    ) {
+      return false;
+    }
+    const existingParams = (job.input?.params ?? {}) as Record<string, unknown>;
+    if (existingParams._fallback_from) return false;
+
+    const allowed = await one(
+      sql,
+      "SELECT studio_model_allowed('edge-tts', $1) AS ok",
+      [job.workspace_id],
+    );
+    if (!allowed?.ok) return false;
+
+    const edgeModel = await one(
+      sql,
+      `SELECT m.id, m.connection_id, c.plugin_id, c.plugin_version, c.config
+         FROM models m
+         JOIN connections c ON c.id = m.connection_id
+        WHERE m.catalog_id = 'edge-tts'
+          AND c.plugin_id = 'edge-tts'
+          AND c.enabled = TRUE
+          AND NOT c.removed
+        ORDER BY c.id ASC
+        LIMIT 1`,
+    );
+    if (!edgeModel) return false;
+
+    // Release commercial credit hold atomically before switching to 0-credit Edge TTS
+    const originalPrice = Number(job.price ?? 0);
+    if (originalPrice > 0) {
+      const released = await one(
+        sql,
+        "UPDATE wallets SET held = held - $2 WHERE workspace_id = $1 AND held >= $2 RETURNING balance, held",
+        [job.workspace_id, originalPrice],
+      );
+      if (!released) return false;
+      await sql.query(
+        `INSERT INTO ledger(id, workspace_id, job_id, key, action, amount, actor_id, balance_snapshot, held_snapshot, note)
+         VALUES ($1, $2, $3, $4, 'refund', $5, $6, $7, $8, $9)
+         ON CONFLICT (key) DO NOTHING`,
+        [
+          randomUUID(),
+          job.workspace_id,
+          job.id,
+          `refund-fallback:${job.id}`,
+          originalPrice,
+          job.owner_id,
+          released.balance,
+          released.held,
+          `语音引擎 ${job.provider_model} 失败，自动切换免费 Edge TTS 退回冻结`,
+        ],
+      );
+    }
+
+    const nextInput = {
+      ...(job.input ?? {}),
+      modelId: edgeModel.id,
+      params: {
+        ...existingParams,
+        _fallback_from: String(job.provider_model),
+      },
+    };
+    const note = `语音引擎 ${job.provider_model} 不可用（${reason.slice(0, 80)}），已自动切换免费 Edge TTS 兜底`;
+    await new JobTiming(this.platform).end(sql, job, "interrupted");
+    await sql.query(
+      `UPDATE jobs
+          SET model_id = $2,
+              connection_id = $3,
+              plugin_id = $4,
+              plugin_version = $5,
+              config_snapshot = $6,
+              provider_model = 'edge-tts',
+              catalog_id = 'edge-tts',
+              price = 0,
+              price_key = 'edge-tts|free',
+              input = $7::jsonb,
+              state = 'queued',
+              error = NULL,
+              request_note = $8,
+              request_retry_at = NULL,
+              lease_token = NULL,
+              lease_until = NULL,
+              updated_at = now()
+        WHERE id = $1`,
+      [
+        job.id,
+        edgeModel.id,
+        edgeModel.connection_id,
+        edgeModel.plugin_id,
+        edgeModel.plugin_version,
+        edgeModel.config,
+        JSON.stringify(nextInput),
+        note,
+      ],
+    );
+    await sql.query(
+      "INSERT INTO job_events(job_id, state, detail) VALUES ($1, 'queued', $2::jsonb)",
+      [job.id, JSON.stringify({ fallback: "edge-tts", from: job.provider_model })],
+    );
+    await sql.query(
+      `INSERT INTO outbox(job_id, available_at, sent_at)
+       VALUES ($1, now(), NULL)
+       ON CONFLICT (job_id) DO UPDATE SET available_at = now(), sent_at = NULL`,
+      [job.id],
+    );
+    return true;
+  }
+  private async requestOutcome(
+    sql: Sql,
+    job: any,
+    value: RequestDisposition,
+  ): Promise<boolean> {
     const outcome = requestDispositionSchema.parse(value),
       timing = new JobTiming(this.platform);
     if (outcome.action === "poll") {
@@ -702,6 +914,7 @@ export class Executor {
         "UPDATE jobs SET state='running',lease_token=NULL,lease_until=NULL WHERE id=$1",
         [job.id],
       );
+      return false;
     } else if (outcome.action === "retry") {
       requireValue(
         !job.remote_id && !job.receipt,
@@ -713,7 +926,51 @@ export class Executor {
         "UPDATE jobs SET state='queued',request_note=$2,request_retry_at=now()+($3*interval '1 second'),error=NULL,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1",
         [job.id, outcome.note, outcome.delaySeconds],
       );
+      return false;
     } else {
+      // F029: Non-billable audio failure automatically falls back to enabled free Edge TTS
+      if (
+        job.kind === "audio" &&
+        !outcome.uncertain &&
+        !outcome.interrupted &&
+        !job.remote_id &&
+        !job.receipt &&
+        (await this.tryAudioFallbackToEdgeTts(sql, job, outcome.note || "上游语音失败"))
+      ) {
+        return false;
+      }
+      // F024: Moderation-blocked rejected/non-billable jobs may neutralize & retry
+      // reusing the exact same hold:<job.id> reservation (zero double-billing),
+      // and fall back to an equivalent model once rewrites are exhausted.
+      const effectiveOutcome: RequestDisposition =
+        outcome.reason !== "moderation_blocked" &&
+        !outcome.uncertain &&
+        !outcome.interrupted &&
+        outcome.certainty === "rejected" &&
+        outcome.billable === false &&
+        isModerationRejectionMessage(outcome.note)
+          ? { ...outcome, reason: "moderation_blocked" }
+          : outcome;
+      if (await tryModerationRewrite(sql, job, effectiveOutcome)) {
+        await timing.end(sql, job, "interrupted");
+        return false;
+      }
+      let preferredFallback: string | undefined;
+      try {
+        const cfg = this.platform.vault.open(job.config_snapshot) as Record<string, unknown>;
+        if (typeof cfg?.fallbackModel === "string") preferredFallback = cfg.fallbackModel;
+      } catch {}
+      if (
+        await tryModerationEquivalentFallback(
+          sql,
+          job,
+          effectiveOutcome,
+          preferredFallback,
+        )
+      ) {
+        await timing.end(sql, job, "interrupted");
+        return false;
+      }
       if (outcome.interrupted) await timing.end(sql, job, "interrupted");
       if (outcome.uncertain)
         await sql.query("UPDATE jobs SET request_uncertain=true WHERE id=$1", [
@@ -728,6 +985,7 @@ export class Executor {
         undefined,
         { preserveTiming: !!outcome.interrupted },
       );
+      return true;
     }
   }
   async saveArtifacts(
@@ -786,7 +1044,21 @@ export class Executor {
         continue;
       }
       let bytes: Buffer;
-      if (version?.manifest.artifactDownload) {
+      if (item.url.startsWith("data:")) {
+        requireValue(
+          /^data:(image\/(png|jpeg|webp)|video\/mp4|audio\/(wav|mpeg));base64,[a-zA-Z0-9+/=]+$/.test(
+            item.url,
+          ),
+          400,
+          "插件内联媒体无效",
+        );
+        bytes = Buffer.from(item.url.split(",")[1], "base64");
+        requireValue(
+          bytes.length <= (job.kind === "image" ? 32 : 128) * 1024 * 1024,
+          413,
+          "图片过大",
+        );
+      } else if (version?.manifest.artifactDownload) {
         const plugin = await p.registry.resolve(
           p.db,
           job.plugin_id,
@@ -802,20 +1074,6 @@ export class Executor {
             },
             signal,
           ),
-        );
-      } else if (item.url.startsWith("data:")) {
-        requireValue(
-          /^data:(image\/(png|jpeg|webp)|video\/mp4|audio\/(wav|mpeg));base64,[a-zA-Z0-9+/=]+$/.test(
-            item.url,
-          ),
-          400,
-          "插件内联媒体无效",
-        );
-        bytes = Buffer.from(item.url.split(",")[1], "base64");
-        requireValue(
-          bytes.length <= (job.kind === "image" ? 32 : 128) * 1024 * 1024,
-          413,
-          "图片过大",
         );
       } else {
         const config = p.vault.open(job.config_snapshot);
@@ -922,7 +1180,12 @@ export class Executor {
             "INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')",
             [job.id, id],
           );
-          if (atomic) await p.settle(sql, current, "completed", result([id]));
+          await ensureDerivativeQueued(sql, id, metadata.mime);
+          if (atomic) {
+            const finalRes = result([id]);
+            await p.settle(sql, current, "completed", finalRes);
+            await recordCompletedJobCost(sql, p, current as any, finalRes);
+          }
           return id;
         });
         if (saved !== id) await p.storage.remove(key);
@@ -946,8 +1209,25 @@ export class Executor {
         "SELECT * FROM jobs WHERE id=$1 AND lease_token=$2 FOR UPDATE",
         [job.id, job.lease_token],
       );
-      if (current)
+      if (current) {
         await this.platform.settle(sql, current, state, result, error);
+        if (state === "completed") {
+          await recordCompletedJobCost(sql, this.platform, current as any, result);
+        }
+      }
     });
+    const firstAsset =
+      result &&
+      typeof result === "object" &&
+      Array.isArray((result as { assets?: unknown }).assets)
+        ? String((result as { assets: unknown[] }).assets[0] ?? "")
+        : undefined;
+    await wakeTailFrameChildren(
+      this.platform,
+      job,
+      state,
+      firstAsset || undefined,
+      AbortSignal.timeout(45_000),
+    ).catch(() => {});
   }
 }

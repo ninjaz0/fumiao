@@ -1,6 +1,51 @@
 import type { CanvasExtension, CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
 import {acceptsCanvasEdge,canvasSourceKind} from "@fumiao/plugin-sdk/canvas-ports";
-export type Kind = "text" | "image" | "video" | "sticky" | "plugin";
+export type Kind = "text" | "image" | "video" | "sticky" | "plugin" | "group";
+export type CanvasGenerationMode =
+  | "first_frame"
+  | "first_last_frame"
+  | "omni_ref"
+  | "grid_preview";
+export type CinematographySpec = {
+  shot_size?: string;
+  camera_angle?: string;
+  camera_movement?: string;
+  lighting?: string;
+  lens?: string;
+  mood?: string;
+};
+export type PrecheckStage = "image" | "video" | "narration" | "dialogue";
+export type PrecheckItem = {
+  node_id: string;
+  title: string;
+  node_type: Kind;
+  stage: PrecheckStage;
+  model: string;
+  credits: number;
+  status: "ready" | "warning" | "blocked";
+  issues: string[];
+};
+export type PrecheckResponse = {
+  revision: number;
+  stale_revision: boolean;
+  price_revision: number;
+  precheck_token?: string;
+  executable_keys?: string[];
+  items: PrecheckItem[];
+  summary: {
+    total: number;
+    ready: number;
+    warning: number;
+    blocked: number;
+    runnable: number;
+    total_credits: number;
+    available_credits: number;
+    sufficient: boolean;
+    budget_blocked?: boolean;
+    budget_blocks?: string[];
+    budget_warnings?: string[];
+  };
+};
 export type H3Options = {mode:"reference"|"frames";first_frame?:string|null;last_frame?:string|null;video_audio?:string[]};
 export type Params = {
   h3?: H3Options|null;
@@ -16,11 +61,38 @@ export type Params = {
   resolution: "1K" | "2K" | "4K";
   image_quality: "low" | "medium" | "high";
 };
+export type DialogueLine = {
+  id: string;
+  speaker: string;
+  text: string;
+  pack_id?: string | null;
+  voice_id?: string;
+  model?: string;
+  instruction?: string;
+  audio_job?: number | null;
+  audio_pending?: number | null;
+};
+export type CanvasBgm = {
+  asset_id: string | null;
+  volume: number;
+  ducking: boolean;
+  loop: boolean;
+};
 export type CanvasNode = {
   narration_text?:string;
   narration_instruction?:string;
+  narration_model?:string;
   narration_job?:number|null;
   narration_pending?:number|null;
+  audio_strategy?: "replace" | "keep_original" | "mix";
+  original_audio_gain?: number;
+  tail_inherited?: boolean;
+  dialogue_lines?: DialogueLine[];
+  parent_id?: string | null;
+  generation_mode?: CanvasGenerationMode;
+  grid_layout?: "2x2" | "3x3" | null;
+  cinematography?: CinematographySpec | null;
+  extra_params?: Record<string, unknown> | null;
   asset_packs?: {id:string;revision:number;name?:string}[];
   id: string;
   type: Kind;
@@ -44,6 +116,9 @@ export type Doc = {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
   shots?: string[];
+  bgm?: CanvasBgm | null;
+  bgm_applied_job?: number | null;
+  loudnorm?: boolean;
 };
 export type Draft = { title: string; document: Doc };
 export type Project = Draft & {
@@ -139,6 +214,7 @@ export const names: Record<Kind, string> = {
   video: "视频",
   sticky: "便签",
   plugin: "插件",
+  group: "工作流组",
 };
 export const newNode = (
   type: Kind,
@@ -151,11 +227,11 @@ export const newNode = (
   title: names[type] + " " + count,
   x,
   y,
-  width: 320,
-  height: type === "text" || type === "sticky" ? 240 : 240,
+  width: type === "group" ? 720 : 320,
+  height: type === "group" ? 440 : 240,
   text: "",
   prompt: "",
-  color: type === "sticky" ? "yellow" : "none",
+  color: type === "sticky" ? "yellow" : type === "group" ? "blue" : "none",
   media_id: null,
   active_job: null,
   params: { ...defaults },

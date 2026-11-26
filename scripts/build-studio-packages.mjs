@@ -42,6 +42,11 @@ const releases = [
     sandboxBuild: "package/build.mjs",
   },
   { id: "storyboard" },
+  { id: "jianying-exporter" },
+  { id: "fcpxml-exporter" },
+  { id: "openrouter-gateway", sandboxBuild: "package/build.mjs" },
+  { id: "tts-commercial", sandboxBuild: "package/build.mjs" },
+  { id: "bgm-generator", sandboxBuild: "package/build.mjs" },
   { id: "payments" },
   { id: "example-extension" },
   { id: "example-asset-tags" },
@@ -146,7 +151,13 @@ for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of
             ? "节点池协议升级，排空任务后重新接入实例"
             : id === "muse" || id === "flow"
               ? "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS"
-              : "首次发布",
+              : id === "example-node-pool"
+                ? "修复节点工作机拉取任务参考素材路径与安全文件名处理"
+                : id === "bgm-generator"
+                  ? "修复 BGM 原生任务计划校验、参数冻结与沙箱成品下载路径解析"
+                  : id === "tts-commercial"
+                    ? "修复商业 TTS 原生任务计划校验与参数冻结"
+                    : "首次发布",
       package: path,
       sha256: hash(data),
     }),

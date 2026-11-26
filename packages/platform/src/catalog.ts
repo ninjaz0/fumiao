@@ -483,4 +483,155 @@ export class StudioCatalog {
       revision: global.price_revision,
     };
   }
+  /** Lock-free read-only quote for Precheck (F010) inside REPEATABLE READ READ ONLY transactions. */
+  async quoteReadOnly(
+    sql: Sql,
+    modelId: string,
+    workspace: string,
+    params: Record<string, unknown>,
+    options?: { requireConnection?: boolean },
+  ): Promise<{
+    allowed: boolean;
+    priced: boolean;
+    amount: number;
+    key: string | null;
+    revision: number;
+    reason?: string;
+  }> {
+    const requireConnection = options?.requireConnection ?? true;
+    const global = await one(sql, "SELECT price_revision FROM studio_policy");
+    const revision = Number(global?.price_revision ?? 1);
+    const catalog = await one(
+      sql,
+      "SELECT * FROM studio_catalog WHERE id=$1",
+      [modelId],
+    );
+    if (!catalog) {
+      return {
+        allowed: false,
+        priced: false,
+        amount: 0,
+        key: null,
+        revision,
+        reason: `模型“${modelId}”未安装或已下架`,
+      };
+    }
+    const policy = await one(
+      sql,
+      "SELECT studio_model_allowed($1,$2) AS allowed",
+      [modelId, workspace],
+    );
+    if (!policy?.allowed) {
+      return {
+        allowed: false,
+        priced: false,
+        amount: 0,
+        key: null,
+        revision,
+        reason: "当前空间未开放该模型",
+      };
+    }
+    if (requireConnection) {
+      const pkgFilter = (await hasStudioPackages(sql))
+        ? "AND studio_service_selected(m.catalog_id, c.id)"
+        : "";
+      const activeConn = await one(
+        sql,
+        `SELECT 1 AS ok
+           FROM models m
+           JOIN connections c ON c.id = m.connection_id
+           LEFT JOIN model_permissions p ON p.model_id = m.id AND p.workspace_id = $2
+          WHERE m.catalog_id = $1
+            AND c.plugin_id = $3
+            AND c.plugin_version = $4
+            AND c.enabled = TRUE
+            AND NOT c.removed
+            AND COALESCE(p.enabled, TRUE) = TRUE
+            ${pkgFilter}
+          LIMIT 1`,
+        [modelId, workspace, catalog.plugin_id, catalog.plugin_version],
+      );
+      if (!activeConn?.ok) {
+        return {
+          allowed: false,
+          priced: false,
+          amount: 0,
+          key: null,
+          revision,
+          reason:
+            catalog.descriptor?.kind === "audio"
+              ? "音频配音服务尚未配置或连接已停用"
+              : "模型执行连接尚未启用或未配置",
+        };
+      }
+    }
+    const allTiers = (
+      await sql.query("SELECT * FROM studio_prices WHERE model_id=$1 ORDER BY position", [
+        modelId,
+      ])
+    ).rows;
+    const expanded: Record<string, unknown> = { ...params };
+    if (
+      typeof params.image_quality === "string" &&
+      expanded.quality === undefined
+    ) {
+      expanded.quality = params.image_quality;
+    }
+    if (
+      typeof params.ratio === "string" &&
+      typeof params.resolution === "string" &&
+      catalog.runtime?.sizes?.[params.ratio] &&
+      expanded.size === undefined
+    ) {
+      const dims = catalog.runtime.sizes[params.ratio];
+      const idx =
+        params.resolution === "4K" ? 4 : params.resolution === "2K" ? 2 : 0;
+      if (Array.isArray(dims) && dims.length >= idx + 2) {
+        expanded.size = `${dims[idx]}x${dims[idx + 1]}`;
+      }
+    }
+    const matched = allTiers.filter((p) => matcher.validate(p.matcher, expanded));
+    let chosen: Record<string, any> | null = matched[0] ?? null;
+    if (!chosen && typeof params.resolution === "string") {
+      const q = String(params.image_quality ?? params.quality ?? "medium");
+      chosen =
+        allTiers.find((p) => p.tier === `${params.resolution}|${q}`) ?? null;
+    }
+    if (!chosen && params.seconds !== undefined) {
+      const sec = String(params.seconds);
+      const qual = params.quality !== undefined ? String(params.quality) : "";
+      chosen =
+        allTiers.find(
+          (p) => p.tier === `${qual}|${sec}` || p.tier === sec,
+        ) ?? null;
+    }
+    if (!chosen && allTiers.length === 1) chosen = allTiers[0];
+    if (!chosen) {
+      return {
+        allowed: true,
+        priced: false,
+        amount: 0,
+        key: null,
+        revision,
+        reason: "模型当前参数档位无对应计费规则",
+      };
+    }
+    if (chosen.amount === null || chosen.amount === undefined) {
+      return {
+        allowed: true,
+        priced: false,
+        amount: 0,
+        key: chosen.key,
+        revision,
+        reason: "该计费档位尚未定价",
+      };
+    }
+    return {
+      allowed: true,
+      priced: true,
+      amount: Number(chosen.amount),
+      key: chosen.key,
+      revision,
+    };
+  }
 }
