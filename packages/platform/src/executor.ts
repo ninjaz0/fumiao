@@ -23,7 +23,11 @@ import { inspectProviderOutput } from "./provider-output.js";
 import { inspectMedia } from "./media.js";
 import { artifactCapacity } from "./capacity.js";
 import { JobTiming } from "./timing.js";
-import { FrozenQueueHealth, sealedConfigKey } from "./queue-health.js";
+import {
+  FrozenQueueHealth,
+  sealedConfigKey,
+  submissionEndpointKey,
+} from "./queue-health.js";
 import type { QueueHealth, QueueJob } from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
 import { hasTailChainTable, wakeTailFrameChildren } from "./tail-frame.js";
@@ -354,8 +358,10 @@ export class Executor {
               [connection.id],
             )
           ).rows;
+          const jobEndpointKey = submissionEndpointKey(p, job.config_snapshot);
           const endpointActive = active.filter(
-            (j) => sealedConfigKey(p, j.config_snapshot) === jobConfigKey,
+            (j) =>
+              submissionEndpointKey(p, j.config_snapshot) === jobEndpointKey,
           );
           const capacity = plugin.requestCapacity({
             stamp: Date.now() / 1000,

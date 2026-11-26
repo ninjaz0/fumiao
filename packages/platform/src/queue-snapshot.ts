@@ -2,7 +2,7 @@ import type { Platform, Actor } from "./platform.js";
 import type { Sql } from "./db.js";
 import { one } from "./db.js";
 import { forecastQueue } from "./queue.js";
-import { sealedConfigKey } from "./queue-health.js";
+import { sealedConfigKey, submissionEndpointKey } from "./queue-health.js";
 import {
   Estimator,
   elapsedDetail,
@@ -152,10 +152,18 @@ export class QueueForecasts {
     for (const connection of connections) {
       const owned = jobs.filter((j) => j.connection_id === connection.id);
       const currentConfigKey = sealedConfigKey(this.p, connection.config);
+      const currentEndpointKey = submissionEndpointKey(
+        this.p,
+        connection.config,
+      );
       const jobConfigKey = (j: any) =>
         j.config_snapshot !== undefined
           ? sealedConfigKey(this.p, j.config_snapshot)
           : currentConfigKey;
+      const jobEndpointKey = (j: any) =>
+        j.config_snapshot !== undefined
+          ? submissionEndpointKey(this.p, j.config_snapshot)
+          : currentEndpointKey;
       const toQueueJob = (j: any): QueueJob => ({
         id: Number(j.public_id),
         node: nodePublic.get(j.remote_id) ?? null,
@@ -187,7 +195,7 @@ export class QueueForecasts {
         }));
       const cohortMap = new Map<
         string,
-        { version: string; configKey: string }
+        { version: string; configKey: string; endpointKey: string }
       >();
       for (const j of owned) {
         if (
@@ -197,12 +205,15 @@ export class QueueForecasts {
           continue;
         const version = String(j.plugin_version);
         const configKey = jobConfigKey(j);
+        const endpointKey = jobEndpointKey(j);
         const key = JSON.stringify([version, configKey]);
-        if (!cohortMap.has(key)) cohortMap.set(key, { version, configKey });
+        if (!cohortMap.has(key))
+          cohortMap.set(key, { version, configKey, endpointKey });
       }
       for (const {
         version: targetVersion,
         configKey: targetConfigKey,
+        endpointKey: targetEndpointKey,
       } of cohortMap.values()) {
         const version = await one(
           sql,
@@ -254,10 +265,12 @@ export class QueueForecasts {
         let otherEndpointActiveCount = 0;
         if (usesQueueHealth) {
           const sameEndpointActive = owned.filter(
-            (j) => j.state !== "queued" && jobConfigKey(j) === targetConfigKey,
+            (j) =>
+              j.state !== "queued" && jobEndpointKey(j) === targetEndpointKey,
           );
           otherEndpointActiveCount = owned.filter(
-            (j) => j.state !== "queued" && jobConfigKey(j) !== targetConfigKey,
+            (j) =>
+              j.state !== "queued" && jobEndpointKey(j) !== targetEndpointKey,
           ).length;
           const cohortWaiting = owned.filter(
             (j) => j.state === "queued" && inCohort(j),

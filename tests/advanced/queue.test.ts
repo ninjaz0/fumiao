@@ -1685,6 +1685,69 @@ test("Muse 2.1.0 deducts external image occupancy from 8-image cap while externa
       return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
     };
 
+    // --- Part 0: Editing ONLY publicUrl on 1-account Endpoint A still shares 1-account capacity ---
+    await new QueueHealthPoller(f.p).refresh(connId);
+    const pubA1 = await submitImage("Endpoint A publicUrl改前");
+    const connInitial = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connId,
+    )!;
+    await f.p.updateConnection(actor, connId, {
+      revision: connInitial.revision,
+      enabled: true,
+      concurrency: 16,
+      config: {
+        baseUrl: "https://1.1.1.1",
+        apiKey: "key-endpoint-a",
+        publicUrl: "https://alias-a.example.com/muse",
+      },
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+    const pubA2 = await submitImage("Endpoint A publicUrl改后");
+
+    await executor.execute(pubA1.id);
+    await executor.execute(pubA1.id); // generating phase on Endpoint A
+    await executor.execute(pubA2.id);
+    assert.equal(
+      maxConcurrentOnA,
+      1,
+      "editing only publicUrl must still share 1-account Endpoint A capacity",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [pubA1.id])).state,
+      "running",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [pubA2.id])).state,
+      "queued",
+    );
+    const pubAForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.ok(
+      pubAForecast.jobs[pubA2.id].eta.median > 0,
+      "post-publicUrl-edit queued job must see pre-edit running job occupying Endpoint A's 1 account",
+    );
+
+    const pubA1Remote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [pubA1.id])
+    ).remote_id;
+    completedOnA.add(pubA1Remote);
+    activeOnA--;
+    await executor.execute(pubA1.id);
+    await executor.execute(pubA2.id);
+    const pubA2Remote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [pubA2.id])
+    ).remote_id;
+    completedOnA.add(pubA2Remote);
+    activeOnA--;
+    await executor.execute(pubA2.id);
+    assert.equal(maxConcurrentOnA, 1);
+
     // --- Part A (Item 3): Same-version edit from 1-account Endpoint A to 12-account Endpoint B ---
     const jobA1 = await submitImage("Endpoint A 图 1");
     const jobA2 = await submitImage("Endpoint A 图 2");
@@ -1834,6 +1897,63 @@ test("Muse 2.1.0 deducts external image occupancy from 8-image cap while externa
     assert.equal(
       (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [bImages[7].id]))
         .state,
+      "running",
+    );
+
+    // --- Part C: Editing ONLY publicUrl on 12-account Endpoint B preserves shared 8-image cap across pre/post edit jobs ---
+    await executor.execute(bImages[7].id); // advance 8th image to generating
+    await executor.execute(bVideo.id); // advance video to generating
+    externalTasksB = [];
+    const connOnB = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connId,
+    )!;
+    await f.p.updateConnection(actor, connId, {
+      revision: connOnB.revision,
+      enabled: true,
+      concurrency: 16,
+      config: {
+        baseUrl: "https://8.8.8.8/",
+        apiKey: "key-endpoint-b",
+        publicUrl: "https://alias-b.example.com/muse",
+      },
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+
+    const bImage9AfterPubEdit = await submitImage("B publicUrl改后第9图");
+    const bVideo2AfterPubEdit = await submitVideo("B publicUrl改后第2视频");
+    const pubBForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.ok(
+      pubBForecast.jobs[bImage9AfterPubEdit.id].eta.median > 0,
+      "9th image after publicUrl-only edit must still wait behind the 8 active images on Endpoint B",
+    );
+    assert.equal(
+      pubBForecast.jobs[bVideo2AfterPubEdit.id].eta.median,
+      0,
+      "video after publicUrl-only edit still sees open shared slots (9 < 12) on Endpoint B",
+    );
+    await executor.execute(bImage9AfterPubEdit.id);
+    assert.equal(
+      (
+        await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+          bImage9AfterPubEdit.id,
+        ])
+      ).state,
+      "queued",
+    );
+    await executor.execute(bVideo2AfterPubEdit.id);
+    assert.equal(
+      (
+        await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+          bVideo2AfterPubEdit.id,
+        ])
+      ).state,
       "running",
     );
   } finally {
