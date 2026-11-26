@@ -41,7 +41,6 @@ pnpm exec fumiao-plugin build voice-length
 | --- | --- | --- |
 | `importers` | 从图片链接导入素材，或将外部分镜清单转换成工作区画布 | `package/image.js`、`package/story.js` 的 `plan` |
 | `providers` | 接受任务并返回一张固定图片的 HTTP 服务 | `server.mjs`、`package/release.json` 的模型清单 |
-| `nodePools` | 报告已就绪模型，领取图片任务，校验节点回执 | `package/program.js` 的五个钩子、`client/worker.py` |
 | `settingsPages` | 在插件设置里添加、删除工作区备注 | `package/notes.js` 的 `view` 和 `action` |
 | `settings` | 保存全站与工作区的显示选项，升级时迁移旧值 | `package/release.json` 的设置 schema、`package/migrate.js` |
 | `pages` | 工作台侧栏的审片清单 | `package/board.js` |

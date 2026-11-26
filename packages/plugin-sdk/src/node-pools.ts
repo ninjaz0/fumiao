@@ -16,7 +16,6 @@ export const capabilitiesSchema = z
     loaded_model_key: z.string().max(180).optional(),
     vram_total_mb: z.number().int().positive().max(1_048_576).optional(),
     vram_free_mb: z.number().int().nonnegative().max(1_048_576).optional(),
-    comfy_object_info_hash: z.string().max(128).optional(),
     scheduling: z
       .object({
         hardware: z.string().max(180),

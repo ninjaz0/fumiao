@@ -9,7 +9,6 @@ export async function writeAuthorTemplates(root, destination) {
   const templates = {
     importers: "example-importers",
     providers: "example-studio",
-    nodePools: "example-node-pool",
     settingsPages: "example-extension",
     settings: "example-extension",
     pages: "example-review-board",
@@ -67,15 +66,6 @@ export async function writeAuthorTemplates(root, destination) {
       if (release.contributes.settings?.migrateFile) {
         const name = release.contributes.settings.migrateFile;
         files["package/" + name] = await read("package/" + name);
-      }
-      if (type === "nodePools") {
-        for (const name of [
-          "package/program.js",
-          "client/worker.py",
-          "client/pack.py",
-          "distribution/install.sh",
-        ])
-          files[name] = await read(name);
       }
     }
     if (type === "importers")

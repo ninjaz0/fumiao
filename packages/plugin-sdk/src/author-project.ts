@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
@@ -47,8 +46,6 @@ export async function createProject(kind: string, path?: string) {
       const dest = join(target, name);
       await mkdir(dirname(dest), { recursive: true });
       let source = original.replaceAll(template.sourceId, id);
-      if (kind === "nodePools")
-        source = source.replaceAll("comfy-image", id + "-image");
       if (name === "package/release.json") {
         const release = JSON.parse(source);
         release.version = "1.0.0";
@@ -61,14 +58,11 @@ export async function createProject(kind: string, path?: string) {
       }
       await writeFile(dest, source, { flag: "wx" });
     }
-    if (kind === "nodePools")
-      execFileSync("python3", ["client/pack.py"], { cwd: target });
     const scripts = {
       dev: "fumiao-plugin dev .",
       test: "fumiao-plugin test .",
       build: "fumiao-plugin build .",
       ...(kind === "providers" ? { provider: "node server.mjs" } : {}),
-      ...(kind === "nodePools" ? { client: "python3 client/pack.py" } : {}),
     };
     await writeFile(
       join(target, "package.json"),

@@ -55,7 +55,6 @@ const releases = [
   { id: "example-reading-time" },
   { id: "example-importers" },
   { id: "example-review-notes" },
-  { id: "example-node-pool", program: true, clientBuild: "client/pack.py" },
 ];
 async function packContributions(root, contributes) {
   for (const page of [
@@ -81,7 +80,7 @@ async function packContributions(root, contributes) {
     delete contributes.settings.migrateFile;
   }
 }
-for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of releases) {
+for (const { id, archive, archiveDigest, sandboxBuild } of releases) {
   const root = "plugins/" + id,
     file = JSON.parse(await readFile(root + "/package/release.json", "utf8"));
   if (archive) {
@@ -121,21 +120,12 @@ for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of
   }
   if (file.contributes)
     await packContributions(root + "/package", file.contributes);
-  if (program) file.program = await expression(root + "/package/program.js");
   if (id === "gpu")
     file.nodeClient = JSON.parse(
       execFileSync("python3", [join(root, "package/build-client.py")], {
         encoding: "utf8",
       }),
     );
-  else if (file.contributes?.nodePools) {
-    if (clientBuild) execFileSync("python3", [join(root, clientBuild)]);
-    file.nodeClient = {};
-    for (const name of ["agent.tgz", "install.sh", "agent.tgz.sha256"])
-      file.nodeClient[name] = (
-        await readFile(root + "/distribution/" + name)
-      ).toString("base64");
-  }
   const path = id + ".fmplugin.json",
     data = json(file);
   await writeFile(root + "/" + path, data);
@@ -151,13 +141,11 @@ for (const { id, archive, archiveDigest, program, sandboxBuild, clientBuild } of
             ? "节点池协议升级，排空任务后重新接入实例"
             : id === "muse" || id === "flow"
               ? "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS"
-              : id === "example-node-pool"
-                ? "修复节点工作机拉取任务参考素材路径与安全文件名处理"
-                : id === "bgm-generator"
-                  ? "修复 BGM 原生任务计划校验、参数冻结与沙箱成品下载路径解析"
-                  : id === "tts-commercial"
-                    ? "修复商业 TTS 原生任务计划校验与参数冻结"
-                    : "首次发布",
+              : id === "bgm-generator"
+                ? "修复 BGM 原生任务计划校验、参数冻结与沙箱成品下载路径解析"
+                : id === "tts-commercial"
+                  ? "修复商业 TTS 原生任务计划校验与参数冻结"
+                  : "首次发布",
       package: path,
       sha256: hash(data),
     }),
