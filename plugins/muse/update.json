@@ -1,7 +1,7 @@
 {
   "id": "muse",
   "version": "2.1.0",
-  "notes": "支持按 Muse2API 启用账号数自动并发派发图片与视频任务",
+  "notes": "支持按 Muse2API 启用账号数回退并发派发（图片最多 8 路，总容量请结合上游 MUSE2API_CONCURRENCY 与共享占用评估）；存量连接保留原并行任务数量，如需扩容请手动调高",
   "package": "muse.fmplugin.json",
-  "sha256": "0f1516b624730b25d6b0ab22c506ed27e8565299757e7b599c6dd94f43a844f7"
+  "sha256": "1373b5c97522778c7de049054c1f349a374b2aed4aa7545c9f87485953562695"
 }

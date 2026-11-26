@@ -289,6 +289,18 @@ test("capacity plugins expose defaultConcurrency 16 for new service forms while 
       assert.equal(fallback, savedConcurrency);
       assert.equal(parseServiceConcurrency("", fallback), savedConcurrency);
     }
+
+    const settingsSource = await readFile(
+      "apps/web/studio/SettingsPlugins.tsx",
+      "utf8",
+    );
+    assert.ok(settingsSource.includes("MUSE2API_CONCURRENCY"));
+    assert.ok(settingsSource.includes("8 张"));
+    const museUpdate = JSON.parse(
+      await readFile("plugins/muse/update.json", "utf8"),
+    );
+    assert.ok(museUpdate.notes.includes("MUSE2API_CONCURRENCY"));
+    assert.ok(museUpdate.notes.includes("存量连接"));
   } finally {
     await f.cleanup();
   }

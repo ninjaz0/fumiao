@@ -18,6 +18,7 @@ import {
 import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
 import { PluginRegistry } from "@fumiao/platform/plugins.js";
 import { QueueHealthPoller } from "@fumiao/platform/queue-health.js";
+import { QueueForecasts } from "@fumiao/platform/queue-snapshot.js";
 import { Executor } from "@fumiao/platform/executor.js";
 import { migrate, one } from "@fumiao/platform/db.js";
 import { execFileSync } from "node:child_process";
@@ -2546,6 +2547,7 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
   ]);
   const media = await readFile(mp4Path);
   let createdTasks = 0;
+  const completedTaskIds = new Set<string>();
   const fixture = createServer(async (req, res) => {
     if (req.headers.authorization !== "Bearer muse-key")
       return void res.writeHead(401).end();
@@ -2558,14 +2560,36 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
         // consume body
       }
       const n = String(++createdTasks).padStart(32, "0");
+      const now = Math.floor(Date.now() / 1000);
       return void res.end(
-        JSON.stringify({ id: "task_" + n, status: "queued" }),
+        JSON.stringify({ id: "task_" + n, status: "queued", created_at: now }),
       );
     }
-    if (req.url?.startsWith("/v1/videos/task_"))
+    if (req.url?.startsWith("/v1/videos/task_")) {
+      const id = req.url.slice("/v1/videos/".length);
+      const now = Math.floor(Date.now() / 1000);
+      if (completedTaskIds.has(id))
+        return void res.end(
+          JSON.stringify({
+            id,
+            status: "completed",
+            url: "/v1/media/upgrade.mp4",
+            created_at: now,
+            started_at: now,
+            generating_at: now,
+          }),
+        );
       return void res.end(
-        '{"status":"completed","url":"/v1/media/upgrade.mp4"}',
+        JSON.stringify({
+          id,
+          status: "processing",
+          phase: "generating",
+          created_at: now,
+          started_at: now,
+          generating_at: now,
+        }),
       );
+    }
     if (req.url === "/v1/media/upgrade.mp4") return void res.end(media);
     res.writeHead(404).end();
   });
@@ -2585,6 +2609,7 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
   try {
     assert.equal(v20.version, "2.0.0");
     assert.equal(v21.version, "2.1.0");
+    const parsed20 = manifestSchema.parse(v20.manifest);
     assert.ok(
       manifestSchema.parse(v21.manifest).queue?.timingVersions.includes("2.0.0"),
       "Muse 2.1.0 must retain 2.0.0 in timingVersions so 2.0.0 calibration samples survive upgrade",
@@ -2618,18 +2643,75 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
     await f.db.transaction((sql) =>
       f.p.credit(sql, team.id, 100, randomUUID(), "adjust"),
     );
+
+    // Seed 2.0.0 calibration samples (60s)
+    const vidFeatures = JSON.stringify({
+      kind: "video",
+      model: "muse-video",
+      executor: "muse-api",
+      workflow: "muse2api-native-v1",
+      width: 0,
+      height: 0,
+      native_ratio: "16:9",
+      seconds: 5,
+      steps: 0,
+      video_mode: "t2v",
+      quality: "native",
+      refs: 0,
+      ref_pixels: 0,
+      hardware: "muse-api",
+      profile: {},
+      runtime_id: "",
+      cold: null,
+    });
+    for (let i = 0; i < 6; i++) {
+      await f.db.query(
+        "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse','2.0.0',$2,'video','muse-video',$3,$4,$4,$5,'done','done')",
+        [
+          randomUUID(),
+          JSON.stringify(parsed20.timing),
+          vidFeatures,
+          1000 + i * 100,
+          1060 + i * 100,
+        ],
+      );
+    }
+
+    await new QueueHealthPoller(f.p).refresh(connId);
     const g = new OriginalGeneration(f.p);
-    const accepted20 = await g.submit(
-      f.actor,
-      await g.parse("video", {
-        uid: randomUUID(),
-        model: "muse-video",
-        prompt: "旧版在途视频",
-        ratio: "16:9",
-        seconds: 5,
-      }),
-      String(team.public_id),
+    const executor = new Executor(f.p);
+    const submitVideo = async (prompt: string) => {
+      const res = await g.submit(
+        f.actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "muse-video",
+          prompt,
+          ratio: "16:9",
+          seconds: 5,
+        }),
+        String(team.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+
+    const running20 = await submitVideo("旧版运行中视频");
+    const queued20 = await submitVideo("旧版排队视频");
+    await executor.execute(running20.id);
+    await executor.execute(running20.id); // transitions run phase -> generating
+    await executor.execute(queued20.id); // blocked by 2.0.0 single-lane capacity
+
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [running20.id]))
+        .state,
+      "running",
     );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued20.id]))
+        .state,
+      "queued",
+    );
+
     const pkgBefore = (await f.packages.list(f.actor)).find(
       (p) => p.id === "muse",
     )!;
@@ -2639,6 +2721,10 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
     assert.equal(savedConn.plugin_version, "2.1.0");
     assert.equal(savedConn.concurrency, 3);
 
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
     await new QueueHealthPoller(f.p).refresh(connId);
     const connHealth = await one(
       f.db,
@@ -2647,21 +2733,61 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
     );
     assert.equal(connHealth.queue_health.capacity, 3);
 
-    const executor = new Executor(f.p);
-    const row20 = await one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [
-      accepted20.id,
-    ]);
-    assert.equal(row20.plugin_version, "2.0.0");
-    await executor.execute(row20.id);
-    await executor.execute(row20.id);
-    const done20 = await one(f.db, "SELECT * FROM jobs WHERE id=$1", [
-      row20.id,
-    ]);
-    assert.equal(done20.state, "completed", done20.error);
-    assert.equal(done20.plugin_version, "2.0.0");
+    const queued21 = await submitVideo("新版排队视频");
+    assert.equal(queued21.plugin_version, "2.1.0");
+
+    // QueueForecasts must forecast each job by its own plugin_version:
+    // - queued20 (2.0.0) has no trusted 2.0.0 health snapshot -> reason: "observing" (never 2.1.0's immediate start median=0)
+    // - queued21 (2.1.0) uses 2.1.0's capacity=3 + inherited 2.0.0 samples -> immediate start (source="queue", median=0)
+    const snapshot = await new QueueForecasts(f.p).forWorkspace(
+      f.actor,
+      team.id,
+    );
+    assert.equal(snapshot.jobs[queued20.id].eta.source, "none");
+    assert.equal(snapshot.jobs[queued20.id].eta.reason, "observing");
+    assert.equal(snapshot.jobs[queued21.id].eta.source, "queue");
+    assert.equal(snapshot.jobs[queued21.id].eta.median, 0);
+
+    // Executor respects 2.0.0's 1-lane limit on queued20 while dispatching 2.1.0's queued21 immediately
+    await executor.execute(queued20.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued20.id]))
+        .state,
+      "queued",
+    );
+    await executor.execute(queued21.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued21.id]))
+        .state,
+      "running",
+    );
+
+    // Drain all 3 jobs cleanly once upstream finishes
+    const run20Remote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [running20.id])
+    ).remote_id;
+    const run21Remote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [queued21.id])
+    ).remote_id;
+    completedTaskIds.add(run20Remote);
+    completedTaskIds.add(run21Remote);
+    await executor.execute(running20.id);
+    await executor.execute(queued21.id);
+
+    await executor.execute(queued20.id);
+    const q20Remote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [queued20.id])
+    ).remote_id;
+    completedTaskIds.add(q20Remote);
+    await executor.execute(queued20.id);
+
+    for (const id of [running20.id, queued20.id, queued21.id]) {
+      const done = await one(f.db, "SELECT * FROM jobs WHERE id=$1", [id]);
+      assert.equal(done.state, "completed", done.error);
+    }
     assert.equal(
       Number((await f.p.wallet(f.actor, team.id)).balance),
-      95,
+      85,
     );
   } finally {
     fixture.closeAllConnections();

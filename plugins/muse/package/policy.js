@@ -9,8 +9,153 @@ import {
   statePolicy,
   timingFeatures,
 } from "../src/studio-policies.ts";
-import { queuePolicy } from "../src/queue-policy.ts";
+import { museCapacity } from "../src/queue-policy.ts";
 import { museClockReport } from "../src/clock-report.ts";
+
+const IMAGE_QUEUE_LIMIT = 8;
+const compareQueueJobs = (a, b) =>
+  typeof a.id === "number" && typeof b.id === "number"
+    ? a.id - b.id
+    : String(a.id) < String(b.id)
+      ? -1
+      : String(a.id) > String(b.id)
+        ? 1
+        : 0;
+const laneRank = (lane) => lane.median ?? Infinity;
+function applyBusyLane(lane, eta) {
+  for (const key of ["low", "median", "high"])
+    lane[key] =
+      lane[key] !== null && eta[key] != null && !eta.overdue
+        ? Math.max(lane[key], eta[key])
+        : null;
+}
+const muse21QueuePolicy = {
+  requestCapacity(context) {
+    if (
+      !context.health.ready ||
+      context.stamp - (context.health.checked ?? 0) >= 90
+    )
+      return 0;
+    const shared = museCapacity(context);
+    if (context.job?.kind !== "image") return shared;
+    const activeNonImage = context.jobs.filter(
+      (j) => j.status === "running" && j.kind !== "image",
+    ).length;
+    return Math.min(shared, activeNonImage + IMAGE_QUEUE_LIMIT);
+  },
+  queuePlan(context, tools) {
+    const { health, jobs, runs, stamp } = context,
+      available = health.ready && stamp - (health.checked ?? 0) < 90,
+      capacity = museCapacity(context),
+      imageCapacity = Math.min(Math.max(1, capacity), IMAGE_QUEUE_LIMIT);
+    const sharedLanes = Array.from({ length: Math.max(1, capacity) }, () => ({
+      low: 0,
+      median: 0,
+      high: 0,
+    }));
+    const imageLanes = Array.from({ length: imageCapacity }, () => ({
+      low: 0,
+      median: 0,
+      high: 0,
+    }));
+    const busy = jobs.filter(
+      (j) => j.status === "running" && runs[j.id]?.phase !== "queued",
+    );
+    let imageBusyIndex = 0;
+    for (const [index, job] of busy.entries()) {
+      const eta = tools.remaining(job);
+      applyBusyLane(
+        sharedLanes[Math.min(index, sharedLanes.length - 1)],
+        eta,
+      );
+      if (job.kind === "image") {
+        applyBusyLane(
+          imageLanes[Math.min(imageBusyIndex, imageLanes.length - 1)],
+          eta,
+        );
+        imageBusyIndex++;
+      }
+    }
+    const plans = {};
+    let ahead = 0;
+    for (const job of jobs
+      .filter(
+        (j) =>
+          j.status === "queued" ||
+          (j.status === "running" && runs[j.id]?.phase === "queued"),
+      )
+      .sort(compareQueueJobs)) {
+      if (job.kind === "image" && !context.imageEnabled) {
+        plans[job.id] = { source: "none", reason: "service_paused", ahead };
+        continue;
+      }
+      const prediction = tools.predict(job);
+      let sLane, start;
+      if (job.kind === "image") {
+        const iLane = imageLanes.reduce((a, b) =>
+          laneRank(b) < laneRank(a) ? b : a,
+        );
+        const iRank = laneRank(iLane);
+        const readyByImage = sharedLanes.filter((l) => laneRank(l) <= iRank);
+        sLane = readyByImage.length
+          ? readyByImage.reduce((a, b) => (laneRank(b) > laneRank(a) ? b : a))
+          : sharedLanes.reduce((a, b) => (laneRank(b) < laneRank(a) ? b : a));
+        start = {
+          low:
+            sLane.low !== null && iLane.low !== null
+              ? Math.max(sLane.low, iLane.low)
+              : null,
+          median:
+            sLane.median !== null && iLane.median !== null
+              ? Math.max(sLane.median, iLane.median)
+              : null,
+          high:
+            sLane.high !== null && iLane.high !== null
+              ? Math.max(sLane.high, iLane.high)
+              : null,
+        };
+        for (const key of ["low", "median", "high"]) {
+          const end =
+            start[key] !== null && prediction[key] != null
+              ? start[key] + prediction[key]
+              : null;
+          sLane[key] = end;
+          iLane[key] = end;
+        }
+      } else {
+        sLane = sharedLanes.reduce((a, b) =>
+          laneRank(b) < laneRank(a) ? b : a,
+        );
+        start = { low: sLane.low, median: sLane.median, high: sLane.high };
+        for (const key of ["low", "median", "high"]) {
+          sLane[key] =
+            start[key] !== null && prediction[key] != null
+              ? start[key] + prediction[key]
+              : null;
+        }
+      }
+      const plan =
+        !available || !capacity
+          ? {
+              source: "none",
+              reason: !available ? "waiting_muse" : "muse_busy",
+              ahead,
+              duration: prediction,
+            }
+          : {
+              ...start,
+              source: start.high !== null ? "queue" : "none",
+              reason: start.high !== null ? null : "observing",
+              ahead,
+              duration: prediction,
+            };
+      plans[job.id] =
+        job.status === "running" ? { ...plan, phase: "queued" } : plan;
+      ahead++;
+    }
+    return plans;
+  },
+};
 
 const pending = (remoteId) => ({ state: "pending", remoteId });
 const fail = (note, observations = {}) => ({
@@ -90,15 +235,17 @@ function polled(value, status, id) {
 
 function accountCapacity(accounts) {
   if (Array.isArray(accounts))
-    return accounts.length > 0 ? Math.min(16, accounts.length) : 0;
+    return accounts.length > 0 ? Math.min(16, accounts.length) : 1;
   if (typeof accounts === "number")
     return Number.isInteger(accounts) && accounts > 0
       ? Math.min(16, accounts)
-      : 0;
-  if (typeof accounts === "boolean") return accounts ? 1 : 0;
-  if (accounts && typeof accounts === "object")
-    return Object.keys(accounts).length > 0 ? 1 : 0;
-  return 0;
+      : 1;
+  return 1;
+}
+function queueInteger(value) {
+  if (typeof value === "number" && !Number.isInteger(value))
+    throw Error("Invalid queue integer");
+  return healthInteger(value);
 }
 
 export default {
@@ -106,7 +253,7 @@ export default {
     submissionPolicy(pythonStrip),
     estimatePolicy,
     statePolicy,
-    queuePolicy,
+    muse21QueuePolicy,
     timingFeatures,
     MODEL_FORMS,
   ),
@@ -153,14 +300,18 @@ export default {
     }
     try {
       const ready = await read("/readyz");
-      const fallbackCapacity = accountCapacity(ready.accounts);
-      if (ready.status !== "ready" || fallbackCapacity <= 0)
+      if (
+        ready.status !== "ready" ||
+        !healthTruthy(ready.accounts) ||
+        (typeof ready.accounts === "number" && ready.accounts <= 0)
+      )
         return { ready: false };
+      const fallbackCapacity = accountCapacity(ready.accounts);
       const models = await read("/v1/models");
       if (!Array.isArray(models.data) || !models.data.length)
         return { ready: false };
       const queueReply = await host.service.read("/v1/queue");
-      if (queueReply.status < 200 || queueReply.status >= 300)
+      if (queueReply.status === 404)
         return {
           ready: true,
           capacity: fallbackCapacity,
@@ -168,7 +319,12 @@ export default {
           tasks: [],
         };
       try {
-        if (queueReply.text === null) throw Error();
+        if (
+          queueReply.status < 200 ||
+          queueReply.status >= 300 ||
+          queueReply.text === null
+        )
+          throw Error();
         const q = JSON.parse(queueReply.text);
         if (!q || typeof q !== "object" || Array.isArray(q)) throw Error();
         const tasks = (q.tasks === undefined ? [] : q.tasks)
@@ -183,14 +339,14 @@ export default {
               16,
               q.capacity === undefined
                 ? fallbackCapacity
-                : healthInteger(q.capacity),
+                : queueInteger(q.capacity),
             ),
           ),
           maintenance: Math.max(
             0,
             Math.min(
               1000,
-              healthInteger(q.maintenance === undefined ? 0 : q.maintenance),
+              queueInteger(q.maintenance === undefined ? 0 : q.maintenance),
             ),
           ),
           tasks,

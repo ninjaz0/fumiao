@@ -186,6 +186,8 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
     else if (url.pathname.endsWith("/v1/models"))
       payload = { data: [{ id: "muse-video" }] };
     else if (url.pathname.endsWith("/v1/queue")) {
+      if (queueReply.body === "__CONNECTION_ERROR__")
+        throw new Error("ECONNRESET");
       replyStatus = queueReply.status;
       payload = queueReply.body;
     }
@@ -208,6 +210,14 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
       close() {},
     };
   };
+  const legacyRelease = JSON.parse(
+    await readFile("plugins/muse/package/legacy-2.0.0.fmplugin.json", "utf8"),
+  );
+  const legacyAdapter = await sandboxRequest(
+    manifestSchema.parse(legacyRelease.manifest),
+    legacyRelease.studioProgram,
+    queueProbe,
+  );
   const healthAdapter = await sandboxRequest(
     manifestSchema.parse(release.manifest),
     release.studioProgram,
@@ -223,11 +233,38 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
   assert.equal((await healthAdapter.queueHealth!(config, signal)).capacity, 16);
   readyBody = { status: "ready", accounts: [1, 2, 3] };
   assert.equal((await healthAdapter.queueHealth!(config, signal)).capacity, 3);
-  for (const badAccounts of [0, -2, 1.5, [], {}, null, ""]) {
+  for (const badAccounts of [0, -2, false, [], {}, null, ""]) {
     readyBody = { status: "ready", accounts: badAccounts };
     assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
       ready: false,
     });
+  }
+  for (const compatAccounts of ["2", true, { primary: 1 }, 1.5]) {
+    readyBody = { status: "ready", accounts: compatAccounts };
+    queueReply = { status: 200, body: { capacity: 3 } };
+    const expectedQueue = await legacyAdapter.queueHealth!(config, signal);
+    assert.deepEqual(expectedQueue, {
+      ready: true,
+      capacity: 3,
+      maintenance: 0,
+      tasks: [],
+    });
+    assert.deepEqual(
+      await healthAdapter.queueHealth!(config, signal),
+      expectedQueue,
+    );
+    queueReply = { status: 404, body: null };
+    const expectedFallback = await legacyAdapter.queueHealth!(config, signal);
+    assert.deepEqual(expectedFallback, {
+      ready: true,
+      capacity: 1,
+      maintenance: 0,
+      tasks: [],
+    });
+    assert.deepEqual(
+      await healthAdapter.queueHealth!(config, signal),
+      expectedFallback,
+    );
   }
   readyBody = { status: "ready", accounts: 4 };
   queueReply = {
@@ -250,7 +287,7 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
     maintenance: 1,
     tasks: [{ id: "ext-1" }],
   });
-  for (const invalidCap of [null, "2.5", "", []]) {
+  for (const invalidCap of [null, "2.5", 9.9, 2.5, "", []]) {
     queueReply = {
       status: 200,
       body: { capacity: invalidCap, tasks: [{ id: "ext-1" }] },
@@ -262,6 +299,16 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
       tasks: [],
     });
   }
+  queueReply = {
+    status: 200,
+    body: { capacity: 4, maintenance: 1.5, tasks: [{ id: "ext-1" }] },
+  };
+  assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
+    ready: true,
+    capacity: 1,
+    maintenance: 0,
+    tasks: [],
+  });
   for (const nonObjectBody of [[{ id: "ext-1" }], "ok", 123, true]) {
     queueReply = { status: 200, body: nonObjectBody };
     assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
@@ -276,6 +323,33 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
   assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
     ready: true,
     capacity: 1,
+    maintenance: 0,
+    tasks: [],
+  });
+  // 5xx / 429 / 401 / 403 / transport errors on /v1/queue must NOT expand to multi-account fallbackCapacity (12)
+  // while wiping maintenance and external tasks; only 404 indicates an absent /v1/queue endpoint.
+  readyBody = { status: "ready", accounts: 12 };
+  for (const degradedQueue of [
+    { status: 500, body: { detail: "internal error" } },
+    { status: 502, body: null },
+    { status: 503, body: null },
+    { status: 429, body: null },
+    { status: 401, body: null },
+    { status: 403, body: null },
+    { status: 0, body: "__CONNECTION_ERROR__" },
+  ]) {
+    queueReply = degradedQueue;
+    assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
+      ready: true,
+      capacity: 1,
+      maintenance: 0,
+      tasks: [],
+    });
+  }
+  queueReply = { status: 404, body: null };
+  assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
+    ready: true,
+    capacity: 12,
     maintenance: 0,
     tasks: [],
   });

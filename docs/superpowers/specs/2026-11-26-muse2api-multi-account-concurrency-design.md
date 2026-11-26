@@ -14,16 +14,16 @@
 ## 2. 目标、非目标与反目标（Goals, Non-Goals & Anti-Goals）
 
 - **目标（Goals）**
-  - 发布 `muse` 插件 `2.1.0`：当 `/v1/queue` 可用时优先采用其返回的 `capacity` 与 `tasks`；当 `/v1/queue` 缺失（如 `404`）或未携带 `capacity` 字段时，回退采用 `/readyz` 返回的启用账号数作为 `capacity`（限制在 `1..16`）。
-  - 对声明动态容量队列（`manifest.queue.strategy === "capacity"`，如 `muse`）的插件，在后端新建连接未显式指定 `concurrency` 时及前端新建服务表单中，默认「并行任务数量」设为 `16`（普通插件保持 `1`），同时完整保留管理员手动调小以适配上游服务器规格的能力。
-  - 在 `QueueForecasts` 与估时候选连接中，将 `health.capacity` 按 `connection.concurrency` 取 `min`，使排队预估车道数与 `Executor` 实际并发放行上限一致。
+  - 发布 `muse` 插件 `2.1.0`：当 `/v1/queue` 可用时优先采用其返回的整数 `capacity` 与 `tasks`；仅当 `/v1/queue` 明确不存在（`404`）或 `2xx` 响应未携带 `capacity` 字段时，回退采用 `/readyz` 返回的启用账号数作为共享总 `capacity`（限制在 `1..16`），并在派发（`requestCapacity`）与排队预估（`queuePlan`）中对齐上游 `muse2api` 图片队列最多 8 路的接单限制，同时保留图片与视频共享的总容量。
+  - 对声明动态容量队列（`manifest.queue.strategy === "capacity"`，如 `muse`）的插件，在后端新建连接未显式指定 `concurrency` 时及前端新建服务表单中，默认「并行任务数量」设为 `16`（普通插件保持 `1`），并在表单与 `update.json` 说明中明确提示实际生成并发同时受启用账号数、上游 `MUSE2API_CONCURRENCY` 与共享占用约束。
+  - 在 `QueueForecasts` 与估时候选连接中，按各任务自身的 `plugin_version` 解析插件预测（升级后存量旧版本排队任务因缺少可信旧快照显示 `observing`），并在扣除外部与维护占用后按 `connection.concurrency` 截断有效并发车道。
 - **非目标（Non-Goals）**
   - 不改动或强依赖上游 `muse2api` 仓库新增接口。
   - 不改变同一公开模型绑定唯一启用服务连接的路由契约（不做跨多条连接自动分流）。
 - **反目标（Anti-Goals）**
   - 严禁原位修改已发布的 `muse` `1.x` 或 `2.0.0` 插件包内容及摘要，不得影响在途或历史任务恢复。
   - 不在插件升级时静默覆盖管理员已保存的存量连接 `concurrency`。
-  - 若 `/v1/queue` 返回 `200` 但 `capacity` 字段格式非法（如 `null`、小数、空串），保持防御性回退 `1`，不放大异常状态下的并发。
+  - 若 `/v1/queue` 返回 `5xx`、`429`、`401/403`、传输超时（`status: 0`）或返回 `2xx` 但 `capacity`/`maintenance` 非整数（如 `null`、JSON 数值小数 `9.9`、字符串小数 `"2.5"`、空串），一律保持防御性单槽回退 `1`，绝不在缺失外部占用信息时放大并发。
 
 ## 3. 约束条件（Constraints）
 

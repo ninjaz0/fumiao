@@ -353,6 +353,7 @@ export class Executor {
           ).rows;
           const capacity = plugin.requestCapacity({
             stamp: Date.now() / 1000,
+            job: { kind: job.kind, model: job.provider_model },
             health: superseded
               ? frozenHealth!
               : connection.queue_health_revision === connection.revision

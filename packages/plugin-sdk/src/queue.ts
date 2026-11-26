@@ -80,6 +80,7 @@ export type QueueHealth = z.infer<typeof queueHealthSchema>;
 export type QueueAdmission = {
   health: QueueHealth;
   jobs: QueueJob[];
+  job?: Pick<QueueJob, "kind" | "model">;
   stamp: number;
 };
 export type QueueContext = {

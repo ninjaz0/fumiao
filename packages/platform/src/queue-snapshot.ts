@@ -147,39 +147,7 @@ export class QueueForecasts {
     const plans: Record<string, any> = {};
     let candidateEligible: boolean | undefined;
     for (const connection of connections) {
-      const version = await one(
-        sql,
-        "SELECT manifest FROM plugin_versions WHERE id=$1 AND version=$2",
-        [connection.plugin_id, connection.plugin_version],
-      );
       const owned = jobs.filter((j) => j.connection_id === connection.id);
-      if (!version?.manifest.queue) {
-        for (const j of owned)
-          if (j.state === "queued")
-            plans[j.public_id] = { source: "none", reason: "unknown" };
-        continue;
-      }
-      const plugin = await this.p.registry.resolve(
-          sql,
-          connection.plugin_id,
-          connection.plugin_version,
-        ),
-        policy = plugin.manifest.timing!;
-      const estimator = new Estimator(
-        samples
-          .filter(
-            (r) =>
-              r.plugin_id === connection.plugin_id &&
-              plugin.manifest.queue!.timingVersions.includes(
-                r.plugin_version,
-              ) &&
-              r.policy?.geometry === policy.geometry &&
-              r.policy?.hardware === policy.hardware &&
-              r.policy?.scaleSteps === policy.scaleSteps,
-          )
-          .map(normalizeRun),
-        policy,
-      );
       const queueJobs: QueueJob[] = owned.map((j) => ({
         id: Number(j.public_id),
         node: nodePublic.get(j.remote_id) ?? null,
@@ -209,63 +177,140 @@ export class QueueForecasts {
           stage: n.queue_state.stage ?? "preparing",
           ready_models: n.queue_state.ready_models ?? [],
         }));
-      const rawHealth =
-        connection.enabled &&
-        connection.queue_health_revision === connection.revision
-          ? connection.queue_health
-          : {};
       const ownIds = new Set(
         queueJobs
           .filter((j) => j.status === "running" && j.remoteId)
           .map((j) => j.remoteId),
       );
-      const external = Array.isArray(rawHealth.tasks)
-        ? rawHealth.tasks.filter((t: any) => !ownIds.has(t?.id)).length
-        : 0;
-      const maintenance =
-        typeof rawHealth.maintenance === "number" &&
-        Number.isFinite(rawHealth.maintenance)
-          ? rawHealth.maintenance
-          : 0;
-      const health =
-        typeof rawHealth.capacity === "number" &&
-        Number.isFinite(rawHealth.capacity) &&
-        typeof connection.concurrency === "number"
-          ? {
-              ...rawHealth,
-              capacity: Math.min(
-                rawHealth.capacity,
-                connection.concurrency + external + maintenance,
-              ),
-            }
-          : rawHealth;
-      const context: QueueContext = {
-        jobs: queueJobs,
-        nodes: queueNodes,
-        runs: contextRuns,
-        history: history
-          .filter(
-            (r) =>
-              r.plugin_id === connection.plugin_id &&
-              plugin.manifest.queue!.timingVersions.includes(r.plugin_version),
-          )
-          .map((r) => ({ ...r, node: publicNode(r.node) }) as QueueRun),
-        stamp,
-        health,
-        imageEnabled: (options.imageEnabled ?? true) && connection.enabled,
-      };
-      if (
-        options.candidate?.connection.id === connection.id &&
-        plugin.originalEstimate?.eligible
-      ) {
-        const job = queueJobs.find(
-          (j) => j.id === options.candidate!.job.public_id,
-        )!;
-        candidateEligible = queueNodes.some((node) =>
-          plugin.originalEstimate!.eligible!(node, job, stamp),
+      const targetVersions = [
+        ...new Set(
+          owned
+            .filter(
+              (j) =>
+                j.state === "queued" ||
+                current[Number(j.public_id)]?.phase === "queued",
+            )
+            .map((j) => String(j.plugin_version)),
+        ),
+      ];
+      for (const targetVersion of targetVersions) {
+        const version = await one(
+          sql,
+          "SELECT manifest FROM plugin_versions WHERE id=$1 AND version=$2",
+          [connection.plugin_id, targetVersion],
         );
+        if (!version?.manifest.queue) {
+          for (const j of owned)
+            if (j.plugin_version === targetVersion && j.state === "queued")
+              plans[j.public_id] = { source: "none", reason: "unknown" };
+          continue;
+        }
+        const plugin = await this.p.registry.resolve(
+          sql,
+          connection.plugin_id,
+          targetVersion,
+        );
+        if (plugin.retired) {
+          for (const j of owned)
+            if (j.plugin_version === targetVersion && j.state === "queued")
+              plans[j.public_id] = { source: "none", reason: "unknown" };
+          continue;
+        }
+        const policy = plugin.manifest.timing!;
+        const estimator = new Estimator(
+          samples
+            .filter(
+              (r) =>
+                r.plugin_id === connection.plugin_id &&
+                plugin.manifest.queue!.timingVersions.includes(
+                  r.plugin_version,
+                ) &&
+                r.policy?.geometry === policy.geometry &&
+                r.policy?.hardware === policy.hardware &&
+                r.policy?.scaleSteps === policy.scaleSteps,
+            )
+            .map(normalizeRun),
+          policy,
+        );
+        const superseded =
+          Boolean(plugin.queueHealth) &&
+          targetVersion !== connection.plugin_version;
+        const rawHealth =
+          !superseded &&
+          connection.enabled &&
+          connection.queue_health_revision === connection.revision
+            ? connection.queue_health
+            : {};
+        const external = Array.isArray(rawHealth.tasks)
+          ? rawHealth.tasks.filter((t: any) => !ownIds.has(t?.id)).length
+          : 0;
+        const maintenance =
+          typeof rawHealth.maintenance === "number" &&
+          Number.isFinite(rawHealth.maintenance)
+            ? rawHealth.maintenance
+            : 0;
+        const health =
+          typeof rawHealth.capacity === "number" &&
+          Number.isFinite(rawHealth.capacity) &&
+          typeof connection.concurrency === "number"
+            ? {
+                ...rawHealth,
+                capacity: Math.min(
+                  rawHealth.capacity,
+                  connection.concurrency + external + maintenance,
+                ),
+              }
+            : rawHealth;
+        const context: QueueContext = {
+          jobs: queueJobs,
+          nodes: queueNodes,
+          runs: contextRuns,
+          history: history
+            .filter(
+              (r) =>
+                r.plugin_id === connection.plugin_id &&
+                plugin.manifest.queue!.timingVersions.includes(
+                  r.plugin_version,
+                ),
+            )
+            .map((r) => ({ ...r, node: publicNode(r.node) }) as QueueRun),
+          stamp,
+          health,
+          imageEnabled: (options.imageEnabled ?? true) && connection.enabled,
+        };
+        if (
+          options.candidate &&
+          options.candidate.connection.id === connection.id &&
+          options.candidate.job.plugin_version === targetVersion &&
+          plugin.originalEstimate?.eligible
+        ) {
+          const job = queueJobs.find(
+            (j) => j.id === options.candidate!.job.public_id,
+          )!;
+          candidateEligible = queueNodes.some((node) =>
+            plugin.originalEstimate!.eligible!(node, job, stamp),
+          );
+        }
+        const versionPlans = forecastQueue(
+          plugin,
+          context,
+          current,
+          estimator,
+        );
+        for (const j of owned) {
+          if (j.plugin_version !== targetVersion) continue;
+          const plan = versionPlans[j.public_id];
+          if (!plan) continue;
+          plans[j.public_id] =
+            superseded &&
+            connection.enabled &&
+            plan.source === "none" &&
+            typeof plan.reason === "string" &&
+            plan.reason.startsWith("waiting_")
+              ? { ...plan, reason: "observing" }
+              : plan;
+        }
       }
-      Object.assign(plans, forecastQueue(plugin, context, current, estimator));
     }
     return {
       serverTime: stamp,

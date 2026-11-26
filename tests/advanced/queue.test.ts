@@ -1047,3 +1047,347 @@ test("Muse 2.1 dispatches multi-account video jobs in parallel without /v1/queue
     await f.cleanup();
   }
 });
+
+test("Muse 2.1.0 caps concurrent image admission and forecast lanes at 8 while preserving 12-account shared image+video capacity", async () => {
+  const f = await databaseFixture();
+  const pngBytes = await sharp({
+    create: { width: 8, height: 8, channels: 3, background: "#2266aa" },
+  })
+    .png()
+    .toBuffer();
+  let taskSeq = 0;
+  let image429Count = 0;
+  const tasks = new Map<
+    string,
+    { kind: "image" | "video"; status: string; phase?: string; url?: string }
+  >();
+  const server = createServer(async (req, res) => {
+    if (req.headers.authorization !== "Bearer muse-12-key")
+      return void res.writeHead(401).end();
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/readyz")
+      return void res.end(
+        JSON.stringify({
+          status: "ready",
+          accounts: 12,
+          browser_running: true,
+        }),
+      );
+    if (req.url === "/v1/models")
+      return void res.end(
+        JSON.stringify({
+          data: [{ id: "muse-image" }, { id: "muse-video" }],
+        }),
+      );
+    if (req.url === "/v1/media/done.png") {
+      res.setHeader("Content-Type", "image/png");
+      return void res.end(pngBytes);
+    }
+    if (req.method === "POST" && req.url === "/v1/images/tasks") {
+      for await (const _ of req) {
+        // drain
+      }
+      const activeImages = [...tasks.values()].filter(
+        (t) =>
+          t.kind === "image" && ["queued", "processing"].includes(t.status),
+      ).length;
+      if (activeImages >= 8) {
+        image429Count++;
+        res.statusCode = 429;
+        return void res.end(
+          JSON.stringify({ detail: "Image queue is full; retry later" }),
+        );
+      }
+      taskSeq++;
+      const id = `task_${String(taskSeq).padStart(32, "0")}`;
+      const now = Math.floor(Date.now() / 1000);
+      tasks.set(id, { kind: "image", status: "processing", phase: "generating" });
+      res.statusCode = 202;
+      return void res.end(
+        JSON.stringify({ id, task_id: id, status: "queued", created_at: now }),
+      );
+    }
+    if (req.method === "POST" && req.url === "/v1/videos") {
+      for await (const _ of req) {
+        // drain
+      }
+      taskSeq++;
+      const id = `task_${String(taskSeq).padStart(32, "0")}`;
+      const now = Math.floor(Date.now() / 1000);
+      tasks.set(id, { kind: "video", status: "processing", phase: "generating" });
+      return void res.end(
+        JSON.stringify({ id, status: "queued", created_at: now }),
+      );
+    }
+    if (req.url?.startsWith("/v1/images/tasks/task_")) {
+      const id = req.url.slice("/v1/images/tasks/".length);
+      const t = tasks.get(id);
+      if (!t) return void res.writeHead(404).end();
+      const now = Math.floor(Date.now() / 1000);
+      return void res.end(
+        JSON.stringify({
+          id,
+          status: t.status,
+          ...(t.phase ? { phase: t.phase } : {}),
+          ...(t.url ? { url: t.url } : {}),
+          created_at: now,
+          started_at: now,
+          generating_at: now,
+        }),
+      );
+    }
+    if (req.url?.startsWith("/v1/videos/task_")) {
+      const id = req.url.slice("/v1/videos/".length);
+      const t = tasks.get(id);
+      if (!t) return void res.writeHead(404).end();
+      const now = Math.floor(Date.now() / 1000);
+      return void res.end(
+        JSON.stringify({
+          id,
+          status: t.status,
+          ...(t.phase ? { phase: t.phase } : {}),
+          created_at: now,
+          started_at: now,
+          generating_at: now,
+        }),
+      );
+    }
+    res.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const base =
+    "http://127.0.0.1:" + (server.address() as { port: number }).port;
+  const sandboxSend: typeof chatHttp = (url, options) => {
+    assert.equal(url.origin, "https://1.1.1.1");
+    assert.ok(options.lookup);
+    return chatHttp(new URL(url.pathname, base), {
+      ...options,
+      lookup: undefined,
+    });
+  };
+  f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+  try {
+    await f.p.registry.initializeStudio(f.db, false);
+    const identity = new OriginalIdentity(f.p);
+    const creds = { name: "admin", password: "muse-12-accounts-password" };
+    await identity.bootstrap({ ...creds, nickname: "管理员" });
+    const actor = await identity.actor(await identity.login(creds, "fixture"));
+    const packages = new StudioPackages(f.p);
+    const musePkg = JSON.parse(
+      await readFile("plugins/muse/muse.fmplugin.json", "utf8"),
+    );
+    await packages.install(actor, musePkg);
+    const { id: museConnId } = await f.p.createConnection(
+      actor,
+      {
+        name: "Muse 12账号池",
+        pluginId: "muse",
+        version: musePkg.adapterVersion,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "muse-12-key" },
+      },
+      true,
+    );
+    const catalog = new StudioCatalog(f.db);
+    const prices = await catalog.prices();
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        Object.fromEntries(prices.items.map((i) => [i.key, 1])),
+        prices.revision,
+      ),
+    );
+    const museListed = (await packages.list(actor)).find(
+      (p) => p.id === "muse",
+    )!;
+    await packages.change(actor, "muse", museListed.revision, "enable");
+    const ws = await one(
+      f.db,
+      "SELECT * FROM workspaces WHERE owner_id=$1 AND kind='personal'",
+      [actor.id],
+    );
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, ws.id, 200, randomUUID(), "adjust"),
+    );
+
+    // Seed calibration samples for muse-image (20s) and muse-video (60s)
+    const timingPolicy = JSON.stringify(musePkg.manifest.timing);
+    const imgFeatures = JSON.stringify({
+      kind: "image",
+      model: "muse-image",
+      executor: "muse-api",
+      workflow: "muse2api-native-v1",
+      width: 0,
+      height: 0,
+      native_ratio: "1:1",
+      seconds: 0,
+      steps: 0,
+      video_mode: "image",
+      quality: "native",
+      refs: 0,
+      ref_pixels: 0,
+      hardware: "muse-api",
+      profile: {},
+      runtime_id: "",
+      cold: null,
+    });
+    const vidFeatures = JSON.stringify({
+      kind: "video",
+      model: "muse-video",
+      executor: "muse-api",
+      workflow: "muse2api-native-v1",
+      width: 0,
+      height: 0,
+      native_ratio: "16:9",
+      seconds: 5,
+      steps: 0,
+      video_mode: "t2v",
+      quality: "native",
+      refs: 0,
+      ref_pixels: 0,
+      hardware: "muse-api",
+      profile: {},
+      runtime_id: "",
+      cold: null,
+    });
+    for (let i = 0; i < 6; i++) {
+      await f.db.query(
+        "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse',$2,$3,'image','muse-image',$4,$5,$5,$6,'done','done')",
+        [randomUUID(), musePkg.adapterVersion, timingPolicy, imgFeatures, 1000 + i * 100, 1020 + i * 100],
+      );
+      await f.db.query(
+        "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse',$2,$3,'video','muse-video',$4,$5,$5,$6,'done','done')",
+        [randomUUID(), musePkg.adapterVersion, timingPolicy, vidFeatures, 2000 + i * 100, 2060 + i * 100],
+      );
+    }
+
+    await new QueueHealthPoller(f.p).refresh(museConnId);
+    const g = new OriginalGeneration(f.p);
+    const submitImage = async (label: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("image", {
+          uid: randomUUID(),
+          model: "muse-image",
+          prompt: label,
+          ratio: "1:1",
+          resolution: "1K",
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+    const submitVideo = async (label: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "muse-video",
+          prompt: label,
+          ratio: "16:9",
+          seconds: 5,
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+
+    const images = [];
+    for (let i = 1; i <= 9; i++) images.push(await submitImage(`图 ${i}`));
+    const videos = [];
+    for (let i = 1; i <= 4; i++) videos.push(await submitVideo(`视频 ${i}`));
+
+    // 1) Forecast check before dispatch:
+    //    - Images 1..8 start immediately (median 0)
+    //    - 9th image must wait for one of the 8 image lanes (median > 0)
+    //    - Videos 1..4 submitted AFTER 9th image still start immediately (median 0) on shared slots 9..12
+    const preForecast = await new QueueForecasts(f.p).forWorkspace(actor, ws.id);
+    for (const img of images.slice(0, 8)) {
+      assert.equal(preForecast.jobs[img.id].eta.source, "queue");
+      assert.equal(preForecast.jobs[img.id].eta.median, 0);
+    }
+    assert.equal(preForecast.jobs[images[8].id].eta.source, "queue");
+    assert.ok(
+      preForecast.jobs[images[8].id].eta.median > 0,
+      `9th image must wait for 8-image cap, got median=${preForecast.jobs[images[8].id].eta.median}`,
+    );
+    for (const vid of videos) {
+      assert.equal(preForecast.jobs[vid.id].eta.source, "queue");
+      assert.equal(
+        preForecast.jobs[vid.id].eta.median,
+        0,
+        "videos 1..4 must use remaining shared slots 9..12 without waiting behind 9th image",
+      );
+    }
+    // 5th video candidate estimate sees all 12 shared slots occupied -> median > 0
+    const estFifthVideo = await new OriginalEstimates(f.p).read(
+      actor,
+      {
+        kind: "video",
+        model: "muse-video",
+        ratio: "16:9",
+        seconds: 5,
+        sampling_steps: 20,
+        refs: [],
+      },
+      String(ws.public_id),
+    );
+    assert.ok((estFifthVideo.queue?.median ?? 0) > 0);
+
+    // 2) Dispatch check:
+    //    - Executor dispatches Images 1..8 and Videos 1..4 (12 active total)
+    //    - 9th image remains queued locally with zero upstream 429s
+    const executor = new Executor(f.p);
+    for (const j of [...images, ...videos]) {
+      await executor.execute(j.id);
+    }
+    assert.equal(image429Count, 0, "must never hit upstream 429 image limit");
+    const afterDispatch = (
+      await f.db.query(
+        "SELECT id,kind,state,remote_id,request_retry_at FROM jobs WHERE id=ANY($1::uuid[])",
+        [[...images, ...videos].map((j) => j.id)],
+      )
+    ).rows;
+    const byId = new Map(afterDispatch.map((r) => [r.id, r]));
+    for (const img of images.slice(0, 8)) {
+      assert.equal(byId.get(img.id)!.state, "running");
+    }
+    assert.equal(byId.get(images[8].id)!.state, "queued");
+    assert.equal(byId.get(images[8].id)!.request_retry_at, null);
+    for (const vid of videos) {
+      assert.equal(byId.get(vid.id)!.state, "running");
+    }
+
+    // 3) Advance generating phase on active jobs and verify live forecast still keeps 9th image waiting
+    //    while 5th video candidate also waits on full 12 shared slots
+    for (const j of [...images.slice(0, 8), ...videos]) {
+      await executor.execute(j.id);
+    }
+    const liveForecast = await new QueueForecasts(f.p).forWorkspace(actor, ws.id);
+    assert.ok(liveForecast.jobs[images[8].id].eta.median > 0);
+
+    // 4) Complete Image 1 -> frees both 1 image slot and 1 shared slot -> 9th image dispatches cleanly
+    const firstImgRemoteId = byId.get(images[0].id)!.remote_id;
+    tasks.set(firstImgRemoteId, {
+      kind: "image",
+      status: "completed",
+      url: "/v1/media/done.png",
+    });
+    await executor.execute(images[0].id);
+    const doneFirst = await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+      images[0].id,
+    ]);
+    assert.equal(doneFirst.state, "completed");
+
+    await executor.execute(images[8].id);
+    const ninthAfter = await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+      images[8].id,
+    ]);
+    assert.equal(ninthAfter.state, "running");
+    assert.equal(image429Count, 0);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+    await f.cleanup();
+  }
+});

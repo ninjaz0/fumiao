@@ -117,9 +117,14 @@ export function requestWorkbenchAdapter(
           })),
         },
       }),
-    requestCapacity: ({ jobs, health, stamp }) =>
+    requestCapacity: ({ job, jobs, health, stamp }) =>
       sync("requestCapacity", {
-        jobs: jobs.map(({ status, remoteId }) => ({ status, remoteId })),
+        ...(job ? { job: { kind: job.kind, model: job.model } } : {}),
+        jobs: jobs.map(({ kind, status, remoteId }) => ({
+          kind,
+          status,
+          remoteId,
+        })),
         health,
         stamp,
       }),

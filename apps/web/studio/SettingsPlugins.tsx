@@ -323,8 +323,9 @@ function ServiceForm({
           aria-describedby={`${prefix}-concurrency-hint`}
         />
         <p id={`${prefix}-concurrency-hint`} className="plugin-field-hint">
-          单条服务允许同时执行的任务上限（1–100 的整数，默认{" "}
-          {pluginDefaultConcurrency}），可按上游配额或吞吐能力调整。
+          {plugin.id === "muse"
+            ? `单条服务允许同时执行的任务上限（1–100 的整数，默认 ${pluginDefaultConcurrency}），实际派发取上游容量与本上限的较小值（图片任务同时最多接单 8 张）。未提供队列接口时仅按启用账号数回退估算，请结合上游 MUSE2API_CONCURRENCY 与共享占用设置，避免过多任务提前进入上游排队后无法在本地取消。`
+            : `单条服务允许同时执行的任务上限（1–100 的整数，默认 ${pluginDefaultConcurrency}），可按上游配额或吞吐能力调整。`}
         </p>
       </div>
       {optionalEntries.length > 0 && (
