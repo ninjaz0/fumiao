@@ -1383,6 +1383,153 @@ test("createCanvasRunsTracker resolves pre-existing in-flight /runs directly bef
   assert.equal(reactCommittedRuns.length, 1);
 });
 
+test("createCanvasRunsTracker never regresses when superseded request A resolves after newer request B, failure, or reset", async () => {
+  const script = [
+    "# EP10 乱序请求保护",
+    "### S01 天台 夜 外",
+    "△林默仰望霓虹灯牌。 <!-- fm-shot:sh_roof_01 -->",
+  ].join("\n");
+  const bd = parseScriptBreakdown(script, { docId: "1010", docPath: "EP10.md" });
+  const gridInit = syncScriptBreakdownToCanvas(
+    { schemaVersion: 1, nodes: [], edges: [], shots: [] },
+    bd,
+    { generationMode: "grid_preview" },
+  );
+  const gridNode = gridInit.document.nodes.find(
+    (n) => n.extra_params?.script_role === "grid_preview",
+  )!;
+
+  // 1. Exact out-of-order reproducer:
+  // A (seq=1) is an older empty /runs poll; ensureFresh starts waiting on A;
+  // B (seq=2) from candidate submission fetchRuns() finishes FIRST with a queued/done job on gridNode;
+  // A finishes LAST with []. ensureFresh MUST return B's job list and preserve gridNode on omni_ref switch!
+  const tracker = createCanvasRunsTracker<Job>({
+    reconcile: (_prev, next) => [...next],
+  });
+  let releaseA!: () => void;
+  const gateA = new Promise<void>((resolve) => {
+    releaseA = resolve;
+  });
+  let releaseB!: () => void;
+  const gateB = new Promise<void>((resolve) => {
+    releaseB = resolve;
+  });
+
+  const reqA = tracker.runFetch(
+    async () => {
+      await gateA;
+      return { runs: [], extra: null };
+    },
+    { silent: true },
+  );
+
+  const ensure1 = tracker.ensureFresh(async () => {
+    throw new Error("should consume committed B snapshot without extra fetch");
+  });
+
+  const queuedGridJob: Job = {
+    id: 5001,
+    canvas_node: gridNode.id,
+    owner: 1,
+    kind: "image",
+    status: "queued",
+    result: null,
+    note: "",
+    prompt: gridNode.prompt,
+    refs: [],
+    width: 1024,
+    height: 1024,
+    created: 2000,
+    seconds: 0,
+    quality: 0,
+    ratio: "16:9",
+    image_quality: "medium",
+    model: "gpt-image-2.6-sunburst",
+  };
+  const reqB = tracker.runFetch(async () => {
+    await gateB;
+    return { runs: [queuedGridJob], extra: null };
+  });
+
+  // B finishes FIRST, then old empty A finishes LAST
+  releaseB();
+  await reqB;
+  releaseA();
+  const [snap1] = await Promise.all([ensure1, reqA]);
+
+  assert.equal(snap1.runsKnown, true);
+  assert.equal(snap1.runs.length, 1);
+  assert.equal(snap1.runs[0].id, 5001);
+
+  const syncedOmni = syncScriptBreakdownToCanvas(gridInit.document, bd, {
+    generationMode: "omni_ref",
+    runs: snap1.runs,
+    runsKnown: snap1.runsKnown,
+  });
+  assert.equal(
+    syncedOmni.document.nodes.some((n) => n.id === gridNode.id),
+    true,
+    "grid_preview node with queued job from B must NOT be deleted when stale A resolves last",
+  );
+
+  // 2. Latest request B2 fails (503), then superseded A2 resolves ok:true -> must NOT mark runsKnown:true if retry also fails!
+  let releaseA2!: () => void;
+  const gateA2 = new Promise<void>((resolve) => {
+    releaseA2 = resolve;
+  });
+  const reqA2 = tracker.runFetch(
+    async () => {
+      await gateA2;
+      return { runs: [], extra: null };
+    },
+    { silent: true },
+  );
+  const ensure2 = tracker.ensureFresh(() =>
+    tracker.runFetch(async () => {
+      throw new Error("503 retry failed");
+    }),
+  );
+  const reqB2 = tracker.runFetch(
+    async () => {
+      throw new Error("503 B2 failed");
+    },
+    { silent: true },
+  );
+  await reqB2;
+  releaseA2();
+  const [snap2] = await Promise.all([ensure2, reqA2]);
+  assert.equal(
+    snap2.runsKnown,
+    false,
+    "superseded A2 must NOT re-mark runsKnown=true after newer B2 failed",
+  );
+  assert.equal(snap2.runs.length, 1); // retains last valid currentRuns ([queuedGridJob])
+
+  // 3. tracker.reset() while A3 is in flight -> A3 resolving must NOT mark runsKnown:true!
+  let releaseA3!: () => void;
+  const gateA3 = new Promise<void>((resolve) => {
+    releaseA3 = resolve;
+  });
+  const reqA3 = tracker.runFetch(
+    async () => {
+      await gateA3;
+      return { runs: [], extra: null };
+    },
+    { silent: true },
+  );
+  const ensure3 = tracker.ensureFresh(async () => {
+    throw new Error("unmounted/reset fetch rejected");
+  });
+  tracker.reset([]);
+  releaseA3();
+  const [snap3] = await Promise.all([ensure3, reqA3]);
+  assert.equal(
+    snap3.runsKnown,
+    false,
+    "pre-reset in-flight request must NOT mark runsKnown=true after reset()",
+  );
+});
+
 test("runsKnown=false preserves existing grid->video edge when shot references >=9 props/scenes with includeAssets=false or true", () => {
   const nineRefsScript = [
     "# EP09 九道具场次宫格连线保护",

@@ -2268,21 +2268,39 @@ export type CanvasRunsSnapshot<J> = {
 
 export function createCanvasRunsTracker<J>(options: {
   reconcile: (prev: J[], incoming: J[]) => J[];
+  isAlive?: () => boolean;
 }) {
+  let generation = 0;
   let seq = 0;
+  let lastSuccessSeq = 0;
   let currentRuns: J[] = [];
-  let inFlightSeq = 0;
-  let inFlightPromise: Promise<{
-    runs: J[];
-    ok: boolean;
-    err?: unknown;
-  }> | null = null;
+  const activePromises = new Map<number, Promise<void>>();
+
+  const checkAlive = (override?: () => boolean): boolean => {
+    if (override && !override()) return false;
+    if (options.isAlive && !options.isAlive()) return false;
+    return true;
+  };
+
+  const latestInFlight = (): Promise<void> | null => {
+    if (activePromises.size === 0) return null;
+    let maxSeq = -1;
+    let maxPromise: Promise<void> | null = null;
+    for (const [s, p] of activePromises.entries()) {
+      if (s > maxSeq) {
+        maxSeq = s;
+        maxPromise = p;
+      }
+    }
+    return maxPromise;
+  };
 
   const reset = (initialRuns: J[] = []) => {
-    seq++;
+    generation++;
+    seq = 0;
+    lastSuccessSeq = 0;
     currentRuns = initialRuns;
-    inFlightSeq = 0;
-    inFlightPromise = null;
+    activePromises.clear();
   };
 
   const getCurrentRuns = () => currentRuns;
@@ -2298,71 +2316,111 @@ export function createCanvasRunsTracker<J>(options: {
       onFinally?: () => void;
     },
   ): Promise<J[]> => {
+    const myGen = generation;
     const mySeq = ++seq;
-    inFlightSeq = mySeq;
     hooks?.onStart?.();
-    const task = (async (): Promise<{
-      runs: J[];
-      ok: boolean;
-      err?: unknown;
-    }> => {
+    let fetchError: unknown;
+    let fetchOk = false;
+    let rawIncoming: J[] = [];
+
+    const task = (async (): Promise<void> => {
       try {
         const { runs: incoming, extra } = await fetcher();
-        const nextRuns = options.reconcile(currentRuns, incoming);
-        const active = (hooks?.isAlive ? hooks.isAlive() : true) && mySeq === seq;
+        rawIncoming = incoming;
+        fetchOk = true;
+        const active =
+          myGen === generation &&
+          mySeq === seq &&
+          checkAlive(hooks?.isAlive);
         if (active) {
-          // Synchronously update readable snapshot BEFORE resolving the Promise or scheduling React state updates
+          const nextRuns = options.reconcile(currentRuns, incoming);
+          // Synchronously update readable snapshot & success watermark BEFORE resolving the Promise or scheduling React state updates
           currentRuns = nextRuns;
+          lastSuccessSeq = mySeq;
           hooks?.onCommit?.(nextRuns, extra);
         }
-        return { runs: active ? nextRuns : incoming, ok: true };
       } catch (err) {
-        const active = (hooks?.isAlive ? hooks.isAlive() : true) && mySeq === seq;
+        fetchError = err;
+        const active =
+          myGen === generation &&
+          mySeq === seq &&
+          checkAlive(hooks?.isAlive);
         if (active) {
           hooks?.onError?.(err);
         }
-        return { runs: currentRuns, ok: false, err };
       } finally {
-        if (mySeq === inFlightSeq) {
-          inFlightSeq = 0;
-          inFlightPromise = null;
-        }
-        if (mySeq === seq) {
-          hooks?.onFinally?.();
+        if (myGen === generation) {
+          activePromises.delete(mySeq);
+          if (mySeq === seq) {
+            hooks?.onFinally?.();
+          }
         }
       }
     })();
-    inFlightPromise = task;
-    const outcome = await task;
-    if (!outcome.ok) {
+
+    activePromises.set(mySeq, task);
+    await task;
+
+    if (!fetchOk) {
       if (hooks?.silent) return [];
-      throw outcome.err;
+      throw fetchError;
     }
-    return outcome.runs;
+    if (myGen === generation && lastSuccessSeq >= mySeq) {
+      return currentRuns;
+    }
+    return rawIncoming;
   };
 
   const ensureFresh = async (
     freshFetch: () => Promise<J[]>,
   ): Promise<CanvasRunsSnapshot<J>> => {
-    while (inFlightPromise !== null) {
-      const settled = await inFlightPromise;
-      if (inFlightPromise === null && settled.ok) {
-        return { runs: settled.runs, runsKnown: true };
-      }
-      if (!settled.ok) break;
+    const startGen = generation;
+    const entrySeq = seq;
+    const hadInFlightAtEntry = activePromises.size > 0;
+
+    while (generation === startGen) {
+      const pending = latestInFlight();
+      if (pending === null) break;
+      await pending;
     }
-    try {
-      const fresh = await freshFetch();
-      return { runs: fresh, runsKnown: true };
-    } catch {
+    if (generation !== startGen || !checkAlive()) {
       return { runs: currentRuns, runsKnown: false };
     }
+    if (
+      hadInFlightAtEntry &&
+      entrySeq > 0 &&
+      lastSuccessSeq === seq &&
+      seq >= entrySeq
+    ) {
+      return { runs: currentRuns, runsKnown: true };
+    }
+
+    const beforeFreshSeq = seq;
+    try {
+      await freshFetch();
+    } catch {
+      // Fall through to verify whether a newer concurrent request succeeded or all failed
+    }
+    while (generation === startGen) {
+      const pending = latestInFlight();
+      if (pending === null) break;
+      await pending;
+    }
+    if (
+      generation === startGen &&
+      checkAlive() &&
+      seq > beforeFreshSeq &&
+      lastSuccessSeq === seq
+    ) {
+      return { runs: currentRuns, runsKnown: true };
+    }
+    return { runs: currentRuns, runsKnown: false };
   };
 
   return {
     reset,
     getCurrentRuns,
-    hasInFlight: () => inFlightPromise !== null,
+    hasInFlight: () => activePromises.size > 0,
     runFetch,
     ensureFresh,
   };

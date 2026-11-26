@@ -726,7 +726,10 @@ export function CanvasWorkspace({
   const aliveRef = useRef(true),
     runsLoadedRef = useRef(false),
     runsTrackerRef = useRef(
-      createCanvasRunsTracker<Job>({ reconcile: reconcileRuns }),
+      createCanvasRunsTracker<Job>({
+        reconcile: reconcileRuns,
+        isAlive: () => aliveRef.current,
+      }),
     );
   const [editing, setEditing] = useState<string | null>(null),
     [hand, setHand] = useState(false),
