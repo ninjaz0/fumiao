@@ -2584,6 +2584,10 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
   try {
     assert.equal(v20.version, "2.0.0");
     assert.equal(v21.version, "2.1.0");
+    assert.ok(
+      v21.manifest?.queue?.timingVersions.includes("2.0.0"),
+      "Muse 2.1.0 must retain 2.0.0 in timingVersions so 2.0.0 calibration samples survive upgrade",
+    );
     await f.packages.install(f.actor, v20);
     const { id: connId } = await f.p.createConnection(
       f.actor,

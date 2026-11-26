@@ -160,11 +160,7 @@ export default {
       if (!Array.isArray(models.data) || !models.data.length)
         return { ready: false };
       const queueReply = await host.service.read("/v1/queue");
-      if (
-        queueReply.status < 200 ||
-        queueReply.status >= 300 ||
-        queueReply.text === null
-      )
+      if (queueReply.status < 200 || queueReply.status >= 300)
         return {
           ready: true,
           capacity: fallbackCapacity,
@@ -172,7 +168,9 @@ export default {
           tasks: [],
         };
       try {
+        if (queueReply.text === null) throw Error();
         const q = JSON.parse(queueReply.text);
+        if (!q || typeof q !== "object" || Array.isArray(q)) throw Error();
         const tasks = (q.tasks === undefined ? [] : q.tasks)
           .slice(0, 10000)
           .map((t) => (typeof t.id === "string" ? { id: t.id } : {}));

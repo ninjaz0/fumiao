@@ -8,7 +8,10 @@ import {
   type Execution,
   manifestSchema,
 } from "@fumiao/plugin-sdk/index.js";
-import type { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
+import {
+  ProviderBodyTooLarge,
+  type chatHttp,
+} from "@fumiao/plugin-sdk/chat-transport.js";
 import { sandboxRequest } from "@fumiao/platform/sandbox-request.js";
 
 test("Muse uses bounded JSON policies for signed submissions, large frozen references, retry decisions, clocks and download recovery", async () => {
@@ -190,7 +193,17 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
       status: replyStatus,
       headers: {},
       body: (async function* () {
-        if (payload !== null) yield Buffer.from(JSON.stringify(payload));
+        if (payload === "__OVERSIZED__") {
+          const buf = Buffer.alloc(2 * 1024 ** 2 + 16, 65);
+          if (
+            options.maxResponseBytes !== undefined &&
+            buf.length > options.maxResponseBytes
+          )
+            throw new ProviderBodyTooLarge();
+          yield buf;
+        } else if (payload !== null) {
+          yield Buffer.from(JSON.stringify(payload));
+        }
       })(),
       close() {},
     };
@@ -249,6 +262,23 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
       tasks: [],
     });
   }
+  for (const nonObjectBody of [[{ id: "ext-1" }], "ok", 123, true]) {
+    queueReply = { status: 200, body: nonObjectBody };
+    assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
+      ready: true,
+      capacity: 1,
+      maintenance: 0,
+      tasks: [],
+    });
+  }
+  // status 200 exceeding 2 MiB causes sandboxRequest read() to return { status: 200, text: null }
+  queueReply = { status: 200, body: "__OVERSIZED__" };
+  assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
+    ready: true,
+    capacity: 1,
+    maintenance: 0,
+    tasks: [],
+  });
 });
 
 test("Flow's installed sandbox streams split and large results, scopes service credentials and preserves recovery decisions", async () => {

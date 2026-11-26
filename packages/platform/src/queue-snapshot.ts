@@ -214,13 +214,29 @@ export class QueueForecasts {
         connection.queue_health_revision === connection.revision
           ? connection.queue_health
           : {};
+      const ownIds = new Set(
+        queueJobs
+          .filter((j) => j.status === "running" && j.remoteId)
+          .map((j) => j.remoteId),
+      );
+      const external = Array.isArray(rawHealth.tasks)
+        ? rawHealth.tasks.filter((t: any) => !ownIds.has(t?.id)).length
+        : 0;
+      const maintenance =
+        typeof rawHealth.maintenance === "number" &&
+        Number.isFinite(rawHealth.maintenance)
+          ? rawHealth.maintenance
+          : 0;
       const health =
         typeof rawHealth.capacity === "number" &&
         Number.isFinite(rawHealth.capacity) &&
         typeof connection.concurrency === "number"
           ? {
               ...rawHealth,
-              capacity: Math.min(rawHealth.capacity, connection.concurrency),
+              capacity: Math.min(
+                rawHealth.capacity,
+                connection.concurrency + external + maintenance,
+              ),
             }
           : rawHealth;
       const context: QueueContext = {

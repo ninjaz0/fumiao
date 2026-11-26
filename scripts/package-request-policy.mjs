@@ -6,9 +6,10 @@ export async function packageRequestPolicy(
   errors,
   options = {},
 ) {
+  const { priorTimingVersions = [], ...submissionOptions } = options;
   const manifest = structuredClone(adapter.manifest);
   manifest.version = version;
-  manifest.queue.timingVersions.push(version);
+  manifest.queue.timingVersions.push(...priorTimingVersions, version);
   manifest.configSchema.properties.baseUrl.pattern = "^https://";
   manifest.artifactValidation = { version: 3, errors };
   const compiled = await build({
@@ -33,7 +34,7 @@ export async function packageRequestPolicy(
     "(()=>{" + compiled.outputFiles[0].text + ";return policy.default})()";
   manifest.originalSubmission = {
     version: 5,
-    ...options,
+    ...submissionOptions,
     studioDigest: createHash("sha256").update(studioProgram).digest("hex"),
   };
   process.stdout.write(
@@ -43,7 +44,10 @@ export async function packageRequestPolicy(
       contributes: {
         version: 1,
         hostCapabilities: ["http", "secrets", "media"],
-        http: { origins: options.artifactOrigins ?? [], connection: true },
+        http: {
+          origins: submissionOptions.artifactOrigins ?? [],
+          connection: true,
+        },
       },
     }),
   );

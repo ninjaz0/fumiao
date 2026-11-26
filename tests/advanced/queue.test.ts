@@ -760,16 +760,26 @@ test("Muse 2.1 dispatches multi-account video jobs in parallel without /v1/queue
   const f = await databaseFixture();
   const videoPosts: { key: string; prompt: string }[] = [];
   let createdTasks = 0;
+  let readyAccounts = 3;
+  let queuePayload: Record<string, unknown> | null = null;
   const taskStatuses = new Map<string, Record<string, unknown>>();
   const server = createServer(async (req, res) => {
     if (req.headers.authorization !== "Bearer multi-account-key")
       return void res.writeHead(401).end();
     if (req.url === "/readyz")
-      return void res.end('{"status":"ready","accounts":3,"browser_running":true}');
+      return void res.end(
+        JSON.stringify({
+          status: "ready",
+          accounts: readyAccounts,
+          browser_running: true,
+        }),
+      );
     if (req.url === "/v1/models")
       return void res.end('{"data":[{"id":"muse-video"},{"id":"muse-image"}]}');
     if (req.url === "/health")
       return void res.end('{"backend_running":true,"has_active_tokens":true}');
+    if (req.url === "/v1/queue" && queuePayload !== null)
+      return void res.end(JSON.stringify(queuePayload));
     if (req.method === "POST" && req.url === "/v1/videos") {
       const parts: Buffer[] = [];
       for await (const chunk of req) parts.push(chunk);
@@ -989,6 +999,48 @@ test("Muse 2.1 dispatches multi-account video jobs in parallel without /v1/queue
       "estimate must also clamp lanes to connection.concurrency=2",
     );
     assert.equal(est.queue?.reason, "observing");
+
+    // When readyz.accounts = 5, external tasks = 2, and connection.concurrency = 2,
+    // upstream still has 5 - 2 = 3 free accounts (>= connection.concurrency = 2).
+    // With 0 running Fumiao jobs, QueueForecasts/OriginalEstimates must NOT subtract
+    // external tasks AFTER clamping to concurrency (min(5, 2) - 2 = 0 -> false muse_busy).
+    for (const r of runningRows.slice(0, 2)) {
+      taskStatuses.set(r.remote_id, { id: r.remote_id, status: "failed" });
+      await new Executor(f.p).execute(r.id);
+    }
+    readyAccounts = 5;
+    queuePayload = { tasks: [{ id: "ext-1" }, { id: "ext-2" }] };
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [museConnId],
+    );
+    await new QueueHealthPoller(f.p).refresh(museConnId);
+
+    const extForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.notEqual(
+      extForecast.jobs[queuedRow.id].eta.reason,
+      "muse_busy",
+      "5 accounts - 2 external leaves 3 upstream slots (>= concurrency 2), so lane is open",
+    );
+    assert.equal(extForecast.jobs[queuedRow.id].eta.median, 0);
+
+    const extEst = await new OriginalEstimates(f.p).read(
+      actor,
+      {
+        kind: "video",
+        model: "muse-video",
+        ratio: "16:9",
+        seconds: 5,
+        sampling_steps: 20,
+        refs: [],
+      },
+      String(ws.public_id),
+    );
+    assert.notEqual(extEst.queue?.reason, "muse_busy");
+    assert.equal(extEst.queue?.median, 0);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((done) => server.close(() => done()));

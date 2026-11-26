@@ -3,5 +3,5 @@
   "version": "2.1.0",
   "notes": "支持按 Muse2API 启用账号数自动并发派发图片与视频任务",
   "package": "muse.fmplugin.json",
-  "sha256": "72a8bb98c57688a1cd148653b8dade4c2fd0b7837824eb3812af81c9b46145a8"
+  "sha256": "0f1516b624730b25d6b0ab22c506ed27e8565299757e7b599c6dd94f43a844f7"
 }
