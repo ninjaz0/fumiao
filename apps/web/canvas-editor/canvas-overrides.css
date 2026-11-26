@@ -1,5 +1,36 @@
 /* Canvas editor style overrides (baseline/production/static/canvas.css is immutable). */
 
+.canvas-archived-pill {
+  flex: none;
+  padding: 0 8px;
+  border: 1px solid var(--cv-line);
+  border-radius: 999px;
+  background: var(--cv-hover);
+  color: var(--cv-muted);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .canvas-archived-pill {
+    position: absolute;
+    top: 100%;
+    right: 8px;
+    padding: 0 5px;
+    font-size: 11px;
+  }
+
+  .canvas-workspace[data-project-archived] .project-heading .save-state {
+    position: absolute;
+    top: 100%;
+    right: 62px;
+    min-height: 22px;
+    margin-left: 0;
+    padding: 0 6px;
+  }
+}
+
 .cv-dialog > p.error {
   color: var(--cv-danger);
 }

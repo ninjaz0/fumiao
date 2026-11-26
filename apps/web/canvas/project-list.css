@@ -1,0 +1,137 @@
+.canvas-list-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.canvas-list-toolbar .list-search {
+  min-height: 42px;
+  margin-bottom: 0;
+}
+
+.canvas-list-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--cv-line);
+  border-radius: 9px;
+  background: var(--cv-surface);
+}
+
+.canvas-list-tabs > button {
+  min-height: 34px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  color: var(--cv-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.canvas-list-tabs > button[aria-selected="true"] {
+  background: var(--cv-hover);
+  color: var(--cv-text);
+  font-weight: 600;
+}
+
+.canvas-list-tabs button:focus-visible,
+.canvas-card-menu button:focus-visible {
+  outline: 2px solid var(--cv-focus);
+  outline-offset: -2px;
+}
+
+.project-actions.canvas-card-actions {
+  position: relative;
+  flex: none;
+  opacity: 1;
+}
+
+.canvas-card-actions .canvas-card-menu {
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 136px;
+  border: 1px solid var(--cv-line);
+}
+
+.canvas-card-menu > .canvas-card-delete {
+  color: var(--cv-danger);
+}
+
+.project-card[data-archived] .project-cover:not(:hover, :focus-visible) {
+  opacity: 0.86;
+}
+
+.project-list .canvas-list-toast {
+  position: fixed;
+  inset: auto auto max(24px, env(safe-area-inset-bottom)) 50%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  padding: 8px 10px 8px 16px;
+  box-shadow: 0 8px 24px #0002;
+  text-align: left;
+}
+
+.canvas-list-toast > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-list-toast > button {
+  flex: none;
+  color: inherit;
+}
+
+.canvas-list-toast > button:hover {
+  background: transparent;
+}
+
+.canvas-list-toast > .canvas-list-undo {
+  min-height: 32px;
+  padding: 0 4px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.canvas-list-toast > button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .canvas-list-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .canvas-list-toolbar .list-search {
+    max-width: none;
+  }
+
+  .canvas-list-toolbar > div:empty {
+    display: none;
+  }
+
+  .canvas-list-tabs > button {
+    flex: 1;
+    min-height: 38px;
+  }
+
+  .project-list .project-card-info {
+    align-items: flex-start;
+    flex-wrap: nowrap;
+  }
+
+  .project-list .project-card-info > a {
+    flex-basis: 0;
+  }
+
+  .project-card:nth-child(odd) .canvas-card-menu {
+    left: auto;
+    right: -20px;
+  }
+}

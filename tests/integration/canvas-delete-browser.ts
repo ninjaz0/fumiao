@@ -47,8 +47,12 @@ try {
     await route.fulfill({ status: 503, json: { detail: "删除失败，请稍后重试" } });
   });
   await page.goto(`/canvas?workspace=${state.workspace_id}`);
-  const open = page.getByRole("button", { name: `删除画布 ${title}`, exact: true });
-  await open.click();
+  const more = page.getByRole("button", { name: `更多操作 ${title}`, exact: true });
+  const open = async () => {
+    await more.click();
+    await page.getByRole("menuitem", { name: "删除", exact: true }).click();
+  };
+  await open();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   const submit = dialog.getByRole("button", { name: "删除画布", exact: true });
@@ -79,15 +83,15 @@ try {
   assert.ok(submitDisabled && cancelDisabled, "submit and cancel must be disabled while deletion is pending");
   await expect(submit).toBeEnabled();
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
-  await open.click();
+  await open();
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await open.click();
+  await open();
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   await page.unroute(`**/api/canvases/${id}`);
   await dialog.getByRole("button", { name: "删除画布", exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(open).toHaveCount(0);
+  await expect(more).toHaveCount(0);
   console.log("Canvas delete pending guard, modal error, close/reopen reset and successful retry: passed");
 } finally {
   await browser?.close();

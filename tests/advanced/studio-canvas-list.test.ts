@@ -3,6 +3,88 @@ import test from "node:test";
 import type { Sql } from "../../packages/platform/src/db.js";
 import { canvasesFixture } from "../helpers/canvases.js";
 
+test("canvas archive is shared, reversible, and independent of document edits", async () => {
+  const f = await canvasesFixture();
+  try {
+    const team = String(f.team.public_id);
+    const project = await f.canvases.create(
+      f.member,
+      { title: "Storyboard" },
+      team,
+    );
+    const other = await f.canvases.create(f.admin, { title: "Other" }, team);
+    const personal = await f.canvases.create(f.admin, {});
+    const active = () => f.canvases.list(f.admin, team);
+    const archived = () => f.canvases.list(f.member, team, true);
+
+    assert.equal(project.archived_at, null);
+    assert.equal((await archived()).projects.length, 0);
+    await assert.rejects(f.canvases.setArchived(f.member, other.id, true), {
+      status: 403,
+    });
+    await assert.rejects(f.canvases.setArchived(f.member, personal.id, true), {
+      status: 404,
+    });
+
+    f.setTime(1800000010);
+    assert.deepEqual(await f.canvases.setArchived(f.member, project.id, true), {
+      archived_at: 1800000010,
+    });
+    assert.deepEqual(
+      (await active()).projects.map(({ id }) => id),
+      [other.id],
+    );
+    assert.deepEqual(
+      (await archived()).projects.map(({ id }) => id),
+      [project.id],
+    );
+    const opened = await f.canvases.get(f.admin, project.id);
+    assert.equal(opened.revision, project.revision);
+    assert.equal(opened.updated, project.updated);
+    assert.equal(opened.archived_at, 1800000010);
+
+    f.setTime(1800000020);
+    assert.equal(
+      (await f.canvases.setArchived(f.admin, project.id, true)).archived_at,
+      1800000010,
+    );
+    await f.canvases.save(f.member, project.id, {
+      expected_revision: project.revision,
+      title: "Revised storyboard",
+      document: { nodes: [{ id: "scene", type: "text", x: 0, y: 0 }] },
+    });
+    assert.equal(
+      (await f.canvases.setArchived(f.admin, other.id, true)).archived_at,
+      1800000020,
+    );
+    assert.deepEqual(
+      (await archived()).projects.map(({ id }) => id),
+      [other.id, project.id],
+    );
+    await assert.rejects(f.canvases.setArchived(f.member, other.id, false), {
+      status: 403,
+    });
+    assert.deepEqual(await f.canvases.setArchived(f.admin, project.id, false), {
+      archived_at: null,
+    });
+    assert.deepEqual(
+      await f.canvases.setArchived(f.member, project.id, false),
+      { archived_at: null },
+    );
+    const [restored] = (await active()).projects;
+    assert.equal(restored.id, project.id);
+    assert.equal(restored.title, "Revised storyboard");
+    assert.equal(restored.count, 1);
+    assert.equal(restored.revision, project.revision + 1);
+    assert.deepEqual(
+      (await archived()).projects.map(({ id }) => id),
+      [other.id],
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("Studio canvas list resolves covers in order with a constant number of reads", async (t) => {
   const f = await canvasesFixture();
   try {

@@ -155,6 +155,7 @@ class OriginalApi {
     return this.canvases.list(
       req.actor,
       this.selected(req, req.headersDistinct["x-workspace-id"]?.[0]),
+      new URL(req.originalUrl, "http://localhost").searchParams.get("view") === "archived",
     );
   }
   @Post("api/canvases")
@@ -169,6 +170,14 @@ class OriginalApi {
   @Get("api/canvases/:key")
   getCanvas(@Req() req: AuthRequest, @Param("key") key: string) {
     return this.canvases.get(req.actor, key);
+  }
+  @Put("api/canvases/:key/archive")
+  archiveCanvas(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.canvases.setArchived(req.actor, key, true);
+  }
+  @Delete("api/canvases/:key/archive")
+  restoreCanvas(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.canvases.setArchived(req.actor, key, false);
   }
   @Put("api/canvases/:key/document")
   saveCanvas(

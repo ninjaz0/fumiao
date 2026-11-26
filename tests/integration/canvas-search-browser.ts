@@ -124,16 +124,84 @@ test("canvas search ignores surrounding whitespace and letter case", async () =>
 test("canvas list can recover from a failed request", async () => {
   let fail = true;
   await page.route("**/api/canvases", (route) =>
-    fail ? route.fulfill({ status: 503, json: { detail: "暂时无法读取画布" } }) : route.continue(),
+    fail
+      ? route.fulfill({ status: 503, json: { detail: "暂时无法读取画布" } })
+      : route.continue(),
   );
   try {
     await page.reload();
-    await expect(page.getByRole("heading", { name: "画布列表暂时无法加载" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "画布列表暂时无法加载" }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "暂无画布" })).toBeHidden();
     fail = false;
     await page.getByRole("button", { name: "重试" }).click();
-    await expect(page.getByRole("link", { name: "打开画布 " + title, exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "打开画布 " + title, exact: true }),
+    ).toBeVisible();
   } finally {
     await page.unroute("**/api/canvases");
   }
+});
+
+test("canvas archive can be undone and restored after opening the original link", async () => {
+  const cover = page.getByRole("link", {
+    name: `打开画布 ${title}`,
+    exact: true,
+  });
+  const more = page.getByRole("button", {
+    name: `更多操作 ${title}`,
+    exact: true,
+  });
+  const archive = page.getByRole("menuitem", { name: "归档", exact: true });
+  const archivedTab = page.getByRole("tab", { name: "已归档", exact: true });
+  const currentTab = page.getByRole("tab", { name: "当前", exact: true });
+  const originalLink = (await cover.getAttribute("href"))!;
+  await more.focus();
+  await more.press("Enter");
+  await expect(archive).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(more).toBeFocused();
+  const archiveEndpoint = `**/api/canvases/${originalLink.split("/").at(-1)!.split("?")[0]}/archive`;
+  await page.route(archiveEndpoint, (route) =>
+    route.fulfill({ status: 503, json: { detail: "暂时无法归档画布" } }),
+  );
+  try {
+    await more.click();
+    await archive.click();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "暂时无法归档画布" }),
+    ).toBeVisible();
+    await expect(cover).toBeVisible();
+  } finally {
+    await page.unroute(archiveEndpoint);
+  }
+  await more.click();
+  await archive.click();
+  await expect(cover).toHaveCount(0);
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect(cover).toBeVisible();
+
+  await more.click();
+  await archive.click();
+  await expect(cover).toHaveCount(0);
+  await currentTab.focus();
+  await currentTab.press("ArrowRight");
+  await expect(archivedTab).toHaveAttribute("aria-selected", "true");
+  await expect(cover).toBeVisible();
+  await page.reload();
+  await expect(archivedTab).toHaveAttribute("aria-selected", "true");
+  await expect(cover).toBeVisible();
+
+  await page.goto(originalLink);
+  const badge = page.locator(".canvas-archived-pill");
+  await expect(badge).toHaveText("已归档");
+  const input = page.getByRole("textbox", { name: "画布名称" });
+  await expect(input).toBeEditable();
+  await page.getByRole("button", { name: "项目菜单" }).click();
+  await page.getByRole("button", { name: "恢复画布", exact: true }).click();
+  await expect(badge).toHaveCount(0);
+  await page.getByRole("button", { name: "所有画布", exact: true }).click();
+  await expect(currentTab).toHaveAttribute("aria-selected", "true");
+  await expect(cover).toBeVisible();
 });

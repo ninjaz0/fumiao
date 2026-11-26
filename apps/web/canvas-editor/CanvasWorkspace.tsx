@@ -35,6 +35,8 @@ import {
 import {
   ArrowLeft,
   ArrowUp,
+  Archive,
+  ArchiveRestore,
   Check,
   ChevronDown,
   ChevronRight,
@@ -614,6 +616,12 @@ export function CanvasWorkspace({
     [minimap, setMinimap] = useState(false),
     [showEdges, setShowEdges] = useState(true),
     [toast, setToast] = useState("");
+  const [archived, setArchived] = useState(project.archived_at != null);
+  const [archivePending, setArchivePending] = useState(false);
+  const archiveLock = useRef(false);
+  const projectMenuTrigger = useRef<HTMLSpanElement>(null);
+  const projectMenu = useRef<HTMLDivElement>(null);
+  const canvasListPath = archived ? "/canvas?view=archived" : "/canvas";
   const [leaveFailure, setLeaveFailure] = useState<{
     path: string;
     message: string;
@@ -854,6 +862,34 @@ export function CanvasWorkspace({
   };
 
   const notify = useCallback((text: string) => setToast(text), []);
+  const closeProjectMenu = () => {
+    projectMenuTrigger.current?.querySelector("button")?.focus();
+    setMenu(null);
+  };
+  useEffect(() => {
+    if (menu === "project") projectMenu.current?.querySelector("button")?.focus();
+  }, [menu]);
+  const changeArchive = async () => {
+    if (archiveLock.current) return;
+    archiveLock.current = true;
+    setArchivePending(true);
+    try {
+      const result = await api<{ archived_at: number | null }>(
+        `/api/canvases/${project.id}/archive`,
+        undefined,
+        archived ? "DELETE" : "PUT",
+      );
+      const next = result.archived_at !== null;
+      setArchived(next);
+      closeProjectMenu();
+      notify(next ? "已归档，原链接仍可编辑" : "已恢复到画布列表");
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      archiveLock.current = false;
+      setArchivePending(false);
+    }
+  };
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 4500);
@@ -2177,6 +2213,7 @@ export function CanvasWorkspace({
     <div
       ref={workspaceRef}
       className="canvas-workspace"
+      data-project-archived={archived || undefined}
       data-composer-open={composerOpen ? "true" : "false"}
       data-selection-toolbar={selectionToolbarOpen ? "true" : "false"}
       tabIndex={-1}
@@ -2204,7 +2241,8 @@ export function CanvasWorkspace({
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
-          setMenu(null);
+          if (menu === "project") closeProjectMenu();
+          else setMenu(null);
           setContext(null);
           setDownstream(null);
         }
@@ -2359,7 +2397,7 @@ export function CanvasWorkspace({
               if (e.key === "Enter") e.currentTarget.blur();
             }}
           />
-          <span className="menu-trigger">
+          <span className="menu-trigger" ref={projectMenuTrigger}>
             <IconButton
               icon={ChevronDown}
               label="项目菜单"
@@ -2367,6 +2405,9 @@ export function CanvasWorkspace({
               onClick={() => setMenu(menu === "project" ? null : "project")}
             />
           </span>
+          {archived && (
+            <span className="canvas-archived-pill" title="已归档，仍可编辑">已归档</span>
+          )}
           <span className="node-count fm-number">节点 {nodes.length}</span>
           <button
             className={
@@ -2421,13 +2462,13 @@ export function CanvasWorkspace({
           <IconButton
             icon={FolderOpen}
             label="所有画布"
-            onClick={() => closeAndLeave("/canvas")}
+            onClick={() => closeAndLeave(canvasListPath)}
           />
         </div>
       </header>
       {menu === "project" && (
-        <div className="cv-menu project-menu">
-          <button onClick={() => closeAndLeave("/canvas")}>
+        <div className="cv-menu project-menu" ref={projectMenu}>
+          <button onClick={() => closeAndLeave(canvasListPath)}>
             <LayoutGrid size={16} />
             所有画布
           </button>
@@ -2465,12 +2506,23 @@ export function CanvasWorkspace({
           <button
             onClick={() => {
               downloadJSON(doc.value.title, doc.value);
-              setMenu(null);
+              closeProjectMenu();
             }}
           >
             <Download size={16} />
             下载画布文档
           </button>
+          {project.can_delete && (
+            <button
+              type="button"
+              aria-busy={archivePending}
+              disabled={archivePending}
+              onClick={() => void changeArchive()}
+            >
+              {archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+              {archived ? "恢复画布" : "归档画布"}
+            </button>
+          )}
           <div className="menu-divider" />
           <button onClick={() => closeAndLeave("/studio")}>
             <ArrowLeft size={16} />
