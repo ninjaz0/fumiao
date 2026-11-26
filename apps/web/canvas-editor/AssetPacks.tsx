@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {Check,Plus,Pencil,Trash2,ArrowLeft,Upload,ChevronRight,Lock,Unlock,Globe,Sparkles} from 'lucide-react';
 import {mergeAssetPackAssets} from '../studio/state';
+import '../studio/asset-packs.css';
 export type PackVoiceProfile = {
   model?: string;
   voice_id?: string;
@@ -50,7 +51,7 @@ export function AssetPacks(props:AssetPacksProps){
  return <WorkspaceAssetPacks key={props.workspace} {...props}/>;
 }
 function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[],onImportImages,onImportPack,onRemovePack,onDeletePack}:AssetPacksProps){
- const [packs,setPacks]=useState<Pack[]>([]),[assets,setAssets]=useState<{id:string;name?:string}[]>([]),[audioAssets,setAudioAssets]=useState<{id:string;name?:string}[]>([]),[opened,setOpened]=useState<string|null>(null),[chosen,setChosen]=useState<string[]>([]),[editing,setEditing]=useState<Pack|null|undefined>(),[draft,setDraft]=useState(blank),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[removing,setRemoving]=useState<string|null>(null);
+ const [packs,setPacks]=useState<Pack[]>([]),[assets,setAssets]=useState<{id:string;name?:string}[]>([]),[opened,setOpened]=useState<string|null>(null),[chosen,setChosen]=useState<string[]>([]),[editing,setEditing]=useState<Pack|null|undefined>(),[draft,setDraft]=useState(blank),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[removing,setRemoving]=useState<string|null>(null);
  const [turnaroundView,setTurnaroundView]=useState<'sheet'|'front'|'side'|'back'>('sheet');
  const [turnaroundDraft,setTurnaroundDraft]=useState<PackTurnaroundViews>({});
  const [showTurnaroundBind,setShowTurnaroundBind]=useState(false);
@@ -79,13 +80,11 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
    const allAssets=(s.assets??[]) as {id:string;kind?:string;name?:string}[];
    const jobImages=((s.jobs??[]) as {kind?:string;status?:string;result?:string|null;id?:number}[]).filter(j=>j.kind==='image'&&j.status==='done'&&j.result).map(j=>({id:j.result!,name:`生成图 #${j.id}`}));
    const loaded=[...allAssets.filter(a=>!a.kind||a.kind==='ref'||a.kind==='image'),...jobImages.filter(ji=>!allAssets.some(a=>a.id===ji.id))];
-   const audioLoaded=allAssets.filter(a=>a.kind==='audio'||a.kind==='ref_audio');
    const loadedIds=new Set(loaded.map(a=>a.id));
    const pending=recentUploadsRef.current.filter(entry=>entry.seq>snapshotUploadSeq).map(entry=>entry.asset);
    recentUploadsRef.current=recentUploadsRef.current.filter(entry=>entry.seq>snapshotUploadSeq&&!loadedIds.has(entry.asset.id));
    setPacks(p.packs);
    setAssets(mergeAssetPackAssets(loaded,pending));
-   setAudioAssets(audioLoaded);
   }catch(e){
    if(mountedRef.current&&!signal?.aborted&&seq===loadSeqRef.current)setError((e as Error).message);
   }finally{
@@ -201,16 +200,12 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
    <div className="fm-pack-images">{assets.map(a=><button key={a.id} disabled={busy||draft.media.length>=9&&!draft.media.includes(a.id)} aria-label={'选择参考图 '+a.id.slice(0,6)} aria-pressed={draft.media.includes(a.id)} onClick={()=>toggle(a.id)}><img loading="lazy" src={'/media/'+a.id+'?variant=thumb'} onError={ev=>{ev.currentTarget.src='/media/'+a.id}} alt="参考图"/>{draft.media.includes(a.id)&&<span>{draft.media.indexOf(a.id)+1}</span>}</button>)}</div>
    {!assets.length&&<p>上传图片，建立这个素材包。</p>}
    {draft.purpose==='subject'&&<fieldset className="fm-pack-voice">
-    <legend>角色专属声线与参考音频槽（对白自动匹配）</legend>
+    <legend>角色专属声线（对白自动匹配）</legend>
     <label>预设音色<select value={draft.voice_profile?.voice_id||''} onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),voice_id:e.target.value||undefined}})}>{voicePresets.map(v=><option key={v.id} value={v.id}>{v.label}</option>)}</select></label>
     <label>默认语速<select value={draft.voice_profile?.rate||'+0%'} onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),rate:e.target.value==='+0%'?undefined:e.target.value}})}>
      <option value="-20%">偏慢 (-20%)</option><option value="-10%">稍慢 (-10%)</option><option value="+0%">标准</option><option value="+10%">稍快 (+10%)</option><option value="+20%">偏快 (+20%)</option>
     </select></label>
-    <label>参考音频槽<select aria-label="参考音频槽" value={draft.voice_profile?.ref_audio_asset_id||''} onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),ref_audio_asset_id:e.target.value||null}})}>
-     <option value="">不绑定参考音频</option>
-     {audioAssets.map(a=><option key={a.id} value={a.id}>{a.name||`音频 ${a.id.slice(0,8)}`}</option>)}
-    </select></label>
-    <label>语气与声线描述<input maxLength={300} value={draft.voice_profile?.instruction||''} placeholder="例如：冷静克制的低沉男中音" onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),instruction:e.target.value||undefined}})}/></label>
+    <label className="fm-pack-voice-wide">语气与声线描述<input maxLength={300} value={draft.voice_profile?.instruction||''} placeholder="例如：冷静克制的低沉男中音" onChange={e=>setDraft({...draft,voice_profile:{...(draft.voice_profile||{}),instruction:e.target.value||undefined}})}/></label>
    </fieldset>}
    <div className="fm-pack-footer"><button className="fm-pack-primary" disabled={busy||!draft.name.trim()||!draft.media.length} onClick={()=>void save()}>{busy&&!uploading?'保存中…':'保存素材包'}</button></div>
   </>:pack?<>
@@ -218,7 +213,7 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
     <button className="fm-pack-button" disabled={busy} aria-label="返回素材包列表" onClick={()=>{setOpened(null);setChosen([]);setShowTurnaroundBind(false);setError('');setNotice('')}}><ArrowLeft size={18}/></button>
     <div>
      <h3>{pack.name}{pack.locked&&<span className="fm-badge-lock"><Lock size={12}/>已锁定</span>}{pack.scope==='global'&&<span className="fm-badge-global"><Globe size={12}/>全局</span>}</h3>
-     <p>{purposes[pack.purpose]} · {pack.media.length} 张图片{pack.voice_profile?.voice_id?` · 声线 ${pack.voice_profile.voice_id}`:''}{pack.voice_profile?.ref_audio_asset_id?' · 已绑参考音频':''}</p>
+     <p>{purposes[pack.purpose]} · {pack.media.length} 张图片{pack.voice_profile?.voice_id?` · 声线 ${pack.voice_profile.voice_id}`:''}</p>
     </div>
    </div>
    {pack.description&&<p className="fm-pack-description">{pack.description}</p>}
@@ -272,7 +267,7 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
    <div className="fm-pack-heading"><span>选择素材包</span><button className="fm-pack-button" disabled={busy||loading} onClick={()=>{setDraft(newDraft.current);setEditing(null);setError('')}}><Plus size={16}/>新建素材包</button></div>
    {loading?<p role="status">正在加载素材包…</p>:packs.length===0?<p className="fm-pack-empty">暂无素材包</p>:<div className="fm-pack-list">{packs.map(pack=><article key={pack.id}>
     <button className="fm-pack-select" disabled={busy} aria-label={'打开素材包 '+pack.name} onClick={()=>{setOpened(pack.id);setChosen([]);setRemoving(null);setError('');setNotice('')}}>
-     <img loading="lazy" src={'/media/'+pack.media[0]+'?variant=thumb'} onError={ev=>{ev.currentTarget.src='/media/'+pack.media[0]}} alt=""/><span><strong>{pack.name}{pack.locked?' 🔒':''}{pack.scope==='global'?' 🌐':''}</strong><small>{purposes[pack.purpose]} · {pack.media.length} 张图片{pack.voice_profile?.voice_id?' · 已配声线':''}{selected.some(p=>p.id===pack.id)?' · 已导入整包':''}</small>{pack.description&&<p>{pack.description}</p>}</span><ChevronRight size={18}/>
+     <img loading="lazy" src={'/media/'+pack.media[0]+'?variant=thumb'} onError={ev=>{ev.currentTarget.src='/media/'+pack.media[0]}} alt=""/><span><strong>{pack.name}{pack.locked&&<span className="fm-badge-lock" title="已锁定"><Lock size={13}/></span>}{pack.scope==='global'&&<span className="fm-badge-global" title="全局"><Globe size={13}/></span>}</strong><small>{purposes[pack.purpose]} · {pack.media.length} 张图片{pack.voice_profile?.voice_id?' · 已配声线':''}{selected.some(p=>p.id===pack.id)?' · 已导入整包':''}</small>{pack.description&&<p>{pack.description}</p>}</span><ChevronRight size={18}/>
     </button>
     <div className="fm-pack-row-actions">
      {(admin||pack.owner===userId)&&<button className="fm-pack-button" disabled={busy} title={pack.locked?'解锁':'锁定'} aria-label={(pack.locked?'解锁 ':'锁定 ')+pack.name} onClick={()=>void toggleLock(pack)}>{pack.locked?<Lock size={15}/>:<Unlock size={15}/>}</button>}

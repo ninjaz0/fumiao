@@ -169,3 +169,73 @@ test("Settings*.tsx strip internal ticket codes and raw DB enums while relocatin
   assert.match(skillModal, /from "\.\.\/studio\/SkillEditorCard"/);
   assert.doesNotMatch(skillModal, /useState\(/);
 });
+
+test("AssetPacks, asset-packs.css, and AssetDialog remove dead ref-audio slot, replace emoji badges, and unify cross-route pack/field styles", () => {
+  const packsTsx = readRepoFile("apps/web/canvas-editor/AssetPacks.tsx");
+  const packsCss = readRepoFile("apps/web/studio/asset-packs.css");
+  const assetDialogTsx = readRepoFile("apps/web/studio/AssetDialog.tsx");
+
+  assert.match(packsTsx, /import\s+["']\.\.\/studio\/asset-packs\.css["']/);
+  assert.doesNotMatch(packsTsx, /参考音频槽/);
+  assert.doesNotMatch(packsTsx, /已绑参考音频/);
+  assert.doesNotMatch(packsTsx, /audioAssets/);
+  assert.doesNotMatch(packsTsx, /🔒|🌐/);
+  assert.match(packsTsx, /<legend>角色专属声线（对白自动匹配）<\/legend>/);
+
+  // Preserve Playwright selectors and accessible names
+  assert.match(packsTsx, /新建素材包/);
+  assert.match(packsTsx, /返回素材包/);
+  assert.match(packsTsx, /返回素材包列表/);
+  assert.match(packsTsx, /保存素材包/);
+  assert.match(packsTsx, /打开素材包 /);
+  assert.match(packsTsx, /导入整个素材包/);
+  assert.match(packsTsx, /移除整包引用/);
+  assert.match(packsTsx, /未保存的素材包修改/);
+
+  assert.match(packsCss, /\.fm-pack-voice\b/);
+  assert.match(packsCss, /\.fm-pack-turnaround-bind\b/);
+  assert.match(packsCss, /\.fm-pack-turnaround-actions\b/);
+  assert.match(packsCss, /\.fm-pack-governance-bar\b/);
+  assert.match(packsCss, /\.fm-turnaround-strip\b/);
+  assert.match(packsCss, /\.fm-badge-lock\b/);
+  assert.match(packsCss, /\.fm-badge-global\b/);
+  assert.match(packsCss, /white-space:\s*nowrap/);
+
+  assert.match(
+    assetDialogTsx,
+    /content\.entry\.fields\?\.map\(\(field\)\s*=>\s*\(\s*<label[^>]*className="formlabel"/,
+  );
+});
+
+test("ProjectList, SeriesTree, dialog.css, and CanvasList demote empty series tree, expose editable bible, fix 5-item ep-form grid, and style retry button", () => {
+  const projectListTsx = readRepoFile("apps/web/canvas/ProjectList.tsx");
+  const seriesTreeTsx = readRepoFile("apps/web/canvas/SeriesTree.tsx");
+  const dialogCss = readRepoFile("apps/web/canvas/dialog.css");
+  const canvasListTsx = readRepoFile("apps/web/canvas/CanvasList.tsx");
+
+  const headingIdx = projectListTsx.indexOf("<h1>画布</h1>");
+  const seriesIdx = projectListTsx.indexOf("<SeriesTree");
+  assert.ok(headingIdx >= 0, "ProjectList.tsx must render <h1>画布</h1>");
+  assert.ok(seriesIdx >= 0, "ProjectList.tsx must render <SeriesTree />");
+  assert.ok(
+    headingIdx < seriesIdx,
+    "<h1>画布</h1> must appear above <SeriesTree /> in ProjectList.tsx",
+  );
+
+  assert.match(seriesTreeTsx, /剧集分集管理\s*·\s*0\s*部剧集/);
+  assert.match(seriesTreeTsx, /世界观设定/);
+  assert.match(seriesTreeTsx, /\/api\/series\/\$\{/);
+  assert.match(seriesTreeTsx, /"PUT"/);
+
+  assert.doesNotMatch(
+    dialogCss,
+    /grid-template-columns:\s*auto\s+auto\s+1fr\s+auto\s*;/,
+  );
+  assert.match(dialogCss, /\.fm-ep-form\b/);
+  assert.match(dialogCss, /\.fm-series-panel[\s\S]*border-radius:\s*8px/);
+
+  assert.match(
+    canvasListTsx,
+    /<button[\s\S]*?className="[^"]*\bbtn\b[^"]*"[\s\S]*?>\s*重试\s*<\/button>/,
+  );
+});

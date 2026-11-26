@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  BookOpen,
   ChevronDown,
   ChevronRight,
   Clapperboard,
   Film,
   FolderOpen,
   Layers,
+  Pencil,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -78,15 +80,54 @@ function groupEpisodesBySeason(item: SeriesItem): SeriesSeason[] {
     }));
 }
 
+function formatBibleText(
+  bible: Record<string, unknown> | undefined | null,
+): string {
+  if (!bible) return "";
+  const keys = Object.keys(bible);
+  if (keys.length === 0) return "";
+  if (keys.length === 1 && typeof bible.notes === "string") {
+    return bible.notes;
+  }
+  return JSON.stringify(bible, null, 2);
+}
+
+function parseBibleDraft(
+  raw: string,
+  existing?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Treat freeform text starting with '{' as plain notes.
+    }
+  }
+  const base =
+    existing && Object.keys(existing).some((k) => k !== "notes")
+      ? { ...existing }
+      : {};
+  return { ...base, notes: trimmed };
+}
+
 export function SeriesTree({ workspace }: { workspace: string }) {
   const [seriesList, setSeriesList] = useState<SeriesItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedSeries, setExpandedSeries] = useState<Set<string>>(() => new Set());
   const [expandedSeasons, setExpandedSeasons] = useState<Set<string>>(() => new Set());
   const [expandedEpisodes, setExpandedEpisodes] = useState<Set<string>>(() => new Set());
+  const [expandedBibles, setExpandedBibles] = useState<Set<string>>(() => new Set());
+  const [editingBibleFor, setEditingBibleFor] = useState<string | null>(null);
+  const [bibleDraft, setBibleDraft] = useState("");
   const [creatingSeries, setCreatingSeries] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newSynopsis, setNewSynopsis] = useState("");
+  const [newBible, setNewBible] = useState("");
   const [addingEpFor, setAddingEpFor] = useState<string | null>(null);
   const [epSeason, setEpSeason] = useState(1);
   const [epNo, setEpNo] = useState(1);
@@ -145,14 +186,43 @@ export function SeriesTree({ workspace }: { workspace: string }) {
     setBusy(true);
     setError("");
     try {
+      const biblePayload = parseBibleDraft(newBible);
       const created = await api<SeriesItem>(workspace, "/api/series", {
         title: newTitle.trim(),
         synopsis: newSynopsis.trim(),
+        ...(Object.keys(biblePayload).length > 0 ? { bible: biblePayload } : {}),
       });
       setNewTitle("");
       setNewSynopsis("");
+      setNewBible("");
       setCreatingSeries(false);
       setExpandedSeries((prev) => new Set([...prev, created.id]));
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveSeriesBible = async (item: SeriesItem) => {
+    setBusy(true);
+    setError("");
+    try {
+      const nextBible = parseBibleDraft(bibleDraft, item.bible);
+      await api<SeriesItem>(
+        workspace,
+        `/api/series/${item.id}`,
+        {
+          expected_revision: item.revision,
+          bible: nextBible,
+        },
+        "PUT",
+      );
+      setEditingBibleFor(null);
+      if (Object.keys(nextBible).length > 0) {
+        setExpandedBibles((prev) => new Set([...prev, item.id]));
+      }
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -261,12 +331,21 @@ export function SeriesTree({ workspace }: { workspace: string }) {
     }
   };
 
+  const isCollapsedEmpty = seriesList.length === 0 && !creatingSeries;
+
   return (
-    <section className="fm-series-panel" aria-label="多集剧集项目树">
+    <section
+      className={"fm-series-panel" + (isCollapsedEmpty ? " is-collapsed" : "")}
+      aria-label="多集剧集项目树"
+    >
       <div className="fm-series-head">
         <h2>
-          <Clapperboard size={18} />
-          剧集项目树（项目 → 季 → 集 → 场）
+          <Clapperboard size={isCollapsedEmpty ? 16 : 18} />
+          {loading && isCollapsedEmpty
+            ? "剧集分集管理 · 加载中…"
+            : seriesList.length === 0
+              ? "剧集分集管理 · 0 部剧集"
+              : `剧集分集管理 · ${seriesList.length} 部剧集`}
         </h2>
         <button
           type="button"
@@ -295,12 +374,20 @@ export function SeriesTree({ workspace }: { workspace: string }) {
             onChange={(e) => setNewTitle(e.target.value)}
           />
           <textarea
-            aria-label="剧集梗概与世界观"
+            aria-label="剧集梗概"
             rows={2}
             maxLength={4000}
-            placeholder="填写核心设定与世界观，建分集/分场时自动同步到画布设定便签…"
+            placeholder="填写核心故事梗概与主线脉络…"
             value={newSynopsis}
             onChange={(e) => setNewSynopsis(e.target.value)}
+          />
+          <textarea
+            aria-label="世界观设定"
+            rows={2}
+            maxLength={4000}
+            placeholder="填写世界观、视觉风格与角色设定，建分集/分场时自动同步到画布设定便签…"
+            value={newBible}
+            onChange={(e) => setNewBible(e.target.value)}
           />
           <div className="fm-series-form-actions">
             <button
@@ -322,16 +409,15 @@ export function SeriesTree({ workspace }: { workspace: string }) {
         </div>
       )}
 
-      {loading ? (
+      {isCollapsedEmpty ? null : loading ? (
         <p className="fm-series-muted">正在加载剧集树…</p>
-      ) : seriesList.length === 0 ? (
-        <p className="fm-series-muted">
-          按「剧集 → 季 → 分集 → 分场」四级结构管理长片与短剧，每集/每场均可独立绑定画布。
-        </p>
-      ) : (
+      ) : seriesList.length === 0 ? null : (
         <div className="fm-series-list">
           {seriesList.map((s) => {
             const open = expandedSeries.has(s.id);
+            const bibleText = formatBibleText(s.bible);
+            const hasBible = bibleText.length > 0;
+            const bibleOpen = expandedBibles.has(s.id) || editingBibleFor === s.id;
             const seasons = groupEpisodesBySeason(s);
             const maxSeason = seasons.reduce(
               (m, sn) => Math.max(m, sn.season_no),
@@ -420,6 +506,78 @@ export function SeriesTree({ workspace }: { workspace: string }) {
                     {s.synopsis && (
                       <p className="fm-series-synopsis">{s.synopsis}</p>
                     )}
+                    <div className="fm-series-bible">
+                      <div className="fm-series-bible-head">
+                        <button
+                          type="button"
+                          className="fm-series-toggle"
+                          aria-expanded={bibleOpen}
+                          onClick={() => toggleSet(setExpandedBibles, s.id)}
+                        >
+                          {bibleOpen ? (
+                            <ChevronDown size={14} />
+                          ) : (
+                            <ChevronRight size={14} />
+                          )}
+                          <BookOpen size={14} />
+                          <strong>世界观设定</strong>
+                          <span>{hasBible ? "已配置" : "未填写"}</span>
+                        </button>
+                        {editingBibleFor !== s.id && (
+                          <button
+                            type="button"
+                            className="secondary"
+                            disabled={busy}
+                            onClick={() => {
+                              setEditingBibleFor(s.id);
+                              setBibleDraft(bibleText);
+                              setExpandedBibles(
+                                (prev) => new Set([...prev, s.id]),
+                              );
+                            }}
+                          >
+                            <Pencil size={13} />
+                            {hasBible ? "编辑设定" : "填写设定"}
+                          </button>
+                        )}
+                      </div>
+                      {editingBibleFor === s.id ? (
+                        <div className="fm-series-bible-editor">
+                          <textarea
+                            aria-label="编辑世界观设定"
+                            rows={3}
+                            maxLength={4000}
+                            placeholder="填写时代背景、视觉风格与角色设定，新建分集/分场画布时自动注入设定便签…"
+                            value={bibleDraft}
+                            onChange={(e) => setBibleDraft(e.target.value)}
+                          />
+                          <div className="fm-series-form-actions">
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={busy}
+                              onClick={() => setEditingBibleFor(null)}
+                            >
+                              取消
+                            </button>
+                            <button
+                              type="button"
+                              className="primary"
+                              disabled={busy}
+                              onClick={() => void saveSeriesBible(s)}
+                            >
+                              保存设定
+                            </button>
+                          </div>
+                        </div>
+                      ) : bibleOpen ? (
+                        <pre className="fm-series-bible-content">
+                          {hasBible
+                            ? bibleText
+                            : "暂未填写世界观设定，点击「填写设定」补充后，新建分集与分场会自动同步。"}
+                        </pre>
+                      ) : null}
+                    </div>
                     {addingEpFor === s.id && (
                       <div className="fm-ep-form">
                         <label>
@@ -673,7 +831,7 @@ export function SeriesTree({ workspace }: { workspace: string }) {
 
                                         {isAddingScene && (
                                           <div
-                                            className="fm-ep-form"
+                                            className="fm-ep-form fm-scene-form"
                                             style={{ marginLeft: 22 }}
                                           >
                                             <label>

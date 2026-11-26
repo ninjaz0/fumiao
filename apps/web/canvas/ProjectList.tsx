@@ -190,7 +190,6 @@ export default function ProjectList({
         {workspaceChanged && (
           <p role="status">无法进入原工作区，已打开{workspaceName ? `「${workspaceName}」` : "可访问的工作区"}。</p>
         )}
-        <SeriesTree workspace={workspace} />
         <div className="project-list-heading">
           <h1>画布</h1>
           <PluginImport
@@ -210,6 +209,7 @@ export default function ProjectList({
             {opening?.kind === "create" ? "正在新建…" : "新建画布"}
           </button>
         </div>
+        <SeriesTree workspace={workspace} />
         {projects.length > 0 && (
           <div className="list-search">
             <Search size={17} />

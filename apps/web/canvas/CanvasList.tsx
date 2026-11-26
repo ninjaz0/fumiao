@@ -48,7 +48,7 @@ export default function CanvasList({ loadingLogo }: { loadingLogo: string }) {
         <main className="canvas-error">
           <h1>画布暂时无法打开</h1>
           <p>{error}</p>
-          <button type="button" onClick={() => location.reload()}>重试</button>
+          <button type="button" className="btn secondary" onClick={() => location.reload()}>重试</button>
         </main>
       ) : studio ? (
         <ProjectList studio={studio} workspaceChanged={workspaceChanged} />
