@@ -6,6 +6,7 @@ import {
   Power,
   Route,
   Search,
+  Ticket,
 } from "lucide-react";
 import { useRef, useState, type FormEvent } from "react";
 import type { AdminSave, AdminOpen, AdminConfirm } from "./settings-admin";
@@ -156,20 +157,20 @@ export function Invites({
           </div>
         </dl>
       ) : (
-        <div className="invite-empty ledger-empty">
-          <EmptyTicket />
-          <div>
-            <h3>还没有邀请码</h3>
-            <p>创建后，成员即可从登录页注册。</p>
-            <button
-              type="button"
-              className="ledger-button ledger-primary"
-              onClick={(event) => edit(event.currentTarget)}
-            >
-              <Plus size={16} aria-hidden="true" />
-              创建邀请码
-            </button>
-          </div>
+        <div className="invite-empty ledger-card">
+          <span className="plugin-mark" aria-hidden="true">
+            <Ticket size={18} />
+          </span>
+          <h3>还没有邀请码</h3>
+          <p>创建后，成员即可从登录页注册。</p>
+          <button
+            type="button"
+            className="ledger-button ledger-primary"
+            onClick={(event) => edit(event.currentTarget)}
+          >
+            <Plus size={16} aria-hidden="true" />
+            创建邀请码
+          </button>
         </div>
       )}
       <InviteGuide empty={!items.length} />
@@ -208,20 +209,27 @@ export function Invites({
             </label>
           </div>
           {hits.length ? (
-            <div className="ledger-ticket-list">
+            <div className="invite-card-list">
               {hits.map(({ item, status }) => (
                 <article
                   key={item.id}
-                  className="invite-code-row ledger-ticket"
+                  className="invite-code-row ledger-card"
                   data-status={status}
                   aria-labelledby={`invite-name-${item.id}`}
                 >
-                  <div className="ledger-ticket-stub">
-                    <h3 id={`invite-name-${item.id}`}>
-                      {item.name || "邀请码"}
-                    </h3>
-                    <div className="invite-code-value">
-                      <code>{item.code}</code>
+                  <div className="invite-card-head">
+                    <div className="invite-card-title">
+                      <h3 id={`invite-name-${item.id}`}>
+                        {item.name || "邀请码"}
+                      </h3>
+                      <span
+                        className="invite-status invite-status-badge"
+                        data-status={status}
+                      >
+                        {statuses[status]}
+                      </span>
+                    </div>
+                    <div className="invite-code-actions">
                       <button
                         type="button"
                         className="ledger-button"
@@ -235,51 +243,9 @@ export function Invites({
                         <Copy size={15} aria-hidden="true" />
                         复制
                       </button>
-                    </div>
-                  </div>
-                  <div className="ledger-ticket-details">
-                    <span className="invite-status ledger-seal">
-                      {statuses[status]}
-                    </span>
-                    <dl className="ledger-facts">
-                      <div>
-                        <dt>有效期</dt>
-                        <dd>
-                          {item.expires === null
-                            ? "长期有效"
-                            : expiryDate(item.expires)}
-                          {item.expires !== null && (
-                            <small>{expiryNote(item.expires, now)}</small>
-                          )}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>初始积分</dt>
-                        <dd>
-                          {item.grant_credits
-                            ? item.initial_credits.toLocaleString() + " / 人"
-                            : "不赠送"}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>加入空间</dt>
-                        <dd>
-                          {item.team_id
-                            ? state.workspaces.find(
-                                ({ id }) => id === item.team_id,
-                              )?.name || "团队已删除"
-                            : "仅个人空间"}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>已注册</dt>
-                        <dd>{item.uses.toLocaleString() + " 人"}</dd>
-                      </div>
-                    </dl>
-                    <div className="invite-code-actions">
                       <button
                         type="button"
-                        className="ledger-button ledger-quiet"
+                        className="ledger-button"
                         data-act="edit-invite"
                         data-id={item.id}
                         onClick={(event) => edit(event.currentTarget, item)}
@@ -289,7 +255,7 @@ export function Invites({
                       </button>
                       <button
                         type="button"
-                        className={`ledger-button ledger-quiet${item.enabled ? " ledger-danger" : ""}`}
+                        className={`ledger-button${item.enabled ? " ledger-danger" : ""}`}
                         data-act="toggle-invite"
                         data-id={item.id}
                         onClick={(event) =>
@@ -319,6 +285,44 @@ export function Invites({
                       </button>
                     </div>
                   </div>
+                  <div className="invite-code-value">
+                    <code>{item.code}</code>
+                  </div>
+                  <dl className="ledger-facts">
+                    <div>
+                      <dt>有效期</dt>
+                      <dd>
+                        {item.expires === null
+                          ? "长期有效"
+                          : expiryDate(item.expires)}
+                        {item.expires !== null && (
+                          <small>{expiryNote(item.expires, now)}</small>
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>初始积分</dt>
+                      <dd>
+                        {item.grant_credits
+                          ? item.initial_credits.toLocaleString() + " / 人"
+                          : "不赠送"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>加入空间</dt>
+                      <dd>
+                        {item.team_id
+                          ? state.workspaces.find(
+                              ({ id }) => id === item.team_id,
+                            )?.name || "团队已删除"
+                          : "仅个人空间"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>已注册</dt>
+                      <dd>{item.uses.toLocaleString() + " 人"}</dd>
+                    </div>
+                  </dl>
                 </article>
               ))}
             </div>
@@ -363,72 +367,6 @@ function InviteGuide({ empty }: { empty: boolean }) {
         ))}
       </ol>
     </details>
-  );
-}
-
-function EmptyTicket() {
-  return (
-    <svg
-      viewBox="0 0 300 200"
-      aria-hidden="true"
-      fill="none"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <g transform="rotate(-8 150 100)">
-        <path
-          d="M46 62a10 10 0 0 1 10-10h188a10 10 0 0 1 10 10v20a14 14 0 0 0 0 28v20a10 10 0 0 1-10 10H56a10 10 0 0 1-10-10v-20a14 14 0 0 0 0-28z"
-          fill="var(--bg)"
-          stroke="var(--ledger-rule)"
-          strokeWidth="1.5"
-        />
-      </g>
-      <path
-        d="M40 70a10 10 0 0 1 10-10h200a10 10 0 0 1 10 10v22a14 14 0 0 0 0 28v22a10 10 0 0 1-10 10H50a10 10 0 0 1-10-10v-22a14 14 0 0 0 0-28z"
-        fill="var(--surface)"
-        stroke="var(--secondary)"
-        strokeWidth="1.5"
-      />
-      <path
-        d="M180 64v84M62 114h72"
-        stroke="var(--ledger-rule)"
-        strokeWidth="1.5"
-        strokeDasharray="3 5"
-      />
-      <rect
-        x="62"
-        y="84"
-        width="58"
-        height="7"
-        rx="3.5"
-        fill="var(--secondary)"
-        opacity=".55"
-      />
-      <rect
-        x="62"
-        y="130"
-        width="38"
-        height="6"
-        rx="3"
-        fill="var(--ledger-rule)"
-      />
-      <g transform="rotate(-14 222 106)" stroke="var(--text)">
-        <circle
-          cx="222"
-          cy="106"
-          r="25"
-          strokeWidth="2.2"
-          strokeDasharray="4 3"
-        />
-        <circle cx="222" cy="106" r="19" strokeWidth="1.2" opacity=".6" />
-        <path d="M214 106h16M222 98v16" strokeWidth="2.2" />
-      </g>
-      <path
-        d="M118 176c20-6 46-6 66 0"
-        stroke="var(--ledger-rule)"
-        strokeWidth="1.5"
-      />
-    </svg>
   );
 }
 
@@ -639,8 +577,8 @@ function InviteDialog({
         <h2 id="modal-heading">{item ? "编辑邀请码" : "创建邀请码"}</h2>
       </header>
       <div className="ledger-sheet-fields">
-        <div className="ledger-ticket-preview" aria-hidden="true">
-          <small>票面预览</small>
+        <div className="invite-form-preview" aria-hidden="true">
+          <small>规则预览</small>
           <strong>{name.trim() || "未命名邀请码"}</strong>
           <code>{item?.code || "创建后自动生成"}</code>
           <ul>

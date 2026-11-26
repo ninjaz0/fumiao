@@ -3,10 +3,21 @@
   max-height: calc(100dvh - 3rem);
   box-sizing: border-box;
   padding: 1.5rem;
-  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
-  border-radius: 0.8rem;
-  background: Canvas;
-  color: CanvasText;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--pop, var(--surface));
+  color: var(--text);
+  box-shadow: var(--shadow, var(--cv-shadow, 0 8px 32px rgb(0 0 0 / 18%)));
+}
+:global(:root:not(:has(.shell))) .dialog {
+  --surface: var(--cv-surface);
+  --text: var(--cv-text);
+  --line: var(--cv-line);
+  --hover: var(--cv-hover);
+  --button: var(--cv-button);
+  --on-button: var(--cv-on-button);
+  --focus: var(--cv-focus);
+  --danger: var(--cv-danger);
 }
 .dialog::backdrop {
   background: rgb(0 0 0 / 45%);
@@ -26,15 +37,60 @@
 .dialog select,
 .dialog textarea {
   font: inherit;
-  padding: 0.6rem;
+  padding: 0.55rem 0.7rem;
   width: 100%;
   box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field, var(--surface));
+  color: var(--text);
+}
+.dialog select {
+  min-height: 36px;
 }
 .dialog textarea {
   resize: vertical;
+}
+.dialog :is(select, textarea):focus-visible {
+  outline: 2px solid var(--focus, #3686ad);
+  outline-offset: 1px;
+}
+.dialog p[role="alert"] {
+  color: var(--danger);
+  font-size: 13px;
 }
 .dialog footer {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+.dialog footer button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.dialog footer button:not(:disabled):hover {
+  background: var(--hover);
+}
+.dialog footer :global(button.primary) {
+  border-color: var(--button);
+  background: var(--button);
+  color: var(--on-button);
+}
+.dialog footer :global(button.primary):not(:disabled):hover {
+  background: var(--button);
+  opacity: 0.88;
+}
+.dialog footer button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
