@@ -463,6 +463,8 @@ type ScriptWorkspaceProps = {
   canvasTitle: string;
   canvasDoc: Doc;
   runs: Job[];
+  runsKnown?: boolean;
+  ensureFreshRuns?: () => Promise<{ runs: Job[]; runsKnown: boolean }>;
   assets: Asset[];
   defaultVideoModel: string;
   defaultImageModel: string;
@@ -501,6 +503,8 @@ export const ScriptWorkspace = forwardRef<
     canvasTitle,
     canvasDoc,
     runs,
+    runsKnown = true,
+    ensureFreshRuns,
     assets,
     defaultVideoModel,
     defaultImageModel,
@@ -1772,6 +1776,11 @@ export const ScriptWorkspace = forwardRef<
     el.addEventListener("pointerup", onUp);
   };
 
+  useEffect(() => {
+    if (!syncModalDocId || runsKnown || !ensureFreshRuns) return;
+    void ensureFreshRuns();
+  }, [syncModalDocId, runsKnown, ensureFreshRuns]);
+
   const syncModalState = useMemo(() => {
     if (!syncModalDocId || !sessions[syncModalDocId]) return null;
     const s = sessions[syncModalDocId];
@@ -1791,11 +1800,16 @@ export const ScriptWorkspace = forwardRef<
     const curSession = sessionsRef.current[syncModalDocId];
     if (!curSession) return;
 
+    const runsSnapshot = ensureFreshRuns
+      ? await ensureFreshRuns()
+      : { runs, runsKnown };
+
     const preferredLines = resolvePreferredShotIdLines(
       canvasDoc,
       syncModalState.breakdown,
       options.explicitNodeBindings ?? {},
-      runs,
+      runsSnapshot.runs,
+      runsSnapshot.runsKnown,
     );
     const stamped = stampScriptShotIds(curSession.draftBody, preferredLines);
     if (stamped.changed) {
@@ -1817,7 +1831,8 @@ export const ScriptWorkspace = forwardRef<
     onChangeCanvasDoc((current) => {
       const synced = syncScriptBreakdownToCanvas(current, freshBreakdown, {
         ...options,
-        runs,
+        runs: runsSnapshot.runs,
+        runsKnown: runsSnapshot.runsKnown,
       });
       focusTargets =
         synced.shotNodeIds.length > 0
@@ -2568,6 +2583,7 @@ export const ScriptWorkspace = forwardRef<
         <ScriptSyncModal
           canvasDoc={canvasDoc}
           runs={runs}
+          runsKnown={runsKnown}
           breakdown={syncModalState.breakdown}
           existingLinks={syncModalState.links}
           defaultVideoModel={defaultVideoModel}

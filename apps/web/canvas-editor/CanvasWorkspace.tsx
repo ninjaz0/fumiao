@@ -724,6 +724,8 @@ export function CanvasWorkspace({
     [selectedEdges, setSelectedEdges] = useState<string[]>([]);
   const aliveRef = useRef(true),
     runsLoadedRef = useRef(false),
+    lastRunsFetchOkRef = useRef(false),
+    inFlightRunsPromiseRef = useRef<Promise<Job[]> | null>(null),
     runsInFlightRef = useRef(false),
     runsReqSeqRef = useRef(0);
   const [editing, setEditing] = useState<string | null>(null),
@@ -1147,45 +1149,74 @@ export function CanvasWorkspace({
       const seq = ++runsReqSeqRef.current;
       runsInFlightRef.current = true;
       if (options.showLoading) setRunsLoading(true);
-      try {
-        const [data, state] = await Promise.all([
-          api<{ runs: Job[] }>(`/api/canvases/${project.id}/runs`),
-          api<Studio>("/api/state"),
-        ]);
-        if (!aliveRef.current || seq !== runsReqSeqRef.current) return data.runs;
-        runsLoadedRef.current = true;
-        setRuns((prev) => reconcileRuns(prev, data.runs));
-        const nextFp = studioFingerprint(state);
-        if (
-          !lastPolledStudioRef.current ||
-          lastPolledStudioRef.current.fp !== nextFp ||
-          studioRef.current !== lastPolledStudioRef.current.value
-        ) {
-          lastPolledStudioRef.current = { fp: nextFp, value: state };
-          setStudio(state);
-        }
-        setRunsLoaded(true);
-        setRunsError("");
-        return data.runs;
-      } catch (e) {
-        if (aliveRef.current && seq === runsReqSeqRef.current) {
-          if (shouldRedirectRunsError(e) && !hasUnsavedChanges()) {
-            location.assign("/studio");
-          } else {
-            setRunsError(formatRunsError(e));
+      const task = (async () => {
+        try {
+          const [data, state] = await Promise.all([
+            api<{ runs: Job[] }>(`/api/canvases/${project.id}/runs`),
+            api<Studio>("/api/state"),
+          ]);
+          if (!aliveRef.current || seq !== runsReqSeqRef.current)
+            return data.runs;
+          runsLoadedRef.current = true;
+          lastRunsFetchOkRef.current = true;
+          setRuns((prev) => {
+            const next = reconcileRuns(prev, data.runs);
+            runsRef.current = next;
+            return next;
+          });
+          const nextFp = studioFingerprint(state);
+          if (
+            !lastPolledStudioRef.current ||
+            lastPolledStudioRef.current.fp !== nextFp ||
+            studioRef.current !== lastPolledStudioRef.current.value
+          ) {
+            lastPolledStudioRef.current = { fp: nextFp, value: state };
+            setStudio(state);
+          }
+          setRunsLoaded(true);
+          setRunsError("");
+          return data.runs;
+        } catch (e) {
+          if (aliveRef.current && seq === runsReqSeqRef.current) {
+            lastRunsFetchOkRef.current = false;
+            if (shouldRedirectRunsError(e) && !hasUnsavedChanges()) {
+              location.assign("/studio");
+            } else {
+              setRunsError(formatRunsError(e));
+            }
+          }
+          if (options.silent) return [];
+          throw e;
+        } finally {
+          if (seq === runsReqSeqRef.current) {
+            runsInFlightRef.current = false;
+            inFlightRunsPromiseRef.current = null;
+            if (aliveRef.current) setRunsLoading(false);
           }
         }
-        if (options.silent) return [];
-        throw e;
-      } finally {
-        if (seq === runsReqSeqRef.current) {
-          runsInFlightRef.current = false;
-          if (aliveRef.current) setRunsLoading(false);
-        }
-      }
+      })();
+      inFlightRunsPromiseRef.current = task;
+      return task;
     },
     [project.id, hasUnsavedChanges],
   );
+  const ensureFreshRuns = useCallback(async (): Promise<{
+    runs: Job[];
+    runsKnown: boolean;
+  }> => {
+    try {
+      if (inFlightRunsPromiseRef.current) {
+        await inFlightRunsPromiseRef.current;
+        if (lastRunsFetchOkRef.current) {
+          return { runs: runsRef.current, runsKnown: true };
+        }
+      }
+      const fresh = await loadRuns({ showLoading: false, silent: false });
+      return { runs: fresh, runsKnown: true };
+    } catch {
+      return { runs: runsRef.current, runsKnown: false };
+    }
+  }, [loadRuns]);
   const fetchRuns = useCallback(
     () => loadRuns({ showLoading: true }),
     [loadRuns],
@@ -5276,6 +5307,8 @@ export function CanvasWorkspace({
           canvasTitle={doc.value.title}
           canvasDoc={doc.value.document}
           runs={runs}
+          runsKnown={runsLoaded && !runsError}
+          ensureFreshRuns={ensureFreshRuns}
           assets={studio.assets}
           defaultVideoModel={defaultVideoModel}
           defaultImageModel={defaultImageModel}

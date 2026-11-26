@@ -72,6 +72,7 @@ export type ScriptSyncOptions = {
   selectedAnchors?: string[];
   explicitNodeBindings?: Record<string, string>;
   runs?: Job[];
+  runsKnown?: boolean;
 };
 
 const ACTIVE_RUN_STATUSES = new Set([
@@ -256,6 +257,7 @@ export function resolvePreferredShotIdLines(
   breakdown: ScriptBreakdown,
   explicitBindings: Record<string, string> = {},
   runs: Job[] = [],
+  runsKnown = true,
 ): Record<string, number> {
   const plan = computeShotBindingPlan(
     doc.nodes,
@@ -263,6 +265,7 @@ export function resolvePreferredShotIdLines(
     breakdown.shots,
     explicitBindings,
     runs,
+    runsKnown,
   );
   const preferred: Record<string, number> = {};
   for (const shot of breakdown.shots) {
@@ -817,6 +820,7 @@ export function syncScriptBreakdownToCanvas(
   const videoModel = options.videoModel ?? "MiniMax H3";
   const imageModel = options.imageModel ?? "";
   const runs = options.runs ?? [];
+  const runsKnown = options.runsKnown ?? true;
 
   const selectedSet = options.selectedAnchors
     ? new Set(options.selectedAnchors)
@@ -967,6 +971,7 @@ export function syncScriptBreakdownToCanvas(
     breakdown.shots,
     options.explicitNodeBindings ?? {},
     runs,
+    runsKnown,
   );
 
   const scriptShotIdTotals = new Map<string, number>();
@@ -1151,6 +1156,7 @@ export function syncScriptBreakdownToCanvas(
         }
       } else if (
         existingGrid &&
+        runsKnown &&
         !nodeHasOutputOrActiveRun(existingGrid, runs)
       ) {
         const gridIdCandidate = existingGrid.id;
@@ -1202,6 +1208,20 @@ export function syncScriptBreakdownToCanvas(
         for (const assetKey of shot.referencedAssets) {
           const assetNodeId = assetKeyToNodeId.get(assetKey);
           if (assetNodeId) desiredManagedPairs.add(`${assetNodeId}>${existingVideo.id}`);
+        }
+        if (existingGrid) {
+          for (const pair of prevManagedSet) {
+            const [src, tgt] = pair.split(">");
+            if (tgt === existingGrid.id) {
+              desiredManagedPairs.add(pair);
+            } else if (
+              !runsKnown &&
+              src === existingGrid.id &&
+              shot.referencedAssets.length < 9
+            ) {
+              desiredManagedPairs.add(pair);
+            }
+          }
         }
       }
 
@@ -1436,6 +1456,7 @@ function computeShotBindingPlan(
   shots: ScriptExtractedShot[],
   explicitBindings: Record<string, string> = {},
   runs: Job[] = [],
+  runsKnown = true,
 ): {
   anchorToVideoId: Map<string, string>;
   unmatchedMediaNodes: CanvasNode[];
@@ -1595,8 +1616,11 @@ function computeShotBindingPlan(
     }
   }
 
-  // Pass 4: Positional anchor fallback ONLY for empty placeholder nodes (!hasMedia) with compatible identity.
-  // Media-bearing nodes that did not match by shotId, fingerprint, or actionSig NEVER auto-bind by position!
+  const mayHaveOutputOrActiveRun = (v: CanvasNode): boolean =>
+    !runsKnown || nodeHasOutputOrActiveRun(v, runs);
+
+  // Pass 4: Positional anchor fallback ONLY for confirmed empty placeholder nodes (!mayHaveOutputOrActiveRun) with compatible identity.
+  // Media-bearing or run-uncertain nodes that did not match by shotId, fingerprint, or actionSig NEVER auto-bind by position!
   for (const s of shots) {
     if (anchorToVideoId.has(s.anchor)) continue;
     const sameSceneCount =
@@ -1607,7 +1631,7 @@ function computeShotBindingPlan(
       (v) =>
         !claimedVideoIds.has(v.id) &&
         v.extra_params?.script_anchor === s.anchor &&
-        !nodeHasOutputOrActiveRun(v, runs) &&
+        !mayHaveOutputOrActiveRun(v) &&
         isIdentityCompatible(s, v),
     );
     if (posCandidate) {
@@ -1617,7 +1641,7 @@ function computeShotBindingPlan(
   }
 
   const unmatchedMediaNodes = existingVideos.filter(
-    (v) => !claimedVideoIds.has(v.id) && nodeHasOutputOrActiveRun(v, runs),
+    (v) => !claimedVideoIds.has(v.id) && mayHaveOutputOrActiveRun(v),
   );
   return { anchorToVideoId, unmatchedMediaNodes };
 }
@@ -1627,6 +1651,7 @@ export function detectAmbiguousShotMatches(
   breakdown: ScriptBreakdown,
   selectedAnchors?: string[],
   runs: Job[] = [],
+  runsKnown = true,
 ): AmbiguousShotMatch[] {
   const fullPlan = computeShotBindingPlan(
     doc.nodes,
@@ -1634,20 +1659,26 @@ export function detectAmbiguousShotMatches(
     breakdown.shots,
     {},
     runs,
+    runsKnown,
   );
-  const selectedSet = selectedAnchors?.length
-    ? new Set(selectedAnchors)
-    : null;
-  const activeShots = selectedSet
-    ? breakdown.shots.filter((s) => selectedSet.has(s.anchor))
+  const rawSelectedSet =
+    selectedAnchors !== undefined ? new Set(selectedAnchors) : null;
+  const isPartialSelection =
+    rawSelectedSet !== null &&
+    breakdown.shots.some((s) => !rawSelectedSet.has(s.anchor));
+  const activeShots = isPartialSelection
+    ? breakdown.shots.filter((s) => rawSelectedSet.has(s.anchor))
     : breakdown.shots;
+  if (isPartialSelection && activeShots.length === 0) {
+    return [];
+  }
   const unboundActiveShots = activeShots.filter(
     (s) => !fullPlan.anchorToVideoId.has(s.anchor),
   );
 
   return fullPlan.unmatchedMediaNodes
     .filter((v) => {
-      if (!selectedSet) return true;
+      if (!isPartialSelection || !rawSelectedSet) return true;
       const prevAnchor =
         typeof v.extra_params?.script_anchor === "string"
           ? v.extra_params.script_anchor
@@ -1656,7 +1687,7 @@ export function detectAmbiguousShotMatches(
         typeof v.extra_params?.script_scene_code === "string"
           ? v.extra_params.script_scene_code
           : prevAnchor.split("-")[0] || "";
-      if (prevAnchor && selectedSet.has(prevAnchor)) return true;
+      if (prevAnchor && rawSelectedSet.has(prevAnchor)) return true;
       return unboundActiveShots.some(
         (s) => !sceneCode || s.sceneCode === sceneCode,
       );

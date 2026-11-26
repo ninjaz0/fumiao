@@ -509,15 +509,146 @@ try {
       new RegExp(`△${heroAfter}推门走进钟表铺环顾四周。`),
     );
 
-    // 3. Sync 01_EP01.md to Canvas & test "查看源剧本" in both Rich mode and Source mode
+    // 3. Sync 01_EP01.md to Canvas (including delayed/failed initial /runs protection!) & test "查看源剧本" in both Rich mode and Source mode
     await page.getByRole("button", { name: "富文本", exact: true }).click();
     await page.getByRole("button", { name: "同步分镜到画布" }).click();
     const syncDialog = page.getByRole("dialog", {
       name: "从剧本拆解并同步至画布",
     });
     await expect(syncDialog).toBeVisible();
+    // First sync in grid_preview mode so grid_preview nodes exist on canvasA with media_id=null & active_job=null
+    await syncDialog.getByLabel("生成链路").selectOption("grid_preview");
     await syncDialog.getByRole("button", { name: "一键落图并查看画布" }).click();
     await expect(syncDialog).toHaveCount(0);
+    await expect(page.locator(".canvas-header")).toContainText("已保存", {
+      timeout: 5000,
+    });
+    const canvasWithGrids: Project = await (
+      await context.request.get(`/api/canvases/${canvasA.id}`, { headers })
+    ).json();
+    const firstGridNode = canvasWithGrids.document.nodes.find(
+      (n) => n.extra_params?.script_role === "grid_preview",
+    );
+    assert.ok(firstGridNode, "expected grid_preview node after grid sync");
+
+    // 3a-1. Delayed initial /runs: reopen canvas while /runs is delayed by 500ms and carries a completed job for firstGridNode;
+    // switching sync mode to omni_ref must await the fresh /runs snapshot and preserve firstGridNode!
+    let runsInterceptMode: "delay_with_done_job" | "fail_503" | "passthrough" =
+      "delay_with_done_job";
+    await page.route(`**/api/canvases/${canvasA.id}/runs`, async (route) => {
+      if (runsInterceptMode === "delay_with_done_job") {
+        await new Promise((r) => setTimeout(r, 500));
+        await route.fulfill({
+          status: 200,
+          json: {
+            runs: [
+              {
+                id: 990001,
+                canvas_node: firstGridNode.id,
+                owner: 1,
+                kind: "image",
+                status: "done",
+                result: "a".repeat(32),
+                note: "",
+                prompt: firstGridNode.prompt,
+                refs: [],
+                width: 1024,
+                height: 1024,
+                created: Math.floor(Date.now() / 1000),
+                seconds: 0,
+                quality: 0,
+                ratio: "9:16",
+                image_quality: "medium",
+                model: "gpt-image-2.6-sunburst",
+              },
+            ],
+          },
+        });
+        return;
+      }
+      if (runsInterceptMode === "fail_503") {
+        await route.fulfill({
+          status: 503,
+          json: { detail: "模拟任务历史加载失败" },
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.goto(editPath);
+    await page.getByRole("tab", { name: "文档" }).click();
+    await page.getByRole("treeitem").filter({ hasText: fileAName }).click();
+    await page.getByRole("button", { name: "同步分镜到画布" }).click();
+    await expect(syncDialog).toBeVisible();
+    await syncDialog.getByLabel("生成链路").selectOption("omni_ref");
+    await syncDialog.getByRole("button", { name: "一键落图并查看画布" }).click();
+    await expect(syncDialog).toHaveCount(0);
+    await expect(page.locator(".canvas-header")).toContainText("已保存", {
+      timeout: 5000,
+    });
+    const afterDelayedRunsSync: Project = await (
+      await context.request.get(`/api/canvases/${canvasA.id}`, { headers })
+    ).json();
+    assert.ok(
+      afterDelayedRunsSync.document.nodes.some((n) => n.id === firstGridNode.id),
+      "grid_preview node with completed job in delayed /runs must be preserved",
+    );
+
+    // 3a-2. Failed /runs (503): reopen canvas when /runs fails completely (runs=[], runsKnown=false);
+    // syncing in omni_ref mode must conservatively preserve ALL remaining grid_preview nodes & their edges!
+    const remainingGridNode = afterDelayedRunsSync.document.nodes.find(
+      (n) =>
+        n.extra_params?.script_role === "grid_preview" &&
+        n.id !== firstGridNode.id,
+    );
+    // Re-sync in grid_preview first so S01-02 also has an empty grid_preview node with edges, then test 503 failure
+    runsInterceptMode = "passthrough";
+    await page.getByRole("tab", { name: "文档" }).click();
+    await page.getByRole("button", { name: "同步分镜到画布" }).click();
+    await syncDialog.getByLabel("生成链路").selectOption("grid_preview");
+    await syncDialog.getByRole("button", { name: "一键落图并查看画布" }).click();
+    await expect(syncDialog).toHaveCount(0);
+    await expect(page.locator(".canvas-header")).toContainText("已保存", {
+      timeout: 5000,
+    });
+    const beforeFail503: Project = await (
+      await context.request.get(`/api/canvases/${canvasA.id}`, { headers })
+    ).json();
+    const s02Grid = beforeFail503.document.nodes.find(
+      (n) =>
+        n.extra_params?.script_role === "grid_preview" &&
+        n.extra_params?.script_anchor === "S01-02",
+    );
+    assert.ok(s02Grid, "expected S01-02 grid node before 503 test");
+    void remainingGridNode;
+
+    runsInterceptMode = "fail_503";
+    await page.goto(editPath);
+    await page.getByRole("tab", { name: "文档" }).click();
+    await page.getByRole("treeitem").filter({ hasText: fileAName }).click();
+    await page.getByRole("button", { name: "同步分镜到画布" }).click();
+    await expect(syncDialog).toBeVisible();
+    await syncDialog.getByLabel("生成链路").selectOption("omni_ref");
+    await syncDialog.getByRole("button", { name: "一键落图并查看画布" }).click();
+    await expect(syncDialog).toHaveCount(0);
+    await expect(page.locator(".canvas-header")).toContainText("已保存", {
+      timeout: 5000,
+    });
+    const afterFail503Sync: Project = await (
+      await context.request.get(`/api/canvases/${canvasA.id}`, { headers })
+    ).json();
+    assert.ok(
+      afterFail503Sync.document.nodes.some((n) => n.id === s02Grid.id),
+      "grid_preview node must be preserved when /runs fails with 503 (runsKnown=false)",
+    );
+    assert.ok(
+      afterFail503Sync.document.edges.some(
+        (e) => e.source === s02Grid.id || e.target === s02Grid.id,
+      ),
+      "grid_preview edges must be preserved when /runs fails with 503 (runsKnown=false)",
+    );
+    runsInterceptMode = "passthrough";
 
     // Clear multi-selection, select second shot video node (S01-02), and click "查看源剧本"
     const secondShotNode = page

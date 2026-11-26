@@ -20,6 +20,7 @@ import type { CanvasGenerationMode, Doc, Job } from "./types";
 export function ScriptSyncModal({
   canvasDoc,
   runs = [],
+  runsKnown = true,
   breakdown,
   existingLinks,
   defaultVideoModel,
@@ -29,6 +30,7 @@ export function ScriptSyncModal({
 }: {
   canvasDoc: Doc;
   runs?: Job[];
+  runsKnown?: boolean;
   breakdown: ScriptBreakdown;
   existingLinks: Record<string, ScriptAnchorLink>;
   defaultVideoModel: string;
@@ -62,8 +64,9 @@ export function ScriptSyncModal({
         breakdown,
         [...selectedAnchors],
         runs,
+        runsKnown,
       ),
-    [canvasDoc, breakdown, selectedAnchors, runs],
+    [canvasDoc, breakdown, selectedAnchors, runs, runsKnown],
   );
 
   const hasUnresolvedAmbiguity = useMemo(

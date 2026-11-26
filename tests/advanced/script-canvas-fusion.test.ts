@@ -1208,3 +1208,126 @@ test("reconcileRenamedOpenScriptSession refreshes clean session and flags confli
   assert.equal(dirtyReconciled.baseRevision, 1);
   assert.equal(dirtyReconciled.revision, 3);
 });
+
+test("runsKnown=false preserves grid_preview nodes and their edges on mode switch and blocks positional video rebinding", () => {
+  const scriptV1 = [
+    "# EP07 任务状态未加载时的保守保护",
+    "## 角色资产",
+    "- **CH01 林默**：黑色风衣侦探。",
+    "### S01 码头 夜 外",
+    "人物：林默",
+    "△林默站在雾气弥漫的码头边。 <!-- fm-shot:sh_dock_01 -->",
+  ].join("\n");
+  const bd1 = parseScriptBreakdown(scriptV1, { docId: "707", docPath: "EP07.md" });
+  const gridSynced = syncScriptBreakdownToCanvas(
+    { schemaVersion: 1, nodes: [], edges: [], shots: [] },
+    bd1,
+    { generationMode: "grid_preview", includeAssets: true },
+  );
+  const gridNode = gridSynced.document.nodes.find(
+    (n) => n.extra_params?.script_role === "grid_preview",
+  )!;
+  const videoNode = gridSynced.document.nodes.find((n) => n.type === "video")!;
+  assert.ok(gridNode && videoNode);
+  const gridEdgeIdsBefore = gridSynced.document.edges.filter(
+    (e) => e.source === gridNode.id || e.target === gridNode.id,
+  );
+  assert.ok(gridEdgeIdsBefore.length >= 3); // text->grid, asset->grid, grid->video
+
+  // Simulate /api/canvases/:id/runs failing or not yet loaded (runs=[], runsKnown=false)
+  const switchedWhileRunsUnknown = syncScriptBreakdownToCanvas(
+    gridSynced.document,
+    bd1,
+    {
+      generationMode: "omni_ref",
+      includeAssets: true,
+      runs: [],
+      runsKnown: false,
+    },
+  );
+  assert.ok(
+    switchedWhileRunsUnknown.document.nodes.some((n) => n.id === gridNode.id),
+    "grid_preview node must be preserved when runsKnown is false",
+  );
+  for (const prevEdge of gridEdgeIdsBefore) {
+    assert.ok(
+      switchedWhileRunsUnknown.document.edges.some(
+        (e) => e.source === prevEdge.source && e.target === prevEdge.target,
+      ),
+      `edge ${prevEdge.source}->${prevEdge.target} must be preserved when runsKnown is false`,
+    );
+  }
+
+  // Same-scene rewrite while runsKnown=false must NOT positionally rebind uncertain video node
+  const scriptV2 = [
+    "# EP07 任务状态未加载时的保守保护",
+    "### S01 码头 夜 外",
+    "△货轮拉响汽笛驶离港口。 <!-- fm-shot:sh_dock_99 -->",
+  ].join("\n");
+  const bd2 = parseScriptBreakdown(scriptV2, { docId: "707", docPath: "EP07.md" });
+  const ambUnknown = detectAmbiguousShotMatches(
+    switchedWhileRunsUnknown.document,
+    bd2,
+    ["S01-01"],
+    [],
+    false,
+  );
+  assert.equal(ambUnknown.length, 1);
+  assert.equal(ambUnknown[0].existingVideoNodeId, videoNode.id);
+});
+
+test("detectAmbiguousShotMatches keeps cross-scene manual binding candidates when explicit full-selection array is passed", () => {
+  const scriptScene1 = [
+    "# EP08 跨场改稿手动绑定",
+    "### S01 旧书店 夜 内",
+    "△林默在书架后发现暗格。 <!-- fm-shot:sh_s01_orig -->",
+  ].join("\n");
+  const bdS01 = parseScriptBreakdown(scriptScene1, {
+    docId: "808",
+    docPath: "EP08.md",
+  });
+  const syncedS01 = syncScriptBreakdownToCanvas(
+    { schemaVersion: 1, nodes: [], edges: [], shots: [] },
+    bdS01,
+    { generationMode: "omni_ref" },
+  );
+  const oldVideoId = syncedS01.anchorToNodeId["S01-01"];
+  const withMedia: Doc = {
+    ...syncedS01.document,
+    nodes: syncedS01.document.nodes.map((n) =>
+      n.id === oldVideoId ? { ...n, media_id: "f".repeat(32) } : n,
+    ),
+  };
+
+  // Author rewrites S01 into S02 with completely new shotId and action text;
+  // ScriptSyncModal defaults to selecting all current shots and passes explicit ["S02-01"] array!
+  const scriptScene2 = [
+    "# EP08 跨场改稿手动绑定",
+    "### S02 地下密室 夜 内",
+    "△火柴擦亮照亮石桌上的青铜匣。 <!-- fm-shot:sh_s02_rewritten -->",
+  ].join("\n");
+  const bdS02 = parseScriptBreakdown(scriptScene2, {
+    docId: "808",
+    docPath: "EP08.md",
+  });
+
+  const ambFullArray = detectAmbiguousShotMatches(withMedia, bdS02, ["S02-01"]);
+  assert.equal(
+    ambFullArray.length,
+    1,
+    "full-selection array must NOT filter out cross-scene unmatched media node",
+  );
+  assert.equal(ambFullArray[0].existingVideoNodeId, oldVideoId);
+  assert.deepEqual(ambFullArray[0].candidateAnchors, ["S02-01"]);
+
+  // Binding explicitly across scenes aligns shotId and anchor cleanly
+  const rebound = syncScriptBreakdownToCanvas(withMedia, bdS02, {
+    generationMode: "omni_ref",
+    selectedAnchors: ["S02-01"],
+    explicitNodeBindings: { "S02-01": oldVideoId },
+  });
+  assert.equal(rebound.anchorToNodeId["S02-01"], oldVideoId);
+  const reboundVideo = rebound.document.nodes.find((n) => n.id === oldVideoId)!;
+  assert.equal(reboundVideo.extra_params?.script_shot_id, "sh_s02_rewritten");
+  assert.equal(reboundVideo.extra_params?.script_scene_code, "S02");
+});
