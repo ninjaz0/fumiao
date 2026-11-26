@@ -56,8 +56,9 @@ export const scriptSearchFields: Fields = {
 export const scriptReplaceFields: Fields = {
   replacements: {
     kind: "list",
-    min: 1,
+    min: 0,
     max: 100,
+    default: [],
     item: {
       kind: "object",
       fields: {
@@ -65,6 +66,32 @@ export const scriptReplaceFields: Fields = {
         expected_revision: { kind: "integer", min: 1, exactInteger: true },
         expected_text: { kind: "string", max: MAX_SCRIPT_BYTES },
         next_text: { kind: "string", max: MAX_SCRIPT_BYTES },
+      },
+    },
+  },
+  canvas_replacements: {
+    kind: "list",
+    min: 0,
+    max: 50,
+    default: [],
+    item: {
+      kind: "object",
+      fields: {
+        canvas_id: { kind: "string", min: 1, max: 64 },
+        expected_revision: { kind: "integer", min: 1, exactInteger: true },
+        nodes: {
+          kind: "list",
+          min: 1,
+          max: 200,
+          item: {
+            kind: "object",
+            fields: {
+              node_id: { kind: "string", min: 1, max: 80 },
+              expected_text: { kind: "string", max: 12000 },
+              next_text: { kind: "string", max: 12000 },
+            },
+          },
+        },
       },
     },
   },

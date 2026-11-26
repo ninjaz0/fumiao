@@ -50,6 +50,21 @@ export type ScriptSearchFileResult = {
   truncated: boolean;
 };
 
+export type ScriptSearchCanvasResult = {
+  canvas_id: string;
+  canvas_title: string;
+  revision: number;
+  nodes: {
+    node_id: string;
+    node_title: string;
+    node_type: string;
+    field: "text" | "prompt";
+    current_text: string;
+    matches: ScriptSearchMatch[];
+    truncated: boolean;
+  }[];
+};
+
 export type WorkspaceCanvasSummary = {
   id: string;
   title: string;
@@ -112,8 +127,10 @@ export const scriptApi = {
   search: (query: string, caseSensitive = false) =>
     api<{
       scanned_files: number;
+      scanned_canvases?: number;
       total_matches: number;
       files: ScriptSearchFileResult[];
+      canvases?: ScriptSearchCanvasResult[];
     }>(
       "/api/workspace/scripts/search",
       { query, case_sensitive: caseSensitive },
@@ -127,6 +144,15 @@ export const scriptApi = {
       expected_text: string;
       next_text: string;
     }[],
+    canvasReplacements: {
+      canvas_id: string;
+      expected_revision: number;
+      nodes: {
+        node_id: string;
+        expected_text: string;
+        next_text: string;
+      }[];
+    }[] = [],
   ) =>
     api<{
       results: {
@@ -135,7 +161,22 @@ export const scriptApi = {
         revision?: number;
         error?: string;
       }[];
-    }>("/api/workspace/scripts/replace", { replacements }, "POST"),
+      canvas_results?: {
+        canvas_id: string;
+        saved: boolean;
+        revision?: number;
+        error?: string;
+      }[];
+    }>(
+      "/api/workspace/scripts/replace",
+      {
+        replacements,
+        ...(canvasReplacements.length
+          ? { canvas_replacements: canvasReplacements }
+          : {}),
+      },
+      "POST",
+    ),
 
   listCanvases: () =>
     api<{ projects: WorkspaceCanvasSummary[] }>("/api/canvases"),

@@ -33,6 +33,9 @@ export type ScriptExtractedScene = {
 
 export type ScriptExtractedShot = {
   anchor: string;
+  shotId: string;
+  fingerprint: string;
+  actionSig: string;
   sceneCode: string;
   shotIndex: number;
   title: string;
@@ -65,6 +68,15 @@ export type ScriptSyncOptions = {
   imageModel?: string;
   ratio?: "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9";
   selectedAnchors?: string[];
+  explicitNodeBindings?: Record<string, string>;
+};
+
+export type AmbiguousShotMatch = {
+  existingVideoNodeId: string;
+  existingTitle: string;
+  previousAnchor: string;
+  sceneCode: string;
+  candidateAnchors: string[];
 };
 
 export type ScriptSyncResult = {
@@ -77,6 +89,7 @@ export type ScriptSyncResult = {
 
 export type ScriptAnchorLink = {
   anchor: string;
+  shotId: string;
   videoNodeId: string;
   textNodeId: string | null;
   title: string;
@@ -92,6 +105,7 @@ export type CanvasNodeSearchMatch = {
   nodeType: CanvasNode["type"];
   field: "text" | "prompt";
   currentText: string;
+  truncated: boolean;
   matches: {
     start: number;
     end: number;
@@ -102,6 +116,55 @@ export type CanvasNodeSearchMatch = {
     after: string;
   }[];
 };
+
+const SHOT_COMMENT_RE = /<!--\s*fm-shot:([a-zA-Z0-9_-]{3,64})\s*-->/g;
+const SHOT_COMMENT_SINGLE_RE = /<!--\s*fm-shot:([a-zA-Z0-9_-]{3,64})\s*-->/;
+
+export function stripShotCommentMarkers(text: string): string {
+  return text.replace(SHOT_COMMENT_RE, "").replace(/\s{2,}/g, " ").trim();
+}
+
+function normalizeSig(text: string): string {
+  return stripShotCommentMarkers(text)
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, "")
+    .slice(0, 160);
+}
+
+export function stampScriptShotIds(markdown: string): {
+  markdown: string;
+  changed: boolean;
+} {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  let changed = false;
+  let pendingIdForNextBeat = false;
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (SHOT_COMMENT_SINGLE_RE.test(trimmed) && !/^[△▲]/.test(trimmed)) {
+      pendingIdForNextBeat = true;
+      out.push(lines[i]);
+      continue;
+    }
+    if (/^[△▲]/.test(trimmed)) {
+      if (!SHOT_COMMENT_SINGLE_RE.test(trimmed) && !pendingIdForNextBeat) {
+        const shotUid = `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+        out.push(`${lines[i]} <!-- fm-shot:${shotUid} -->`);
+        changed = true;
+      } else {
+        out.push(lines[i]);
+      }
+      pendingIdForNextBeat = false;
+      continue;
+    }
+    if (/^#{1,4}\s+/.test(trimmed)) {
+      pendingIdForNextBeat = false;
+    }
+    out.push(lines[i]);
+  }
+  return { markdown: out.join("\n"), changed };
+}
 
 function sanitizeIdPart(raw: string): string {
   const cleaned = raw.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
@@ -169,6 +232,7 @@ export function parseScriptBreakdown(
   let currentScene: ScriptExtractedScene | null = null;
 
   type PendingBeat = {
+    shotId?: string;
     actions: string[];
     dialogues: { speaker: string; text: string }[];
     lineStart: number;
@@ -176,6 +240,7 @@ export function parseScriptBreakdown(
     explicitSeconds?: number;
   };
   let currentBeat: PendingBeat | null = null;
+  let pendingCommentShotId: string | undefined = undefined;
   const sceneShotCounters = new Map<string, number>();
 
   const registerAsset = (
@@ -260,8 +325,14 @@ export function parseScriptBreakdown(
     const count = (sceneShotCounters.get(scene.code) ?? 0) + 1;
     sceneShotCounters.set(scene.code, count);
     const anchor = `${scene.code}-${String(count).padStart(2, "0")}`;
-    const actionText = currentBeat.actions.join(" ").trim();
+    const actionText = stripShotCommentMarkers(currentBeat.actions.join(" "));
     const dialogues = currentBeat.dialogues;
+    const actionSig = normalizeSig(actionText);
+    const dlgSig = dialogues
+      .map((d) => `${normalizeSig(d.speaker)}:${normalizeSig(d.text)}`)
+      .join("|");
+    const fingerprint = `${scene.code}|${actionSig}|${dlgSig}`.slice(0, 240);
+    const explicitShotId = currentBeat.shotId || "";
 
     const referenced: string[] = [];
     if (scene.location) {
@@ -318,6 +389,9 @@ export function parseScriptBreakdown(
 
     shots.push({
       anchor,
+      shotId: explicitShotId,
+      fingerprint,
+      actionSig,
       sceneCode: scene.code,
       shotIndex: count,
       title: `${anchor} ${shortAction || scene.location || "镜头"}`.slice(0, 76),
@@ -338,6 +412,15 @@ export function parseScriptBreakdown(
     const lineNo = idx + 1;
     const raw = lines[idx].trim();
     if (!raw || /^---+$/.test(raw)) {
+      continue;
+    }
+
+    // Standalone persistent shot marker comment line: <!-- fm-shot:sh_xxx -->
+    const standaloneShotComment = raw.match(
+      /^<!--\s*fm-shot:([a-zA-Z0-9_-]{3,64})\s*-->$/,
+    );
+    if (standaloneShotComment) {
+      pendingCommentShotId = standaloneShotComment[1];
       continue;
     }
 
@@ -529,7 +612,9 @@ export function parseScriptBreakdown(
 
     // Action line starting with △ or ▲: starts a new visual beat if previous beat already has dialogue or action!
     if (/^[△▲]/.test(raw)) {
-      const segments = raw
+      const inlineComment = raw.match(SHOT_COMMENT_SINGLE_RE);
+      const cleanRaw = raw.replace(SHOT_COMMENT_RE, "").trim();
+      const segments = cleanRaw
         .split(/(?=[△▲])/)
         .map((s) => s.replace(/^[△▲]\s*/, "").trim())
         .filter(Boolean);
@@ -538,11 +623,16 @@ export function parseScriptBreakdown(
       }
       if (!currentBeat) {
         currentBeat = {
+          shotId: inlineComment?.[1] || pendingCommentShotId,
           actions: [],
           dialogues: [],
           lineStart: lineNo,
           lineEnd: lineNo,
         };
+        pendingCommentShotId = undefined;
+      } else if (!currentBeat.shotId && (inlineComment?.[1] || pendingCommentShotId)) {
+        currentBeat.shotId = inlineComment?.[1] || pendingCommentShotId;
+        pendingCommentShotId = undefined;
       }
       currentBeat.actions.push(...segments);
       currentBeat.lineEnd = lineNo;
@@ -708,10 +798,13 @@ export function syncScriptBreakdownToCanvas(
     });
   }
 
-  const ensureEdge = (source: string, target: string) => {
-    if (source === target) return;
-    if (nextEdges.some((e) => e.source === source && e.target === target)) return;
-    if (nextEdges.length >= 1200) return;
+  const ensureEdge = (source: string, target: string): string | null => {
+    if (source === target) return null;
+    const existing = nextEdges.find(
+      (e) => e.source === source && e.target === target,
+    );
+    if (existing) return `${source}>${target}`;
+    if (nextEdges.length >= 1200) return null;
     const sourceNode = nextNodes.find((n) => n.id === source);
     if (sourceNode?.type === "image") {
       const existingImageRefs = nextEdges.filter((e) => {
@@ -719,14 +812,22 @@ export function syncScriptBreakdownToCanvas(
         const s = nextNodes.find((n) => n.id === e.source);
         return s?.type === "image";
       }).length;
-      if (existingImageRefs >= 9) return;
+      if (existingImageRefs >= 9) return null;
     }
     nextEdges.push({
       id: `edge_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
       source,
       target,
     });
+    return `${source}>${target}`;
   };
+
+  const bindingPlan = computeShotBindingPlan(
+    nextNodes,
+    breakdown.docId,
+    activeShots,
+    options.explicitNodeBindings ?? {},
+  );
 
   // 2. Sync Shot Chains (Text Prompt Node + Optional Grid Image + Video Shot Node)
   activeShots.forEach((shot, index) => {
@@ -736,31 +837,147 @@ export function syncScriptBreakdownToCanvas(
       text: d.text.slice(0, 300),
     }));
 
-    const existingVideo = nextNodes.find(
-      (n) =>
-        n.type === "video" &&
-        n.extra_params?.script_doc_id === breakdown.docId &&
-        n.extra_params?.script_anchor === shot.anchor,
-    );
-    const existingText = nextNodes.find(
-      (n) =>
-        n.type === "text" &&
-        n.extra_params?.script_doc_id === breakdown.docId &&
-        n.extra_params?.script_anchor === shot.anchor,
-    );
+    const matchedVideoId = bindingPlan.anchorToVideoId.get(shot.anchor);
+    const existingVideo = matchedVideoId
+      ? nextNodes.find((n) => n.id === matchedVideoId && n.type === "video")
+      : undefined;
 
     if (existingVideo) {
-      if (existingText && existingText.text !== shot.prompt) {
+      const prevAnchor =
+        typeof existingVideo.extra_params?.script_anchor === "string"
+          ? existingVideo.extra_params.script_anchor
+          : "";
+      const prevShotId =
+        typeof existingVideo.extra_params?.script_shot_id === "string"
+          ? existingVideo.extra_params.script_shot_id
+          : "";
+      const effectiveShotId =
+        shot.shotId ||
+        prevShotId ||
+        `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+
+      let existingText = nextNodes.find(
+        (n) =>
+          n.type === "text" &&
+          n.extra_params?.script_doc_id === breakdown.docId &&
+          ((prevShotId && n.extra_params?.script_shot_id === prevShotId) ||
+            (!prevShotId && prevAnchor && n.extra_params?.script_anchor === prevAnchor)),
+      );
+      if (!existingText && nextNodes.length < 399) {
+        const createdText = newNode(
+          "text",
+          existingVideo.x,
+          Math.max(40, existingVideo.y - 320),
+          nextNodes.length + 1,
+        );
+        createdText.id = `scr_${sanitizeIdPart(shot.anchor)}_${crypto.randomUUID().slice(0, 6)}`;
+        createdText.title = `${shot.title} · 剧本提示词`.slice(0, 80);
+        createdText.text = shot.prompt;
+        createdText.color = "purple";
+        createdText.extra_params = {
+          script_doc_id: breakdown.docId,
+          script_doc_path: breakdown.docPath,
+          script_shot_id: effectiveShotId,
+          script_anchor: shot.anchor,
+          script_line: shot.lineStart,
+        };
+        nextNodes.push(createdText);
+        createdNodeIds.push(createdText.id);
+        existingText = createdText;
+      } else if (existingText) {
+        const nextTitle = `${shot.title} · 剧本提示词`.slice(0, 80);
+        const textChanged =
+          existingText.text !== shot.prompt || existingText.title !== nextTitle;
         existingText.text = shot.prompt;
-        existingText.title = `${shot.title} · 剧本提示词`.slice(0, 80);
+        existingText.title = nextTitle;
         existingText.extra_params = {
           ...(existingText.extra_params ?? {}),
           script_doc_id: breakdown.docId,
           script_doc_path: breakdown.docPath,
+          script_shot_id: effectiveShotId,
           script_anchor: shot.anchor,
           script_line: shot.lineStart,
         };
-        updatedNodeIds.push(existingText.id);
+        if (textChanged) updatedNodeIds.push(existingText.id);
+      }
+
+      let existingGrid = nextNodes.find(
+        (n) =>
+          n.type === "image" &&
+          n.extra_params?.script_doc_id === breakdown.docId &&
+          (n.extra_params?.script_role === "grid_preview" ||
+            n.generation_mode === "grid_preview") &&
+          ((prevShotId && n.extra_params?.script_shot_id === prevShotId) ||
+            (!prevShotId && prevAnchor && n.extra_params?.script_anchor === prevAnchor)),
+      );
+
+      if (isGridPreview) {
+        if (!existingGrid && nextNodes.length < 399) {
+          existingGrid = newNode(
+            "image",
+            existingVideo.x,
+            Math.max(120, existingVideo.y - 260),
+            nextNodes.length + 1,
+          );
+          existingGrid.id = `grid_${sanitizeIdPart(shot.anchor)}_${crypto.randomUUID().slice(0, 6)}`;
+          existingGrid.title = `${shot.title} · 宫格预览`.slice(0, 80);
+          existingGrid.prompt = shot.prompt;
+          existingGrid.generation_mode = "grid_preview";
+          existingGrid.grid_layout = gridLayout;
+          existingGrid.params = {
+            ...defaults,
+            ratio,
+            ...(imageModel ? { model: imageModel } : {}),
+          };
+          existingGrid.extra_params = {
+            script_doc_id: breakdown.docId,
+            script_doc_path: breakdown.docPath,
+            script_shot_id: effectiveShotId,
+            script_role: "grid_preview",
+            script_anchor: shot.anchor,
+            script_line: shot.lineStart,
+          };
+          nextNodes.push(existingGrid);
+          createdNodeIds.push(existingGrid.id);
+        } else if (existingGrid) {
+          const nextGridTitle = `${shot.title} · 宫格预览`.slice(0, 80);
+          const gridChanged =
+            existingGrid.prompt !== shot.prompt ||
+            existingGrid.title !== nextGridTitle ||
+            existingGrid.grid_layout !== gridLayout;
+          existingGrid.title = nextGridTitle;
+          existingGrid.prompt = shot.prompt;
+          existingGrid.generation_mode = "grid_preview";
+          existingGrid.grid_layout = gridLayout;
+          existingGrid.extra_params = {
+            ...(existingGrid.extra_params ?? {}),
+            script_doc_id: breakdown.docId,
+            script_doc_path: breakdown.docPath,
+            script_shot_id: effectiveShotId,
+            script_role: "grid_preview",
+            script_anchor: shot.anchor,
+            script_line: shot.lineStart,
+          };
+          if (gridChanged) updatedNodeIds.push(existingGrid.id);
+        }
+      } else if (
+        existingGrid &&
+        !existingGrid.media_id &&
+        !existingGrid.active_job
+      ) {
+        // Switching away from grid_preview when grid node has no generated media: clean up unused grid node
+        const gridIdToRemove = existingGrid.id;
+        const gIdx = nextNodes.findIndex((n) => n.id === gridIdToRemove);
+        if (gIdx >= 0) nextNodes.splice(gIdx, 1);
+        for (let eIdx = nextEdges.length - 1; eIdx >= 0; eIdx--) {
+          if (
+            nextEdges[eIdx].source === gridIdToRemove ||
+            nextEdges[eIdx].target === gridIdToRemove
+          ) {
+            nextEdges.splice(eIdx, 1);
+          }
+        }
+        existingGrid = undefined;
       }
 
       // Preserve audio_job / audio_pending when speaker + text unchanged, update changed lines
@@ -778,15 +995,56 @@ export function syncScriptBreakdownToCanvas(
         };
       });
 
+      // Reconcile script-managed edges: remove obsolete script-managed pairs, keep manual edges!
+      const prevManagedRaw =
+        typeof existingVideo.extra_params?.script_managed_edges === "string"
+          ? existingVideo.extra_params.script_managed_edges
+          : "";
+      const prevManagedSet = new Set(
+        prevManagedRaw.split("|").map((s) => s.trim()).filter(Boolean),
+      );
+      const desiredManagedPairs = new Set<string>();
+      if (isGridPreview && existingGrid) {
+        if (existingText) desiredManagedPairs.add(`${existingText.id}>${existingGrid.id}`);
+        desiredManagedPairs.add(`${existingGrid.id}>${existingVideo.id}`);
+        for (const assetKey of shot.referencedAssets) {
+          const assetNodeId = assetKeyToNodeId.get(assetKey);
+          if (assetNodeId) desiredManagedPairs.add(`${assetNodeId}>${existingGrid.id}`);
+        }
+      } else {
+        if (existingText) desiredManagedPairs.add(`${existingText.id}>${existingVideo.id}`);
+        for (const assetKey of shot.referencedAssets) {
+          const assetNodeId = assetKeyToNodeId.get(assetKey);
+          if (assetNodeId) desiredManagedPairs.add(`${assetNodeId}>${existingVideo.id}`);
+        }
+      }
+
+      // Prune edges that were previously created by script sync for this shot but are no longer desired
+      for (let eIdx = nextEdges.length - 1; eIdx >= 0; eIdx--) {
+        const pair = `${nextEdges[eIdx].source}>${nextEdges[eIdx].target}`;
+        if (prevManagedSet.has(pair) && !desiredManagedPairs.has(pair)) {
+          nextEdges.splice(eIdx, 1);
+        }
+      }
+
+      const activeManagedPairs: string[] = [];
+      for (const pair of desiredManagedPairs) {
+        const [src, tgt] = pair.split(">");
+        const added = ensureEdge(src, tgt);
+        if (added) activeManagedPairs.push(added);
+      }
+
       const changed =
         existingVideo.title !== shot.title ||
         existingVideo.narration_text !== shot.narration ||
+        existingVideo.extra_params?.script_anchor !== shot.anchor ||
         JSON.stringify(existingVideo.dialogue_lines ?? []) !==
           JSON.stringify(mergedDlg);
 
       existingVideo.title = shot.title;
       existingVideo.narration_text = shot.narration;
       existingVideo.dialogue_lines = mergedDlg;
+      existingVideo.generation_mode = isGridPreview ? "first_frame" : generationMode;
       existingVideo.cinematography = {
         ...shot.cinematography,
         ...(existingVideo.cinematography ?? {}),
@@ -795,19 +1053,16 @@ export function syncScriptBreakdownToCanvas(
         ...(existingVideo.extra_params ?? {}),
         script_doc_id: breakdown.docId,
         script_doc_path: breakdown.docPath,
+        script_shot_id: effectiveShotId,
+        script_fingerprint: shot.fingerprint,
+        script_action_sig: shot.actionSig,
+        script_scene_code: shot.sceneCode,
         script_anchor: shot.anchor,
         script_line: shot.lineStart,
+        script_managed_edges: activeManagedPairs.join("|").slice(0, 2000),
       };
       if (changed) updatedNodeIds.push(existingVideo.id);
 
-      if (existingText) ensureEdge(existingText.id, existingVideo.id);
-      for (const assetKey of shot.referencedAssets) {
-        const assetNodeId = assetKeyToNodeId.get(assetKey);
-        if (assetNodeId) ensureEdge(assetNodeId, existingVideo.id);
-      }
-      if (!nextShots.includes(existingVideo.id)) {
-        nextShots.push(existingVideo.id);
-      }
       shotNodeIds.push(existingVideo.id);
       anchorToNodeId[shot.anchor] = existingVideo.id;
       return;
@@ -816,6 +1071,9 @@ export function syncScriptBreakdownToCanvas(
     const neededNodes = isGridPreview ? 3 : 2;
     if (nextNodes.length + neededNodes > 400) return;
 
+    const effectiveShotId =
+      shot.shotId ||
+      `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
     const colX = shotStartX + index * 420;
     const textNode = newNode("text", colX, 60, nextNodes.length + 1);
     textNode.id = `scr_${sanitizeIdPart(shot.anchor)}_${crypto.randomUUID().slice(0, 6)}`;
@@ -825,6 +1083,7 @@ export function syncScriptBreakdownToCanvas(
     textNode.extra_params = {
       script_doc_id: breakdown.docId,
       script_doc_path: breakdown.docPath,
+      script_shot_id: effectiveShotId,
       script_anchor: shot.anchor,
       script_line: shot.lineStart,
     };
@@ -847,6 +1106,8 @@ export function syncScriptBreakdownToCanvas(
       gridNode.extra_params = {
         script_doc_id: breakdown.docId,
         script_doc_path: breakdown.docPath,
+        script_shot_id: effectiveShotId,
+        script_role: "grid_preview",
         script_anchor: shot.anchor,
         script_line: shot.lineStart,
       };
@@ -875,48 +1136,223 @@ export function syncScriptBreakdownToCanvas(
       ratio,
       seconds: shot.seconds,
     };
-    videoNode.extra_params = {
-      script_doc_id: breakdown.docId,
-      script_doc_path: breakdown.docPath,
-      script_anchor: shot.anchor,
-      script_line: shot.lineStart,
-    };
-    nextNodes.push(videoNode);
-    createdNodeIds.push(videoNode.id);
 
+    const managedPairs: string[] = [];
     if (gridNode) {
-      ensureEdge(textNode.id, gridNode.id);
-      ensureEdge(gridNode.id, videoNode.id);
+      const p1 = ensureEdge(textNode.id, gridNode.id);
+      const p2 = ensureEdge(gridNode.id, videoNode.id);
+      if (p1) managedPairs.push(p1);
+      if (p2) managedPairs.push(p2);
     } else {
-      ensureEdge(textNode.id, videoNode.id);
+      const p1 = ensureEdge(textNode.id, videoNode.id);
+      if (p1) managedPairs.push(p1);
     }
 
     for (const assetKey of shot.referencedAssets) {
       const assetNodeId = assetKeyToNodeId.get(assetKey);
       if (assetNodeId) {
-        ensureEdge(assetNodeId, gridNode ? gridNode.id : videoNode.id);
+        const pRef = ensureEdge(
+          assetNodeId,
+          gridNode ? gridNode.id : videoNode.id,
+        );
+        if (pRef) managedPairs.push(pRef);
       }
     }
 
-    if (nextShots.length < 200) {
-      nextShots.push(videoNode.id);
-    }
+    videoNode.extra_params = {
+      script_doc_id: breakdown.docId,
+      script_doc_path: breakdown.docPath,
+      script_shot_id: effectiveShotId,
+      script_fingerprint: shot.fingerprint,
+      script_action_sig: shot.actionSig,
+      script_scene_code: shot.sceneCode,
+      script_anchor: shot.anchor,
+      script_line: shot.lineStart,
+      script_managed_edges: managedPairs.join("|").slice(0, 2000),
+    };
+    nextNodes.push(videoNode);
+    createdNodeIds.push(videoNode.id);
+
     shotNodeIds.push(videoNode.id);
     anchorToNodeId[shot.anchor] = videoNode.id;
   });
+
+  // Maintain shot list in script order for synced shots while preserving other manual shots
+  const syncedSet = new Set(shotNodeIds);
+  const nonSyncedShots = nextShots.filter((id) => !syncedSet.has(id));
+  const orderedShots = [...nonSyncedShots, ...shotNodeIds].slice(0, 200);
 
   return {
     document: {
       ...doc,
       nodes: nextNodes,
       edges: nextEdges,
-      shots: nextShots,
+      shots: orderedShots,
     },
     createdNodeIds,
     updatedNodeIds,
     shotNodeIds,
     anchorToNodeId,
   };
+}
+
+function computeShotBindingPlan(
+  nodes: CanvasNode[],
+  docId: string,
+  shots: ScriptExtractedShot[],
+  explicitBindings: Record<string, string> = {},
+): {
+  anchorToVideoId: Map<string, string>;
+  unmatchedMediaNodes: CanvasNode[];
+} {
+  const existingVideos = nodes.filter(
+    (n) => n.type === "video" && n.extra_params?.script_doc_id === docId,
+  );
+  const claimedVideoIds = new Set<string>();
+  const anchorToVideoId = new Map<string, string>();
+
+  // Count existing vs current shots per scene so positional fallback is NEVER used when shots were inserted/deleted on media nodes!
+  const existingSceneCounts = new Map<string, number>();
+  for (const v of existingVideos) {
+    const sc =
+      typeof v.extra_params?.script_scene_code === "string"
+        ? v.extra_params.script_scene_code
+        : typeof v.extra_params?.script_anchor === "string"
+          ? v.extra_params.script_anchor.split("-")[0]
+          : "";
+    if (sc) existingSceneCounts.set(sc, (existingSceneCounts.get(sc) ?? 0) + 1);
+  }
+  const currentSceneCounts = new Map<string, number>();
+  for (const s of shots) {
+    currentSceneCounts.set(
+      s.sceneCode,
+      (currentSceneCounts.get(s.sceneCode) ?? 0) + 1,
+    );
+  }
+
+  // Pass 1: Explicit user confirmation bindings & persistent shotId
+  for (const s of shots) {
+    const explicitId = explicitBindings[s.anchor];
+    if (explicitId && !claimedVideoIds.has(explicitId)) {
+      const found = existingVideos.find((v) => v.id === explicitId);
+      if (found) {
+        claimedVideoIds.add(found.id);
+        anchorToVideoId.set(s.anchor, found.id);
+        continue;
+      }
+    }
+    if (s.shotId) {
+      const byShotId = existingVideos.find(
+        (v) =>
+          !claimedVideoIds.has(v.id) &&
+          v.extra_params?.script_shot_id === s.shotId,
+      );
+      if (byShotId) {
+        claimedVideoIds.add(byShotId.id);
+        anchorToVideoId.set(s.anchor, byShotId.id);
+      }
+    }
+  }
+
+  // Pass 2: Unique fingerprint match (exact scene + action + dialogue signature)
+  for (const s of shots) {
+    if (anchorToVideoId.has(s.anchor)) continue;
+    const candidates = existingVideos.filter(
+      (v) =>
+        !claimedVideoIds.has(v.id) &&
+        v.extra_params?.script_fingerprint === s.fingerprint,
+    );
+    if (candidates.length === 1) {
+      claimedVideoIds.add(candidates[0].id);
+      anchorToVideoId.set(s.anchor, candidates[0].id);
+    }
+  }
+
+  // Pass 3: Unique actionSig match within same scene (handles dialogue tweaks even when a shot was inserted!)
+  for (const s of shots) {
+    if (anchorToVideoId.has(s.anchor) || !s.actionSig) continue;
+    const candidates = existingVideos.filter((v) => {
+      if (claimedVideoIds.has(v.id)) return false;
+      const vScene =
+        typeof v.extra_params?.script_scene_code === "string"
+          ? v.extra_params.script_scene_code
+          : typeof v.extra_params?.script_anchor === "string"
+            ? v.extra_params.script_anchor.split("-")[0]
+            : "";
+      return (
+        vScene === s.sceneCode &&
+        v.extra_params?.script_action_sig === s.actionSig
+      );
+    });
+    if (candidates.length === 1) {
+      claimedVideoIds.add(candidates[0].id);
+      anchorToVideoId.set(s.anchor, candidates[0].id);
+    }
+  }
+
+  // Pass 4: Safe positional anchor fallback ONLY when scene shot count is unchanged OR old node has no generated media
+  for (const s of shots) {
+    if (anchorToVideoId.has(s.anchor)) continue;
+    const posCandidate = existingVideos.find(
+      (v) =>
+        !claimedVideoIds.has(v.id) &&
+        v.extra_params?.script_anchor === s.anchor,
+    );
+    if (!posCandidate) continue;
+    const hasMedia = Boolean(posCandidate.media_id || posCandidate.active_job);
+    const sameSceneCount =
+      existingSceneCounts.get(s.sceneCode) ===
+      currentSceneCounts.get(s.sceneCode);
+    if (!hasMedia || sameSceneCount) {
+      claimedVideoIds.add(posCandidate.id);
+      anchorToVideoId.set(s.anchor, posCandidate.id);
+    }
+  }
+
+  const unmatchedMediaNodes = existingVideos.filter(
+    (v) => !claimedVideoIds.has(v.id) && Boolean(v.media_id || v.active_job),
+  );
+  return { anchorToVideoId, unmatchedMediaNodes };
+}
+
+export function detectAmbiguousShotMatches(
+  doc: Doc,
+  breakdown: ScriptBreakdown,
+  selectedAnchors?: string[],
+): AmbiguousShotMatch[] {
+  const activeShots = selectedAnchors?.length
+    ? breakdown.shots.filter((s) => selectedAnchors.includes(s.anchor))
+    : breakdown.shots;
+  const plan = computeShotBindingPlan(doc.nodes, breakdown.docId, activeShots);
+  return plan.unmatchedMediaNodes.map((v) => {
+    const prevAnchor =
+      typeof v.extra_params?.script_anchor === "string"
+        ? v.extra_params.script_anchor
+        : "";
+    const sceneCode =
+      typeof v.extra_params?.script_scene_code === "string"
+        ? v.extra_params.script_scene_code
+        : prevAnchor.split("-")[0] || "";
+    const sceneCandidates = activeShots
+      .filter(
+        (s) =>
+          (!sceneCode || s.sceneCode === sceneCode) &&
+          !plan.anchorToVideoId.has(s.anchor),
+      )
+      .map((s) => s.anchor);
+    const fallbackCandidates = activeShots
+      .filter((s) => !plan.anchorToVideoId.has(s.anchor))
+      .map((s) => s.anchor);
+    return {
+      existingVideoNodeId: v.id,
+      existingTitle: v.title,
+      previousAnchor: prevAnchor,
+      sceneCode,
+      candidateAnchors: sceneCandidates.length
+        ? sceneCandidates
+        : fallbackCandidates,
+    };
+  });
 }
 
 export function extractScriptAnchorsMap(
@@ -930,14 +1366,18 @@ export function extractScriptAnchorsMap(
     if (!extra || typeof extra.script_anchor !== "string") continue;
     if (scriptDocId && extra.script_doc_id !== scriptDocId) continue;
     const anchor = extra.script_anchor;
+    const shotId =
+      typeof extra.script_shot_id === "string" ? extra.script_shot_id : "";
     const textNode = doc.nodes.find(
       (n) =>
         n.type === "text" &&
-        n.extra_params?.script_anchor === anchor &&
+        ((shotId && n.extra_params?.script_shot_id === shotId) ||
+          (!shotId && n.extra_params?.script_anchor === anchor)) &&
         (!scriptDocId || n.extra_params?.script_doc_id === scriptDocId),
     );
     result[anchor] = {
       anchor,
+      shotId,
       videoNodeId: node.id,
       textNodeId: textNode?.id ?? null,
       title: node.title,
@@ -948,30 +1388,63 @@ export function extractScriptAnchorsMap(
   return result;
 }
 
+function escapeLiteralRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function applyMatchSpansReplacement(
+  sourceText: string,
+  matches: { start: number; end: number }[],
+  replacement: string,
+): string {
+  if (!matches.length) return sourceText;
+  const sorted = [...matches].sort((a, b) => a.start - b.start);
+  let out = "";
+  let cursor = 0;
+  for (const m of sorted) {
+    if (m.start < cursor || m.end > sourceText.length) continue;
+    out += sourceText.slice(cursor, m.start) + replacement;
+    cursor = m.end;
+  }
+  out += sourceText.slice(cursor);
+  return out;
+}
+
 export function searchCanvasTextNodes(
   doc: Doc,
   canvasMeta: { id: string; title: string },
   query: string,
   caseSensitive = false,
+  maxMatchesPerNode = 200,
 ): CanvasNodeSearchMatch[] {
-  const needle = caseSensitive ? query : query.toLowerCase();
-  if (!needle) return [];
+  if (!query) return [];
   const results: CanvasNodeSearchMatch[] = [];
+  const re = new RegExp(
+    escapeLiteralRegExp(query),
+    caseSensitive ? "g" : "gi",
+  );
 
   for (const node of doc.nodes) {
     const field: "text" | "prompt" =
       node.type === "text" || node.type === "sticky" ? "text" : "prompt";
     const currentText = field === "text" ? node.text : node.prompt;
     if (!currentText) continue;
-    const haystack = caseSensitive ? currentText : currentText.toLowerCase();
-    if (!haystack.includes(needle)) continue;
 
+    re.lastIndex = 0;
     const matches: CanvasNodeSearchMatch["matches"] = [];
-    let cursor = 0;
-    while (cursor <= haystack.length - needle.length && matches.length < 50) {
-      const idx = haystack.indexOf(needle, cursor);
-      if (idx < 0) break;
-      const end = idx + needle.length;
+    let truncated = false;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(currentText)) !== null) {
+      if (m[0].length === 0) {
+        re.lastIndex++;
+        continue;
+      }
+      if (matches.length >= maxMatchesPerNode) {
+        truncated = true;
+        break;
+      }
+      const idx = m.index;
+      const end = idx + m[0].length;
       const beforeBlock = currentText.slice(0, idx);
       const lineIdx = beforeBlock.split("\n").length;
       const lastNewline = beforeBlock.lastIndexOf("\n");
@@ -989,7 +1462,6 @@ export function searchCanvasTextNodes(
         text: currentText.slice(idx, end),
         after: currentText.slice(end, snippetEnd),
       });
-      cursor = Math.max(end, idx + 1);
     }
 
     if (matches.length) {
@@ -1001,6 +1473,7 @@ export function searchCanvasTextNodes(
         nodeType: node.type,
         field,
         currentText,
+        truncated,
         matches,
       });
     }

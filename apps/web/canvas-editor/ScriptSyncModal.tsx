@@ -9,14 +9,16 @@ import {
   User,
   X,
 } from "lucide-react";
-import type {
-  ScriptAnchorLink,
-  ScriptBreakdown,
-  ScriptSyncOptions,
+import {
+  detectAmbiguousShotMatches,
+  type ScriptAnchorLink,
+  type ScriptBreakdown,
+  type ScriptSyncOptions,
 } from "./script-fusion";
-import type { CanvasGenerationMode } from "./types";
+import type { CanvasGenerationMode, Doc } from "./types";
 
 export function ScriptSyncModal({
+  canvasDoc,
   breakdown,
   existingLinks,
   defaultVideoModel,
@@ -24,6 +26,7 @@ export function ScriptSyncModal({
   onSync,
   onClose,
 }: {
+  canvasDoc: Doc;
   breakdown: ScriptBreakdown;
   existingLinks: Record<string, ScriptAnchorLink>;
   defaultVideoModel: string;
@@ -43,8 +46,17 @@ export function ScriptSyncModal({
   const [selectedAnchors, setSelectedAnchors] = useState<Set<string>>(
     () => new Set(breakdown.shots.map((s) => s.anchor)),
   );
+  const [explicitBindings, setExplicitBindings] = useState<
+    Record<string, string>
+  >({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  const ambiguousMediaNodes = useMemo(
+    () =>
+      detectAmbiguousShotMatches(canvasDoc, breakdown, [...selectedAnchors]),
+    [canvasDoc, breakdown, selectedAnchors],
+  );
 
   const toggleAnchor = (anchor: string) => {
     setSelectedAnchors((prev) => {
@@ -82,6 +94,7 @@ export function ScriptSyncModal({
           videoModel: defaultVideoModel,
           imageModel: defaultImageModel,
           selectedAnchors: [...selectedAnchors],
+          explicitNodeBindings: explicitBindings,
         },
         switchAfterSync,
       );
@@ -190,6 +203,74 @@ export function ScriptSyncModal({
         </div>
 
         <div className="fm-script-sync-body">
+          {ambiguousMediaNodes.length > 0 && (
+            <section className="fm-sync-section" role="region" aria-label="已出片镜头复用确认">
+              <h3>已出片镜头复用确认（{ambiguousMediaNodes.length} 项）</h3>
+              <p style={{ fontSize: 12.5, color: "var(--cv-muted)", marginBottom: 8 }}>
+                检测到场次镜头数量增删且正文已改写。为防止把已有视频误挂到新插入的镜头上，请确认以下已出片节点的对应镜头（留空则保留原节点独立，不覆盖已有视频）：
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {ambiguousMediaNodes.map((amb) => {
+                  const chosenAnchor =
+                    Object.entries(explicitBindings).find(
+                      ([, vid]) => vid === amb.existingVideoNodeId,
+                    )?.[0] || "";
+                  return (
+                    <label
+                      key={amb.existingVideoNodeId}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        border: "1px solid var(--cv-line)",
+                        background: "var(--cv-bg)",
+                        fontSize: 12.5,
+                      }}
+                    >
+                      <span>
+                        原已出片节点：<strong>{amb.existingTitle}</strong>
+                        {amb.previousAnchor ? ` (${amb.previousAnchor})` : ""}
+                      </span>
+                      <select
+                        value={chosenAnchor}
+                        disabled={busy}
+                        onChange={(e) => {
+                          const targetAnchor = e.target.value;
+                          setExplicitBindings((prev) => {
+                            const cleaned = Object.fromEntries(
+                              Object.entries(prev).filter(
+                                ([, vid]) => vid !== amb.existingVideoNodeId,
+                              ),
+                            );
+                            if (targetAnchor) {
+                              cleaned[targetAnchor] = amb.existingVideoNodeId;
+                            }
+                            return cleaned;
+                          });
+                        }}
+                      >
+                        <option value="">不自动复用（保留原视频节点独立）</option>
+                        {amb.candidateAnchors.map((anc) => {
+                          const shot = breakdown.shots.find(
+                            (s) => s.anchor === anc,
+                          );
+                          return (
+                            <option key={anc} value={anc}>
+                              绑定到 {shot?.title || anc}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </label>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           {breakdown.assets.length > 0 && (
             <section className="fm-sync-section">
               <h3>

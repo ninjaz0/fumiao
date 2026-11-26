@@ -5,6 +5,7 @@ import { DomainError, requireValue } from "@fumiao/platform/security.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { OriginalIdentity } from "./identity.js";
 import { OriginalCanvases } from "./canvases.js";
+import { parseCanvasSave } from "./canvas-draft.js";
 import { parseBody } from "./validation.js";
 import {
   MAX_SCRIPT_BYTES,
@@ -189,15 +190,17 @@ export function buildScriptTemplate(
 `;
 }
 
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function findLiteralMatches(
   text: string,
   needle: string,
   caseSensitive: boolean,
   limit: number,
 ): { matches: ScriptSearchMatch[]; truncated: boolean } {
-  const haystack = caseSensitive ? text : text.toLowerCase();
-  const target = caseSensitive ? needle : needle.toLowerCase();
-  if (!target) return { matches: [], truncated: false };
+  if (!needle) return { matches: [], truncated: false };
 
   const lineStarts = [0];
   for (let i = 0; i < text.length; i++) {
@@ -225,15 +228,19 @@ function findLiteralMatches(
     };
   };
 
+  const re = new RegExp(escapeRegExp(needle), caseSensitive ? "g" : "gi");
   const matches: ScriptSearchMatch[] = [];
-  let cursor = 0;
-  while (cursor <= haystack.length - target.length) {
-    const found = haystack.indexOf(target, cursor);
-    if (found < 0) break;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m[0].length === 0) {
+      re.lastIndex++;
+      continue;
+    }
     if (matches.length >= limit) {
       return { matches, truncated: true };
     }
-    const end = found + target.length;
+    const found = m.index;
+    const end = found + m[0].length;
     const loc = locateLine(found);
     const snippetStart = Math.max(loc.lineStart, found - 36);
     const snippetEnd = Math.min(loc.lineEnd, end + 48);
@@ -249,7 +256,6 @@ function findLiteralMatches(
       after:
         text.slice(end, snippetEnd) + (snippetEnd < loc.lineEnd ? "…" : ""),
     });
-    cursor = Math.max(end, found + 1);
   }
   return { matches, truncated: false };
 }
@@ -365,19 +371,19 @@ export class OriginalScriptDocuments {
     });
   }
 
-  private async ensureParentDirectories(
+  private async countMissingParents(
     sql: Sql,
     workspaceId: string,
-    userId: string,
     filePath: string,
-  ) {
+  ): Promise<number> {
     const segments = filePath.split("/").slice(0, -1);
     let current = "";
+    let missing = 0;
     for (const seg of segments) {
       current = current ? `${current}/${seg}` : seg;
       const existing = await one(
         sql,
-        `SELECT id, entry_type FROM workspace_script_documents
+        `SELECT entry_type FROM workspace_script_documents
          WHERE workspace_id=$1 AND lower(path)=lower($2) AND NOT deleted`,
         [workspaceId, current],
       );
@@ -387,6 +393,38 @@ export class OriginalScriptDocuments {
           409,
           `父路径「${current}」已是文件，不能作为文件夹`,
         );
+      } else {
+        missing++;
+      }
+    }
+    return missing;
+  }
+
+  private async ensureParentDirectories(
+    sql: Sql,
+    workspaceId: string,
+    userId: string,
+    filePath: string,
+  ): Promise<string> {
+    const parts = filePath.split("/");
+    const leaf = parts.at(-1)!;
+    const parentSegments = parts.slice(0, -1);
+    let canonicalParent = "";
+    for (const seg of parentSegments) {
+      const candidate = canonicalParent ? `${canonicalParent}/${seg}` : seg;
+      const existing = await one(
+        sql,
+        `SELECT id, path, entry_type FROM workspace_script_documents
+         WHERE workspace_id=$1 AND lower(path)=lower($2) AND NOT deleted`,
+        [workspaceId, candidate],
+      );
+      if (existing) {
+        requireValue(
+          existing.entry_type === "directory",
+          409,
+          `父路径「${candidate}」已是文件，不能作为文件夹`,
+        );
+        canonicalParent = String(existing.path);
         continue;
       }
       await sql.query(
@@ -398,10 +436,12 @@ export class OriginalScriptDocuments {
           randomUUID().replaceAll("-", ""),
           workspaceId,
           userId,
-          current,
+          candidate,
         ],
       );
+      canonicalParent = candidate;
     }
+    return canonicalParent ? `${canonicalParent}/${leaf}` : leaf;
   }
 
   private async queryByPublicId(
@@ -503,11 +543,6 @@ export class OriginalScriptDocuments {
         "SELECT count(*) AS count FROM workspace_script_documents WHERE workspace_id=$1 AND NOT deleted",
         [workspace.id],
       );
-      requireValue(
-        Number(countRow.count) < MAX_DOCS_PER_WORKSPACE,
-        409,
-        `工作区剧本文档数量已达上限 (${MAX_DOCS_PER_WORKSPACE})`,
-      );
       const duplicate = await one(
         sql,
         `SELECT 1 FROM workspace_script_documents
@@ -516,7 +551,23 @@ export class OriginalScriptDocuments {
       );
       requireValue(!duplicate, 409, `同名文件或文件夹「${path}」已存在`);
 
-      await this.ensureParentDirectories(sql, workspace.id, user.id, path);
+      const missingParents = await this.countMissingParents(
+        sql,
+        workspace.id,
+        path,
+      );
+      requireValue(
+        Number(countRow.count) + missingParents + 1 <= MAX_DOCS_PER_WORKSPACE,
+        409,
+        `工作区剧本文档数量已达上限 (${MAX_DOCS_PER_WORKSPACE})`,
+      );
+
+      const canonicalPath = await this.ensureParentDirectories(
+        sql,
+        workspace.id,
+        user.id,
+        path,
+      );
       const canvasUuid = await this.resolveCanvasUuid(
         sql,
         workspace.id,
@@ -548,7 +599,7 @@ export class OriginalScriptDocuments {
           user.id,
           seriesUuid,
           canvasUuid,
-          path,
+          canonicalPath,
           body.entry_type,
           docKind,
           rawBody,
@@ -595,31 +646,81 @@ export class OriginalScriptDocuments {
         body.series_id,
       );
 
+      const countRow = await one(
+        sql,
+        "SELECT count(*) AS count FROM workspace_script_documents WHERE workspace_id=$1 AND NOT deleted",
+        [workspace.id],
+      );
+      const missingFolderDirs = folder
+        ? await this.countMissingParents(sql, workspace.id, `${folder}/placeholder.md`)
+        : 0;
+      let newFileCount = 0;
+      for (const spec of specs) {
+        const existingSpec = await one(
+          sql,
+          `SELECT entry_type FROM workspace_script_documents
+           WHERE workspace_id=$1 AND lower(path)=lower($2) AND NOT deleted`,
+          [workspace.id, spec.file],
+        );
+        if (existingSpec) {
+          requireValue(
+            existingSpec.entry_type === "file",
+            409,
+            `目标路径「${spec.file}」已被同名文件夹占用`,
+          );
+        } else {
+          newFileCount++;
+        }
+      }
+      requireValue(
+        Number(countRow.count) + missingFolderDirs + newFileCount <=
+          MAX_DOCS_PER_WORKSPACE,
+        409,
+        `工作区剧本文档数量已达上限 (${MAX_DOCS_PER_WORKSPACE})`,
+      );
+
       const createdIds: string[] = [];
+      let canonicalFolder = folder;
       if (folder) {
-        await this.ensureParentDirectories(
+        const canonicalPlaceholder = await this.ensureParentDirectories(
           sql,
           workspace.id,
           user.id,
           `${folder}/placeholder.md`,
         );
+        canonicalFolder = splitParent(canonicalPlaceholder).parent;
         const dirRow = await one(
           sql,
-          `SELECT public_id FROM workspace_script_documents
+          `SELECT public_id, entry_type FROM workspace_script_documents
            WHERE workspace_id=$1 AND lower(path)=lower($2) AND NOT deleted`,
-          [workspace.id, folder],
+          [workspace.id, canonicalFolder],
         );
-        if (dirRow) createdIds.push(String(dirRow.public_id));
+        if (dirRow) {
+          requireValue(
+            dirRow.entry_type === "directory",
+            409,
+            `父路径「${canonicalFolder}」已是文件，不能作为文件夹`,
+          );
+          createdIds.push(String(dirRow.public_id));
+        }
       }
+      const canonicalPrefix = canonicalFolder ? `${canonicalFolder}/` : "";
 
       for (const spec of specs) {
+        const fileName = splitParent(spec.file).name;
+        const targetFilePath = `${canonicalPrefix}${fileName}`;
         const exists = await one(
           sql,
-          `SELECT public_id FROM workspace_script_documents
+          `SELECT public_id, entry_type FROM workspace_script_documents
            WHERE workspace_id=$1 AND lower(path)=lower($2) AND NOT deleted`,
-          [workspace.id, spec.file],
+          [workspace.id, targetFilePath],
         );
         if (exists) {
+          requireValue(
+            exists.entry_type === "file",
+            409,
+            `目标路径「${targetFilePath}」已被同名文件夹占用`,
+          );
           createdIds.push(String(exists.public_id));
           continue;
         }
@@ -635,7 +736,7 @@ export class OriginalScriptDocuments {
             user.id,
             seriesUuid,
             canvasUuid,
-            spec.file,
+            targetFilePath,
             spec.kind,
             buildScriptTemplate(spec.kind, projectTitle),
           ],
@@ -693,15 +794,16 @@ export class OriginalScriptDocuments {
 
       const entryType = row.entry_type as ScriptEntryType;
       const currentPath = String(row.path);
-      const nextPath =
+      const requestedPath =
         body.path !== undefined
           ? normalizeScriptPath(body.path, entryType)
           : currentPath;
+      let nextPath = requestedPath;
 
-      if (nextPath.toLowerCase() !== currentPath.toLowerCase()) {
+      if (requestedPath !== currentPath) {
         if (entryType === "directory") {
           requireValue(
-            !nextPath.toLowerCase().startsWith(currentPath.toLowerCase() + "/"),
+            !requestedPath.toLowerCase().startsWith(currentPath.toLowerCase() + "/"),
             400,
             "不能将文件夹移动到其自身子目录中",
           );
@@ -710,12 +812,35 @@ export class OriginalScriptDocuments {
           sql,
           `SELECT 1 FROM workspace_script_documents
            WHERE workspace_id=$1 AND lower(path)=lower($2) AND id<>$3 AND NOT deleted`,
-          [workspace.id, nextPath, row.id],
+          [workspace.id, requestedPath, row.id],
         );
-        requireValue(!conflict, 409, `目标路径「${nextPath}」已存在`);
-        await this.ensureParentDirectories(sql, workspace.id, user.id, nextPath);
+        requireValue(!conflict, 409, `目标路径「${requestedPath}」已存在`);
 
-        if (entryType === "directory") {
+        const missingParents = await this.countMissingParents(
+          sql,
+          workspace.id,
+          requestedPath,
+        );
+        if (missingParents > 0) {
+          const countRow = await one(
+            sql,
+            "SELECT count(*) AS count FROM workspace_script_documents WHERE workspace_id=$1 AND NOT deleted",
+            [workspace.id],
+          );
+          requireValue(
+            Number(countRow.count) + missingParents <= MAX_DOCS_PER_WORKSPACE,
+            409,
+            `工作区剧本文档数量已达上限 (${MAX_DOCS_PER_WORKSPACE})`,
+          );
+        }
+        nextPath = await this.ensureParentDirectories(
+          sql,
+          workspace.id,
+          user.id,
+          requestedPath,
+        );
+
+        if (entryType === "directory" && nextPath !== currentPath) {
           const { rows: children } = await sql.query(
             `SELECT id, path FROM workspace_script_documents
              WHERE workspace_id=$1 AND NOT deleted AND lower(path) LIKE $2 FOR UPDATE`,
@@ -816,7 +941,7 @@ export class OriginalScriptDocuments {
         const prefixPattern =
           String(row.path).toLowerCase().replace(/[%_\\]/g, "\\$&") + "/%";
         const { rows: descendants } = await sql.query(
-          `SELECT id FROM workspace_script_documents
+          `SELECT id, owner_id FROM workspace_script_documents
            WHERE workspace_id=$1 AND NOT deleted AND lower(path) LIKE $2 FOR UPDATE`,
           [workspace.id, prefixPattern],
         );
@@ -824,6 +949,15 @@ export class OriginalScriptDocuments {
           throw new DomainError(
             409,
             "文件夹非空，请先移出内容或确认连同子文件一并删除",
+          );
+        }
+        if (
+          user.role !== "admin" &&
+          descendants.some((d) => String(d.owner_id) !== user.id)
+        ) {
+          throw new DomainError(
+            403,
+            "文件夹中包含其他成员创建的文档，只有对应创建者或管理员可删除",
           );
         }
         if (descendants.length > 0) {
@@ -854,7 +988,7 @@ export class OriginalScriptDocuments {
     const needle = body.query;
     requireValue(needle.length > 0, 400, "请输入查找内容");
 
-    return this.p.db.transaction(async (sql) => {
+    const scriptScan = await this.p.db.transaction(async (sql) => {
       await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
       const workspace = await this.resolveWorkspace(sql, user, selected);
       const { rows } = await sql.query(
@@ -909,8 +1043,78 @@ export class OriginalScriptDocuments {
         scanned_files: sorted.length,
         total_matches: totalMatches,
         files,
+        remaining,
       };
     });
+
+    // Also scan all accessible canvases in the workspace
+    const canvasList = await this.canvases.list(user, selected);
+    let remainingNodeBudget = Math.max(50, scriptScan.remaining);
+    let canvasMatchCount = 0;
+    const canvases: {
+      canvas_id: string;
+      canvas_title: string;
+      revision: number;
+      nodes: {
+        node_id: string;
+        node_title: string;
+        node_type: string;
+        field: "text" | "prompt";
+        current_text: string;
+        matches: ScriptSearchMatch[];
+        truncated: boolean;
+      }[];
+    }[] = [];
+
+    for (const proj of canvasList.projects.slice(0, 100)) {
+      if (remainingNodeBudget <= 0) break;
+      const detail = await this.canvases.get(user, proj.id).catch(() => null);
+      if (!detail?.document?.nodes?.length) continue;
+      const hitNodes: (typeof canvases)[number]["nodes"] = [];
+      for (const node of detail.document.nodes) {
+        if (remainingNodeBudget <= 0) break;
+        const field: "text" | "prompt" =
+          node.type === "text" || node.type === "sticky" ? "text" : "prompt";
+        const currentText = String(
+          field === "text" ? (node.text ?? "") : (node.prompt ?? ""),
+        );
+        if (!currentText) continue;
+        const { matches, truncated } = findLiteralMatches(
+          currentText,
+          needle,
+          body.case_sensitive,
+          Math.min(100, remainingNodeBudget),
+        );
+        if (!matches.length) continue;
+        canvasMatchCount += matches.length;
+        remainingNodeBudget = Math.max(0, remainingNodeBudget - matches.length);
+        hitNodes.push({
+          node_id: String(node.id),
+          node_title: String(node.title ?? ""),
+          node_type: String(node.type),
+          field,
+          current_text: currentText,
+          matches,
+          truncated: truncated || remainingNodeBudget === 0,
+        });
+      }
+      if (hitNodes.length > 0) {
+        canvases.push({
+          canvas_id: detail.id,
+          canvas_title: detail.title,
+          revision: detail.revision,
+          nodes: hitNodes,
+        });
+      }
+    }
+
+    return {
+      scanned_files: scriptScan.scanned_files,
+      scanned_canvases: canvasList.projects.length,
+      total_matches: scriptScan.total_matches + canvasMatchCount,
+      files: scriptScan.files,
+      canvases,
+    };
   }
 
   async replace(user: Actor, value: unknown, selected?: string) {
@@ -921,7 +1125,21 @@ export class OriginalScriptDocuments {
         expected_text: string;
         next_text: string;
       }[];
+      canvas_replacements: {
+        canvas_id: string;
+        expected_revision: number;
+        nodes: {
+          node_id: string;
+          expected_text: string;
+          next_text: string;
+        }[];
+      }[];
     };
+    requireValue(
+      body.replacements.length > 0 || body.canvas_replacements.length > 0,
+      422,
+      "至少需要一项待替换目标",
+    );
     const workspace = await this.p.db.transaction((sql) =>
       this.resolveWorkspace(sql, user, selected),
     );
@@ -984,6 +1202,77 @@ export class OriginalScriptDocuments {
       }
     }
 
-    return { results };
+    const canvas_results: {
+      canvas_id: string;
+      saved: boolean;
+      revision?: number;
+      error?: string;
+    }[] = [];
+
+    for (const cItem of body.canvas_replacements) {
+      try {
+        const savedRevision = await this.p.db.transaction(async (sql) => {
+          const row = await this.canvases.project(
+            sql,
+            user,
+            cItem.canvas_id,
+            true,
+          );
+          if (String(row.workspace_id) !== String(workspace.id)) {
+            throw new DomainError(404, "画布不存在或不属于当前工作区");
+          }
+          if (Number(row.revision) !== Number(cItem.expected_revision)) {
+            throw new DomainError(
+              409,
+              "画布已被修改，保留原节点文字，请重新搜索后再替换",
+            );
+          }
+          const current = this.canvases.publicProject(row, user);
+          const byNodeId = new Map(cItem.nodes.map((n) => [n.node_id, n]));
+          const nextNodes = current.document.nodes.map((node: any) => {
+            const patch = byNodeId.get(node.id);
+            if (!patch) return node;
+            const field: "text" | "prompt" =
+              node.type === "text" || node.type === "sticky"
+                ? "text"
+                : "prompt";
+            const actual = String(node[field] ?? "");
+            if (actual !== patch.expected_text) {
+              throw new DomainError(
+                409,
+                `节点「${node.title || node.id}」文字已变化，保留原文`,
+              );
+            }
+            return { ...node, [field]: patch.next_text };
+          });
+          const parsed = parseCanvasSave({
+            title: current.title,
+            expected_revision: cItem.expected_revision,
+            document: { ...current.document, nodes: nextNodes },
+          });
+          const savedCanvas = await this.canvases.saveLocked(
+            sql,
+            user,
+            row,
+            pythonStrip(parsed.title) || current.title,
+            parsed.document,
+          );
+          return savedCanvas.revision;
+        });
+        canvas_results.push({
+          canvas_id: cItem.canvas_id,
+          saved: true,
+          revision: savedRevision,
+        });
+      } catch (err) {
+        canvas_results.push({
+          canvas_id: cItem.canvas_id,
+          saved: false,
+          error: err instanceof Error ? err.message : "画布节点替换失败",
+        });
+      }
+    }
+
+    return { results, canvas_results };
   }
 }

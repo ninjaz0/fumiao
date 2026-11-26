@@ -1,6 +1,8 @@
 import React, {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -61,6 +63,8 @@ import {
 import {
   extractScriptAnchorsMap,
   parseScriptBreakdown,
+  stampScriptShotIds,
+  stripShotCommentMarkers,
   syncScriptBreakdownToCanvas,
   type ScriptAnchorLink,
   type ScriptSyncOptions,
@@ -77,6 +81,13 @@ import {
   type Job,
 } from "./types";
 
+export type ScriptWorkspaceHandle = {
+  flushAll: () => Promise<void>;
+  rememberAll: () => boolean;
+  hasUnsavedChanges: () => boolean;
+  prepareLeave: () => void;
+};
+
 export type OpenDocTab =
   | {
       key: string;
@@ -86,6 +97,9 @@ export type OpenDocTab =
       path: string;
       preview?: boolean;
       targetLine?: number;
+      targetAnchor?: string;
+      targetShotId?: string;
+      jumpSeq?: number;
     }
   | {
       key: string;
@@ -94,6 +108,79 @@ export type OpenDocTab =
       title: string;
       preview?: boolean;
     };
+
+type PersistedScriptDraft = {
+  draftBody: string;
+  savedBody: string;
+  baseRevision: number;
+  updatedAt: number;
+};
+
+function scriptDraftStorageKey(
+  userId: number,
+  workspace: number,
+  docId: string,
+): string {
+  return `fm-script-draft:${userId}:${workspace}:${docId}`;
+}
+
+function readPersistedScriptDraft(
+  userId: number,
+  workspace: number,
+  docId: string,
+): PersistedScriptDraft | null {
+  try {
+    const raw = localStorage.getItem(
+      scriptDraftStorageKey(userId, workspace, docId),
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedScriptDraft>;
+    if (
+      typeof parsed.draftBody === "string" &&
+      typeof parsed.savedBody === "string" &&
+      typeof parsed.baseRevision === "number"
+    ) {
+      return {
+        draftBody: parsed.draftBody,
+        savedBody: parsed.savedBody,
+        baseRevision: parsed.baseRevision,
+        updatedAt: Number(parsed.updatedAt) || Date.now(),
+      };
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return null;
+}
+
+function writePersistedScriptDraft(
+  userId: number,
+  workspace: number,
+  docId: string,
+  draft: PersistedScriptDraft,
+): boolean {
+  try {
+    localStorage.setItem(
+      scriptDraftStorageKey(userId, workspace, docId),
+      JSON.stringify(draft),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearPersistedScriptDraft(
+  userId: number,
+  workspace: number,
+  docId: string,
+): void {
+  try {
+    localStorage.removeItem(scriptDraftStorageKey(userId, workspace, docId));
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 type LoadedScriptState = {
   detail: ScriptDocumentDetail;
@@ -169,6 +256,23 @@ type RichScriptBlock = {
   speech?: string;
 };
 
+function preserveShotCommentMarker(
+  originalBlock: string,
+  editedBlock: string,
+): string {
+  if (/<!--\s*fm-shot:[a-zA-Z0-9_-]{3,64}\s*-->/.test(editedBlock)) {
+    return editedBlock;
+  }
+  const match = originalBlock.match(
+    /<!--\s*fm-shot:([a-zA-Z0-9_-]{3,64})\s*-->/,
+  );
+  if (!match) return editedBlock;
+  const lines = editedBlock.split("\n");
+  if (!lines.length || !lines[0].trim()) return editedBlock;
+  lines[0] = `${lines[0]} <!-- fm-shot:${match[1]} -->`;
+  return lines.join("\n");
+}
+
 function splitRichScriptBlocks(
   markdown: string,
   docId: string,
@@ -187,7 +291,10 @@ function splitRichScriptBlocks(
   while (i < lines.length) {
     const line = lines[i];
     const trimmed = line.trim();
-    if (!trimmed) {
+    if (
+      !trimmed ||
+      /^<!--\s*fm-shot:[a-zA-Z0-9_-]{3,64}\s*-->$/.test(trimmed)
+    ) {
       i++;
       continue;
     }
@@ -212,11 +319,13 @@ function splitRichScriptBlocks(
       continue;
     }
 
+    const cleanTrimmed = stripShotCommentMarkers(trimmed).trim();
+
     // Scene heading
-    const sceneMatch = trimmed.match(
+    const sceneMatch = cleanTrimmed.match(
       /^(?:#{1,4}\s*)?(S\d{1,3}|SC\d{1,3}|第\s*\d+\s*场)\s+([^\n]+)$/i,
     );
-    if (sceneMatch && !trimmed.startsWith("-")) {
+    if (sceneMatch && !cleanTrimmed.startsWith("-")) {
       const code = sceneMatch[1].replace(/\s+/g, "").toUpperCase();
       blocks.push({
         id: `blk_${i}`,
@@ -230,7 +339,7 @@ function splitRichScriptBlocks(
       continue;
     }
 
-    if (/^#\s+/.test(trimmed)) {
+    if (/^#\s+/.test(cleanTrimmed)) {
       blocks.push({
         id: `blk_${i}`,
         lineStart: i + 1,
@@ -242,7 +351,7 @@ function splitRichScriptBlocks(
       continue;
     }
 
-    if (/^#{2,4}\s+/.test(trimmed)) {
+    if (/^#{2,4}\s+/.test(cleanTrimmed)) {
       blocks.push({
         id: `blk_${i}`,
         lineStart: i + 1,
@@ -254,7 +363,7 @@ function splitRichScriptBlocks(
       continue;
     }
 
-    if (/^[△▲]/.test(trimmed)) {
+    if (/^[△▲]/.test(cleanTrimmed)) {
       blocks.push({
         id: `blk_${i}`,
         lineStart: i + 1,
@@ -267,7 +376,7 @@ function splitRichScriptBlocks(
       continue;
     }
 
-    const dlgMatch = trimmed.match(
+    const dlgMatch = cleanTrimmed.match(
       /^([^：:*#\-|<>]{1,18})[：:]\s*(.+)$/,
     );
     if (
@@ -283,7 +392,7 @@ function splitRichScriptBlocks(
         rawText: line,
         blockType: "dialogue",
         speaker: dlgMatch[1].trim(),
-        speech: dlgMatch[2].trim(),
+        speech: stripShotCommentMarkers(dlgMatch[2]).trim(),
         shotAnchor: shotByLine.get(i + 1),
       });
       i++;
@@ -296,10 +405,11 @@ function splitRichScriptBlocks(
     while (
       i < lines.length &&
       lines[i].trim() &&
+      !/^<!--\s*fm-shot:[a-zA-Z0-9_-]{3,64}\s*-->$/.test(lines[i].trim()) &&
       !/^(#{1,4}\s|[△▲]|\||```)/.test(lines[i].trim()) &&
       !/^(S\d{1,3}|SC\d{1,3})\s+/i.test(lines[i].trim())
     ) {
-      const nextTrim = lines[i].trim();
+      const nextTrim = stripShotCommentMarkers(lines[i]).trim();
       if (
         /^([^：:*#\-|<>]{1,18})[：:]\s*(.+)$/.test(nextTrim) &&
         !nextTrim.startsWith("-")
@@ -320,26 +430,10 @@ function splitRichScriptBlocks(
   return blocks;
 }
 
-export function ScriptWorkspace({
-  active,
-  canvasId,
-  canvasTitle,
-  canvasDoc,
-  runs,
-  assets,
-  defaultVideoModel,
-  defaultImageModel,
-  externalOpenRequest,
-  onActiveScriptChange,
-  onChangeCanvasDoc,
-  onEditCanvasNode,
-  onFocusCanvasNode,
-  onSwitchToCanvas,
-  onSwitchCanvasProject,
-  onAssetUploaded,
-  onNotify,
-}: {
+type ScriptWorkspaceProps = {
   active: boolean;
+  workspace: number;
+  userId: number;
   canvasId: string;
   canvasTitle: string;
   canvasDoc: Doc;
@@ -350,6 +444,7 @@ export function ScriptWorkspace({
   externalOpenRequest?: {
     docId: string;
     anchor?: string;
+    shotId?: string;
     line?: number;
     seq: number;
   } | null;
@@ -367,7 +462,35 @@ export function ScriptWorkspace({
   onSwitchCanvasProject: (targetCanvasId: string) => void;
   onAssetUploaded: (asset: { id: string; w: number; h: number }) => void;
   onNotify: (msg: string) => void;
-}) {
+};
+
+export const ScriptWorkspace = forwardRef<
+  ScriptWorkspaceHandle,
+  ScriptWorkspaceProps
+>(function ScriptWorkspace(
+  {
+    active,
+    workspace,
+    userId,
+    canvasId,
+    canvasTitle,
+    canvasDoc,
+    runs,
+    assets,
+    defaultVideoModel,
+    defaultImageModel,
+    externalOpenRequest,
+    onActiveScriptChange,
+    onChangeCanvasDoc,
+    onEditCanvasNode,
+    onFocusCanvasNode,
+    onSwitchToCanvas,
+    onSwitchCanvasProject,
+    onAssetUploaded,
+    onNotify,
+  },
+  ref,
+) {
   const [sidebarWidth, setSidebarWidth] = useState(268);
   const [items, setItems] = useState<ScriptDocumentSummary[]>([]);
   const [otherCanvases, setOtherCanvases] = useState<WorkspaceCanvasSummary[]>(
@@ -399,6 +522,9 @@ export function ScriptWorkspace({
   );
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const saveChainRef = useRef<Record<string, Promise<void>>>({});
+  const allowUnloadRef = useRef(false);
+  const jumpCounterRef = useRef(0);
 
   // Multi-tab & split-pane state
   const [tabs, setTabs] = useState<OpenDocTab[]>([]);
@@ -409,6 +535,48 @@ export function ScriptWorkspace({
   // Modals
   const [syncModalDocId, setSyncModalDocId] = useState<string | null>(null);
   const [workspaceSearchOpen, setWorkspaceSearchOpen] = useState(false);
+
+  const ensureScriptLoaded = useCallback(
+    async (docId: string) => {
+      if (sessionsRef.current[docId]) return sessionsRef.current[docId];
+      const detail = await scriptApi.get(docId);
+      const persisted = readPersistedScriptDraft(userId, workspace, docId);
+      let draftBody = detail.body_md;
+      let status: LoadedScriptState["status"] = "saved";
+      let error = "";
+      if (persisted) {
+        if (persisted.draftBody === detail.body_md) {
+          clearPersistedScriptDraft(userId, workspace, docId);
+        } else if (detail.revision === persisted.baseRevision) {
+          draftBody = persisted.draftBody;
+          status = "dirty";
+        } else {
+          draftBody = persisted.draftBody;
+          status = "conflict";
+          error =
+            "检测到未同步的本地剧本草稿与服务器新版本冲突，本地草稿已为你保留。";
+        }
+      }
+      const loaded: LoadedScriptState = {
+        detail,
+        draftBody,
+        savedBody: detail.body_md,
+        revision: detail.revision,
+        status,
+        error,
+        undoStack: [],
+        redoStack: [],
+      };
+      setSessions((prev) => {
+        if (prev[docId]) return prev;
+        const next = { ...prev, [docId]: loaded };
+        sessionsRef.current = next;
+        return next;
+      });
+      return sessionsRef.current[docId] ?? loaded;
+    },
+    [userId, workspace],
+  );
 
   const loadWorkspaceTree = useCallback(async () => {
     setLoadingTree(true);
@@ -431,6 +599,16 @@ export function ScriptWorkspace({
         }
         return next;
       });
+      // Eagerly restore any files that have unsaved persisted localStorage drafts
+      for (const item of scriptList.items) {
+        if (
+          item.entry_type === "file" &&
+          !sessionsRef.current[item.id] &&
+          readPersistedScriptDraft(userId, workspace, item.id) !== null
+        ) {
+          void ensureScriptLoaded(item.id).catch(() => {});
+        }
+      }
       return scriptList.items;
     } catch (e) {
       setTreeError(e instanceof Error ? e.message : "加载工作区文件失败");
@@ -438,24 +616,7 @@ export function ScriptWorkspace({
     } finally {
       setLoadingTree(false);
     }
-  }, [canvasId]);
-
-  const ensureScriptLoaded = useCallback(async (docId: string) => {
-    if (sessionsRef.current[docId]) return sessionsRef.current[docId];
-    const detail = await scriptApi.get(docId);
-    const loaded: LoadedScriptState = {
-      detail,
-      draftBody: detail.body_md,
-      savedBody: detail.body_md,
-      revision: detail.revision,
-      status: "saved",
-      error: "",
-      undoStack: [],
-      redoStack: [],
-    };
-    setSessions((prev) => ({ ...prev, [docId]: prev[docId] ?? loaded }));
-    return loaded;
-  }, []);
+  }, [canvasId, ensureScriptLoaded, userId, workspace]);
 
   const openScriptTab = useCallback(
     async (
@@ -464,22 +625,37 @@ export function ScriptWorkspace({
         preview?: boolean;
         pane?: "left" | "right";
         targetLine?: number;
+        targetAnchor?: string;
+        targetShotId?: string;
       } = {},
     ) => {
       const key = `script:${summary.id}`;
       const targetPane = options.pane ?? focusedPane;
+      const hasJumpTarget = Boolean(
+        options.targetLine || options.targetAnchor || options.targetShotId,
+      );
+      const nextJumpSeq = hasJumpTarget
+        ? ++jumpCounterRef.current
+        : undefined;
       await ensureScriptLoaded(summary.id);
       setTabs((prev) => {
         const existing = prev.find((t) => t.key === key);
-        if (existing) {
+        if (existing && existing.kind === "script") {
           return prev.map((t) =>
-            t.key === key
+            t.key === key && t.kind === "script"
               ? {
                   ...t,
                   title: summary.name,
                   path: summary.path,
                   preview: options.preview ? t.preview : false,
-                  targetLine: options.targetLine,
+                  targetLine: hasJumpTarget ? options.targetLine : t.targetLine,
+                  targetAnchor: hasJumpTarget
+                    ? options.targetAnchor
+                    : t.targetAnchor,
+                  targetShotId: hasJumpTarget
+                    ? options.targetShotId
+                    : t.targetShotId,
+                  jumpSeq: nextJumpSeq ?? t.jumpSeq,
                 }
               : t,
           );
@@ -492,6 +668,9 @@ export function ScriptWorkspace({
           path: summary.path,
           preview: options.preview ?? false,
           targetLine: options.targetLine,
+          targetAnchor: options.targetAnchor,
+          targetShotId: options.targetShotId,
+          jumpSeq: nextJumpSeq,
         };
         if (options.preview) {
           const previewIdx = prev.findIndex((t) => t.preview);
@@ -577,7 +756,7 @@ export function ScriptWorkspace({
     });
   }, [canvasId, loadWorkspaceTree, openScriptTab]);
 
-  // Handle external jump request (e.g. clicking "查看剧本段落" from a Canvas node)
+  // Handle external jump request (e.g. clicking "查看源剧本" from a Canvas node)
   const handledReqSeq = useRef(0);
   useEffect(() => {
     if (
@@ -591,7 +770,12 @@ export function ScriptWorkspace({
       .then((detail) =>
         openScriptTab(
           { id: detail.id, name: detail.name, path: detail.path },
-          { pane: "left", targetLine: externalOpenRequest.line },
+          {
+            pane: "left",
+            targetLine: externalOpenRequest.line,
+            targetAnchor: externalOpenRequest.anchor,
+            targetShotId: externalOpenRequest.shotId,
+          },
         ),
       )
       .catch((e) =>
@@ -599,71 +783,155 @@ export function ScriptWorkspace({
       );
   }, [externalOpenRequest, onNotify, openScriptTab]);
 
-  // Auto-save dirty scripts with 700ms debounce
-  const flushScript = useCallback(async (docId: string) => {
-    const current = sessionsRef.current[docId];
-    if (!current || current.draftBody === current.savedBody) return;
-    if (current.status === "saving" || current.status === "conflict") return;
+  // Serialized per-document save queue with follow-up edit chaining
+  const flushScript = useCallback(
+    async (
+      docId: string,
+      options: { throwOnError?: boolean } = {},
+    ): Promise<void> => {
+      const execute = async (): Promise<void> => {
+        while (true) {
+          const current = sessionsRef.current[docId];
+          if (!current) return;
+          if (current.status === "conflict") {
+            if (options.throwOnError) {
+              throw new Error(
+                current.error ||
+                  `剧本「${current.detail.name}」存在版本冲突，请先处理保存冲突`,
+              );
+            }
+            return;
+          }
+          if (current.draftBody === current.savedBody) {
+            clearPersistedScriptDraft(userId, workspace, docId);
+            if (current.status !== "saved") {
+              setSessions((prev) => {
+                const cur = prev[docId];
+                if (!cur || cur.draftBody !== cur.savedBody) return prev;
+                const next = {
+                  ...prev,
+                  [docId]: { ...cur, status: "saved" as const, error: "" },
+                };
+                sessionsRef.current = next;
+                return next;
+              });
+            }
+            return;
+          }
 
-    const bodySnapshot = current.draftBody;
-    const expectedRev = current.revision;
-    setSessions((prev) => ({
-      ...prev,
-      [docId]: { ...prev[docId], status: "saving", error: "" },
-    }));
+          const bodySnapshot = current.draftBody;
+          const expectedRev = current.revision;
+          setSessions((prev) => {
+            const cur = prev[docId];
+            if (!cur) return prev;
+            const next = {
+              ...prev,
+              [docId]: { ...cur, status: "saving" as const, error: "" },
+            };
+            sessionsRef.current = next;
+            return next;
+          });
 
-    try {
-      const updated = await scriptApi.update(docId, {
-        expected_revision: expectedRev,
-        body_md: bodySnapshot,
-      });
-      setSessions((prev) => {
-        const latest = prev[docId];
-        if (!latest) return prev;
-        const stillDirty = latest.draftBody !== bodySnapshot;
-        return {
-          ...prev,
-          [docId]: {
-            ...latest,
-            detail: updated,
-            savedBody: bodySnapshot,
-            revision: updated.revision,
-            status: stillDirty ? "dirty" : "saved",
-            error: "",
-          },
-        };
-      });
-      setItems((prev) =>
-        prev.map((item) =>
-          item.id === docId
-            ? {
-                ...item,
-                revision: updated.revision,
-                char_count: updated.char_count,
-                line_count: updated.line_count,
-                preview: updated.preview,
-                updated: updated.updated,
+          try {
+            const updated = await scriptApi.update(docId, {
+              expected_revision: expectedRev,
+              body_md: bodySnapshot,
+            });
+            let hasMoreEdits = false;
+            setSessions((prev) => {
+              const latest = prev[docId];
+              if (!latest) return prev;
+              hasMoreEdits = latest.draftBody !== bodySnapshot;
+              if (hasMoreEdits) {
+                writePersistedScriptDraft(userId, workspace, docId, {
+                  draftBody: latest.draftBody,
+                  savedBody: bodySnapshot,
+                  baseRevision: updated.revision,
+                  updatedAt: Date.now(),
+                });
+              } else {
+                clearPersistedScriptDraft(userId, workspace, docId);
               }
-            : item,
-        ),
-      );
-    } catch (e: any) {
-      const isConflict = e?.status === 409;
-      setSessions((prev) => {
-        const latest = prev[docId];
-        if (!latest) return prev;
-        return {
-          ...prev,
-          [docId]: {
-            ...latest,
-            status: isConflict ? "conflict" : "error",
-            error:
-              e instanceof Error ? e.message : "保存失败，本地草稿已保留",
-          },
-        };
-      });
-    }
-  }, []);
+              const nextMap: Record<string, LoadedScriptState> = {
+                ...prev,
+                [docId]: {
+                  ...latest,
+                  detail: updated,
+                  savedBody: bodySnapshot,
+                  revision: updated.revision,
+                  status: hasMoreEdits ? "dirty" : "saved",
+                  error: "",
+                },
+              };
+              sessionsRef.current = nextMap;
+              return nextMap;
+            });
+            setItems((prev) =>
+              prev.map((item) =>
+                item.id === docId
+                  ? {
+                      ...item,
+                      revision: updated.revision,
+                      char_count: updated.char_count,
+                      line_count: updated.line_count,
+                      preview: updated.preview,
+                      updated: updated.updated,
+                    }
+                  : item,
+              ),
+            );
+            if (!hasMoreEdits) return;
+          } catch (e: unknown) {
+            const httpStatus = (e as { status?: number })?.status;
+            const isConflict = httpStatus === 409;
+            const docName =
+              sessionsRef.current[docId]?.detail.name || "剧本文档";
+            const errMsg = isConflict
+              ? `剧本「${docName}」已被其他协作者修改，本地草稿已保留`
+              : e instanceof Error
+                ? e.message
+                : `剧本「${docName}」保存失败，本地草稿已保留`;
+            setSessions((prev) => {
+              const latest = prev[docId];
+              if (!latest) return prev;
+              writePersistedScriptDraft(userId, workspace, docId, {
+                draftBody: latest.draftBody,
+                savedBody: latest.savedBody,
+                baseRevision: latest.revision,
+                updatedAt: Date.now(),
+              });
+              const nextMap: Record<string, LoadedScriptState> = {
+                ...prev,
+                [docId]: {
+                  ...latest,
+                  status: isConflict ? "conflict" : "error",
+                  error: errMsg,
+                },
+              };
+              sessionsRef.current = nextMap;
+              return nextMap;
+            });
+            if (options.throwOnError) {
+              throw new Error(errMsg);
+            }
+            return;
+          }
+        }
+      };
+
+      const prevChain = saveChainRef.current[docId] ?? Promise.resolve();
+      const nextPromise = prevChain.catch(() => {}).then(execute);
+      saveChainRef.current[docId] = nextPromise;
+      try {
+        await nextPromise;
+      } finally {
+        if (saveChainRef.current[docId] === nextPromise) {
+          delete saveChainRef.current[docId];
+        }
+      }
+    },
+    [userId, workspace],
+  );
 
   useEffect(() => {
     const dirtyIds = Object.entries(sessions)
@@ -678,31 +946,51 @@ export function ScriptWorkspace({
     return () => clearTimeout(timer);
   }, [sessions, flushScript]);
 
-  const updateScriptDraft = useCallback(
-    (docId: string, nextBody: string, recordUndo = true) => {
+  const mutateScriptDraft = useCallback(
+    (
+      docId: string,
+      mutator: (currentBody: string) => string,
+      recordUndo = true,
+    ) => {
       setSessions((prev) => {
         const cur = prev[docId];
-        if (!cur || cur.draftBody === nextBody) return prev;
+        if (!cur) return prev;
+        const nextBody = mutator(cur.draftBody);
+        if (nextBody === cur.draftBody) return prev;
         const undoStack = recordUndo
           ? [...cur.undoStack.slice(-50), cur.draftBody]
           : cur.undoStack;
-        return {
+        if (nextBody === cur.savedBody) {
+          clearPersistedScriptDraft(userId, workspace, docId);
+        } else {
+          writePersistedScriptDraft(userId, workspace, docId, {
+            draftBody: nextBody,
+            savedBody: cur.savedBody,
+            baseRevision: cur.revision,
+            updatedAt: Date.now(),
+          });
+        }
+        const nextStatus: LoadedScriptState["status"] =
+          cur.status === "conflict"
+            ? "conflict"
+            : cur.status === "saving"
+              ? "saving"
+              : nextBody === cur.savedBody
+                ? "saved"
+                : "dirty";
+        const nextMap: Record<string, LoadedScriptState> = {
           ...prev,
           [docId]: {
             ...cur,
             draftBody: nextBody,
             undoStack,
             redoStack: recordUndo ? [] : cur.redoStack,
-            status:
-              cur.status === "conflict"
-                ? "conflict"
-                : nextBody === cur.savedBody
-                  ? "saved"
-                  : "dirty",
+            status: nextStatus,
           },
         };
+        sessionsRef.current = nextMap;
+        return nextMap;
       });
-      // Pin preview tab once modified
       setTabs((prev) =>
         prev.map((t) =>
           t.kind === "script" && t.docId === docId && t.preview
@@ -711,34 +999,147 @@ export function ScriptWorkspace({
         ),
       );
     },
-    [],
+    [userId, workspace],
   );
 
-  const travelScriptHistory = useCallback((docId: string, redo = false) => {
-    setSessions((prev) => {
-      const cur = prev[docId];
-      if (!cur) return prev;
-      const source = redo ? cur.redoStack : cur.undoStack;
-      if (!source.length) return prev;
-      const targetBody = source[source.length - 1];
-      const nextUndo = redo
-        ? [...cur.undoStack, cur.draftBody]
-        : cur.undoStack.slice(0, -1);
-      const nextRedo = redo
-        ? cur.redoStack.slice(0, -1)
-        : [...cur.redoStack, cur.draftBody];
-      return {
-        ...prev,
-        [docId]: {
-          ...cur,
-          draftBody: targetBody,
-          undoStack: nextUndo,
-          redoStack: nextRedo,
-          status: targetBody === cur.savedBody ? "saved" : "dirty",
-        },
-      };
-    });
+  const updateScriptDraft = useCallback(
+    (docId: string, nextBody: string, recordUndo = true) => {
+      mutateScriptDraft(docId, () => nextBody, recordUndo);
+    },
+    [mutateScriptDraft],
+  );
+
+  const travelScriptHistory = useCallback(
+    (docId: string, redo = false) => {
+      setSessions((prev) => {
+        const cur = prev[docId];
+        if (!cur) return prev;
+        const source = redo ? cur.redoStack : cur.undoStack;
+        if (!source.length) return prev;
+        const targetBody = source[source.length - 1];
+        const nextUndo = redo
+          ? [...cur.undoStack, cur.draftBody]
+          : cur.undoStack.slice(0, -1);
+        const nextRedo = redo
+          ? cur.redoStack.slice(0, -1)
+          : [...cur.redoStack, cur.draftBody];
+        if (targetBody === cur.savedBody) {
+          clearPersistedScriptDraft(userId, workspace, docId);
+        } else {
+          writePersistedScriptDraft(userId, workspace, docId, {
+            draftBody: targetBody,
+            savedBody: cur.savedBody,
+            baseRevision: cur.revision,
+            updatedAt: Date.now(),
+          });
+        }
+        const nextStatus: LoadedScriptState["status"] =
+          cur.status === "conflict"
+            ? "conflict"
+            : cur.status === "saving"
+              ? "saving"
+              : targetBody === cur.savedBody
+                ? "saved"
+                : "dirty";
+        const nextMap: Record<string, LoadedScriptState> = {
+          ...prev,
+          [docId]: {
+            ...cur,
+            draftBody: targetBody,
+            undoStack: nextUndo,
+            redoStack: nextRedo,
+            status: nextStatus,
+          },
+        };
+        sessionsRef.current = nextMap;
+        return nextMap;
+      });
+    },
+    [userId, workspace],
+  );
+
+  const rememberAllScripts = useCallback((): boolean => {
+    let allSavedToStorage = true;
+    for (const [docId, s] of Object.entries(sessionsRef.current)) {
+      if (s.draftBody === s.savedBody) {
+        clearPersistedScriptDraft(userId, workspace, docId);
+      } else {
+        const ok = writePersistedScriptDraft(userId, workspace, docId, {
+          draftBody: s.draftBody,
+          savedBody: s.savedBody,
+          baseRevision: s.revision,
+          updatedAt: Date.now(),
+        });
+        if (!ok) allSavedToStorage = false;
+      }
+    }
+    return allSavedToStorage;
+  }, [userId, workspace]);
+
+  const hasUnsavedScripts = useCallback((): boolean => {
+    return Object.values(sessionsRef.current).some(
+      (s) =>
+        s.draftBody !== s.savedBody ||
+        s.status === "saving" ||
+        s.status === "conflict" ||
+        s.status === "error",
+    );
   }, []);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      flushAll: async () => {
+        const entries = Object.entries(sessionsRef.current).filter(
+          ([, s]) =>
+            s.draftBody !== s.savedBody ||
+            s.status === "saving" ||
+            s.status === "conflict" ||
+            s.status === "error",
+        );
+        for (const [docId] of entries) {
+          await flushScript(docId, { throwOnError: true });
+        }
+      },
+      rememberAll: rememberAllScripts,
+      hasUnsavedChanges: hasUnsavedScripts,
+      prepareLeave: () => {
+        allowUnloadRef.current = true;
+      },
+    }),
+    [flushScript, hasUnsavedScripts, rememberAllScripts],
+  );
+
+  // Persist pending script drafts on tab hide / beforeunload
+  useEffect(() => {
+    const persistPending = () => {
+      if (hasUnsavedScripts()) {
+        rememberAllScripts();
+      }
+    };
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (allowUnloadRef.current) {
+        allowUnloadRef.current = false;
+        return;
+      }
+      if (hasUnsavedScripts()) {
+        rememberAllScripts();
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    const onVisibility = () => {
+      if (document.hidden) persistPending();
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("pagehide", persistPending);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("pagehide", persistPending);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [hasUnsavedScripts, rememberAllScripts]);
 
   // Report active script to parent (for AI Agent context!)
   useEffect(() => {
@@ -886,6 +1287,28 @@ export function ScriptWorkspace({
     setDeletingItem(null);
     try {
       await scriptApi.remove(target.id, target.entry_type === "directory");
+      const deletedDocIds: string[] = [];
+      for (const [docId, s] of Object.entries(sessionsRef.current)) {
+        if (
+          docId === target.id ||
+          s.detail.path.startsWith(target.path + "/")
+        ) {
+          deletedDocIds.push(docId);
+        }
+      }
+      for (const docId of deletedDocIds) {
+        clearPersistedScriptDraft(userId, workspace, docId);
+      }
+      if (deletedDocIds.length > 0) {
+        setSessions((prev) => {
+          const next = { ...prev };
+          for (const docId of deletedDocIds) {
+            delete next[docId];
+          }
+          sessionsRef.current = next;
+          return next;
+        });
+      }
       await loadWorkspaceTree();
       const closedKeys = new Set<string>();
       for (const tab of tabs) {
@@ -929,6 +1352,23 @@ export function ScriptWorkspace({
       setLeftTabKey(tabs[0].key);
     }
   }, [leftTabKey, tabs]);
+
+  const dirtyScriptIds = useMemo(
+    () =>
+      new Set(
+        Object.entries(sessions)
+          .filter(
+            ([, s]) =>
+              s.draftBody !== s.savedBody ||
+              s.status === "dirty" ||
+              s.status === "saving" ||
+              s.status === "conflict" ||
+              s.status === "error",
+          )
+          .map(([id]) => id),
+      ),
+    [sessions],
+  );
 
   // Filter tree items + canvas nodes
   const filterLower = treeFilter.trim().toLowerCase();
@@ -1008,7 +1448,22 @@ export function ScriptWorkspace({
     switchAfterSync: boolean,
   ) => {
     if (!syncModalDocId || !syncModalState) return;
-    await flushScript(syncModalDocId);
+    const curSession = sessionsRef.current[syncModalDocId];
+    if (!curSession) return;
+
+    const stamped = stampScriptShotIds(curSession.draftBody);
+    if (stamped.changed) {
+      updateScriptDraft(syncModalDocId, stamped.markdown, false);
+    }
+    await flushScript(syncModalDocId, { throwOnError: true });
+
+    const syncedBody =
+      sessionsRef.current[syncModalDocId]?.draftBody ?? stamped.markdown;
+    const freshBreakdown = parseScriptBreakdown(syncedBody, {
+      docId: syncModalDocId,
+      docPath: curSession.detail.path,
+    });
+
     let focusTargets: string[] = [];
     let createdCount = 0;
     let updatedCount = 0;
@@ -1016,7 +1471,7 @@ export function ScriptWorkspace({
     onChangeCanvasDoc((current) => {
       const synced = syncScriptBreakdownToCanvas(
         current,
-        syncModalState.breakdown,
+        freshBreakdown,
         options,
       );
       focusTargets =
@@ -1220,7 +1675,7 @@ export function ScriptWorkspace({
               const tabKey = `script:${item.id}`;
               const isSelected =
                 leftTabKey === tabKey || rightTabKey === tabKey;
-              const isDirty = sessions[item.id]?.status === "dirty";
+              const isDirty = dirtyScriptIds.has(item.id);
 
               return (
                 <div
@@ -1549,23 +2004,29 @@ export function ScriptWorkspace({
                 runs={runs}
                 assets={assets}
                 onUpdateScript={updateScriptDraft}
+                onMutateScript={mutateScriptDraft}
                 onTravelHistory={travelScriptHistory}
                 onFlushScript={flushScript}
                 onReloadScript={async (docId) => {
                   const fresh = await scriptApi.get(docId);
-                  setSessions((prev) => ({
-                    ...prev,
-                    [docId]: {
-                      detail: fresh,
-                      draftBody: fresh.body_md,
-                      savedBody: fresh.body_md,
-                      revision: fresh.revision,
-                      status: "saved",
-                      error: "",
-                      undoStack: [],
-                      redoStack: [],
-                    },
-                  }));
+                  clearPersistedScriptDraft(userId, workspace, docId);
+                  setSessions((prev) => {
+                    const next: Record<string, LoadedScriptState> = {
+                      ...prev,
+                      [docId]: {
+                        detail: fresh,
+                        draftBody: fresh.body_md,
+                        savedBody: fresh.body_md,
+                        revision: fresh.revision,
+                        status: "saved",
+                        error: "",
+                        undoStack: [],
+                        redoStack: [],
+                      },
+                    };
+                    sessionsRef.current = next;
+                    return next;
+                  });
                 }}
                 onOpenSyncModal={(docId) => setSyncModalDocId(docId)}
                 onEditCanvasNode={onEditCanvasNode}
@@ -1574,13 +2035,34 @@ export function ScriptWorkspace({
                   const found = canvasDoc.nodes.find((n) => n.id === nodeId);
                   if (found) openNodeTab(found, { pane: "right" });
                 }}
-                onOpenLinkedScript={(docId, line) => {
+                onOpenLinkedScript={(docId, target) => {
                   const item = items.find((i) => i.id === docId);
                   if (item) {
                     void openScriptTab(item, {
                       pane: "left",
-                      targetLine: line,
+                      targetLine: target?.line,
+                      targetAnchor: target?.anchor,
+                      targetShotId: target?.shotId,
                     });
+                  } else {
+                    void scriptApi
+                      .get(docId)
+                      .then((detail) =>
+                        openScriptTab(
+                          { id: detail.id, name: detail.name, path: detail.path },
+                          {
+                            pane: "left",
+                            targetLine: target?.line,
+                            targetAnchor: target?.anchor,
+                            targetShotId: target?.shotId,
+                          },
+                        ),
+                      )
+                      .catch((e) =>
+                        onNotify(
+                          e instanceof Error ? e.message : "无法打开关联剧本文档",
+                        ),
+                      );
                   }
                 }}
                 onAssetUploaded={onAssetUploaded}
@@ -1629,23 +2111,29 @@ export function ScriptWorkspace({
                   runs={runs}
                   assets={assets}
                   onUpdateScript={updateScriptDraft}
+                  onMutateScript={mutateScriptDraft}
                   onTravelHistory={travelScriptHistory}
                   onFlushScript={flushScript}
                   onReloadScript={async (docId) => {
                     const fresh = await scriptApi.get(docId);
-                    setSessions((prev) => ({
-                      ...prev,
-                      [docId]: {
-                        detail: fresh,
-                        draftBody: fresh.body_md,
-                        savedBody: fresh.body_md,
-                        revision: fresh.revision,
-                        status: "saved",
-                        error: "",
-                        undoStack: [],
-                        redoStack: [],
-                      },
-                    }));
+                    clearPersistedScriptDraft(userId, workspace, docId);
+                    setSessions((prev) => {
+                      const next: Record<string, LoadedScriptState> = {
+                        ...prev,
+                        [docId]: {
+                          detail: fresh,
+                          draftBody: fresh.body_md,
+                          savedBody: fresh.body_md,
+                          revision: fresh.revision,
+                          status: "saved",
+                          error: "",
+                          undoStack: [],
+                          redoStack: [],
+                        },
+                      };
+                      sessionsRef.current = next;
+                      return next;
+                    });
                   }}
                   onOpenSyncModal={(docId) => setSyncModalDocId(docId)}
                   onEditCanvasNode={onEditCanvasNode}
@@ -1654,13 +2142,40 @@ export function ScriptWorkspace({
                     const found = canvasDoc.nodes.find((n) => n.id === nodeId);
                     if (found) openNodeTab(found, { pane: "right" });
                   }}
-                  onOpenLinkedScript={(docId, line) => {
+                  onOpenLinkedScript={(docId, target) => {
                     const item = items.find((i) => i.id === docId);
                     if (item) {
                       void openScriptTab(item, {
                         pane: "left",
-                        targetLine: line,
+                        targetLine: target?.line,
+                        targetAnchor: target?.anchor,
+                        targetShotId: target?.shotId,
                       });
+                    } else {
+                      void scriptApi
+                        .get(docId)
+                        .then((detail) =>
+                          openScriptTab(
+                            {
+                              id: detail.id,
+                              name: detail.name,
+                              path: detail.path,
+                            },
+                            {
+                              pane: "left",
+                              targetLine: target?.line,
+                              targetAnchor: target?.anchor,
+                              targetShotId: target?.shotId,
+                            },
+                          ),
+                        )
+                        .catch((e) =>
+                          onNotify(
+                            e instanceof Error
+                              ? e.message
+                              : "无法打开关联剧本文档",
+                          ),
+                        );
                     }
                   }}
                   onAssetUploaded={onAssetUploaded}
@@ -1710,6 +2225,7 @@ export function ScriptWorkspace({
       {/* Script -> Canvas Interactive Fusion Modal */}
       {syncModalDocId && syncModalState && (
         <ScriptSyncModal
+          canvasDoc={canvasDoc}
           breakdown={syncModalState.breakdown}
           existingLinks={syncModalState.links}
           defaultVideoModel={defaultVideoModel}
@@ -1725,6 +2241,7 @@ export function ScriptWorkspace({
           canvasId={canvasId}
           canvasTitle={canvasTitle}
           canvasDoc={canvasDoc}
+          dirtyScriptIds={dirtyScriptIds}
           onOpenScriptMatch={(docId, path, line) => {
             const name = path.split("/").at(-1) || path;
             void openScriptTab(
@@ -1733,26 +2250,70 @@ export function ScriptWorkspace({
             );
           }}
           onFocusCanvasNode={onFocusCanvasNode}
+          onSwitchCanvasProject={onSwitchCanvasProject}
           onReplaceCanvasDoc={onChangeCanvasDoc}
-          onScriptsChanged={async () => {
+          onScriptsChanged={async (savedDocIds) => {
             await loadWorkspaceTree();
-            for (const docId of Object.keys(sessionsRef.current)) {
+            for (const docId of savedDocIds) {
+              if (!sessionsRef.current[docId]) continue;
               const fresh = await scriptApi.get(docId).catch(() => null);
-              if (fresh) {
-                setSessions((prev) => ({
+              if (!fresh) continue;
+              setSessions((prev) => {
+                const cur = prev[docId];
+                if (!cur) return prev;
+                const editedLocallyDuringReplace =
+                  cur.draftBody !== cur.savedBody;
+                if (editedLocallyDuringReplace) {
+                  const isNowEqual = cur.draftBody === fresh.body_md;
+                  if (isNowEqual) {
+                    clearPersistedScriptDraft(userId, workspace, docId);
+                  } else {
+                    writePersistedScriptDraft(userId, workspace, docId, {
+                      draftBody: cur.draftBody,
+                      savedBody: fresh.body_md,
+                      baseRevision: fresh.revision,
+                      updatedAt: Date.now(),
+                    });
+                  }
+                  const nextMap: Record<string, LoadedScriptState> = {
+                    ...prev,
+                    [docId]: {
+                      ...cur,
+                      detail: fresh,
+                      savedBody: fresh.body_md,
+                      revision: fresh.revision,
+                      status: isNowEqual ? "saved" : "conflict",
+                      error: isNowEqual
+                        ? ""
+                        : "批量替换期间该文档有新的本地改动，已保留本地草稿，请核对后保存。",
+                    },
+                  };
+                  sessionsRef.current = nextMap;
+                  return nextMap;
+                }
+
+                clearPersistedScriptDraft(userId, workspace, docId);
+                const nextUndo =
+                  cur.savedBody !== fresh.body_md
+                    ? [...cur.undoStack.slice(-50), cur.savedBody]
+                    : cur.undoStack;
+                const nextMap: Record<string, LoadedScriptState> = {
                   ...prev,
                   [docId]: {
+                    ...cur,
                     detail: fresh,
                     draftBody: fresh.body_md,
                     savedBody: fresh.body_md,
                     revision: fresh.revision,
                     status: "saved",
                     error: "",
-                    undoStack: [],
+                    undoStack: nextUndo,
                     redoStack: [],
                   },
-                }));
-              }
+                };
+                sessionsRef.current = nextMap;
+                return nextMap;
+              });
             }
           }}
           onClose={() => setWorkspaceSearchOpen(false)}
@@ -1760,7 +2321,7 @@ export function ScriptWorkspace({
       )}
     </section>
   );
-}
+});
 
 function EditorTabBar({
   tabs,
@@ -1783,8 +2344,15 @@ function EditorTabBar({
     <div className="fm-doc-tabs" role="tablist" aria-label="已打开文档标签">
       {tabs.map((tab) => {
         const isActive = tab.key === activeKey;
-        const dirty =
-          tab.kind === "script" && sessions[tab.docId]?.status === "dirty";
+        const s = tab.kind === "script" ? sessions[tab.docId] : undefined;
+        const dirty = Boolean(
+          s &&
+            (s.draftBody !== s.savedBody ||
+              s.status === "dirty" ||
+              s.status === "saving" ||
+              s.status === "conflict" ||
+              s.status === "error"),
+        );
         return (
           <div
             key={tab.key}
@@ -1845,6 +2413,7 @@ function EditorPaneBody({
   runs,
   assets,
   onUpdateScript,
+  onMutateScript,
   onTravelHistory,
   onFlushScript,
   onReloadScript,
@@ -1862,8 +2431,16 @@ function EditorPaneBody({
   runs: Job[];
   assets: Asset[];
   onUpdateScript: (docId: string, body: string, recordUndo?: boolean) => void;
+  onMutateScript: (
+    docId: string,
+    mutator: (currentBody: string) => string,
+    recordUndo?: boolean,
+  ) => void;
   onTravelHistory: (docId: string, redo?: boolean) => void;
-  onFlushScript: (docId: string) => Promise<void>;
+  onFlushScript: (
+    docId: string,
+    options?: { throwOnError?: boolean },
+  ) => Promise<void>;
   onReloadScript: (docId: string) => Promise<void>;
   onOpenSyncModal: (docId: string) => void;
   onEditCanvasNode: (
@@ -1873,7 +2450,10 @@ function EditorPaneBody({
   ) => void;
   onFocusCanvasNode: (nodeId: string) => void;
   onOpenNodeInSplit: (nodeId: string) => void;
-  onOpenLinkedScript: (docId: string, line?: number) => void;
+  onOpenLinkedScript: (
+    docId: string,
+    target?: { line?: number; anchor?: string; shotId?: string },
+  ) => void;
   onAssetUploaded: (asset: { id: string; w: number; h: number }) => void;
   onNotify: (msg: string) => void;
 }) {
@@ -1912,12 +2492,16 @@ function EditorPaneBody({
     <MarkdownScriptEditor
       session={session}
       targetLine={tab.targetLine}
+      targetAnchor={tab.targetAnchor}
+      targetShotId={tab.targetShotId}
+      jumpSeq={tab.jumpSeq}
       canvasDoc={canvasDoc}
       assets={assets}
       onUpdate={(next) => onUpdateScript(tab.docId, next, true)}
+      onMutate={(mutator) => onMutateScript(tab.docId, mutator, true)}
       onUndo={() => onTravelHistory(tab.docId, false)}
       onRedo={() => onTravelHistory(tab.docId, true)}
-      onFlush={() => onFlushScript(tab.docId)}
+      onFlush={(opts) => onFlushScript(tab.docId, opts)}
       onReload={() => onReloadScript(tab.docId)}
       onOpenSync={() => onOpenSyncModal(tab.docId)}
       onFocusCanvasNode={onFocusCanvasNode}
@@ -1931,9 +2515,13 @@ function EditorPaneBody({
 function MarkdownScriptEditor({
   session,
   targetLine,
+  targetAnchor,
+  targetShotId,
+  jumpSeq,
   canvasDoc,
   assets,
   onUpdate,
+  onMutate,
   onUndo,
   onRedo,
   onFlush,
@@ -1946,12 +2534,16 @@ function MarkdownScriptEditor({
 }: {
   session: LoadedScriptState;
   targetLine?: number;
+  targetAnchor?: string;
+  targetShotId?: string;
+  jumpSeq?: number;
   canvasDoc: Doc;
   assets: Asset[];
   onUpdate: (next: string) => void;
+  onMutate: (mutator: (currentBody: string) => string) => void;
   onUndo: () => void;
   onRedo: () => void;
-  onFlush: () => Promise<void>;
+  onFlush: (options?: { throwOnError?: boolean }) => Promise<void>;
   onReload: () => Promise<void>;
   onOpenSync: () => void;
   onFocusCanvasNode: (nodeId: string) => void;
@@ -1961,11 +2553,16 @@ function MarkdownScriptEditor({
 }) {
   const [mode, setMode] = useState<"rich" | "source">("rich");
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const [highlightedBlockId, setHighlightedBlockId] = useState<string | null>(
+    null,
+  );
   const [assetMenuOpen, setAssetMenuOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [uploadingImage, setUploadingImage] = useState(false);
   const sourceRef = useRef<HTMLTextAreaElement>(null);
+  const richScrollRef = useRef<HTMLDivElement>(null);
+  const handledJumpSeqRef = useRef<number>(0);
 
   const breakdown = useMemo(
     () =>
@@ -1991,18 +2588,85 @@ function MarkdownScriptEditor({
     [mode, session.draftBody, session.detail.id],
   );
 
-  // Scroll to target line when requested
+  // One-shot jump locator supporting both Rich Screenplay mode and Source mode without resetting cursor on edit
   useEffect(() => {
-    if (!targetLine) return;
-    if (mode === "source" && sourceRef.current) {
-      const lines = session.draftBody.split("\n");
-      const offset = lines
-        .slice(0, Math.max(0, targetLine - 1))
-        .reduce((sum, l) => sum + l.length + 1, 0);
-      sourceRef.current.focus();
-      sourceRef.current.setSelectionRange(offset, offset);
+    if (!jumpSeq || handledJumpSeqRef.current === jumpSeq) return;
+
+    const matchedShot =
+      (targetShotId
+        ? breakdown.shots.find((s) => s.shotId === targetShotId)
+        : undefined) ??
+      (targetAnchor
+        ? breakdown.shots.find((s) => s.anchor === targetAnchor)
+        : undefined);
+    const resolvedLine = matchedShot?.lineStart ?? targetLine;
+    const resolvedAnchor = matchedShot?.anchor ?? targetAnchor;
+    if (!resolvedLine && !resolvedAnchor) {
+      handledJumpSeqRef.current = jumpSeq;
+      return;
     }
-  }, [targetLine, mode, session.draftBody]);
+
+    if (mode === "source") {
+      if (!sourceRef.current) return;
+      const el = sourceRef.current;
+      const lines = session.draftBody.split("\n");
+      const lineIdx = Math.max(
+        0,
+        Math.min(lines.length - 1, (resolvedLine ?? 1) - 1),
+      );
+      const startOffset = lines
+        .slice(0, lineIdx)
+        .reduce((sum, l) => sum + l.length + 1, 0);
+      const endOffset = startOffset + (lines[lineIdx]?.length ?? 0);
+      handledJumpSeqRef.current = jumpSeq;
+      requestAnimationFrame(() => {
+        el.focus();
+        el.setSelectionRange(startOffset, endOffset);
+        el.scrollTop = Math.max(0, (lineIdx - 3) * 22);
+      });
+      return;
+    }
+
+    const targetBlock =
+      richBlocks.find(
+        (b) =>
+          (resolvedAnchor && b.shotAnchor === resolvedAnchor) ||
+          (resolvedLine &&
+            resolvedLine >= b.lineStart &&
+            resolvedLine <= b.lineEnd),
+      ) ??
+      richBlocks.find(
+        (b) => Boolean(resolvedLine) && b.lineStart >= (resolvedLine ?? 1),
+      );
+
+    if (!targetBlock) {
+      handledJumpSeqRef.current = jumpSeq;
+      return;
+    }
+
+    handledJumpSeqRef.current = jumpSeq;
+    setHighlightedBlockId(targetBlock.id);
+    requestAnimationFrame(() => {
+      const container = richScrollRef.current;
+      const domEl = container?.querySelector<HTMLElement>(
+        `[data-block-id="${targetBlock.id}"]`,
+      );
+      domEl?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    const timer = setTimeout(() => {
+      setHighlightedBlockId((cur) => (cur === targetBlock.id ? null : cur));
+    }, 2600);
+    return () => clearTimeout(timer);
+  }, [
+    jumpSeq,
+    targetShotId,
+    targetAnchor,
+    targetLine,
+    mode,
+    breakdown.shots,
+    richBlocks,
+    session.draftBody,
+  ]);
 
   const insertSnippet = (snippet: string, wrapPair?: [string, string]) => {
     if (mode === "source" && sourceRef.current) {
@@ -2025,23 +2689,30 @@ function MarkdownScriptEditor({
       });
       return;
     }
-    const base = session.draftBody.replace(/\s+$/, "");
-    const next = base ? `${base}\n\n${snippet}\n` : `${snippet}\n`;
-    onUpdate(next);
+    onMutate((latestBody) => {
+      const base = latestBody.replace(/\s+$/, "");
+      return base ? `${base}\n\n${snippet}\n` : `${snippet}\n`;
+    });
   };
 
   const replaceBlockLines = (
     lineStart: number,
     lineEnd: number,
+    originalRawText: string,
     nextBlockText: string,
   ) => {
-    const lines = session.draftBody.replace(/\r\n?/g, "\n").split("\n");
-    const updated = [
-      ...lines.slice(0, lineStart - 1),
-      ...nextBlockText.split("\n"),
-      ...lines.slice(lineEnd),
-    ].join("\n");
-    onUpdate(updated);
+    const finalBlock = preserveShotCommentMarker(
+      originalRawText,
+      nextBlockText,
+    );
+    onMutate((latestBody) => {
+      const lines = latestBody.replace(/\r\n?/g, "\n").split("\n");
+      return [
+        ...lines.slice(0, lineStart - 1),
+        ...finalBlock.split("\n"),
+        ...lines.slice(lineEnd),
+      ].join("\n");
+    });
   };
 
   const nextSceneNumber = String(breakdown.scenes.length + 1).padStart(2, "0");
@@ -2054,18 +2725,81 @@ function MarkdownScriptEditor({
     );
     if (!imageFiles.length) return;
     e.preventDefault();
+
+    const wasSource = mode === "source" && Boolean(sourceRef.current);
+    let expectedBody = session.draftBody;
+    let insertStart =
+      wasSource && sourceRef.current ? sourceRef.current.selectionStart : -1;
+    let insertEnd =
+      wasSource && sourceRef.current ? sourceRef.current.selectionEnd : -1;
+
     setUploadingImage(true);
     try {
+      let insertedCount = 0;
       for (const file of imageFiles) {
         const uploaded = await upload(file, () => {});
         onAssetUploaded(uploaded);
-        insertSnippet(`![${file.name}](/media/${uploaded.id})`);
+        const safeAlt =
+          (file.name || "参考图").replace(/[\[\]\r\n]/g, " ").trim() ||
+          "参考图";
+        const mdImage = `![${safeAlt}](/media/${uploaded.id})`;
+
+        onMutate((latestBody) => {
+          if (
+            wasSource &&
+            insertStart >= 0 &&
+            latestBody === expectedBody &&
+            insertEnd <= latestBody.length
+          ) {
+            const prefix =
+              insertStart > 0 && latestBody[insertStart - 1] !== "\n"
+                ? "\n"
+                : "";
+            const suffix =
+              insertEnd < latestBody.length && latestBody[insertEnd] !== "\n"
+                ? "\n"
+                : "";
+            const chunk = `${prefix}${mdImage}${suffix}`;
+            const updated =
+              latestBody.slice(0, insertStart) +
+              chunk +
+              latestBody.slice(insertEnd);
+            expectedBody = updated;
+            insertStart += chunk.length;
+            insertEnd = insertStart;
+            return updated;
+          }
+          const base = latestBody.replace(/\s+$/, "");
+          const updated = base ? `${base}\n\n${mdImage}\n` : `${mdImage}\n`;
+          expectedBody = updated;
+          insertStart = -1;
+          insertEnd = -1;
+          return updated;
+        });
+        insertedCount++;
       }
-      onNotify("图片已上传并插入剧本文档");
+      onNotify(
+        insertedCount > 1
+          ? `已上传并插入 ${insertedCount} 张图片`
+          : "图片已上传并插入剧本文档",
+      );
     } catch (err) {
       onNotify(err instanceof Error ? err.message : "粘贴图片失败");
     } finally {
       setUploadingImage(false);
+    }
+  };
+
+  const handleManualSaveShortcut = (
+    e: React.KeyboardEvent<HTMLElement>,
+  ) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      void onFlush({ throwOnError: true })
+        .then(() => onNotify("剧本文档已保存"))
+        .catch((err) =>
+          onNotify(err instanceof Error ? err.message : "剧本文档保存失败"),
+        );
     }
   };
 
@@ -2083,7 +2817,11 @@ function MarkdownScriptEditor({
   }, [findQuery, session.draftBody]);
 
   return (
-    <div className="fm-md-editor" onPaste={(e) => void handlePasteImages(e)}>
+    <div
+      className="fm-md-editor"
+      onPaste={(e) => void handlePasteImages(e)}
+      onKeyDown={handleManualSaveShortcut}
+    >
       {/* Top Mode & Script-to-Canvas Fusion Strip */}
       <div className="fm-md-modebar">
         <div className="fm-md-modes" role="group" aria-label="剧本编辑模式">
@@ -2113,7 +2851,9 @@ function MarkdownScriptEditor({
                 ? "自动保存中…"
                 : session.status === "conflict"
                   ? "版本冲突（本地草稿已保留）"
-                  : `✓ 已保存 v${session.revision}`}
+                  : session.status === "error"
+                    ? "保存失败（本地草稿已保留）"
+                    : `✓ 已保存 v${session.revision}`}
           </span>
         </div>
 
@@ -2140,13 +2880,35 @@ function MarkdownScriptEditor({
 
       {session.status === "conflict" && (
         <div className="fm-md-conflict-bar" role="alert">
-          <span>{session.error || "该剧本文档已被其他协作者修改，你的修改已保留在当前编辑器中。"}</span>
+          <span>
+            {session.error ||
+              "该剧本文档已被其他协作者修改，你的修改已保留在当前编辑器中。"}
+          </span>
           <button
             type="button"
             className="secondary"
             onClick={() => void onReload()}
           >
             读取服务器最新版
+          </button>
+        </div>
+      )}
+
+      {session.status === "error" && (
+        <div className="fm-md-conflict-bar" role="alert">
+          <span>{session.error || "剧本文档保存失败，本地草稿已保留。"}</span>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() =>
+              void onFlush({ throwOnError: true })
+                .then(() => onNotify("剧本文档已保存"))
+                .catch((err) =>
+                  onNotify(err instanceof Error ? err.message : "重试保存失败"),
+                )
+            }
+          >
+            重试保存
           </button>
         </div>
       )}
@@ -2361,7 +3123,7 @@ function MarkdownScriptEditor({
                         type="button"
                         onClick={() => {
                           insertSnippet(
-                            `![${a.name || "参考图"}](/media/${a.id})`,
+                            `![${(a.name || "参考图").replace(/[\[\]\r\n]/g, " ").trim()}](/media/${a.id})`,
                           );
                           setAssetMenuOpen(false);
                         }}
@@ -2434,15 +3196,9 @@ function MarkdownScriptEditor({
           value={session.draftBody}
           placeholder="在此编写短剧剧本、场次 S01、△动作镜头、角色对白或 Markdown 文档…"
           onChange={(e) => onUpdate(e.target.value)}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
-              e.preventDefault();
-              void onFlush().then(() => onNotify("剧本文档已保存"));
-            }
-          }}
         />
       ) : (
-        <div className="fm-md-rich-scroll">
+        <div ref={richScrollRef} className="fm-md-rich-scroll">
           <article className="fm-md-rich-paper">
             {richBlocks.length === 0 ? (
               <div
@@ -2454,26 +3210,38 @@ function MarkdownScriptEditor({
             ) : (
               richBlocks.map((block) => {
                 const isEditing = editingBlockId === block.id;
+                const isHighlighted = highlightedBlockId === block.id;
+                const highlightClass = isHighlighted
+                  ? " fm-rich-jump-highlight"
+                  : "";
                 const linkedShot = block.shotAnchor
                   ? anchorLinks[block.shotAnchor]
                   : undefined;
+                const cleanEditableText = stripShotCommentMarkers(
+                  block.rawText,
+                ).trimEnd();
 
                 if (isEditing) {
                   return (
-                    <div key={block.id} className="fm-rich-block-editing">
+                    <div
+                      key={block.id}
+                      data-block-id={block.id}
+                      className="fm-rich-block-editing"
+                    >
                       <textarea
                         autoFocus
                         rows={Math.max(
                           2,
-                          block.rawText.split("\n").length + 1,
+                          cleanEditableText.split("\n").length + 1,
                         )}
-                        defaultValue={block.rawText}
+                        defaultValue={cleanEditableText}
                         onBlur={(e) => {
                           setEditingBlockId(null);
-                          if (e.target.value !== block.rawText) {
+                          if (e.target.value !== cleanEditableText) {
                             replaceBlockLines(
                               block.lineStart,
                               block.lineEnd,
+                              block.rawText,
                               e.target.value,
                             );
                           }
@@ -2498,12 +3266,13 @@ function MarkdownScriptEditor({
                   return (
                     <div
                       key={block.id}
-                      className="fm-rich-scene-banner"
+                      data-block-id={block.id}
+                      className={"fm-rich-scene-banner" + highlightClass}
                       onClick={() => setEditingBlockId(block.id)}
                     >
                       <span className="fm-scene-tag">{block.sceneCode}</span>
                       <strong>
-                        {block.rawText.replace(/^#{1,4}\s*/, "")}
+                        {cleanEditableText.replace(/^#{1,4}\s*/, "")}
                       </strong>
                       <span className="fm-block-edit-hint">点击编辑</span>
                     </div>
@@ -2514,7 +3283,9 @@ function MarkdownScriptEditor({
                   return (
                     <div
                       key={block.id}
-                      className="fm-rich-action-beat"
+                      data-block-id={block.id}
+                      data-shot-anchor={block.shotAnchor}
+                      className={"fm-rich-action-beat" + highlightClass}
                       onClick={() => setEditingBlockId(block.id)}
                     >
                       <div className="fm-beat-top">
@@ -2552,7 +3323,9 @@ function MarkdownScriptEditor({
                           </span>
                         )}
                       </div>
-                      <p>{block.rawText.replace(/^[△▲]\s*/, "")}</p>
+                      <p>
+                        {cleanEditableText.replace(/^[△▲]\s*/, "").trim()}
+                      </p>
                     </div>
                   );
                 }
@@ -2561,7 +3334,9 @@ function MarkdownScriptEditor({
                   return (
                     <div
                       key={block.id}
-                      className="fm-rich-dialogue-row"
+                      data-block-id={block.id}
+                      data-shot-anchor={block.shotAnchor}
+                      className={"fm-rich-dialogue-row" + highlightClass}
                       onClick={() => setEditingBlockId(block.id)}
                     >
                       <span className="fm-dialogue-speaker">
@@ -2588,10 +3363,11 @@ function MarkdownScriptEditor({
                 return (
                   <div
                     key={block.id}
-                    className="fm-rich-markdown-block"
+                    data-block-id={block.id}
+                    className={"fm-rich-markdown-block" + highlightClass}
                     onClick={() => setEditingBlockId(block.id)}
                     dangerouslySetInnerHTML={{
-                      __html: renderSafeMarkdown(block.rawText),
+                      __html: renderSafeMarkdown(cleanEditableText),
                     }}
                   />
                 );
@@ -2639,7 +3415,10 @@ function CanvasNodeDocumentEditor({
     history?: boolean,
   ) => void;
   onFocusCanvasNode: (nodeId: string) => void;
-  onOpenLinkedScript: (docId: string, line?: number) => void;
+  onOpenLinkedScript: (
+    docId: string,
+    target?: { line?: number; anchor?: string; shotId?: string },
+  ) => void;
 }) {
   const resolved = resolveNode(node, runs);
   const incomingNodes = canvasDoc.edges
@@ -2655,6 +3434,10 @@ function CanvasNodeDocumentEditor({
   const scriptAnchor =
     typeof node.extra_params?.script_anchor === "string"
       ? node.extra_params.script_anchor
+      : null;
+  const scriptShotId =
+    typeof node.extra_params?.script_shot_id === "string"
+      ? node.extra_params.script_shot_id
       : null;
   const scriptLine =
     typeof node.extra_params?.script_line === "number"
@@ -2692,7 +3475,13 @@ function CanvasNodeDocumentEditor({
             <button
               type="button"
               className="secondary"
-              onClick={() => onOpenLinkedScript(scriptDocId, scriptLine)}
+              onClick={() =>
+                onOpenLinkedScript(scriptDocId, {
+                  line: scriptLine,
+                  anchor: scriptAnchor ?? undefined,
+                  shotId: scriptShotId ?? undefined,
+                })
+              }
             >
               <FileText size={14} />
               查看源剧本 {scriptAnchor ? `(${scriptAnchor})` : ""}

@@ -1,9 +1,11 @@
 import { parseBody, type Fields } from "./validation.js";
 export const chatContextFields: Fields = {
   project: { kind: "string", max: 80 },
-  node: { kind: "string", max: 80 },
+  node: { kind: "string", max: 80, default: "" },
   expected_revision: { kind: "integer", min: 1 },
   writeback: { kind: "boolean", strict: false, default: false },
+  script_ids: { kind: "strings", max: 6, optional: true },
+  node_ids: { kind: "strings", max: 6, optional: true },
 };
 const context = {
   kind: "object" as const,
@@ -43,6 +45,8 @@ export type ChatContextInput = {
   node: string;
   expected_revision: number;
   writeback: boolean;
+  script_ids?: string[];
+  node_ids?: string[];
 } | null;
 export type ChatSendInput = {
   uid: string;

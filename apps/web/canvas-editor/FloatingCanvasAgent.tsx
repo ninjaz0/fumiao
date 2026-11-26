@@ -77,7 +77,7 @@ export function FloatingCanvasAgent({
   const [mentionOpen, setMentionOpen] = useState(false);
   const [scriptList, setScriptList] = useState<ScriptDocumentSummary[]>([]);
   const [pinnedMentions, setPinnedMentions] = useState<
-    { key: string; label: string; snippet: string }[]
+    { key: string; kind: "script" | "node"; id: string; label: string; snippet: string }[]
   >([]);
 
   useEffect(() => {
@@ -145,17 +145,20 @@ export function FloatingCanvasAgent({
     el.addEventListener("pointerup", onUp);
   };
 
-  const addMention = (key: string, label: string, snippet: string) => {
+  const addMention = (
+    kind: "script" | "node",
+    id: string,
+    label: string,
+    snippet: string,
+  ) => {
+    const key = `${kind}:${id}`;
     setPinnedMentions((prev) =>
       prev.some((m) => m.key === key)
         ? prev
-        : [...prev.slice(-4), { key, label, snippet }],
+        : [...prev.slice(-4), { key, kind, id, label, snippet }],
     );
     setMentionOpen(false);
-    void navigator.clipboard
-      .writeText(`@${label} `)
-      .then(() => onNotify(`已引用 @${label} 上下文（可直接粘贴或提问）`))
-      .catch(() => onNotify(`已挂载 @${label} 上下文`));
+    onNotify(`已挂载 @${label} 正文至对话上下文（提问时将由服务端授权注入）`);
   };
 
   if (!visible) return null;
@@ -304,7 +307,7 @@ export function FloatingCanvasAgent({
                         key={s.id}
                         type="button"
                         onClick={() =>
-                          addMention(`script:${s.id}`, s.name, s.preview)
+                          addMention("script", s.id, s.name, s.preview)
                         }
                       >
                         <FileText size={13} />
@@ -322,7 +325,8 @@ export function FloatingCanvasAgent({
                         type="button"
                         onClick={() =>
                           addMention(
-                            `node:${n.id}`,
+                            "node",
+                            n.id,
                             n.title,
                             n.text || n.prompt,
                           )
@@ -355,11 +359,27 @@ export function FloatingCanvasAgent({
                   ? `剧本 · ${activeScript.path.split("/").at(-1)}`
                   : "画布与剧本助手")
               }
-              getContext={async () => ({
-                project: projectId,
-                node: selectedNode?.id || "",
-                expected_revision: await getCanvasRevision(),
-              })}
+              getContext={async () => {
+                const scriptIds = [
+                  ...(activeScript ? [activeScript.id] : []),
+                  ...pinnedMentions
+                    .filter((m) => m.kind === "script")
+                    .map((m) => m.id),
+                ].filter((v, i, arr) => Boolean(v) && arr.indexOf(v) === i);
+                const nodeIds = [
+                  ...(selectedNode ? [selectedNode.id] : []),
+                  ...pinnedMentions
+                    .filter((m) => m.kind === "node")
+                    .map((m) => m.id),
+                ].filter((v, i, arr) => Boolean(v) && arr.indexOf(v) === i);
+                return {
+                  project: projectId,
+                  node: selectedNode?.id || "",
+                  expected_revision: await getCanvasRevision(),
+                  ...(scriptIds.length ? { script_ids: scriptIds.slice(0, 6) } : {}),
+                  ...(nodeIds.length ? { node_ids: nodeIds.slice(0, 6) } : {}),
+                };
+              }}
               onApply={async (cid, message, mode) => {
                 await onApplyChatToCanvas(cid, message, mode);
               }}

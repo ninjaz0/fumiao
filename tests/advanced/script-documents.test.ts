@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { chatCanvasContext } from "@fumiao/original-api/chat-canvas.js";
 import { OriginalScriptDocuments } from "@fumiao/original-api/script-documents.js";
+import { chatContext } from "@fumiao/platform/chat-context.js";
 import { canvasesFixture } from "../helpers/canvases.js";
 
 test("Workspace script documents support CRUD, folder tree relocation, and suite templates", async () => {
@@ -248,6 +250,218 @@ test("Workspace script search and batch optimistic replace handle matches and co
     const afterB = await scripts.get(f.member, b.id, ws);
     assert.match(afterB.body_md, /林墨/);
     assert.match(afterB.body_md, /远处警笛声响起/);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("Recursive delete enforces descendant ownership, directory casing stays canonical, and suite rejects entry_type collisions", async () => {
+  const f = await canvasesFixture();
+  try {
+    const scripts = new OriginalScriptDocuments(f.p);
+    const ws = String(f.team.public_id);
+
+    // 1. Member creates folder "Scenes", another workspace author (f.admin) creates a script inside "scenes/Episode.md"
+    const dir = await scripts.create(
+      f.member,
+      { path: "Scenes", entry_type: "directory" },
+      ws,
+    );
+
+    const child = await scripts.create(
+      f.admin,
+      {
+        path: "scenes/Episode.md",
+        doc_kind: "script",
+        body_md: "同事撰写的剧本内容",
+      },
+      ws,
+    );
+    // Parent casing must canonicalize to existing directory "Scenes"
+    assert.equal(child.path, "Scenes/Episode.md");
+    assert.equal(child.parent_path, "Scenes");
+
+    // Case-only rename of folder ("Scenes" -> "scenes") must relocate descendants too!
+    const renamedDir = await scripts.update(
+      f.member,
+      dir.id,
+      { expected_revision: dir.revision, path: "scenes" },
+      ws,
+    );
+    assert.equal(renamedDir.path, "scenes");
+    const childAfterCaseRename = await scripts.get(f.member, child.id, ws);
+    assert.equal(childAfterCaseRename.path, "scenes/Episode.md");
+    assert.equal(childAfterCaseRename.parent_path, "scenes");
+
+    // Non-admin folder owner MUST NOT delete colleague's descendant document via recursive=true
+    await assert.rejects(
+      () => scripts.remove(f.member, dir.id, true, ws),
+      (err: any) => err?.status === 403,
+    );
+    const stillExists = await scripts.get(f.admin, child.id, ws);
+    assert.equal(stillExists.body_md, "同事撰写的剧本内容");
+
+    // Suite creation must reject when a directory occupies an expected .md file path
+    await scripts.create(
+      f.member,
+      { path: "冲突剧目/01_事件图谱与故事骨架.md", entry_type: "directory" },
+      ws,
+    );
+    await assert.rejects(
+      () =>
+        scripts.createSuite(
+          f.member,
+          { folder: "冲突剧目", project_title: "冲突剧目" },
+          ws,
+        ),
+      (err: any) => err?.status === 409,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("Unicode case-insensitive search, cross-canvas node search/replace, and server-verified @ references in chat context", async () => {
+  const f = await canvasesFixture();
+  try {
+    const scripts = new OriginalScriptDocuments(f.p);
+    const ws = String(f.team.public_id);
+
+    // 1. Unicode İ expansion does not shift match offsets
+    const unicodeDoc = await scripts.create(
+      f.member,
+      {
+        path: "unicode.md",
+        doc_kind: "notes",
+        body_md: "İabc 与 林默",
+      },
+      ws,
+    );
+    const uniHits = await scripts.search(
+      f.member,
+      { query: "abc", case_sensitive: false },
+      ws,
+    );
+    const uniFile = uniHits.files.find((x) => x.id === unicodeDoc.id);
+    assert.ok(uniFile);
+    assert.equal(uniFile.matches[0].text, "abc");
+
+    // 2. Cross-canvas search & optimistic replace across multiple canvases in workspace
+    const c1 = await f.canvases.create(f.member, { title: "画布 A" }, ws);
+    const c2 = await f.canvases.create(f.member, { title: "画布 B" }, ws);
+    const baseNode = (id: string, text: string) => ({
+      id,
+      type: "text" as const,
+      title: "镜头文稿",
+      x: 40,
+      y: 40,
+      width: 320,
+      height: 220,
+      text,
+      prompt: "",
+      color: "none",
+      media_id: null,
+      active_job: null,
+      use_media: false,
+      params: {
+        model: "gpt-image-2.6-sunburst",
+        ratio: "16:9",
+        seconds: 5,
+        resolution: "1K" as const,
+        quality: 768 as const,
+        image_quality: "high" as const,
+        fast_mode: true,
+        sampling_steps: 20 as const,
+        seed: null,
+        flow_source_job: null,
+        h3: null,
+        h3_refs: [],
+      },
+    });
+    const c1Saved = await f.canvases.save(f.member, c1.id, {
+      title: "画布 A",
+      expected_revision: c1.revision,
+      document: { nodes: [baseNode("n_a", "林默推开审讯室大门")], edges: [], shots: [] },
+    });
+    const c2Saved = await f.canvases.save(f.member, c2.id, {
+      title: "画布 B",
+      expected_revision: c2.revision,
+      document: { nodes: [baseNode("n_b", "天台上的林默回望城市")], edges: [], shots: [] },
+    });
+
+    const crossHits: any = await scripts.search(
+      f.member,
+      { query: "林默", case_sensitive: false },
+      ws,
+    );
+    assert.equal(crossHits.canvases.length, 2);
+
+    const crossReplaced: any = await scripts.replace(
+      f.member,
+      {
+        replacements: [],
+        canvas_replacements: [
+          {
+            canvas_id: c2.id,
+            expected_revision: c2Saved.revision,
+            nodes: [
+              {
+                node_id: "n_b",
+                expected_text: "天台上的林默回望城市",
+                next_text: "天台上的沈默回望城市",
+              },
+            ],
+          },
+        ],
+      },
+      ws,
+    );
+    assert.equal(crossReplaced.canvas_results[0].saved, true);
+    const c2After = await f.canvases.get(f.member, c2.id);
+    assert.equal(c2After.document.nodes[0].text, "天台上的沈默回望城市");
+
+    // Reject cross-workspace canvas_replacements even when caller owns the foreign canvas
+    const personalCanvas = await f.canvases.create(f.member, { title: "个人画布" });
+    const crossWsAttempt: any = await scripts.replace(
+      f.member,
+      {
+        replacements: [],
+        canvas_replacements: [
+          {
+            canvas_id: personalCanvas.id,
+            expected_revision: personalCanvas.revision,
+            nodes: [{ node_id: "n_x", expected_text: "a", next_text: "b" }],
+          },
+        ],
+      },
+      ws,
+    );
+    assert.equal(crossWsAttempt.canvas_results[0].saved, false);
+    assert.match(String(crossWsAttempt.canvas_results[0].error), /工作区/);
+
+    // 3. Server-verified @ script_ids and @ node_ids in chatCanvasContext (including empty selected node)
+    const ctx = await f.p.db.transaction((sql) =>
+      chatCanvasContext(f.p, sql, f.member, String(f.team.id), {
+        project: c1.id,
+        node: "",
+        expected_revision: c1Saved.revision,
+        writeback: false,
+        script_ids: [unicodeDoc.id],
+        node_ids: ["n_a"],
+      } as any),
+    );
+    assert.ok(Array.isArray(ctx.references));
+    assert.equal(ctx.references.length, 2);
+    const builtMessages = chatContext([
+      {
+        role: "user",
+        content: "请根据引用的剧本与节点续写下一镜",
+        state: "complete",
+        context: JSON.stringify(ctx),
+      },
+    ]);
+    assert.match(builtMessages[1].content, /林默推开审讯室大门/);
+    assert.match(builtMessages[1].content, /unicode\.md/);
   } finally {
     await f.cleanup();
   }

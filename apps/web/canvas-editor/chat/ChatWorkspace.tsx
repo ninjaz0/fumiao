@@ -11,7 +11,7 @@ import {chatSettingsHref,hasAvailableChatModels} from './guidance';
 export type Message={id:number;role:'user'|'assistant';content:string;state:string;model:string;author_name:string;error?:string;context:string;reply_to:number|null};
 type Snapshot={conversation:Conversation;messages:Message[]};
 type Config={models:Record<string,{label:string;provider:string}>;pricing:{revision:number;items:{key:string;amount:number|null}[]};credits:{available:number}};
-export type ChatContext={project:string;node:string;expected_revision:number;writeback?:boolean};
+export type ChatContext={project:string;node:string;expected_revision:number;writeback?:boolean;script_ids?:string[];node_ids?:string[]};
 export type ApplyOptions={automatic?:boolean;expectedText?:string;uid?:string};
 type Props={workspace:number;userId:number;isAdmin?:boolean;configureLabel?:string;configureHref?:string;onConfigureModels?:(event:MouseEvent<HTMLButtonElement|HTMLAnchorElement>)=>void;compact?:boolean;inline?:boolean;onActivityChange?:(active:boolean)=>void;project?:string;node?:string;nodeTitle?:string;getContext?:()=>Promise<ChatContext>;onApply?:(cid:string,message:Message,mode:'new'|'replace',options?:ApplyOptions)=>Promise<void>;onClose?:()=>void;openCanvas?:(event:MouseEvent<HTMLAnchorElement>)=>void;onRecharge?:()=>void};
 class ApiError extends Error {constructor(public status:number,message:string){super(message)}}

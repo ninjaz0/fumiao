@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyMatchSpansReplacement,
+  detectAmbiguousShotMatches,
   extractScriptAnchorsMap,
   parseScriptBreakdown,
   replaceCanvasNodeText,
   searchCanvasTextNodes,
+  stampScriptShotIds,
   syncScriptBreakdownToCanvas,
 } from "../../apps/web/canvas-editor/script-fusion.js";
 import type { Doc } from "../../apps/web/canvas-editor/types.js";
@@ -234,4 +237,258 @@ test("syncScriptBreakdownToCanvas output passes strict OriginalCanvases.save val
   } finally {
     await f.cleanup();
   }
+});
+
+test("Inserting a shot before an existing shot preserves generated video on the original shot instead of misattaching by positional index", () => {
+  const scriptV1 = `# 密室逃脱
+### S01 走廊 夜 内
+人物：林默
+
+△林默在黑暗中推开沉重的铁门。
+林默：门没锁。
+`;
+  const b1 = parseScriptBreakdown(scriptV1, { docId: "doc_insert", docPath: "ep1.md" });
+  const sync1 = syncScriptBreakdownToCanvas(
+    { schemaVersion: 1, nodes: [], edges: [], shots: [] },
+    b1,
+    { includeAssets: true, generationMode: "omni_ref", videoModel: "MiniMax H3", imageModel: "gpt-image-2.6-sunburst" },
+  );
+  const doorVideoId = sync1.anchorToNodeId["S01-01"];
+  assert.ok(doorVideoId);
+
+  // User generates video #88 on "打开门"
+  const docWithDoorMedia: Doc = {
+    ...sync1.document,
+    nodes: sync1.document.nodes.map((n) =>
+      n.id === doorVideoId ? { ...n, media_id: "b".repeat(32), active_job: 88 } : n,
+    ),
+  };
+
+  // User inserts a brand-new shot "摸索钥匙" BEFORE "推开沉重的铁门"
+  const scriptV2 = `# 密室逃脱
+### S01 走廊 夜 内
+人物：林默
+
+△特写林默手指在风衣口袋里摸索黄铜钥匙。
+
+△林默在黑暗中推开沉重的铁门。
+林默：门没锁。
+`;
+  const b2 = parseScriptBreakdown(scriptV2, { docId: "doc_insert", docPath: "ep1.md" });
+  assert.equal(b2.shots.length, 2);
+
+  const sync2 = syncScriptBreakdownToCanvas(docWithDoorMedia, b2, {
+    includeAssets: true,
+    generationMode: "omni_ref",
+    videoModel: "MiniMax H3",
+    imageModel: "gpt-image-2.6-sunburst",
+  });
+
+  const newShot1Id = sync2.anchorToNodeId["S01-01"];
+  const shiftedDoorId = sync2.anchorToNodeId["S01-02"];
+  assert.notEqual(newShot1Id, doorVideoId);
+  assert.equal(shiftedDoorId, doorVideoId);
+
+  const newShot1Node = sync2.document.nodes.find((n) => n.id === newShot1Id)!;
+  const shiftedDoorNode = sync2.document.nodes.find((n) => n.id === shiftedDoorId)!;
+  assert.equal(newShot1Node.media_id, null);
+  assert.equal(newShot1Node.active_job, null);
+  assert.equal(shiftedDoorNode.media_id, "b".repeat(32));
+  assert.equal(shiftedDoorNode.active_job, 88);
+  assert.deepEqual(sync2.document.shots, [newShot1Id, shiftedDoorId]);
+
+  // Also verify stamped shot IDs survive total prose rewrite + insertion, and ambiguous cases surface cleanly
+  const stamped = stampScriptShotIds(scriptV1);
+  assert.equal(stamped.changed, true);
+  assert.match(stamped.markdown, /<!--\s*fm-shot:sh_[a-z0-9_]+\s*-->/);
+
+  // Ambiguous case: unstamped script where shot count changed AND old text was completely rewritten
+  const scriptAmbiguous = `# 密室逃脱
+### S01 走廊 夜 内
+人物：林默
+
+△全新的第一镜：监控摄像头红光闪烁。
+
+△全新的第二镜：铁门轰然敞开露出阶梯。
+`;
+  const bAmb = parseScriptBreakdown(scriptAmbiguous, { docId: "doc_insert", docPath: "ep1.md" });
+  const ambiguities = detectAmbiguousShotMatches(docWithDoorMedia, bAmb);
+  assert.equal(ambiguities.length, 1);
+  assert.equal(ambiguities[0].existingVideoNodeId, doorVideoId);
+
+  // User confirms binding existing media node to S01-02
+  const syncConfirmed = syncScriptBreakdownToCanvas(docWithDoorMedia, bAmb, {
+    includeAssets: true,
+    explicitNodeBindings: { "S01-02": doorVideoId },
+  });
+  assert.equal(syncConfirmed.anchorToNodeId["S01-02"], doorVideoId);
+  const s01Node = syncConfirmed.document.nodes.find(
+    (n) => n.id === syncConfirmed.anchorToNodeId["S01-01"],
+  )!;
+  assert.equal(s01Node.active_job, null);
+});
+
+test("grid_preview sync is idempotent across replays, prunes removed script asset edges, and preserves manual edges", () => {
+  const scriptWithTwoChars = `# 测试
+### S01 密室 夜 内
+人物：齐夏、人羊
+
+△特写齐夏抬头看向人羊。
+齐夏：你是谁？
+
+△中景人羊缓缓摘下面具。
+`;
+  const b1 = parseScriptBreakdown(scriptWithTwoChars, { docId: "doc_grid", docPath: "grid.md" });
+  const sync1 = syncScriptBreakdownToCanvas(
+    { schemaVersion: 1, nodes: [], edges: [], shots: [] },
+    b1,
+    { includeAssets: true, generationMode: "grid_preview", gridLayout: "3x3" },
+  );
+  const initialEdgeCount = sync1.document.edges.length;
+  const initialNodeCount = sync1.document.nodes.length;
+
+  // Replay identical grid_preview sync -> edge count and node count MUST stay identical!
+  const sync2 = syncScriptBreakdownToCanvas(sync1.document, b1, {
+    includeAssets: true,
+    generationMode: "grid_preview",
+    gridLayout: "3x3",
+  });
+  assert.equal(sync2.document.nodes.length, initialNodeCount);
+  assert.equal(sync2.document.edges.length, initialEdgeCount);
+
+  // Add a manual user-created sticky/text reference edge to shot 1 video node
+  const shot1VideoId = sync2.anchorToNodeId["S01-01"];
+  const docWithManualEdge: Doc = {
+    ...sync2.document,
+    nodes: [
+      ...sync2.document.nodes,
+      {
+        ...sync2.document.nodes.find((n) => n.type === "text")!,
+        id: "manual_director_note",
+        title: "导演手写备注",
+        text: "保持冷色调",
+        extra_params: undefined,
+      },
+    ],
+    edges: [
+      ...sync2.document.edges,
+      { id: "edge_manual_keep", source: "manual_director_note", target: shot1VideoId },
+    ],
+  };
+
+  // Remove 人羊 from shot 1 & scene cast, switch mode from grid_preview to omni_ref
+  const scriptReduced = `# 测试
+### S01 密室 夜 内
+人物：齐夏
+
+△特写齐夏独自抬头看向镜头。
+齐夏：只剩我一个人了。
+
+△中景空荡的密室圆桌。
+`;
+  const bReduced = parseScriptBreakdown(scriptReduced, { docId: "doc_grid", docPath: "grid.md" });
+  const sync3 = syncScriptBreakdownToCanvas(docWithManualEdge, bReduced, {
+    includeAssets: true,
+    generationMode: "omni_ref",
+  });
+
+  // Manual edge MUST still exist!
+  assert.ok(sync3.document.edges.some((e) => e.id === "edge_manual_keep"));
+  // Removed character "人羊" asset node MUST NO LONGER be wired to S01-01!
+  const renyangNode = sync3.document.nodes.find((n) => n.title.includes("人羊"));
+  if (renyangNode) {
+    assert.equal(
+      sync3.document.edges.some(
+        (e) => e.source === renyangNode.id && e.target === shot1VideoId,
+      ),
+      false,
+    );
+  }
+});
+
+test("searchCanvasTextNodes handles Unicode case-folding accurately, reports truncation, and applyMatchSpansReplacement patches exact spans", () => {
+  const repeated = Array.from({ length: 60 }, (_, i) => `词条${i}:林默`).join(" ");
+  const doc: Doc = {
+    schemaVersion: 1,
+    edges: [],
+    shots: [],
+    nodes: [
+      {
+        id: "n_uni",
+        type: "text",
+        title: "Unicode 节点",
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 200,
+        text: "İabc 测试 AbC",
+        prompt: "",
+        color: "none",
+        media_id: null,
+        active_job: null,
+        use_media: false,
+        params: {
+          model: "",
+          ratio: "16:9",
+          seconds: 5,
+          resolution: "1K",
+          quality: 768,
+          image_quality: "high",
+          fast_mode: true,
+          sampling_steps: 20,
+          seed: null,
+          flow_source_job: null,
+          h3: null,
+          h3_refs: [],
+        },
+      },
+      {
+        id: "n_many",
+        type: "text",
+        title: "高频节点",
+        x: 0,
+        y: 300,
+        width: 300,
+        height: 200,
+        text: repeated,
+        prompt: "",
+        color: "none",
+        media_id: null,
+        active_job: null,
+        use_media: false,
+        params: {
+          model: "",
+          ratio: "16:9",
+          seconds: 5,
+          resolution: "1K",
+          quality: 768,
+          image_quality: "high",
+          fast_mode: true,
+          sampling_steps: 20,
+          seed: null,
+          flow_source_job: null,
+          h3: null,
+          h3_refs: [],
+        },
+      },
+    ],
+  };
+
+  const uniHits = searchCanvasTextNodes(doc, { id: "c1", title: "画布" }, "abc", false);
+  assert.equal(uniHits.length, 1);
+  assert.equal(uniHits[0].matches.length, 2);
+  assert.equal(uniHits[0].matches[0].text, "abc");
+  assert.equal(uniHits[0].matches[1].text, "AbC");
+  assert.equal(uniHits[0].truncated, false);
+
+  const patched = applyMatchSpansReplacement(
+    "İabc 测试 AbC",
+    [uniHits[0].matches[0]],
+    "XYZ",
+  );
+  assert.equal(patched, "İXYZ 测试 AbC");
+
+  const manyHits = searchCanvasTextNodes(doc, { id: "c1", title: "画布" }, "林默", false, 50);
+  assert.equal(manyHits[0].matches.length, 50);
+  assert.equal(manyHits[0].truncated, true);
 });

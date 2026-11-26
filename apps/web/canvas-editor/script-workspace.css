@@ -132,7 +132,7 @@
 /* Main Document Workspace Shell */
 .fm-doc-workspace {
   position: absolute;
-  top: 58px;
+  top: 66px;
   left: 0;
   right: var(--fm-agent-width, 0px);
   bottom: 0;
@@ -1835,6 +1835,13 @@
   box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.65);
 }
 
+.fm-rich-jump-highlight {
+  outline: 2px solid var(--cv-accent, #3b82f6);
+  outline-offset: 3px;
+  border-radius: 10px;
+  transition: outline-color 0.25s ease;
+}
+
 @media (max-width: 1480px) {
   .canvas-workspace:has(.fm-floating-agent.is-docked) .fm-surface-switcher {
     left: 420px;
@@ -1842,10 +1849,17 @@
   }
 }
 
-@media (max-width: 900px) {
-  .fm-surface-switcher {
-    position: static;
-    transform: none;
+@media (max-width: 980px) {
+  .fm-surface-switcher,
+  .canvas-workspace:has(.fm-floating-agent.is-docked) .fm-surface-switcher {
+    position: absolute;
+    top: 68px;
+    left: calc((100% - var(--fm-agent-width, 0px)) / 2);
+    transform: translateX(-50%);
+    z-index: 22;
+  }
+  .fm-doc-workspace {
+    top: 108px;
   }
 }
 
@@ -1854,7 +1868,7 @@
     --fm-agent-width: 0px !important;
   }
   .fm-doc-workspace {
-    top: 96px;
+    top: 108px;
     right: 0;
     flex-direction: column;
   }

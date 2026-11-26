@@ -143,7 +143,10 @@ import { GridCropModal } from "./GridCropModal";
 import { PrecheckCostModal } from "./PrecheckCostModal";
 import { ReferencePromptInput } from "./ReferencePromptInput";
 import { FloatingCanvasAgent } from "./FloatingCanvasAgent";
-import { ScriptWorkspace } from "./ScriptWorkspace";
+import {
+  ScriptWorkspace,
+  type ScriptWorkspaceHandle,
+} from "./ScriptWorkspace";
 import { scriptApi, type WorkspaceCanvasSummary } from "./script-api";
 import { SkillEditorModal } from "./SkillEditorModal";
 import { captureFrame } from "./videoFrame";
@@ -809,9 +812,11 @@ export function CanvasWorkspace({
     path: string;
     body_md: string;
   } | null>(null);
+  const scriptWorkspaceRef = useRef<ScriptWorkspaceHandle | null>(null);
   const [scriptJumpReq, setScriptJumpReq] = useState<{
     docId: string;
     anchor?: string;
+    shotId?: string;
     line?: number;
     seq: number;
   } | null>(null);
@@ -2446,13 +2451,20 @@ export function CanvasWorkspace({
     setRetryingLeave(true);
     setMenu(null);
     try {
-      await doc.flush();
-      location.assign(workspaceURL(url));
+      await Promise.all([
+        doc.flush(),
+        scriptWorkspaceRef.current?.flushAll() ?? Promise.resolve(),
+      ]);
+      scriptWorkspaceRef.current?.prepareLeave();
+      doc.leave(workspaceURL(url));
     } catch (e) {
+      const canvasRetained = doc.remember();
+      const scriptsRetained =
+        scriptWorkspaceRef.current?.rememberAll() ?? true;
       setLeaveFailure({
         path: url,
         message: (e as Error).message,
-        retained: doc.remember(),
+        retained: canvasRetained && scriptsRetained,
       });
     } finally {
       leaveInFlight.current = false;
@@ -3467,11 +3479,16 @@ export function CanvasWorkspace({
                     typeof single.extra_params?.script_anchor === "string"
                       ? single.extra_params.script_anchor
                       : undefined;
+                  const shotId =
+                    typeof single.extra_params?.script_shot_id === "string"
+                      ? single.extra_params.script_shot_id
+                      : undefined;
                   setScriptWorkspaceMounted(true);
                   setSurface("document");
                   setScriptJumpReq((prev) => ({
                     docId,
                     anchor,
+                    shotId,
                     line,
                     seq: (prev?.seq ?? 0) + 1,
                   }));
@@ -5182,7 +5199,10 @@ export function CanvasWorkspace({
       )}
       {(surface === "document" || scriptWorkspaceMounted) && (
         <ScriptWorkspace
+          ref={scriptWorkspaceRef}
           active={surface === "document"}
+          workspace={project.workspace}
+          userId={initial.me.id}
           canvasId={project.id}
           canvasTitle={doc.value.title}
           canvasDoc={doc.value.document}
@@ -5295,8 +5315,16 @@ export function CanvasWorkspace({
           doc.acceptRemote(result, snapshot);
         }}
         onProposalApplied={() => {
-          void doc.reload();
-          notify("提案已批准并落图到当前画布");
+          void (async () => {
+            try {
+              await scriptWorkspaceRef.current?.flushAll();
+            } catch {
+              scriptWorkspaceRef.current?.rememberAll();
+            }
+            scriptWorkspaceRef.current?.prepareLeave();
+            doc.reload();
+            notify("提案已批准并落图到当前画布");
+          })();
         }}
         onOpenSkills={() => setSkillsModal(true)}
         onNotify={notify}
@@ -5315,7 +5343,7 @@ export function CanvasWorkspace({
         >
           <p className="error">{leaveFailure.message}</p>
           <p>当前修改尚未同步到服务器。{leaveFailure.retained
-            ? "本地草稿已保留。画布仍可访问时，可在此标签页重新打开继续编辑。"
+            ? "本地草稿已保留。画布或剧本文档仍可访问时，重新打开即可继续编辑。"
             : "浏览器无法保留本地草稿，离开后未保存的修改将丢失。"}</p>
           <div className="dialog-actions" style={{ flexWrap: "wrap" }}>
             <button className="secondary" disabled={retryingLeave} onClick={() => setLeaveFailure(null)}>
@@ -5329,10 +5357,13 @@ export function CanvasWorkspace({
               下载本地副本
             </button>
             <button className="secondary" disabled={retryingLeave} onClick={() => {
-              if (leaveFailure.retained && !doc.remember()) {
+              const okCanvas = doc.remember();
+              const okScripts = scriptWorkspaceRef.current?.rememberAll() ?? true;
+              if (leaveFailure.retained && !(okCanvas && okScripts)) {
                 setLeaveFailure({ ...leaveFailure, retained: false });
                 return;
               }
+              scriptWorkspaceRef.current?.prepareLeave();
               doc.leave(workspaceURL(leaveFailure.path));
             }}>
               仍要离开
