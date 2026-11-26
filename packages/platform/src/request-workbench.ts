@@ -117,16 +117,22 @@ export function requestWorkbenchAdapter(
           })),
         },
       }),
-    requestCapacity: ({ jobs, health, stamp }) =>
+    requestCapacity: ({ job, jobs, health, stamp }) =>
       sync("requestCapacity", {
-        jobs: jobs.map(({ status, remoteId }) => ({ status, remoteId })),
+        ...(job ? { job: { kind: job.kind, model: job.model } } : {}),
+        jobs: jobs.map(({ kind, status, remoteId }) => ({
+          kind,
+          status,
+          remoteId,
+        })),
         health,
         stamp,
       }),
     queuePlan(ctx, tools) {
       const predict = requestQueueTools(tools).predict;
-      const jobs = ctx.jobs.map(({ id, kind, status, remoteId }) => ({
+      const jobs = ctx.jobs.map(({ id, connection, kind, status, remoteId }) => ({
         id,
+        ...(connection ? { connection } : {}),
         kind,
         status,
         remoteId,
@@ -155,6 +161,9 @@ export function requestWorkbenchAdapter(
           stamp: ctx.stamp,
           imageEnabled: ctx.imageEnabled,
           runs,
+          ...(ctx.connectionLimits
+            ? { connectionLimits: ctx.connectionLimits }
+            : {}),
         },
         predictions,
         remaining,

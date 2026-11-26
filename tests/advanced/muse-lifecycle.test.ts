@@ -70,9 +70,15 @@ test("Muse admission retry is durable across queue wakeups, duplicate workers an
     assert.equal(running.remote_id, museTaskId);
     assert.equal(running.attempts, 2);
     assert.equal(running.request_retry_at, null);
-    assert.equal(f.requests.length, 2);
-    assert.equal(f.requests[0].idempotency, j.id.replaceAll("-", ""));
-    assert.equal(f.requests[1].idempotency, f.requests[0].idempotency);
+    const posts = f.requests.filter((r) => r.method === "POST");
+    assert.equal(posts.length, 2);
+    assert.equal(posts[0].idempotency, j.id.replaceAll("-", ""));
+    assert.equal(posts[1].idempotency, posts[0].idempotency);
+    assert.ok(
+      f.requests
+        .filter((r) => r.method !== "POST")
+        .every((r) => r.method === "GET" && r.path.endsWith("/" + museTaskId)),
+    );
     assert.deepEqual(
       (
         await f.db.query(

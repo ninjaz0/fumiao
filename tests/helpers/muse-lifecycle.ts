@@ -61,6 +61,21 @@ export async function museLifecycleFixture(
       res.writeHead(401).end();
       return;
     }
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end('{"status":"ready","accounts":1}');
+      return;
+    }
+    if (req.method === "GET" && req.url === "/v1/models") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end('{"data":[{"id":"muse-image"},{"id":"muse-video"}]}');
+      return;
+    }
+    if (req.method === "GET" && req.url === "/v1/queue") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end('{"capacity":2,"maintenance":0,"tasks":[]}');
+      return;
+    }
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk);
     requests.push({

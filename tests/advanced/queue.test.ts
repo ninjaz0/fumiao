@@ -20,6 +20,13 @@ import { museQueue } from "@fumiao/plugin-muse/queue.js";
 import { flowQueue } from "@fumiao/plugin-flow/queue.js";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
+import { StudioPackages } from "@fumiao/platform/studio-packages.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalGeneration } from "@fumiao/original-api/generation.js";
+import { OriginalEstimates } from "@fumiao/original-api/estimate.js";
+import { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
 import type { ProviderPlugin, QueueContext } from "@fumiao/plugin-sdk/index.js";
 
 const plugin: ProviderPlugin = {
@@ -748,3 +755,2291 @@ for (const provider of ["flow", "muse"]) {
     },
   );
 }
+
+test("Muse 2.1 dispatches multi-account video jobs in parallel without /v1/queue and clamps forecasts to connection concurrency", async () => {
+  const f = await databaseFixture();
+  const videoPosts: { key: string; prompt: string }[] = [];
+  let createdTasks = 0;
+  let readyAccounts = 3;
+  let queuePayload: Record<string, unknown> | null = null;
+  const taskStatuses = new Map<string, Record<string, unknown>>();
+  const server = createServer(async (req, res) => {
+    if (req.headers.authorization !== "Bearer multi-account-key")
+      return void res.writeHead(401).end();
+    if (req.url === "/readyz")
+      return void res.end(
+        JSON.stringify({
+          status: "ready",
+          accounts: readyAccounts,
+          browser_running: true,
+        }),
+      );
+    if (req.url === "/v1/models")
+      return void res.end('{"data":[{"id":"muse-video"},{"id":"muse-image"}]}');
+    if (req.url === "/health")
+      return void res.end('{"backend_running":true,"has_active_tokens":true}');
+    if (req.url === "/v1/queue" && queuePayload !== null)
+      return void res.end(JSON.stringify(queuePayload));
+    if (req.method === "POST" && req.url === "/v1/videos") {
+      const parts: Buffer[] = [];
+      for await (const chunk of req) parts.push(chunk);
+      const body = JSON.parse(Buffer.concat(parts).toString());
+      const id = "task_" + String(++createdTasks).padStart(32, "0");
+      videoPosts.push({
+        key: String(req.headers["idempotency-key"]),
+        prompt: body.prompt,
+      });
+      const now = Math.floor(Date.now() / 1000);
+      taskStatuses.set(id, {
+        id,
+        status: "processing",
+        phase: "generating",
+        created_at: now,
+        started_at: now,
+        generating_at: now,
+      });
+      return void res.end(
+        JSON.stringify({ id, status: "queued", created_at: now }),
+      );
+    }
+    if (req.url?.startsWith("/v1/videos/task_")) {
+      const id = req.url.slice("/v1/videos/".length);
+      const state = taskStatuses.get(id);
+      if (!state) return void res.writeHead(404).end();
+      return void res.end(JSON.stringify(state));
+    }
+    // Standard muse2api has no /v1/queue endpoint -> 404
+    res.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const base =
+    "http://127.0.0.1:" + (server.address() as { port: number }).port;
+  const sandboxSend: typeof chatHttp = (url, options) => {
+    assert.equal(url.origin, "https://1.1.1.1");
+    assert.ok(options.lookup);
+    return chatHttp(new URL(url.pathname, base), {
+      ...options,
+      lookup: undefined,
+    });
+  };
+  f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+  try {
+    await f.p.registry.initializeStudio(f.db, false);
+    const identity = new OriginalIdentity(f.p);
+    const creds = { name: "admin", password: "multi-account-password" };
+    await identity.bootstrap({ ...creds, nickname: "管理员" });
+    const actor = await identity.actor(await identity.login(creds, "fixture"));
+    const packages = new StudioPackages(f.p);
+    const musePkg = JSON.parse(
+      await readFile("plugins/muse/muse.fmplugin.json", "utf8"),
+    );
+    const flowPkg = JSON.parse(
+      await readFile("plugins/flow/flow.fmplugin.json", "utf8"),
+    );
+    await packages.install(actor, musePkg);
+    await packages.install(actor, flowPkg);
+
+    const { id: museConnId } = await f.p.createConnection(
+      actor,
+      {
+        name: "Muse 多账号池",
+        pluginId: "muse",
+        version: musePkg.adapterVersion,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "multi-account-key" },
+      },
+      true,
+    );
+    const { id: flowConnId } = await f.p.createConnection(
+      actor,
+      {
+        name: "Flow 默认单并发",
+        pluginId: "flow",
+        version: flowPkg.adapterVersion,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "multi-account-key" },
+      },
+      true,
+    );
+    const savedConns = await f.p.studioConnections(actor);
+    assert.equal(
+      savedConns.find((c) => c.id === museConnId)?.concurrency,
+      16,
+    );
+    assert.equal(
+      savedConns.find((c) => c.id === flowConnId)?.concurrency,
+      1,
+    );
+
+    const catalog = new StudioCatalog(f.db);
+    const prices = await catalog.prices();
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        Object.fromEntries(prices.items.map((i) => [i.key, 2])),
+        prices.revision,
+      ),
+    );
+    const museListed = (await packages.list(actor)).find(
+      (p) => p.id === "muse",
+    )!;
+    await packages.change(actor, "muse", museListed.revision, "enable");
+    const ws = await one(
+      f.db,
+      "SELECT * FROM workspaces WHERE owner_id=$1 AND kind='personal'",
+      [actor.id],
+    );
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, ws.id, 100, randomUUID(), "adjust"),
+    );
+
+    await new QueueHealthPoller(f.p).refresh(museConnId);
+    const g = new OriginalGeneration(f.p);
+    const submitVideo = async (label: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "muse-video",
+          prompt: label,
+          ratio: "16:9",
+          seconds: 5,
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+
+    const j1 = await submitVideo("镜头 1");
+    const j2 = await submitVideo("镜头 2");
+    const j3 = await submitVideo("镜头 3");
+    const j4 = await submitVideo("镜头 4");
+
+    await Promise.all([
+      new Executor(f.p).execute(j1.id),
+      new Executor(f.p).execute(j2.id),
+      new Executor(f.p).execute(j3.id),
+      new Executor(f.p).execute(j4.id),
+    ]);
+
+    assert.equal(videoPosts.length, 3, "all 3 accounts dispatch in parallel");
+    const statesAfterSubmit = (
+      await f.db.query(
+        "SELECT id,state,remote_id FROM jobs WHERE id=ANY($1::uuid[])",
+        [[j1.id, j2.id, j3.id, j4.id]],
+      )
+    ).rows;
+    assert.equal(
+      statesAfterSubmit.filter((r) => r.state === "running" && r.remote_id)
+        .length,
+      3,
+    );
+    assert.equal(
+      statesAfterSubmit.filter((r) => r.state === "queued").length,
+      1,
+    );
+
+    // Poll the 3 running jobs so their provider clocks advance phase -> generating
+    for (const row of statesAfterSubmit.filter((r) => r.state === "running")) {
+      await new Executor(f.p).execute(row.id);
+    }
+
+    // Settle one of the 3 running jobs via real poll failure to test connection.concurrency = 2 < accounts = 3
+    const runningRows = statesAfterSubmit.filter((r) => r.state === "running");
+    taskStatuses.set(runningRows[2].remote_id, {
+      id: runningRows[2].remote_id,
+      status: "failed",
+    });
+    await new Executor(f.p).execute(runningRows[2].id);
+
+    const currentConn = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === museConnId,
+    )!;
+    await f.p.updateConnection(actor, museConnId, {
+      revision: currentConn.revision,
+      enabled: true,
+      concurrency: 2,
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [museConnId],
+    );
+    await new QueueHealthPoller(f.p).refresh(museConnId);
+
+    // With 2 generating jobs and concurrency=2 (even though readyz.accounts=3):
+    // 1) Executor must NOT dispatch the 4th queued job
+    const queuedRow = statesAfterSubmit.find((r) => r.state === "queued")!;
+    await new Executor(f.p).execute(queuedRow.id);
+    assert.equal(videoPosts.length, 3);
+
+    // 2) QueueForecasts and OriginalEstimates must clamp lanes to 2 (not 3),
+    //    so neither reports an immediately free 3rd lane (median === 0).
+    const forecast = await new QueueForecasts(f.p).forWorkspace(actor, ws.id);
+    assert.notEqual(
+      forecast.jobs[queuedRow.id].eta.median,
+      0,
+      "queued job must not see a phantom 3rd lane when connection.concurrency is 2",
+    );
+    assert.equal(forecast.jobs[queuedRow.id].eta.reason, "observing");
+
+    const est = await new OriginalEstimates(f.p).read(
+      actor,
+      {
+        kind: "video",
+        model: "muse-video",
+        ratio: "16:9",
+        seconds: 5,
+        sampling_steps: 20,
+        refs: [],
+      },
+      String(ws.public_id),
+    );
+    assert.notEqual(
+      est.queue?.median,
+      0,
+      "estimate must also clamp lanes to connection.concurrency=2",
+    );
+    assert.equal(est.queue?.reason, "observing");
+
+    // When readyz.accounts = 5, external tasks = 2, and connection.concurrency = 2,
+    // upstream still has 5 - 2 = 3 free accounts (>= connection.concurrency = 2).
+    // With 0 running Fumiao jobs, QueueForecasts/OriginalEstimates must NOT subtract
+    // external tasks AFTER clamping to concurrency (min(5, 2) - 2 = 0 -> false muse_busy).
+    for (const r of runningRows.slice(0, 2)) {
+      taskStatuses.set(r.remote_id, { id: r.remote_id, status: "failed" });
+      await new Executor(f.p).execute(r.id);
+    }
+    readyAccounts = 5;
+    queuePayload = { tasks: [{ id: "ext-1" }, { id: "ext-2" }] };
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [museConnId],
+    );
+    await new QueueHealthPoller(f.p).refresh(museConnId);
+
+    const extForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.notEqual(
+      extForecast.jobs[queuedRow.id].eta.reason,
+      "muse_busy",
+      "5 accounts - 2 external leaves 3 upstream slots (>= concurrency 2), so lane is open",
+    );
+    assert.equal(extForecast.jobs[queuedRow.id].eta.median, 0);
+
+    const extEst = await new OriginalEstimates(f.p).read(
+      actor,
+      {
+        kind: "video",
+        model: "muse-video",
+        ratio: "16:9",
+        seconds: 5,
+        sampling_steps: 20,
+        refs: [],
+      },
+      String(ws.public_id),
+    );
+    assert.notEqual(extEst.queue?.reason, "muse_busy");
+    assert.equal(extEst.queue?.median, 0);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+    await f.cleanup();
+  }
+});
+
+test("Muse 2.1.0 caps concurrent image admission and forecast lanes at 8 while preserving 12-account shared image+video capacity", async () => {
+  const f = await databaseFixture();
+  const pngBytes = await sharp({
+    create: { width: 8, height: 8, channels: 3, background: "#2266aa" },
+  })
+    .png()
+    .toBuffer();
+  let taskSeq = 0;
+  let image429Count = 0;
+  const tasks = new Map<
+    string,
+    { kind: "image" | "video"; status: string; phase?: string; url?: string }
+  >();
+  const server = createServer(async (req, res) => {
+    if (req.headers.authorization !== "Bearer muse-12-key")
+      return void res.writeHead(401).end();
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/readyz")
+      return void res.end(
+        JSON.stringify({
+          status: "ready",
+          accounts: 12,
+          browser_running: true,
+        }),
+      );
+    if (req.url === "/v1/models")
+      return void res.end(
+        JSON.stringify({
+          data: [{ id: "muse-image" }, { id: "muse-video" }],
+        }),
+      );
+    if (req.url === "/v1/media/done.png") {
+      res.setHeader("Content-Type", "image/png");
+      return void res.end(pngBytes);
+    }
+    if (req.method === "POST" && req.url === "/v1/images/tasks") {
+      for await (const _ of req) {
+        // drain
+      }
+      const activeImages = [...tasks.values()].filter(
+        (t) =>
+          t.kind === "image" && ["queued", "processing"].includes(t.status),
+      ).length;
+      if (activeImages >= 8) {
+        image429Count++;
+        res.statusCode = 429;
+        return void res.end(
+          JSON.stringify({ detail: "Image queue is full; retry later" }),
+        );
+      }
+      taskSeq++;
+      const id = `task_${String(taskSeq).padStart(32, "0")}`;
+      const now = Math.floor(Date.now() / 1000);
+      tasks.set(id, { kind: "image", status: "processing", phase: "generating" });
+      res.statusCode = 202;
+      return void res.end(
+        JSON.stringify({ id, task_id: id, status: "queued", created_at: now }),
+      );
+    }
+    if (req.method === "POST" && req.url === "/v1/videos") {
+      for await (const _ of req) {
+        // drain
+      }
+      taskSeq++;
+      const id = `task_${String(taskSeq).padStart(32, "0")}`;
+      const now = Math.floor(Date.now() / 1000);
+      tasks.set(id, { kind: "video", status: "processing", phase: "generating" });
+      return void res.end(
+        JSON.stringify({ id, status: "queued", created_at: now }),
+      );
+    }
+    if (req.url?.startsWith("/v1/images/tasks/task_")) {
+      const id = req.url.slice("/v1/images/tasks/".length);
+      const t = tasks.get(id);
+      if (!t) return void res.writeHead(404).end();
+      const now = Math.floor(Date.now() / 1000);
+      return void res.end(
+        JSON.stringify({
+          id,
+          status: t.status,
+          ...(t.phase ? { phase: t.phase } : {}),
+          ...(t.url ? { url: t.url } : {}),
+          created_at: now,
+          started_at: now,
+          generating_at: now,
+        }),
+      );
+    }
+    if (req.url?.startsWith("/v1/videos/task_")) {
+      const id = req.url.slice("/v1/videos/".length);
+      const t = tasks.get(id);
+      if (!t) return void res.writeHead(404).end();
+      const now = Math.floor(Date.now() / 1000);
+      return void res.end(
+        JSON.stringify({
+          id,
+          status: t.status,
+          ...(t.phase ? { phase: t.phase } : {}),
+          created_at: now,
+          started_at: now,
+          generating_at: now,
+        }),
+      );
+    }
+    res.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const base =
+    "http://127.0.0.1:" + (server.address() as { port: number }).port;
+  const sandboxSend: typeof chatHttp = (url, options) => {
+    assert.equal(url.origin, "https://1.1.1.1");
+    assert.ok(options.lookup);
+    return chatHttp(new URL(url.pathname, base), {
+      ...options,
+      lookup: undefined,
+    });
+  };
+  f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+  try {
+    await f.p.registry.initializeStudio(f.db, false);
+    const identity = new OriginalIdentity(f.p);
+    const creds = { name: "admin", password: "muse-12-accounts-password" };
+    await identity.bootstrap({ ...creds, nickname: "管理员" });
+    const actor = await identity.actor(await identity.login(creds, "fixture"));
+    const packages = new StudioPackages(f.p);
+    const musePkg = JSON.parse(
+      await readFile("plugins/muse/muse.fmplugin.json", "utf8"),
+    );
+    await packages.install(actor, musePkg);
+    const { id: museConnId } = await f.p.createConnection(
+      actor,
+      {
+        name: "Muse 12账号池",
+        pluginId: "muse",
+        version: musePkg.adapterVersion,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "muse-12-key" },
+      },
+      true,
+    );
+    const catalog = new StudioCatalog(f.db);
+    const prices = await catalog.prices();
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        Object.fromEntries(prices.items.map((i) => [i.key, 1])),
+        prices.revision,
+      ),
+    );
+    const museListed = (await packages.list(actor)).find(
+      (p) => p.id === "muse",
+    )!;
+    await packages.change(actor, "muse", museListed.revision, "enable");
+    const ws = await one(
+      f.db,
+      "SELECT * FROM workspaces WHERE owner_id=$1 AND kind='personal'",
+      [actor.id],
+    );
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, ws.id, 200, randomUUID(), "adjust"),
+    );
+
+    // Seed calibration samples for muse-image (20s) and muse-video (60s)
+    const timingPolicy = JSON.stringify(musePkg.manifest.timing);
+    const imgFeatures = JSON.stringify({
+      kind: "image",
+      model: "muse-image",
+      executor: "muse-api",
+      workflow: "muse2api-native-v1",
+      width: 0,
+      height: 0,
+      native_ratio: "1:1",
+      seconds: 0,
+      steps: 0,
+      video_mode: "image",
+      quality: "native",
+      refs: 0,
+      ref_pixels: 0,
+      hardware: "muse-api",
+      profile: {},
+      runtime_id: "",
+      cold: null,
+    });
+    const vidFeatures = JSON.stringify({
+      kind: "video",
+      model: "muse-video",
+      executor: "muse-api",
+      workflow: "muse2api-native-v1",
+      width: 0,
+      height: 0,
+      native_ratio: "16:9",
+      seconds: 5,
+      steps: 0,
+      video_mode: "t2v",
+      quality: "native",
+      refs: 0,
+      ref_pixels: 0,
+      hardware: "muse-api",
+      profile: {},
+      runtime_id: "",
+      cold: null,
+    });
+    for (let i = 0; i < 6; i++) {
+      await f.db.query(
+        "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse',$2,$3,'image','muse-image',$4,$5,$5,$6,'done','done')",
+        [randomUUID(), musePkg.adapterVersion, timingPolicy, imgFeatures, 1000 + i * 100, 1020 + i * 100],
+      );
+      await f.db.query(
+        "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse',$2,$3,'video','muse-video',$4,$5,$5,$6,'done','done')",
+        [randomUUID(), musePkg.adapterVersion, timingPolicy, vidFeatures, 2000 + i * 100, 2060 + i * 100],
+      );
+    }
+
+    await new QueueHealthPoller(f.p).refresh(museConnId);
+    const g = new OriginalGeneration(f.p);
+    const submitImage = async (label: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("image", {
+          uid: randomUUID(),
+          model: "muse-image",
+          prompt: label,
+          ratio: "1:1",
+          resolution: "1K",
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+    const submitVideo = async (label: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "muse-video",
+          prompt: label,
+          ratio: "16:9",
+          seconds: 5,
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+
+    const images = [];
+    for (let i = 1; i <= 9; i++) images.push(await submitImage(`图 ${i}`));
+    const videos = [];
+    for (let i = 1; i <= 4; i++) videos.push(await submitVideo(`视频 ${i}`));
+
+    // 1) Forecast check before dispatch:
+    //    - Images 1..8 start immediately (median 0)
+    //    - 9th image must wait for one of the 8 image lanes (median > 0)
+    //    - Videos 1..4 submitted AFTER 9th image still start immediately (median 0) on shared slots 9..12
+    const preForecast = await new QueueForecasts(f.p).forWorkspace(actor, ws.id);
+    for (const img of images.slice(0, 8)) {
+      assert.equal(preForecast.jobs[img.id].eta.source, "queue");
+      assert.equal(preForecast.jobs[img.id].eta.median, 0);
+    }
+    assert.equal(preForecast.jobs[images[8].id].eta.source, "queue");
+    assert.ok(
+      preForecast.jobs[images[8].id].eta.median > 0,
+      `9th image must wait for 8-image cap, got median=${preForecast.jobs[images[8].id].eta.median}`,
+    );
+    for (const vid of videos) {
+      assert.equal(preForecast.jobs[vid.id].eta.source, "queue");
+      assert.equal(
+        preForecast.jobs[vid.id].eta.median,
+        0,
+        "videos 1..4 must use remaining shared slots 9..12 without waiting behind 9th image",
+      );
+    }
+    // 5th video candidate estimate sees all 12 shared slots occupied -> median > 0
+    const estFifthVideo = await new OriginalEstimates(f.p).read(
+      actor,
+      {
+        kind: "video",
+        model: "muse-video",
+        ratio: "16:9",
+        seconds: 5,
+        sampling_steps: 20,
+        refs: [],
+      },
+      String(ws.public_id),
+    );
+    assert.ok((estFifthVideo.queue?.median ?? 0) > 0);
+
+    // 2) Dispatch check:
+    //    - Executor dispatches Images 1..8 and Videos 1..4 (12 active total)
+    //    - 9th image remains queued locally with zero upstream 429s
+    const executor = new Executor(f.p);
+    for (const j of [...images, ...videos]) {
+      await executor.execute(j.id);
+    }
+    assert.equal(image429Count, 0, "must never hit upstream 429 image limit");
+    const afterDispatch = (
+      await f.db.query(
+        "SELECT id,kind,state,remote_id,request_retry_at FROM jobs WHERE id=ANY($1::uuid[])",
+        [[...images, ...videos].map((j) => j.id)],
+      )
+    ).rows;
+    const byId = new Map(afterDispatch.map((r) => [r.id, r]));
+    for (const img of images.slice(0, 8)) {
+      assert.equal(byId.get(img.id)!.state, "running");
+    }
+    assert.equal(byId.get(images[8].id)!.state, "queued");
+    assert.equal(byId.get(images[8].id)!.request_retry_at, null);
+    for (const vid of videos) {
+      assert.equal(byId.get(vid.id)!.state, "running");
+    }
+
+    // 3) Advance generating phase on active jobs and verify live forecast still keeps 9th image waiting
+    //    while 5th video candidate also waits on full 12 shared slots
+    for (const j of [...images.slice(0, 8), ...videos]) {
+      await executor.execute(j.id);
+    }
+    const liveForecast = await new QueueForecasts(f.p).forWorkspace(actor, ws.id);
+    assert.ok(liveForecast.jobs[images[8].id].eta.median > 0);
+
+    // 4) Complete Image 1 -> frees both 1 image slot and 1 shared slot -> 9th image dispatches cleanly
+    const firstImgRemoteId = byId.get(images[0].id)!.remote_id;
+    tasks.set(firstImgRemoteId, {
+      kind: "image",
+      status: "completed",
+      url: "/v1/media/done.png",
+    });
+    await executor.execute(images[0].id);
+    const doneFirst = await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+      images[0].id,
+    ]);
+    assert.equal(doneFirst.state, "completed");
+
+    await executor.execute(images[8].id);
+    const ninthAfter = await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+      images[8].id,
+    ]);
+    assert.equal(ninthAfter.state, "running");
+    assert.equal(image429Count, 0);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+    await f.cleanup();
+  }
+});
+
+test("Muse 2.1.0 deducts external image occupancy from 8-image cap while external video only consumes shared capacity, and isolates same-version edited endpoints", async () => {
+  const f = await databaseFixture();
+  const pngBytes = await sharp({
+    create: { width: 8, height: 8, channels: 3, background: "#448866" },
+  })
+    .png()
+    .toBuffer();
+  let seqA = 0;
+  let activeOnA = 0;
+  let maxConcurrentOnA = 0;
+  let allowedKeysA = new Set(["key-endpoint-a"]);
+  const healthAuthsA: string[] = [];
+  const completedOnA = new Set<string>();
+  const serverA = createServer(async (req, res) => {
+    if (req.url === "/readyz")
+      healthAuthsA.push(String(req.headers.authorization ?? ""));
+    const token = String(req.headers.authorization ?? "").replace(
+      /^Bearer\s+/i,
+      "",
+    );
+    if (!allowedKeysA.has(token)) return void res.writeHead(401).end();
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/readyz")
+      return void res.end(
+        JSON.stringify({ status: "ready", accounts: 1, browser_running: true }),
+      );
+    if (req.url === "/v1/models")
+      return void res.end(
+        JSON.stringify({
+          data: [{ id: "muse-image" }, { id: "muse-video" }],
+        }),
+      );
+    if (req.url === "/v1/media/a.png") {
+      res.setHeader("Content-Type", "image/png");
+      return void res.end(pngBytes);
+    }
+    if (req.method === "POST" && req.url === "/v1/images/tasks") {
+      for await (const _ of req) {
+        // drain
+      }
+      seqA++;
+      activeOnA++;
+      maxConcurrentOnA = Math.max(maxConcurrentOnA, activeOnA);
+      const id = `task_a${String(seqA).padStart(31, "0")}`;
+      const now = Math.floor(Date.now() / 1000);
+      res.statusCode = 202;
+      return void res.end(
+        JSON.stringify({ id, task_id: id, status: "queued", created_at: now }),
+      );
+    }
+    if (req.url?.startsWith("/v1/images/tasks/task_")) {
+      const id = req.url.slice("/v1/images/tasks/".length);
+      const now = Math.floor(Date.now() / 1000);
+      if (completedOnA.has(id))
+        return void res.end(
+          JSON.stringify({
+            id,
+            status: "completed",
+            url: "/v1/media/a.png",
+            created_at: now - 25,
+            started_at: now - 20,
+            generating_at: now - 20,
+            finished_at: now,
+          }),
+        );
+      return void res.end(
+        JSON.stringify({
+          id,
+          status: "processing",
+          phase: "generating",
+          created_at: now,
+          started_at: now,
+          generating_at: now,
+        }),
+      );
+    }
+    res.writeHead(404).end();
+  });
+
+  let seqB = 0;
+  let externalTasksB: { id: string; kind?: string }[] = [];
+  let exposeQueueEndpointB = false;
+  let allowedKeysB = new Set(["key-endpoint-b"]);
+  const tasksB = new Map<string, { kind: string; status: string }>();
+  const serverB = createServer(async (req, res) => {
+    const token = String(req.headers.authorization ?? "").replace(
+      /^Bearer\s+/i,
+      "",
+    );
+    if (!allowedKeysB.has(token)) return void res.writeHead(401).end();
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/readyz")
+      return void res.end(
+        JSON.stringify({ status: "ready", accounts: 12, browser_running: true }),
+      );
+    if (req.url === "/v1/models")
+      return void res.end(
+        JSON.stringify({
+          data: [{ id: "muse-image" }, { id: "muse-video" }],
+        }),
+      );
+    if (req.url === "/v1/queue") {
+      if (!exposeQueueEndpointB) return void res.writeHead(404).end();
+      const own = [...tasksB.entries()]
+        .filter(([, v]) => v.status === "processing")
+        .map(([id, v]) => ({ id, kind: v.kind }));
+      return void res.end(
+        JSON.stringify({
+          capacity: 12,
+          maintenance: 0,
+          tasks: [...own, ...externalTasksB],
+        }),
+      );
+    }
+    if (
+      req.method === "POST" &&
+      (req.url === "/v1/images/tasks" || req.url === "/v1/videos")
+    ) {
+      for await (const _ of req) {
+        // drain
+      }
+      seqB++;
+      const kind = req.url === "/v1/images/tasks" ? "image" : "video";
+      const id = `task_b${String(seqB).padStart(31, "0")}`;
+      tasksB.set(id, { kind, status: "processing" });
+      const now = Math.floor(Date.now() / 1000);
+      res.statusCode = kind === "image" ? 202 : 200;
+      return void res.end(
+        JSON.stringify({ id, task_id: id, status: "queued", created_at: now }),
+      );
+    }
+    if (
+      req.url?.startsWith("/v1/images/tasks/task_") ||
+      req.url?.startsWith("/v1/videos/task_")
+    ) {
+      const id = req.url.split("/").at(-1)!;
+      const now = Math.floor(Date.now() / 1000);
+      return void res.end(
+        JSON.stringify({
+          id,
+          status: "processing",
+          phase: "generating",
+          created_at: now,
+          started_at: now,
+          generating_at: now,
+        }),
+      );
+    }
+    res.writeHead(404).end();
+  });
+
+  serverA.listen(0, "127.0.0.1");
+  serverB.listen(0, "127.0.0.1");
+  await Promise.all([once(serverA, "listening"), once(serverB, "listening")]);
+  const baseA =
+    "http://127.0.0.1:" + (serverA.address() as { port: number }).port;
+  const baseB =
+    "http://127.0.0.1:" + (serverB.address() as { port: number }).port;
+  const sandboxSend: typeof chatHttp = (url, options) => {
+    assert.ok(options.lookup);
+    const targetBase = url.origin === "https://1.1.1.1" ? baseA : baseB;
+    return chatHttp(new URL(url.pathname, targetBase), {
+      ...options,
+      lookup: undefined,
+    });
+  };
+  f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+  try {
+    await f.p.registry.initializeStudio(f.db, false);
+    const identity = new OriginalIdentity(f.p);
+    const creds = { name: "admin", password: "endpoint-edit-password" };
+    await identity.bootstrap({ ...creds, nickname: "管理员" });
+    const actor = await identity.actor(await identity.login(creds, "fixture"));
+    const packages = new StudioPackages(f.p);
+    const musePkg = JSON.parse(
+      await readFile("plugins/muse/muse.fmplugin.json", "utf8"),
+    );
+    await packages.install(actor, musePkg);
+    const { id: connId } = await f.p.createConnection(
+      actor,
+      {
+        name: "Muse 切换测试",
+        pluginId: "muse",
+        version: musePkg.adapterVersion,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "key-endpoint-a" },
+      },
+      true,
+    );
+    const catalog = new StudioCatalog(f.db);
+    const prices = await catalog.prices();
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        Object.fromEntries(prices.items.map((i) => [i.key, 1])),
+        prices.revision,
+      ),
+    );
+    const museListed = (await packages.list(actor)).find(
+      (p) => p.id === "muse",
+    )!;
+    await packages.change(actor, "muse", museListed.revision, "enable");
+    const ws = await one(
+      f.db,
+      "SELECT * FROM workspaces WHERE owner_id=$1 AND kind='personal'",
+      [actor.id],
+    );
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, ws.id, 200, randomUUID(), "adjust"),
+    );
+
+    const timingPolicy = JSON.stringify(musePkg.manifest.timing);
+    const imgFeatures = JSON.stringify({
+      kind: "image",
+      model: "muse-image",
+      executor: "muse-api",
+      workflow: "muse2api-native-v1",
+      width: 0,
+      height: 0,
+      native_ratio: "1:1",
+      seconds: 0,
+      steps: 0,
+      video_mode: "image",
+      quality: "native",
+      refs: 0,
+      ref_pixels: 0,
+      hardware: "muse-api",
+      profile: {},
+      runtime_id: "",
+      cold: null,
+    });
+    const vidFeatures = JSON.stringify({
+      kind: "video",
+      model: "muse-video",
+      executor: "muse-api",
+      workflow: "muse2api-native-v1",
+      width: 0,
+      height: 0,
+      native_ratio: "16:9",
+      seconds: 5,
+      steps: 0,
+      video_mode: "t2v",
+      quality: "native",
+      refs: 0,
+      ref_pixels: 0,
+      hardware: "muse-api",
+      profile: {},
+      runtime_id: "",
+      cold: null,
+    });
+    for (let i = 0; i < 20; i++) {
+      await f.db.query(
+        "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse',$2,$3,'image','muse-image',$4,$5,$5,$6,'done','done')",
+        [
+          randomUUID(),
+          musePkg.adapterVersion,
+          timingPolicy,
+          imgFeatures,
+          1000 + i * 100,
+          1020 + i * 100,
+        ],
+      );
+      await f.db.query(
+        "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse',$2,$3,'video','muse-video',$4,$5,$5,$6,'done','done')",
+        [
+          randomUUID(),
+          musePkg.adapterVersion,
+          timingPolicy,
+          vidFeatures,
+          2000 + i * 100,
+          2060 + i * 100,
+        ],
+      );
+    }
+
+    const g = new OriginalGeneration(f.p);
+    const executor = new Executor(f.p);
+    const submitImage = async (label: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("image", {
+          uid: randomUUID(),
+          model: "muse-image",
+          prompt: label,
+          ratio: "1:1",
+          resolution: "1K",
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+    const submitVideo = async (label: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "muse-video",
+          prompt: label,
+          ratio: "16:9",
+          seconds: 5,
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+
+    // --- Part 0: Editing ONLY publicUrl on 1-account Endpoint A shares 1-account capacity AND keeps earlier queued jobs in the same forecast cohort ---
+    await new QueueHealthPoller(f.p).refresh(connId);
+    const pubA1 = await submitImage("Endpoint A publicUrl改前运行");
+    const pubAQueuedBefore = await submitImage("Endpoint A publicUrl改前候排");
+    const connInitial = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connId,
+    )!;
+    await f.p.updateConnection(actor, connId, {
+      revision: connInitial.revision,
+      enabled: true,
+      concurrency: 16,
+      config: {
+        baseUrl: "https://1.1.1.1",
+        apiKey: "key-endpoint-a",
+        publicUrl: "https://alias-a.example.com/muse",
+      },
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+    const pubA2 = await submitImage("Endpoint A publicUrl改后候排");
+
+    await executor.execute(pubA1.id);
+    await executor.execute(pubA1.id); // generating phase on Endpoint A
+    await executor.execute(pubA2.id);
+    assert.equal(
+      maxConcurrentOnA,
+      1,
+      "editing only publicUrl must still share 1-account Endpoint A capacity",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [pubA1.id])).state,
+      "running",
+    );
+    assert.equal(
+      (
+        await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+          pubAQueuedBefore.id,
+        ])
+      ).state,
+      "queued",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [pubA2.id])).state,
+      "queued",
+    );
+    const pubAForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(
+      pubAForecast.jobs[pubAQueuedBefore.id].eta.source,
+      "queue",
+      "earlier runnable job before publicUrl-only edit must stay in calibrated queue cohort rather than observing",
+    );
+    assert.equal(pubAForecast.jobs[pubAQueuedBefore.id].eta.ahead, 0);
+    assert.ok(pubAForecast.jobs[pubAQueuedBefore.id].eta.median > 0);
+    assert.equal(pubAForecast.jobs[pubA2.id].eta.source, "queue");
+    assert.equal(
+      pubAForecast.jobs[pubA2.id].eta.ahead,
+      1,
+      "post-publicUrl-edit queued job must count earlier runnable pre-edit queued job ahead of it",
+    );
+    assert.ok(
+      pubAForecast.jobs[pubA2.id].eta.median >
+        pubAForecast.jobs[pubAQueuedBefore.id].eta.median,
+      "post-publicUrl-edit queued job must wait behind both running job and earlier pre-edit queued job",
+    );
+
+    for (const job of [pubA1, pubAQueuedBefore, pubA2]) {
+      const currentState = (
+        await one(f.db, "SELECT state FROM jobs WHERE id=$1", [job.id])
+      ).state;
+      if (currentState === "queued") await executor.execute(job.id);
+      const remote = (
+        await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [job.id])
+      ).remote_id;
+      completedOnA.add(remote);
+      activeOnA--;
+      await executor.execute(job.id);
+    }
+    assert.equal(maxConcurrentOnA, 1);
+
+    // --- Part 0.5: Key rotation on 1-account Endpoint A shares queue occupancy while keeping frozen health credentials ---
+    const rotRunningOld = await submitImage("Endpoint A 旧密钥运行中");
+    const rotQueuedOld = await submitImage("Endpoint A 旧密钥候排");
+    await executor.execute(rotRunningOld.id);
+    await executor.execute(rotRunningOld.id); // generating on Endpoint A with old key
+    assert.equal(activeOnA, 1);
+
+    // Save rotated key on Studio connection first, accept new job, then rotate upstream key in-place (old key invalidated, new key active)
+    const connBeforeKeyRot = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connId,
+    )!;
+    await f.p.updateConnection(actor, connId, {
+      revision: connBeforeKeyRot.revision,
+      enabled: true,
+      concurrency: 16,
+      config: {
+        baseUrl: "https://1.1.1.1",
+        apiKey: "key-endpoint-a-rotated",
+        publicUrl: "https://alias-a.example.com/muse",
+      },
+    });
+    const rotQueuedNew = await submitImage("Endpoint A 新密钥候排");
+    // Before new key takes effect on upstream, refreshing health sees 401 and new job stays queued
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+    await executor.execute(rotQueuedNew.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [rotQueuedNew.id]))
+        .state,
+      "queued",
+    );
+
+    // Upstream rotates key without restarting: old key is now 401, new key is 200, rotRunningOld is still running in upstream queue
+    allowedKeysA = new Set(["key-endpoint-a-rotated"]);
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+    assert.equal(
+      (
+        await one(f.db, "SELECT queue_health FROM connections WHERE id=$1", [
+          connId,
+        ])
+      ).queue_health.ready,
+      true,
+    );
+
+    const rotForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(rotForecast.jobs[rotQueuedNew.id].eta.source, "queue");
+    assert.ok(
+      rotForecast.jobs[rotQueuedNew.id].eta.median > 0,
+      "new-key queued job must see old-key running job occupying Endpoint A's 1 account",
+    );
+    assert.equal(rotForecast.jobs[rotQueuedOld.id].eta.source, "none");
+    assert.equal(rotForecast.jobs[rotQueuedOld.id].eta.reason, "observing");
+
+    // Retrying dispatch of new-key job while old-key job is still running MUST NOT send a 2nd concurrent job to Endpoint A
+    await executor.execute(rotQueuedNew.id);
+    assert.equal(
+      maxConcurrentOnA,
+      1,
+      "rotating apiKey on the same Muse upstream must never split 1-account active occupancy into two pools",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [rotQueuedNew.id]))
+        .state,
+      "queued",
+    );
+
+    // Dispatching old-key queued job probes health with frozen old key (401 -> unready), never borrowing new-key health
+    healthAuthsA.length = 0;
+    const freshExecAfterRot = new Executor(f.p);
+    await freshExecAfterRot.execute(rotQueuedOld.id);
+    assert.ok(
+      healthAuthsA.includes("Bearer key-endpoint-a"),
+      "health probe for old-key job must authenticate with its frozen credential",
+    );
+    const rotOldRowWhileRevoked = await one(
+      f.db,
+      "SELECT state,attempts,request_note FROM jobs WHERE id=$1",
+      [rotQueuedOld.id],
+    );
+    assert.equal(rotOldRowWhileRevoked.state, "queued");
+    assert.equal(rotOldRowWhileRevoked.attempts, 0);
+    assert.equal(rotOldRowWhileRevoked.request_note, "等待 Muse 就绪");
+
+    // Finish old-key running job on upstream (allow status/media read or settle once upstream finishes)
+    allowedKeysA = new Set(["key-endpoint-a", "key-endpoint-a-rotated"]);
+    const rotOldRunningRemote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [
+        rotRunningOld.id,
+      ])
+    ).remote_id;
+    completedOnA.add(rotOldRunningRemote);
+    activeOnA--;
+    await executor.execute(rotRunningOld.id);
+    assert.equal(
+      (
+        await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+          rotRunningOld.id,
+        ])
+      ).state,
+      "completed",
+    );
+
+    // Keep old key revoked while slot is now empty: old-key queued job still refuses to borrow new-key health, while retrying new-key job dispatches!
+    allowedKeysA = new Set(["key-endpoint-a-rotated"]);
+    await new Executor(f.p).execute(rotQueuedOld.id);
+    assert.equal(
+      (
+        await one(f.db, "SELECT attempts FROM jobs WHERE id=$1", [
+          rotQueuedOld.id,
+        ])
+      ).attempts,
+      0,
+    );
+    await executor.execute(rotQueuedNew.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [rotQueuedNew.id]))
+        .state,
+      "running",
+    );
+    assert.equal(maxConcurrentOnA, 1);
+
+    // If old key is temporarily re-enabled while new-key job is running, old-key queued job still respects new-key active occupancy
+    allowedKeysA = new Set(["key-endpoint-a", "key-endpoint-a-rotated"]);
+    await new Executor(f.p).execute(rotQueuedOld.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [rotQueuedOld.id]))
+        .state,
+      "queued",
+    );
+    assert.equal(maxConcurrentOnA, 1);
+
+    // Drain rotQueuedNew then retry rotQueuedOld once slot frees
+    const rotNewRemote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [
+        rotQueuedNew.id,
+      ])
+    ).remote_id;
+    completedOnA.add(rotNewRemote);
+    activeOnA--;
+    await executor.execute(rotQueuedNew.id);
+    const drainOldExec = new Executor(f.p);
+    await drainOldExec.execute(rotQueuedOld.id);
+    const rotOldQueuedRemote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [
+        rotQueuedOld.id,
+      ])
+    ).remote_id;
+    completedOnA.add(rotOldQueuedRemote);
+    activeOnA--;
+    await drainOldExec.execute(rotQueuedOld.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [rotQueuedOld.id]))
+        .state,
+      "completed",
+    );
+    assert.equal(maxConcurrentOnA, 1);
+
+    // Reset Endpoint A to single key-endpoint-a before Part A
+    allowedKeysA = new Set(["key-endpoint-a"]);
+    const connAfterKeyRot = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connId,
+    )!;
+    await f.p.updateConnection(actor, connId, {
+      revision: connAfterKeyRot.revision,
+      enabled: true,
+      concurrency: 16,
+      config: { baseUrl: "https://1.1.1.1", apiKey: "key-endpoint-a" },
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+
+    // --- Part A (Item 3): Same-version edit from 1-account Endpoint A to 12-account Endpoint B ---
+    const jobA1 = await submitImage("Endpoint A 图 1");
+    const jobA2 = await submitImage("Endpoint A 图 2");
+
+    const connBeforeEdit = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connId,
+    )!;
+    await f.p.updateConnection(actor, connId, {
+      revision: connBeforeEdit.revision,
+      enabled: true,
+      concurrency: 16,
+      config: { baseUrl: "https://8.8.8.8", apiKey: "key-endpoint-b" },
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+    assert.equal(
+      (
+        await one(f.db, "SELECT queue_health FROM connections WHERE id=$1", [
+          connId,
+        ])
+      ).queue_health.capacity,
+      12,
+    );
+
+    // QueueForecasts must NOT use Endpoint B's capacity=12 for jobA1/jobA2 frozen on Endpoint A
+    const forecastAfterEdit = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(forecastAfterEdit.jobs[jobA1.id].eta.source, "none");
+    assert.equal(forecastAfterEdit.jobs[jobA1.id].eta.reason, "observing");
+    assert.equal(forecastAfterEdit.jobs[jobA2.id].eta.source, "none");
+    assert.equal(forecastAfterEdit.jobs[jobA2.id].eta.reason, "observing");
+    // Meanwhile OriginalEstimates for a new Endpoint B submission sees Endpoint B's 12 accounts -> median 0
+    const estB = await new OriginalEstimates(f.p).read(
+      actor,
+      {
+        kind: "image",
+        model: "muse-image",
+        ratio: "1:1",
+        seconds: 5,
+        sampling_steps: 20,
+        refs: [],
+      },
+      String(ws.public_id),
+    );
+    assert.equal(estB.queue?.source, "queue");
+    assert.equal(estB.queue?.median, 0);
+
+    // Executor must probe Endpoint A (1 account) for jobA1/jobA2 and dispatch ONLY jobA1
+    await executor.execute(jobA1.id);
+    await executor.execute(jobA2.id);
+    assert.equal(maxConcurrentOnA, 1, "must never concurrently send 2 jobs to 1-account Endpoint A");
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [jobA1.id])).state,
+      "running",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [jobA2.id])).state,
+      "queued",
+    );
+
+    // Finish jobA1 and jobA2 sequentially on Endpoint A
+    const a1Remote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [jobA1.id])
+    ).remote_id;
+    completedOnA.add(a1Remote);
+    activeOnA--;
+    await executor.execute(jobA1.id);
+    await executor.execute(jobA2.id);
+    const a2Remote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [jobA2.id])
+    ).remote_id;
+    completedOnA.add(a2Remote);
+    activeOnA--;
+    await executor.execute(jobA2.id);
+    assert.equal(maxConcurrentOnA, 1);
+
+    // --- Part B (Item 2): External image vs external video occupancy on Endpoint B ---
+    exposeQueueEndpointB = true;
+    externalTasksB = [{ id: "ext-img-1", kind: "image" }];
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+
+    const bImages = [];
+    for (let i = 1; i <= 8; i++) bImages.push(await submitImage(`B 图 ${i}`));
+    const bVideo = await submitVideo("B 视频 1");
+
+    // Dispatch 7 local images first and advance to generating
+    for (const img of bImages.slice(0, 7)) {
+      await executor.execute(img.id);
+      await executor.execute(img.id);
+    }
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+
+    // With 7 local images + 1 external image = 8 images on upstream:
+    // - 8th local image (= 9th total image) predicts wait (median > 0) and stays queued on execute
+    // - local video predicts immediate start (median === 0) and dispatches immediately
+    const extImgForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    if (!(extImgForecast.jobs[bImages[7].id].eta.median > 0)) {
+      const bConnSnapshot = await one(
+        f.db,
+        "SELECT revision,queue_health_revision,queue_health FROM connections WHERE id=$1",
+        [connId],
+      );
+      const runningDiag = bImages.slice(0, 7).map((img) => ({
+        id: img.id,
+        forecast: extImgForecast.jobs[img.id],
+      }));
+      assert.fail(
+        `8th local image must wait when 1 external image already occupies the 8th image slot: ` +
+          JSON.stringify({
+            connection: bConnSnapshot,
+            running7: runningDiag,
+            eighthEta: extImgForecast.jobs[bImages[7].id]?.eta,
+          }),
+      );
+    }
+    assert.equal(extImgForecast.jobs[bVideo.id].eta.median, 0);
+
+    await executor.execute(bImages[7].id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [bImages[7].id]))
+        .state,
+      "queued",
+    );
+    await executor.execute(bVideo.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [bVideo.id]))
+        .state,
+      "running",
+    );
+
+    // Now switch external occupancy from external image to external video:
+    // 8th local image now predicts immediate start (median === 0) and dispatches!
+    externalTasksB = [{ id: "ext-vid-1", kind: "video" }];
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+
+    const extVidForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(extVidForecast.jobs[bImages[7].id].eta.median, 0);
+
+    // --- Part C: Editing ONLY publicUrl AND rotating apiKey on 12-account Endpoint B preserve 8-image cap & pre-edit queued ordering ---
+    await executor.execute(bVideo.id); // advance video to generating
+    externalTasksB = [];
+    const connOnB = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connId,
+    )!;
+    await f.p.updateConnection(actor, connId, {
+      revision: connOnB.revision,
+      enabled: true,
+      concurrency: 16,
+      config: {
+        baseUrl: "https://8.8.8.8/",
+        apiKey: "key-endpoint-b",
+        publicUrl: "https://alias-b.example.com/muse",
+      },
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+
+    // bImages[7] (8th image) is still queued BEFORE publicUrl edit; bImage9AfterPubEdit (9th image) is queued AFTER publicUrl edit
+    const bImage9AfterPubEdit = await submitImage("B publicUrl改后第9图");
+    const bVideo2AfterPubEdit = await submitVideo("B publicUrl改后第2视频");
+    const pubBQueuedForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(pubBQueuedForecast.jobs[bImages[7].id].eta.source, "queue");
+    assert.equal(pubBQueuedForecast.jobs[bImages[7].id].eta.median, 0);
+    assert.ok(
+      pubBQueuedForecast.jobs[bImage9AfterPubEdit.id].eta.median > 0,
+      "9th image after publicUrl-only edit must account for 8th pre-edit queued image claiming the 8th image lane",
+    );
+    assert.equal(pubBQueuedForecast.jobs[bVideo2AfterPubEdit.id].eta.median, 0);
+
+    // Now dispatch 8th image (bImages[7]) so 8 images are running, then rotate apiKey on Endpoint B in-place
+    await executor.execute(bImages[7].id);
+    await executor.execute(bImages[7].id); // generating
+    allowedKeysB = new Set(["key-endpoint-b-rotated"]);
+    const connOnBBeforeKeyRot = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connId,
+    )!;
+    await f.p.updateConnection(actor, connId, {
+      revision: connOnBBeforeKeyRot.revision,
+      enabled: true,
+      concurrency: 16,
+      config: {
+        baseUrl: "https://8.8.8.8/",
+        apiKey: "key-endpoint-b-rotated",
+        publicUrl: "https://alias-b.example.com/muse",
+      },
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+
+    const bImageAfterKeyRot = await submitImage("B 轮换密钥后第9图");
+    const rotBForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.ok(
+      rotBForecast.jobs[bImageAfterKeyRot.id].eta.median > 0,
+      "new-key 9th image must still see 8 active old-key images on Endpoint B",
+    );
+    assert.equal(
+      rotBForecast.jobs[bVideo2AfterPubEdit.id].eta.reason,
+      "observing",
+    );
+    const bVideoAfterKeyRot = await submitVideo("B 轮换密钥后视频");
+    const rotBForecast2 = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(
+      rotBForecast2.jobs[bVideoAfterKeyRot.id].eta.median,
+      0,
+      "new-key video still sees open shared slots (9 < 12) on Endpoint B",
+    );
+    await executor.execute(bImageAfterKeyRot.id);
+    assert.equal(
+      (
+        await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+          bImageAfterKeyRot.id,
+        ])
+      ).state,
+      "queued",
+    );
+    await executor.execute(bVideoAfterKeyRot.id);
+    assert.equal(
+      (
+        await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+          bVideoAfterKeyRot.id,
+        ])
+      ).state,
+      "running",
+    );
+  } finally {
+    serverA.closeAllConnections();
+    serverB.closeAllConnections();
+    await Promise.all([
+      new Promise<void>((done) => serverA.close(() => done())),
+      new Promise<void>((done) => serverB.close(() => done())),
+    ]);
+    await f.cleanup();
+  }
+});
+
+test("Muse 2.1.0 shares active occupancy and serializes concurrent claims across separate image and video connections on the same upstream while preserving per-connection concurrency and isolating distinct upstreams", async () => {
+  const f = await databaseFixture();
+  let accountsA = 1;
+  let seqA = 0;
+  let activeOnA = 0;
+  let maxConcurrentOnA = 0;
+  const terminalOnA = new Set<string>();
+  const serverA = createServer(async (req, res) => {
+    if (req.headers.authorization !== "Bearer shared-key-a")
+      return void res.writeHead(401).end();
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/readyz")
+      return void res.end(
+        JSON.stringify({
+          status: "ready",
+          accounts: accountsA,
+          browser_running: true,
+        }),
+      );
+    if (req.url === "/v1/models")
+      return void res.end(
+        JSON.stringify({
+          data: [{ id: "muse-image" }, { id: "muse-video" }],
+        }),
+      );
+    if (
+      req.method === "POST" &&
+      (req.url === "/v1/images/tasks" || req.url === "/v1/videos")
+    ) {
+      for await (const _ of req) {
+        // drain
+      }
+      seqA++;
+      activeOnA++;
+      maxConcurrentOnA = Math.max(maxConcurrentOnA, activeOnA);
+      const id = `task_da${String(seqA).padStart(30, "0")}`;
+      const now = Math.floor(Date.now() / 1000);
+      res.statusCode = req.url === "/v1/images/tasks" ? 202 : 200;
+      return void res.end(
+        JSON.stringify({ id, task_id: id, status: "queued", created_at: now }),
+      );
+    }
+    if (
+      req.url?.startsWith("/v1/images/tasks/task_") ||
+      req.url?.startsWith("/v1/videos/task_")
+    ) {
+      const id = req.url.split("/").at(-1)!;
+      const now = Math.floor(Date.now() / 1000);
+      if (terminalOnA.has(id))
+        return void res.end(JSON.stringify({ id, status: "failed" }));
+      return void res.end(
+        JSON.stringify({
+          id,
+          status: "processing",
+          phase: "generating",
+          created_at: now,
+          started_at: now,
+          generating_at: now,
+        }),
+      );
+    }
+    res.writeHead(404).end();
+  });
+
+  let seqB = 0;
+  let activeOnB = 0;
+  const serverB = createServer(async (req, res) => {
+    if (req.headers.authorization !== "Bearer independent-key-b")
+      return void res.writeHead(401).end();
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/readyz")
+      return void res.end(
+        JSON.stringify({ status: "ready", accounts: 1, browser_running: true }),
+      );
+    if (req.url === "/v1/models")
+      return void res.end(
+        JSON.stringify({
+          data: [{ id: "muse-image" }, { id: "muse-video" }],
+        }),
+      );
+    if (
+      req.method === "POST" &&
+      (req.url === "/v1/images/tasks" || req.url === "/v1/videos")
+    ) {
+      for await (const _ of req) {
+        // drain
+      }
+      seqB++;
+      activeOnB++;
+      const id = `task_db${String(seqB).padStart(30, "0")}`;
+      const now = Math.floor(Date.now() / 1000);
+      res.statusCode = req.url === "/v1/images/tasks" ? 202 : 200;
+      return void res.end(
+        JSON.stringify({ id, task_id: id, status: "queued", created_at: now }),
+      );
+    }
+    res.writeHead(404).end();
+  });
+
+  serverA.listen(0, "127.0.0.1");
+  serverB.listen(0, "127.0.0.1");
+  await Promise.all([once(serverA, "listening"), once(serverB, "listening")]);
+  const baseA =
+    "http://127.0.0.1:" + (serverA.address() as { port: number }).port;
+  const baseB =
+    "http://127.0.0.1:" + (serverB.address() as { port: number }).port;
+  const sandboxSend: typeof chatHttp = (url, options) => {
+    assert.ok(options.lookup);
+    const targetBase = url.origin === "https://1.1.1.1" ? baseA : baseB;
+    return chatHttp(new URL(url.pathname, targetBase), {
+      ...options,
+      lookup: undefined,
+    });
+  };
+  f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+  try {
+    await f.p.registry.initializeStudio(f.db, false);
+    const identity = new OriginalIdentity(f.p);
+    const creds = { name: "admin", password: "dual-conn-password" };
+    await identity.bootstrap({ ...creds, nickname: "管理员" });
+    const actor = await identity.actor(await identity.login(creds, "fixture"));
+    const packages = new StudioPackages(f.p);
+    const musePkg = JSON.parse(
+      await readFile("plugins/muse/muse.fmplugin.json", "utf8"),
+    );
+    await packages.install(actor, musePkg);
+
+    const { id: connImage } = await f.p.createConnection(
+      actor,
+      {
+        name: "Muse 图片连接",
+        pluginId: "muse",
+        version: musePkg.adapterVersion,
+        concurrency: 1,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "shared-key-a" },
+      },
+      true,
+    );
+    const { id: connVideo } = await f.p.createConnection(
+      actor,
+      {
+        name: "Muse 视频连接",
+        pluginId: "muse",
+        version: musePkg.adapterVersion,
+        concurrency: 2,
+        config: {
+          baseUrl: "https://1.1.1.1/",
+          apiKey: "shared-key-a",
+          publicUrl: "https://cdn.example.com/muse",
+        },
+      },
+      true,
+    );
+    await f.db.query(
+      "INSERT INTO studio_model_service VALUES('muse-image',$1),('muse-video',$2) ON CONFLICT(model_id) DO UPDATE SET connection_id=excluded.connection_id",
+      [connImage, connVideo],
+    );
+
+    const catalog = new StudioCatalog(f.db);
+    const prices = await catalog.prices();
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        Object.fromEntries(prices.items.map((i) => [i.key, 1])),
+        prices.revision,
+      ),
+    );
+    const museListed = (await packages.list(actor)).find(
+      (p) => p.id === "muse",
+    )!;
+    await packages.change(actor, "muse", museListed.revision, "enable");
+    const ws = await one(
+      f.db,
+      "SELECT * FROM workspaces WHERE owner_id=$1 AND kind='personal'",
+      [actor.id],
+    );
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, ws.id, 100, randomUUID(), "adjust"),
+    );
+
+    const timingPolicy = JSON.stringify(musePkg.manifest.timing);
+    const imgFeatures = JSON.stringify({
+      kind: "image",
+      model: "muse-image",
+      executor: "muse-api",
+      workflow: "muse2api-native-v1",
+      width: 0,
+      height: 0,
+      native_ratio: "1:1",
+      seconds: 0,
+      steps: 0,
+      video_mode: "image",
+      quality: "native",
+      refs: 0,
+      ref_pixels: 0,
+      hardware: "muse-api",
+      profile: {},
+      runtime_id: "",
+      cold: null,
+    });
+    const vidFeatures = JSON.stringify({
+      kind: "video",
+      model: "muse-video",
+      executor: "muse-api",
+      workflow: "muse2api-native-v1",
+      width: 0,
+      height: 0,
+      native_ratio: "16:9",
+      seconds: 5,
+      steps: 0,
+      video_mode: "t2v",
+      quality: "native",
+      refs: 0,
+      ref_pixels: 0,
+      hardware: "muse-api",
+      profile: {},
+      runtime_id: "",
+      cold: null,
+    });
+    for (let i = 0; i < 20; i++) {
+      await f.db.query(
+        "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse',$2,$3,'image','muse-image',$4,$5,$5,$6,'done','done')",
+        [
+          randomUUID(),
+          musePkg.adapterVersion,
+          timingPolicy,
+          imgFeatures,
+          1000 + i * 100,
+          1020 + i * 100,
+        ],
+      );
+      await f.db.query(
+        "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse',$2,$3,'video','muse-video',$4,$5,$5,$6,'done','done')",
+        [
+          randomUUID(),
+          musePkg.adapterVersion,
+          timingPolicy,
+          vidFeatures,
+          2000 + i * 100,
+          2060 + i * 100,
+        ],
+      );
+    }
+
+    await new QueueHealthPoller(f.p).refreshEnabled();
+    const g = new OriginalGeneration(f.p);
+    const submitImg = async (prompt: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("image", {
+          uid: randomUUID(),
+          model: "muse-image",
+          prompt,
+          ratio: "1:1",
+          resolution: "1K",
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+    const submitVid = async (prompt: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "muse-video",
+          prompt,
+          ratio: "16:9",
+          seconds: 5,
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+
+    // 1. Two connections bound to muse-image & muse-video on 1-account serverA (/v1/queue -> 404):
+    const img1 = await submitImg("双连接同上游图片1");
+    const vid1 = await submitVid("双连接同上游视频1");
+    assert.equal(img1.connection_id, connImage);
+    assert.equal(vid1.connection_id, connVideo);
+
+    const preDispatchForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(preDispatchForecast.jobs[img1.id].eta.source, "queue");
+    assert.equal(preDispatchForecast.jobs[img1.id].eta.median, 0);
+    assert.equal(preDispatchForecast.jobs[vid1.id].eta.source, "queue");
+    assert.ok(
+      preDispatchForecast.jobs[vid1.id].eta.median > 0,
+      "video on connVideo must account for earlier queued image on connImage sharing 1-account upstream",
+    );
+
+    // Concurrent claims across connImage and connVideo must serialize and claim only 1 job total
+    await Promise.all([
+      new Executor(f.p).execute(img1.id),
+      new Executor(f.p).execute(vid1.id),
+    ]);
+    assert.equal(
+      maxConcurrentOnA,
+      1,
+      "concurrent claims on two connections targeting the same 1-account Muse upstream must claim at most 1 job",
+    );
+    const pairRows = (
+      await f.db.query("SELECT id,state,remote_id FROM jobs WHERE id=ANY($1::uuid[])", [
+        [img1.id, vid1.id],
+      ])
+    ).rows;
+    const runningFirst = pairRows.find((r) => r.state === "running")!;
+    const queuedSecond = pairRows.find((r) => r.state === "queued")!;
+    assert.ok(runningFirst && queuedSecond);
+
+    // Advance runningFirst to generating and verify QueueForecasts + OriginalEstimates on the other connection
+    await new Executor(f.p).execute(runningFirst.id);
+    const midForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(midForecast.jobs[queuedSecond.id].eta.source, "queue");
+    assert.ok(
+      midForecast.jobs[queuedSecond.id].eta.median > 0,
+      "queued job on second connection must see running job on first connection occupying shared 1-account upstream",
+    );
+    const estOther = await new OriginalEstimates(f.p).read(
+      actor,
+      queuedSecond.id === vid1.id
+        ? {
+            kind: "video",
+            model: "muse-video",
+            ratio: "16:9",
+            seconds: 5,
+            sampling_steps: 20,
+            refs: [],
+          }
+        : {
+            kind: "image",
+            model: "muse-image",
+            ratio: "1:1",
+            seconds: 5,
+            sampling_steps: 20,
+            refs: [],
+          },
+      String(ws.public_id),
+    );
+    assert.equal(estOther.queue?.source, "queue");
+    assert.ok((estOther.queue?.median ?? 0) > 0);
+
+    // Finish runningFirst, then dispatch & finish queuedSecond
+    terminalOnA.add(runningFirst.remote_id);
+    activeOnA--;
+    await new Executor(f.p).execute(runningFirst.id);
+    await new Executor(f.p).execute(queuedSecond.id);
+    const secondRemote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [
+        queuedSecond.id,
+      ])
+    ).remote_id;
+    terminalOnA.add(secondRemote);
+    activeOnA--;
+    await new Executor(f.p).execute(queuedSecond.id);
+    assert.equal(maxConcurrentOnA, 1);
+
+    // 2. On 4-account upstream with connImage.concurrency=1 and connVideo.concurrency=2:
+    //    - When queue is empty and 1 image + 2 videos are queued, ALL THREE predict immediate start (median 0/0/0)
+    //      because siblingWaiting on connImage consumes 1 shared upstream slot + connImage's own slot, NOT connVideo's 2 slots!
+    //    - Then concurrent dispatch claims all 3 simultaneously, while a 2nd image and 3rd video stay capped by per-connection concurrency.
+    accountsA = 4;
+    await f.db.query("UPDATE connections SET queue_refresh_until=NULL");
+    await new QueueHealthPoller(f.p).refreshEnabled();
+
+    const imgA = await submitImg("4账号限流图A");
+    const vidA = await submitVid("4账号限流视频A");
+    const vidB = await submitVid("4账号限流视频B");
+
+    const emptyPoolOnePlusTwoForecast = await new QueueForecasts(
+      f.p,
+    ).forWorkspace(actor, ws.id);
+    assert.equal(emptyPoolOnePlusTwoForecast.jobs[imgA.id].eta.median, 0);
+    assert.equal(emptyPoolOnePlusTwoForecast.jobs[vidA.id].eta.median, 0);
+    assert.equal(
+      emptyPoolOnePlusTwoForecast.jobs[vidB.id].eta.median,
+      0,
+      "2nd video on connVideo (concurrency=2) must predict immediate start (median=0) when 4-account upstream only has 1 image on connImage + 1 earlier video on connVideo",
+    );
+
+    const imgB = await submitImg("4账号限流图B");
+    const vidC = await submitVid("4账号限流视频C");
+    const cappedQueuedForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.ok(
+      cappedQueuedForecast.jobs[imgB.id].eta.median > 0,
+      "2nd image on connImage (concurrency=1) must wait behind imgA",
+    );
+    assert.ok(
+      cappedQueuedForecast.jobs[vidC.id].eta.median > 0,
+      "3rd video on connVideo (concurrency=2) must wait behind vidA/vidB",
+    );
+
+    await Promise.all([
+      new Executor(f.p).execute(imgA.id),
+      new Executor(f.p).execute(vidA.id),
+      new Executor(f.p).execute(vidB.id),
+    ]);
+    await new Executor(f.p).execute(imgA.id); // generating on connImage
+    await new Executor(f.p).execute(imgB.id);
+    await new Executor(f.p).execute(vidC.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [imgA.id])).state,
+      "running",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [vidA.id])).state,
+      "running",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [vidB.id])).state,
+      "running",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [imgB.id])).state,
+      "queued",
+      "connImage.concurrency=1 must still cap connImage at 1 active job even when upstream has 4 accounts",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [vidC.id])).state,
+      "queued",
+      "connVideo.concurrency=2 must still cap connVideo at 2 active jobs",
+    );
+    assert.equal(activeOnA, 3);
+
+    // Drain all 5 jobs
+    for (const j of [imgA, vidA, vidB]) {
+      const rem = (
+        await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [j.id])
+      ).remote_id;
+      terminalOnA.add(rem);
+      activeOnA--;
+      await new Executor(f.p).execute(j.id);
+    }
+    for (const j of [imgB, vidC]) {
+      await new Executor(f.p).execute(j.id);
+      const rem = (
+        await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [j.id])
+      ).remote_id;
+      terminalOnA.add(rem);
+      activeOnA--;
+      await new Executor(f.p).execute(j.id);
+    }
+
+    // 2.5 Online concurrency scale-down (3 running -> concurrency lowered to 2 on 4-account upstream):
+    //     4th queued video must wait for 2nd completion (~10s, NOT 1st completion ~5s) in both QueueForecasts and Executor!
+    const connVidScaleUp = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connVideo,
+    )!;
+    await f.p.updateConnection(actor, connVideo, {
+      revision: connVidScaleUp.revision,
+      enabled: true,
+      concurrency: 3,
+    });
+    await f.db.query("UPDATE connections SET queue_refresh_until=NULL");
+    await new QueueHealthPoller(f.p).refreshEnabled();
+
+    const sd1 = await submitVid("缩容运行1_剩5s");
+    const sd2 = await submitVid("缩容运行2_剩10s");
+    const sd3 = await submitVid("缩容运行3_剩20s");
+    const sd4 = await submitVid("缩容排队4");
+    for (const j of [sd1, sd2, sd3]) {
+      await new Executor(f.p).execute(j.id);
+      await new Executor(f.p).execute(j.id); // generating
+    }
+    const dbNow = Number(
+      (
+        await one(
+          f.db,
+          "SELECT extract(epoch FROM now())::double precision AS t",
+        )
+      ).t,
+    );
+    // Calibrated video median is 60s -> set started so remaining medians are ~5s, ~10s, ~20s
+    await f.db.query(
+      "UPDATE job_runs SET started=$2,generating=$2 WHERE job=$1",
+      [sd1.id, dbNow - 55],
+    );
+    await f.db.query(
+      "UPDATE job_runs SET started=$2,generating=$2 WHERE job=$1",
+      [sd2.id, dbNow - 50],
+    );
+    await f.db.query(
+      "UPDATE job_runs SET started=$2,generating=$2 WHERE job=$1",
+      [sd3.id, dbNow - 40],
+    );
+
+    const connVidScaleDown = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connVideo,
+    )!;
+    await f.p.updateConnection(actor, connVideo, {
+      revision: connVidScaleDown.revision,
+      enabled: true,
+      concurrency: 2,
+    });
+    await f.db.query("UPDATE connections SET queue_refresh_until=NULL");
+    await new QueueHealthPoller(f.p).refreshEnabled();
+
+    const scaleDownForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.ok(
+      scaleDownForecast.jobs[sd4.id].eta.median >= 8 &&
+        scaleDownForecast.jobs[sd4.id].eta.median <= 12,
+      `4th video after concurrency 3->2 scale-down must wait ~10s (2nd completion), got ${JSON.stringify(scaleDownForecast.jobs[sd4.id].eta)}`,
+    );
+
+    // Finishing only sd1 (5s) leaves 2 active >= concurrency 2 -> sd4 must STILL stay queued
+    const sd1Rem = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [sd1.id])
+    ).remote_id;
+    terminalOnA.add(sd1Rem);
+    activeOnA--;
+    await new Executor(f.p).execute(sd1.id);
+    await new Executor(f.p).execute(sd4.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [sd4.id])).state,
+      "queued",
+    );
+
+    // Finishing sd2 (10s) drops active to 1 < concurrency 2 -> sd4 NOW claims and dispatches!
+    const sd2Rem = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [sd2.id])
+    ).remote_id;
+    terminalOnA.add(sd2Rem);
+    activeOnA--;
+    await new Executor(f.p).execute(sd2.id);
+    await new Executor(f.p).execute(sd4.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [sd4.id])).state,
+      "running",
+    );
+    for (const j of [sd3, sd4]) {
+      const rem = (
+        await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [j.id])
+      ).remote_id;
+      terminalOnA.add(rem);
+      activeOnA--;
+      await new Executor(f.p).execute(j.id);
+    }
+
+    // 3. Distinct upstreams (connImage -> serverA 1-account, connVideo -> serverB 1-account) remain independent
+    accountsA = 1;
+    const connVidCurrent = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connVideo,
+    )!;
+    await f.p.updateConnection(actor, connVideo, {
+      revision: connVidCurrent.revision,
+      enabled: true,
+      concurrency: 2,
+      config: { baseUrl: "https://8.8.8.8", apiKey: "independent-key-b" },
+    });
+    await f.db.query("UPDATE connections SET queue_refresh_until=NULL");
+    await new QueueHealthPoller(f.p).refreshEnabled();
+
+    const imgIndep = await submitImg("独立上游A图");
+    const vidIndep = await submitVid("独立上游B视频");
+    const indepForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(indepForecast.jobs[imgIndep.id].eta.median, 0);
+    assert.equal(indepForecast.jobs[vidIndep.id].eta.median, 0);
+
+    await Promise.all([
+      new Executor(f.p).execute(imgIndep.id),
+      new Executor(f.p).execute(vidIndep.id),
+    ]);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [imgIndep.id]))
+        .state,
+      "running",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [vidIndep.id]))
+        .state,
+      "running",
+    );
+    assert.equal(activeOnA, 1);
+    assert.equal(activeOnB, 1);
+  } finally {
+    serverA.closeAllConnections();
+    serverB.closeAllConnections();
+    await Promise.all([
+      new Promise<void>((done) => serverA.close(() => done())),
+      new Promise<void>((done) => serverB.close(() => done())),
+    ]);
+    await f.cleanup();
+  }
+});
+
+test("Flow 2.0.0 opaque queue strategy stays per-connection across shared baseUrl credentials and across address edits on one connection", async () => {
+  const f = await databaseFixture();
+  const flowServer = createServer((req, res) => {
+    const token = String(req.headers.authorization ?? "");
+    if (token !== "Bearer flow-key-1" && token !== "Bearer flow-key-2")
+      return void res.writeHead(401).end();
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/v1/models")
+      return void res.end(
+        JSON.stringify({
+          data: [
+            { id: "veo-3.1-quality-8s-landscape" },
+            { id: "omni-1.2-flash-8s-landscape" },
+          ],
+        }),
+      );
+    if (req.url === "/health")
+      return void res.end(
+        JSON.stringify({ backend_running: true, has_active_tokens: true }),
+      );
+    res.writeHead(404).end();
+  });
+  flowServer.listen(0, "127.0.0.1");
+  await once(flowServer, "listening");
+  const flowBase =
+    "http://127.0.0.1:" + (flowServer.address() as { port: number }).port;
+  const sandboxSend: typeof chatHttp = (url, options) => {
+    assert.ok(options.lookup);
+    return chatHttp(new URL(url.pathname, flowBase), {
+      ...options,
+      lookup: undefined,
+    });
+  };
+  f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+  try {
+    await f.p.registry.initializeStudio(f.db, false);
+    const identity = new OriginalIdentity(f.p);
+    const creds = { name: "admin", password: "flow-opaque-password" };
+    await identity.bootstrap({ ...creds, nickname: "管理员" });
+    const actor = await identity.actor(await identity.login(creds, "fixture"));
+    const packages = new StudioPackages(f.p);
+    const flowPkg = JSON.parse(
+      await readFile("plugins/flow/flow.fmplugin.json", "utf8"),
+    );
+    await packages.install(actor, flowPkg);
+
+    const { id: connFlow1 } = await f.p.createConnection(
+      actor,
+      {
+        name: "Flow 连接 1",
+        pluginId: "flow",
+        version: flowPkg.adapterVersion,
+        concurrency: 2,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "flow-key-1" },
+      },
+      true,
+    );
+    const { id: connFlow2 } = await f.p.createConnection(
+      actor,
+      {
+        name: "Flow 连接 2",
+        pluginId: "flow",
+        version: flowPkg.adapterVersion,
+        concurrency: 2,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "flow-key-2" },
+      },
+      true,
+    );
+    await f.db.query(
+      "INSERT INTO studio_model_service VALUES('flow:veo-3.1-quality',$1),('flow:veo-3.1-quality-8s-landscape',$1),('flow:omni-1.2-flash',$2),('flow:omni-1.2-flash-8s-landscape',$2) ON CONFLICT(model_id) DO UPDATE SET connection_id=excluded.connection_id",
+      [connFlow1, connFlow2],
+    );
+    const catalog = new StudioCatalog(f.db);
+    const prices = await catalog.prices();
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        Object.fromEntries(prices.items.map((i) => [i.key, 1])),
+        prices.revision,
+      ),
+    );
+    const flowListed = (await packages.list(actor)).find(
+      (p) => p.id === "flow",
+    )!;
+    await packages.change(actor, "flow", flowListed.revision, "enable");
+    const ws = await one(
+      f.db,
+      "SELECT * FROM workspaces WHERE owner_id=$1 AND kind='personal'",
+      [actor.id],
+    );
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, ws.id, 100, randomUUID(), "adjust"),
+    );
+    await new QueueHealthPoller(f.p).refreshEnabled();
+
+    const g = new OriginalGeneration(f.p);
+    const submitFlowVid = async (prompt: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "flow:veo-3.1-quality",
+          prompt,
+          ratio: "16:9",
+          seconds: 8,
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+    const submitFlowImg = async (prompt: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "flow:omni-1.2-flash",
+          prompt,
+          ratio: "16:9",
+          seconds: 8,
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+
+    // 1. Two enabled Flow connections with same baseUrl and different credentials must NOT block each other
+    const flowJob1 = await submitFlowVid("Flow 连接1首单");
+    const flowJob2 = await submitFlowImg("Flow 连接2首单");
+    assert.equal(flowJob1.connection_id, connFlow1);
+    assert.equal(flowJob2.connection_id, connFlow2);
+
+    const executor = new Executor(f.p);
+    assert.ok(await executor.claim(flowJob1.id));
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [flowJob1.id]))
+        .state,
+      "dispatching",
+    );
+
+    const forecastConn2BeforeClaim = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(
+      forecastConn2BeforeClaim.jobs[flowJob2.id].eta.reason,
+      "observing",
+      "second Flow connection must not inherit flow_busy from first Flow connection",
+    );
+    assert.ok(
+      await executor.claim(flowJob2.id),
+      "second Flow connection sharing baseUrl with distinct credentials must still claim independently",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [flowJob2.id]))
+        .state,
+      "dispatching",
+    );
+
+    // 2. Single Flow connection (concurrency=2) with flowJob1 dispatching on old address 1.1.1.1:
+    //    after editing connFlow1 to 8.8.8.8 and refreshing health, a second job on connFlow1 must stay serial (queued + flow_busy)
+    const conn1Row = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connFlow1,
+    )!;
+    await f.p.updateConnection(actor, connFlow1, {
+      revision: conn1Row.revision,
+      enabled: true,
+      concurrency: 2,
+      config: { baseUrl: "https://8.8.8.8", apiKey: "flow-key-1" },
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connFlow1],
+    );
+    await new QueueHealthPoller(f.p).refresh(connFlow1);
+
+    const flowJob1Second = await submitFlowVid("Flow 连接1改地址后第二单");
+    assert.equal(flowJob1Second.connection_id, connFlow1);
+    const forecastConn1Serial = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(
+      forecastConn1Serial.jobs[flowJob1Second.id].eta.reason,
+      "flow_busy",
+      "single Flow connection must still report flow_busy when an earlier job is dispatching on old address",
+    );
+    assert.equal(
+      await executor.claim(flowJob1Second.id),
+      undefined,
+      "single Flow connection must not bypass serial execution after editing baseUrl",
+    );
+    assert.equal(
+      (
+        await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+          flowJob1Second.id,
+        ])
+      ).state,
+      "queued",
+    );
+  } finally {
+    flowServer.closeAllConnections();
+    await new Promise<void>((done) => flowServer.close(() => done()));
+    await f.cleanup();
+  }
+});
