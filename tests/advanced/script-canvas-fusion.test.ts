@@ -4,6 +4,7 @@ import {
   applyMatchSpansReplacement,
   buildCanvasLocalBackup,
   buildPersistedScriptDraftForSession,
+  createCanvasRunsTracker,
   detectAmbiguousShotMatches,
   extractScriptAnchorsMap,
   nodeHasOutputOrActiveRun,
@@ -1330,4 +1331,157 @@ test("detectAmbiguousShotMatches keeps cross-scene manual binding candidates whe
   const reboundVideo = rebound.document.nodes.find((n) => n.id === oldVideoId)!;
   assert.equal(reboundVideo.extra_params?.script_shot_id, "sh_s02_rewritten");
   assert.equal(reboundVideo.extra_params?.script_scene_code, "S02");
+});
+
+test("createCanvasRunsTracker resolves pre-existing in-flight /runs directly before deferred React 19 state commit", async () => {
+  const tracker = createCanvasRunsTracker<{ id: number; canvas_node: string }>({
+    reconcile: (_prev, next) => [...next],
+  });
+
+  // Simulate React 19 deferring setRuns updater commit behind a pending state update
+  let reactCommittedRuns: { id: number; canvas_node: string }[] = [];
+  let releaseApi!: () => void;
+  const apiGate = new Promise<void>((resolve) => {
+    releaseApi = resolve;
+  });
+
+  const inFlightMountFetch = tracker.runFetch(
+    async () => {
+      await apiGate;
+      return {
+        runs: [{ id: 101, canvas_node: "grid_node_1" }],
+        extra: { ok: true },
+      };
+    },
+    {
+      silent: true,
+      onCommit: (nextRuns) => {
+        // React 19 commits state asynchronously in a later task
+        setTimeout(() => {
+          reactCommittedRuns = nextRuns;
+        }, 50);
+      },
+    },
+  );
+
+  assert.equal(tracker.hasInFlight(), true);
+  const ensurePromise = tracker.ensureFresh(async () => {
+    throw new Error("should reuse pre-existing in-flight request instead of re-fetching");
+  });
+
+  releaseApi();
+  const [snap] = await Promise.all([ensurePromise, inFlightMountFetch]);
+
+  // Even BEFORE React 19 commits reactCommittedRuns (still length 0!), ensureFresh and getCurrentRuns MUST already have length 1!
+  assert.equal(reactCommittedRuns.length, 0);
+  assert.equal(snap.runsKnown, true);
+  assert.equal(snap.runs.length, 1);
+  assert.equal(snap.runs[0].canvas_node, "grid_node_1");
+  assert.equal(tracker.getCurrentRuns().length, 1);
+
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(reactCommittedRuns.length, 1);
+});
+
+test("runsKnown=false preserves existing grid->video edge when shot references >=9 props/scenes with includeAssets=false or true", () => {
+  const nineRefsScript = [
+    "# EP09 九道具场次宫格连线保护",
+    "## 场景资产",
+    "- **SC01 古董店**：暗调木柜与铜灯。",
+    "## 道具资产",
+    "- **PR01 怀表**：黄铜怀表。",
+    "- **PR02 铜钥匙**：古旧铜钥匙。",
+    "- **PR03 羊皮卷**：残破羊皮卷。",
+    "- **PR04 烛台**：银质三叉烛台。",
+    "- **PR05 放大镜**：木柄放大镜。",
+    "- **PR06 印章**：红玛瑙印章。",
+    "- **PR07 算盘**：紫檀算盘。",
+    "- **PR08 匕首**：雕花短匕首。",
+    "### S01 古董店 夜 内",
+    "△桌面依次摆着怀表、铜钥匙、羊皮卷、烛台、放大镜、印章、算盘、匕首，映照古董店微光。 <!-- fm-shot:sh_ant_01 -->",
+  ].join("\n");
+
+  const bd = parseScriptBreakdown(nineRefsScript, {
+    docId: "909",
+    docPath: "EP09.md",
+  });
+  assert.equal(bd.shots[0].referencedAssets.length, 9);
+
+  // 1. Initial sync in grid_preview mode (includeAssets=false, just like user toggling assets off)
+  const gridSync = syncScriptBreakdownToCanvas(
+    { schemaVersion: 1, nodes: [], edges: [], shots: [] },
+    bd,
+    { generationMode: "grid_preview", includeAssets: false },
+  );
+  const gridNode = gridSync.document.nodes.find(
+    (n) => n.extra_params?.script_role === "grid_preview",
+  )!;
+  const videoNode = gridSync.document.nodes.find((n) => n.type === "video")!;
+  assert.ok(gridNode && videoNode);
+  const hadGridToVideoBefore = gridSync.document.edges.some(
+    (e) => e.source === gridNode.id && e.target === videoNode.id,
+  );
+  assert.equal(hadGridToVideoBefore, true);
+
+  // 2. Switch to omni_ref with includeAssets=false and runsKnown=false (/runs failed):
+  // grid->video MUST remain intact (imageRefsAfter === 1, never dropped to 0!)
+  const switchedNoAssets = syncScriptBreakdownToCanvas(gridSync.document, bd, {
+    generationMode: "omni_ref",
+    includeAssets: false,
+    runs: [],
+    runsKnown: false,
+  });
+  const gridPreserved = switchedNoAssets.document.nodes.some(
+    (n) => n.id === gridNode.id,
+  );
+  const hasGridToVideoAfter = switchedNoAssets.document.edges.some(
+    (e) => e.source === gridNode.id && e.target === videoNode.id,
+  );
+  const imageRefsAfter = switchedNoAssets.document.edges.filter((e) => {
+    if (e.target !== videoNode.id) return false;
+    const src = switchedNoAssets.document.nodes.find((n) => n.id === e.source);
+    return src?.type === "image";
+  }).length;
+  assert.deepEqual(
+    {
+      before: hadGridToVideoBefore,
+      after: hasGridToVideoAfter,
+      gridPreserved,
+      imageRefsAfter,
+    },
+    {
+      before: true,
+      after: true,
+      gridPreserved: true,
+      imageRefsAfter: 1,
+    },
+  );
+
+  // 3. Switch to omni_ref with includeAssets=true (9 assets) and runsKnown=false:
+  // existing grid->video takes priority first, and 8 new asset refs fill the remaining capacity (total = 9 <= 9)!
+  const switchedWithAssets = syncScriptBreakdownToCanvas(
+    gridSync.document,
+    bd,
+    {
+      generationMode: "omni_ref",
+      includeAssets: true,
+      runs: [],
+      runsKnown: false,
+    },
+  );
+  assert.equal(
+    switchedWithAssets.document.edges.some(
+      (e) => e.source === gridNode.id && e.target === videoNode.id,
+    ),
+    true,
+    "existing grid->video must still be preserved first even when 9 assets are enabled",
+  );
+  const totalVideoImageRefs = switchedWithAssets.document.edges.filter((e) => {
+    if (e.target !== videoNode.id) return false;
+    const src = switchedWithAssets.document.nodes.find(
+      (n) => n.id === e.source,
+    );
+    return src?.type === "image";
+  }).length;
+  assert.equal(totalVideoImageRefs, 9);
 });

@@ -1,3 +1,4 @@
+import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports";
 import {
   defaults,
   newNode,
@@ -931,6 +932,38 @@ export function syncScriptBreakdownToCanvas(
     });
   }
 
+  const isImageSource = (
+    node: CanvasNode | undefined,
+    port?: string,
+  ): boolean => Boolean(node && canvasSourceKind(node, port) === "image");
+
+  const countProjectedImageRefs = (
+    targetId: string,
+    desiredSet: ReadonlySet<string>,
+    managedSet: ReadonlySet<string>,
+  ): number => {
+    const manualSources = new Set<string>();
+    let count = 0;
+    for (const e of nextEdges) {
+      if (e.target !== targetId) continue;
+      if (managedSet.has(`${e.source}>${e.target}`)) continue;
+      const srcNode = nextNodes.find((n) => n.id === e.source);
+      if (isImageSource(srcNode, e.sourcePort)) {
+        count++;
+        manualSources.add(e.source);
+      }
+    }
+    for (const pair of desiredSet) {
+      const [src, tgt] = pair.split(">");
+      if (tgt !== targetId || manualSources.has(src)) continue;
+      const srcNode = nextNodes.find((n) => n.id === src);
+      if (isImageSource(srcNode)) {
+        count++;
+      }
+    }
+    return count;
+  };
+
   // Only returns a managed pair key if the edge was newly created by sync OR was already in prevManagedSet.
   // Pre-existing manual user edges are left intact and NEVER claimed as script-managed!
   const ensureManagedEdge = (
@@ -948,11 +981,11 @@ export function syncScriptBreakdownToCanvas(
     }
     if (nextEdges.length >= 1200) return null;
     const sourceNode = nextNodes.find((n) => n.id === source);
-    if (sourceNode?.type === "image") {
+    if (isImageSource(sourceNode)) {
       const existingImageRefs = nextEdges.filter((e) => {
         if (e.target !== target) return false;
         const s = nextNodes.find((n) => n.id === e.source);
-        return s?.type === "image";
+        return isImageSource(s, e.sourcePort);
       }).length;
       if (existingImageRefs >= 9) return null;
     }
@@ -1198,17 +1231,32 @@ export function syncScriptBreakdownToCanvas(
       const desiredManagedPairs = new Set<string>();
       if (isGridPreview && existingGrid) {
         if (existingText) desiredManagedPairs.add(`${existingText.id}>${existingGrid.id}`);
-        desiredManagedPairs.add(`${existingGrid.id}>${existingVideo.id}`);
+        if (
+          countProjectedImageRefs(
+            existingVideo.id,
+            desiredManagedPairs,
+            prevManagedSet,
+          ) < 9
+        ) {
+          desiredManagedPairs.add(`${existingGrid.id}>${existingVideo.id}`);
+        }
         for (const assetKey of shot.referencedAssets) {
           const assetNodeId = assetKeyToNodeId.get(assetKey);
-          if (assetNodeId) desiredManagedPairs.add(`${assetNodeId}>${existingGrid.id}`);
+          if (
+            assetNodeId &&
+            countProjectedImageRefs(
+              existingGrid.id,
+              desiredManagedPairs,
+              prevManagedSet,
+            ) < 9
+          ) {
+            desiredManagedPairs.add(`${assetNodeId}>${existingGrid.id}`);
+          }
         }
       } else {
         if (existingText) desiredManagedPairs.add(`${existingText.id}>${existingVideo.id}`);
-        for (const assetKey of shot.referencedAssets) {
-          const assetNodeId = assetKeyToNodeId.get(assetKey);
-          if (assetNodeId) desiredManagedPairs.add(`${assetNodeId}>${existingVideo.id}`);
-        }
+        // Preserve existing grid edges FIRST (before adding new asset refs) when existingGrid is retained,
+        // so uncertain /runs state never drops an existing grid->video connection due to referencedAssets count!
         if (existingGrid) {
           for (const pair of prevManagedSet) {
             const [src, tgt] = pair.split(">");
@@ -1217,11 +1265,30 @@ export function syncScriptBreakdownToCanvas(
             } else if (
               !runsKnown &&
               src === existingGrid.id &&
-              shot.referencedAssets.length < 9
+              countProjectedImageRefs(
+                tgt,
+                desiredManagedPairs,
+                prevManagedSet,
+              ) < 9
             ) {
               desiredManagedPairs.add(pair);
             }
           }
+        }
+        // Fill remaining image reference capacity with resolved asset image nodes
+        for (const assetKey of shot.referencedAssets) {
+          const assetNodeId = assetKeyToNodeId.get(assetKey);
+          if (!assetNodeId) continue;
+          if (
+            countProjectedImageRefs(
+              existingVideo.id,
+              desiredManagedPairs,
+              prevManagedSet,
+            ) >= 9
+          ) {
+            break;
+          }
+          desiredManagedPairs.add(`${assetNodeId}>${existingVideo.id}`);
         }
       }
 
@@ -2192,4 +2259,111 @@ export function computeScriptDescendantsSignature(
     .sort()
     .join(",");
   return sha256HexUtf8(canonical);
+}
+
+export type CanvasRunsSnapshot<J> = {
+  runs: J[];
+  runsKnown: boolean;
+};
+
+export function createCanvasRunsTracker<J>(options: {
+  reconcile: (prev: J[], incoming: J[]) => J[];
+}) {
+  let seq = 0;
+  let currentRuns: J[] = [];
+  let inFlightSeq = 0;
+  let inFlightPromise: Promise<{
+    runs: J[];
+    ok: boolean;
+    err?: unknown;
+  }> | null = null;
+
+  const reset = (initialRuns: J[] = []) => {
+    seq++;
+    currentRuns = initialRuns;
+    inFlightSeq = 0;
+    inFlightPromise = null;
+  };
+
+  const getCurrentRuns = () => currentRuns;
+
+  const runFetch = async <Extra>(
+    fetcher: () => Promise<{ runs: J[]; extra: Extra }>,
+    hooks?: {
+      silent?: boolean;
+      isAlive?: () => boolean;
+      onStart?: () => void;
+      onCommit?: (nextRuns: J[], extra: Extra) => void;
+      onError?: (err: unknown) => void;
+      onFinally?: () => void;
+    },
+  ): Promise<J[]> => {
+    const mySeq = ++seq;
+    inFlightSeq = mySeq;
+    hooks?.onStart?.();
+    const task = (async (): Promise<{
+      runs: J[];
+      ok: boolean;
+      err?: unknown;
+    }> => {
+      try {
+        const { runs: incoming, extra } = await fetcher();
+        const nextRuns = options.reconcile(currentRuns, incoming);
+        const active = (hooks?.isAlive ? hooks.isAlive() : true) && mySeq === seq;
+        if (active) {
+          // Synchronously update readable snapshot BEFORE resolving the Promise or scheduling React state updates
+          currentRuns = nextRuns;
+          hooks?.onCommit?.(nextRuns, extra);
+        }
+        return { runs: active ? nextRuns : incoming, ok: true };
+      } catch (err) {
+        const active = (hooks?.isAlive ? hooks.isAlive() : true) && mySeq === seq;
+        if (active) {
+          hooks?.onError?.(err);
+        }
+        return { runs: currentRuns, ok: false, err };
+      } finally {
+        if (mySeq === inFlightSeq) {
+          inFlightSeq = 0;
+          inFlightPromise = null;
+        }
+        if (mySeq === seq) {
+          hooks?.onFinally?.();
+        }
+      }
+    })();
+    inFlightPromise = task;
+    const outcome = await task;
+    if (!outcome.ok) {
+      if (hooks?.silent) return [];
+      throw outcome.err;
+    }
+    return outcome.runs;
+  };
+
+  const ensureFresh = async (
+    freshFetch: () => Promise<J[]>,
+  ): Promise<CanvasRunsSnapshot<J>> => {
+    while (inFlightPromise !== null) {
+      const settled = await inFlightPromise;
+      if (inFlightPromise === null && settled.ok) {
+        return { runs: settled.runs, runsKnown: true };
+      }
+      if (!settled.ok) break;
+    }
+    try {
+      const fresh = await freshFetch();
+      return { runs: fresh, runsKnown: true };
+    } catch {
+      return { runs: currentRuns, runsKnown: false };
+    }
+  };
+
+  return {
+    reset,
+    getCurrentRuns,
+    hasInFlight: () => inFlightPromise !== null,
+    runFetch,
+    ensureFresh,
+  };
 }

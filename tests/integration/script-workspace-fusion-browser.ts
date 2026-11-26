@@ -531,13 +531,16 @@ try {
     );
     assert.ok(firstGridNode, "expected grid_preview node after grid sync");
 
-    // 3a-1. Delayed initial /runs: reopen canvas while /runs is delayed by 500ms and carries a completed job for firstGridNode;
-    // switching sync mode to omni_ref must await the fresh /runs snapshot and preserve firstGridNode!
-    let runsInterceptMode: "delay_with_done_job" | "fail_503" | "passthrough" =
-      "delay_with_done_job";
+    // 3a-1. Pre-existing in-flight initial /runs held open until AFTER user triggers pending sync submit:
+    // ensureFreshRuns must await and consume that in-flight /runs response directly without racing React 19 state commit!
+    let runsInterceptMode: "hold_in_flight" | "fail_503" | "passthrough" =
+      "hold_in_flight";
+    let releaseHeldRuns: (() => void) | null = null;
     await page.route(`**/api/canvases/${canvasA.id}/runs`, async (route) => {
-      if (runsInterceptMode === "delay_with_done_job") {
-        await new Promise((r) => setTimeout(r, 500));
+      if (runsInterceptMode === "hold_in_flight") {
+        await new Promise<void>((resolve) => {
+          releaseHeldRuns = resolve;
+        });
         await route.fulfill({
           status: 200,
           json: {
@@ -577,12 +580,22 @@ try {
     });
 
     await page.goto(editPath);
+    await expect
+      .poll(() => Boolean(releaseHeldRuns), { timeout: 5000 })
+      .toBe(true);
     await page.getByRole("tab", { name: "文档" }).click();
     await page.getByRole("treeitem").filter({ hasText: fileAName }).click();
     await page.getByRole("button", { name: "同步分镜到画布" }).click();
     await expect(syncDialog).toBeVisible();
     await syncDialog.getByLabel("生成链路").selectOption("omni_ref");
-    await syncDialog.getByRole("button", { name: "一键落图并查看画布" }).click();
+    // Click submit WHILE initial /runs request is STILL held in flight (and setBusy(true) state update is pending)!
+    const clickSubmitPromise = syncDialog
+      .getByRole("button", { name: "一键落图并查看画布" })
+      .click();
+    await page.waitForTimeout(80);
+    runsInterceptMode = "passthrough";
+    releaseHeldRuns!();
+    await clickSubmitPromise;
     await expect(syncDialog).toHaveCount(0);
     await expect(page.locator(".canvas-header")).toContainText("已保存", {
       timeout: 5000,
@@ -592,7 +605,7 @@ try {
     ).json();
     assert.ok(
       afterDelayedRunsSync.document.nodes.some((n) => n.id === firstGridNode.id),
-      "grid_preview node with completed job in delayed /runs must be preserved",
+      "grid_preview node with completed job in pre-existing in-flight /runs must be preserved",
     );
 
     // 3a-2. Failed /runs (503): reopen canvas when /runs fails completely (runs=[], runsKnown=false);

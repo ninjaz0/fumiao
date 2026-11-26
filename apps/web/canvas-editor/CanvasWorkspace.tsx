@@ -150,6 +150,7 @@ import {
 import { scriptApi, type WorkspaceCanvasSummary } from "./script-api";
 import {
   buildCanvasLocalBackup,
+  createCanvasRunsTracker,
   resolveChatReplaceTarget,
 } from "./script-fusion";
 import { SkillEditorModal } from "./SkillEditorModal";
@@ -724,10 +725,9 @@ export function CanvasWorkspace({
     [selectedEdges, setSelectedEdges] = useState<string[]>([]);
   const aliveRef = useRef(true),
     runsLoadedRef = useRef(false),
-    lastRunsFetchOkRef = useRef(false),
-    inFlightRunsPromiseRef = useRef<Promise<Job[]> | null>(null),
-    runsInFlightRef = useRef(false),
-    runsReqSeqRef = useRef(0);
+    runsTrackerRef = useRef(
+      createCanvasRunsTracker<Job>({ reconcile: reconcileRuns }),
+    );
   const [editing, setEditing] = useState<string | null>(null),
     [hand, setHand] = useState(false),
     [minimap, setMinimap] = useState(false),
@@ -1146,77 +1146,58 @@ export function CanvasWorkspace({
   }, [toast]);
   const loadRuns = useCallback(
     async (options: { showLoading?: boolean; silent?: boolean } = {}) => {
-      const seq = ++runsReqSeqRef.current;
-      runsInFlightRef.current = true;
-      if (options.showLoading) setRunsLoading(true);
-      const task = (async () => {
-        try {
+      return runsTrackerRef.current.runFetch(
+        async () => {
           const [data, state] = await Promise.all([
             api<{ runs: Job[] }>(`/api/canvases/${project.id}/runs`),
             api<Studio>("/api/state"),
           ]);
-          if (!aliveRef.current || seq !== runsReqSeqRef.current)
-            return data.runs;
-          runsLoadedRef.current = true;
-          lastRunsFetchOkRef.current = true;
-          setRuns((prev) => {
-            const next = reconcileRuns(prev, data.runs);
-            runsRef.current = next;
-            return next;
-          });
-          const nextFp = studioFingerprint(state);
-          if (
-            !lastPolledStudioRef.current ||
-            lastPolledStudioRef.current.fp !== nextFp ||
-            studioRef.current !== lastPolledStudioRef.current.value
-          ) {
-            lastPolledStudioRef.current = { fp: nextFp, value: state };
-            setStudio(state);
-          }
-          setRunsLoaded(true);
-          setRunsError("");
-          return data.runs;
-        } catch (e) {
-          if (aliveRef.current && seq === runsReqSeqRef.current) {
-            lastRunsFetchOkRef.current = false;
+          return { runs: data.runs, extra: state };
+        },
+        {
+          silent: options.silent,
+          isAlive: () => aliveRef.current,
+          onStart: () => {
+            if (options.showLoading) setRunsLoading(true);
+          },
+          onCommit: (nextRuns, state) => {
+            runsLoadedRef.current = true;
+            runsRef.current = nextRuns;
+            setRuns(nextRuns);
+            const nextFp = studioFingerprint(state);
+            if (
+              !lastPolledStudioRef.current ||
+              lastPolledStudioRef.current.fp !== nextFp ||
+              studioRef.current !== lastPolledStudioRef.current.value
+            ) {
+              lastPolledStudioRef.current = { fp: nextFp, value: state };
+              setStudio(state);
+            }
+            setRunsLoaded(true);
+            setRunsError("");
+          },
+          onError: (e) => {
             if (shouldRedirectRunsError(e) && !hasUnsavedChanges()) {
               location.assign("/studio");
             } else {
               setRunsError(formatRunsError(e));
             }
-          }
-          if (options.silent) return [];
-          throw e;
-        } finally {
-          if (seq === runsReqSeqRef.current) {
-            runsInFlightRef.current = false;
-            inFlightRunsPromiseRef.current = null;
+          },
+          onFinally: () => {
             if (aliveRef.current) setRunsLoading(false);
-          }
-        }
-      })();
-      inFlightRunsPromiseRef.current = task;
-      return task;
+          },
+        },
+      );
     },
     [project.id, hasUnsavedChanges],
   );
-  const ensureFreshRuns = useCallback(async (): Promise<{
-    runs: Job[];
-    runsKnown: boolean;
-  }> => {
-    try {
-      if (inFlightRunsPromiseRef.current) {
-        await inFlightRunsPromiseRef.current;
-        if (lastRunsFetchOkRef.current) {
-          return { runs: runsRef.current, runsKnown: true };
-        }
-      }
-      const fresh = await loadRuns({ showLoading: false, silent: false });
-      return { runs: fresh, runsKnown: true };
-    } catch {
-      return { runs: runsRef.current, runsKnown: false };
-    }
-  }, [loadRuns]);
+  const ensureFreshRuns = useCallback(
+    () =>
+      runsTrackerRef.current.ensureFresh(() =>
+        loadRuns({ showLoading: false, silent: false }),
+      ),
+    [loadRuns],
+  );
   const fetchRuns = useCallback(
     () => loadRuns({ showLoading: true }),
     [loadRuns],
@@ -1224,13 +1205,13 @@ export function CanvasWorkspace({
   useEffect(() => {
     aliveRef.current = true;
     runsLoadedRef.current = false;
-    runsInFlightRef.current = false;
+    runsTrackerRef.current.reset([]);
     lastPolledStudioRef.current = {
       fp: studioFingerprint(studioRef.current),
       value: studioRef.current,
     };
     const update = () => {
-      if (runsInFlightRef.current) return;
+      if (runsTrackerRef.current.hasInFlight()) return;
       void loadRuns({ showLoading: !runsLoadedRef.current, silent: true });
     };
     update();
@@ -1239,8 +1220,7 @@ export function CanvasWorkspace({
     }, 5000);
     return () => {
       aliveRef.current = false;
-      runsInFlightRef.current = false;
-      runsReqSeqRef.current++;
+      runsTrackerRef.current.reset([]);
       clearInterval(timer);
     };
   }, [loadRuns]);
