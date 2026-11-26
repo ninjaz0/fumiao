@@ -202,3 +202,34 @@ test("original assets are pinned, unknown paths and modified source fail closed"
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+test("#80 custom Chinese 404 page provides accessible home/studio links and dark/mobile styling without modifying baseline contracts", async () => {
+  const root = process.cwd();
+  const notFoundTsx = await readFile(
+    join(root, "apps/web/app/not-found.tsx"),
+    "utf8",
+  );
+  const notFoundCss = await readFile(
+    join(root, "apps/web/app/not-found.css"),
+    "utf8",
+  );
+  const routesContract = JSON.parse(
+    await readFile(join(root, "baseline/contracts/routes.json"), "utf8"),
+  ) as { routes: unknown[] };
+
+  assert.equal(routesContract.routes.length, 120);
+  assert.match(notFoundTsx, /import "\.\/not-found\.css";/);
+  assert.match(notFoundTsx, /页面不存在/);
+  assert.match(notFoundTsx, /href="\/studio"[\s\S]*?进入工作台/);
+  assert.match(notFoundTsx, /href="\/"[\s\S]*?返回首页/);
+  assert.match(notFoundTsx, /fumiao-appearance/);
+
+  assert.match(notFoundCss, /:root\[data-theme="dark"\] \.not-found-shell/);
+  assert.match(notFoundCss, /@media \(prefers-color-scheme: dark\)/);
+  assert.match(notFoundCss, /:where\(a, button\):focus-visible/);
+  assert.match(
+    notFoundCss,
+    /\.nf-button\s*\{[\s\S]*?min-height:\s*(4[4-9]|[5-9]\d)px;/,
+  );
+  assert.match(notFoundCss, /@media \(max-width: 560px\)/);
+});
