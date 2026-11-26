@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -88,4 +88,84 @@ test("PluginImport.module.css replaces bare system Canvas/CanvasText keywords wi
   assert.match(css, /var\(--text\)/);
   assert.match(css, /var\(--line\)/);
   assert.match(css, /\.dialog footer button/);
+});
+
+test("Settings tabs remove redundant general tab, rename budgets nav, drop ComfySlotMapper, and strip half-baked cards", () => {
+  assert.equal(
+    existsSync(join(repoRoot, "apps/web/studio/ComfySlotMapper.tsx")),
+    false,
+    "ComfySlotMapper.tsx should be removed from Studio settings",
+  );
+
+  const settingsTabs = readRepoFile("apps/web/studio/settings-tabs.ts");
+  const settings = readRepoFile("apps/web/studio/Settings.tsx");
+  const studio = readRepoFile("apps/web/studio/Studio.tsx");
+  const credits = readRepoFile("apps/web/studio/SettingsCredits.tsx");
+  const budgets = readRepoFile("apps/web/studio/SettingsBudgets.tsx");
+
+  assert.doesNotMatch(settingsTabs, /"general"/);
+  assert.doesNotMatch(settings, /"general"|function General\b/);
+  assert.doesNotMatch(studio, /"general"/);
+
+  assert.doesNotMatch(settings, /预算与风控/);
+  assert.match(settings, /\["budgets",\s*"预算控制",\s*"sliders",\s*"account"\]/);
+  assert.match(settings, /key === "openai"/);
+  assert.match(settings, /key === "chatService"/);
+
+  assert.doesNotMatch(credits, /周期配额包|使用已支付充值单号激活|\/api\/subscriptions/);
+  assert.doesNotMatch(budgets, /\/api\/budgets\/moderation|saveModeration/);
+  assert.match(budgets, /\{canManage\s*&&\s*\(/);
+});
+
+test("Settings*.tsx strip internal ticket codes and raw DB enums while relocating SkillEditorCard cleanly", () => {
+  const studioDir = join(repoRoot, "apps/web/studio");
+  const settingsFiles = readdirSync(studioDir).filter((name) =>
+    /^Settings.*\.tsx$/.test(name),
+  );
+  assert.ok(settingsFiles.length >= 10);
+
+  for (const file of settingsFiles) {
+    const src = readRepoFile(`apps/web/studio/${file}`);
+    assert.doesNotMatch(src, /\bF0(?:15|24|34)\b/, `${file} leaked ticket code`);
+    assert.doesNotMatch(
+      src,
+      /ComfySlotMapper|ComfyUI 工作流发布器|周期配额包|使用已支付充值单号激活/,
+      `${file} kept removed UI block`,
+    );
+    assert.doesNotMatch(
+      src,
+      /\(plan_only|\(propose_and_confirm\)|\(auto_within_budget\)|\(cap\)|moderation_blocked/,
+      `${file} leaked raw DB enum in copy`,
+    );
+  }
+
+  const redeem = readRepoFile("apps/web/studio/SettingsRedeem.tsx");
+  assert.match(redeem, /<h2>兑换码管理<\/h2>/);
+  assert.match(redeem, /className="secondary"[\s\S]*复制全部/);
+  assert.match(redeem, /className="secondary"[\s\S]*停用/);
+
+  const observability = readRepoFile("apps/web/studio/SettingsObservability.tsx");
+  assert.doesNotMatch(observability, /<code>uncertain<\/code>|（uncertain|安全改写\s*\/\s*在线 GPU/);
+  assert.match(observability, /<small>在线 GPU 节点<\/small>/);
+  assert.match(observability, /className="secondary"[\s\S]*人工核对退款/);
+
+  const apiTokens = readRepoFile("apps/web/studio/SettingsApiTokens.tsx");
+  assert.match(apiTokens, /<option value="plan_only">/);
+  assert.match(apiTokens, /<option value="propose_and_confirm">/);
+  assert.match(apiTokens, /<option value="auto_within_budget">/);
+  assert.match(apiTokens, /<SkillEditorCard workspace=\{Number\(workspace\)\} \/>/);
+
+  assert.equal(
+    existsSync(join(repoRoot, "apps/web/studio/SkillEditorCard.tsx")),
+    true,
+    "SkillEditorCard.tsx must exist",
+  );
+  const skillCard = readRepoFile("apps/web/studio/SkillEditorCard.tsx");
+  assert.match(skillCard, /ledger-card/);
+  assert.match(skillCard, /启用后将自动注入工作区对话与外部 MCP 上下文/);
+  assert.doesNotMatch(skillCard, /`SKILL\.md`|`\.zip`|icon-button|\bF0(?:15|24|34)\b/);
+
+  const skillModal = readRepoFile("apps/web/canvas-editor/SkillEditorModal.tsx");
+  assert.match(skillModal, /from "\.\.\/studio\/SkillEditorCard"/);
+  assert.doesNotMatch(skillModal, /useState\(/);
 });

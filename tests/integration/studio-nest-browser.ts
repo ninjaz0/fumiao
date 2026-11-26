@@ -809,7 +809,7 @@ export async function studioBrowser(
         page.waitForRequest((r) => new URL(r.url()).pathname === "/api/settings/prices" && r.method() === "PUT"),
         savePrice.click(),
       ]);
-      await setTab(page, "general");
+      await setTab(page, "profile");
       await setTab(page, "prices");
       await expect(priceInput).toHaveValue("10");
       await priceInput.fill("7");
@@ -817,7 +817,7 @@ export async function studioBrowser(
       releaseSave();
     }
     await expect(page.locator("#toast")).toHaveText("价格已保存");
-    await setTab(page, "general");
+    await setTab(page, "profile");
     await setTab(page, "prices");
     await expect(priceInput).toHaveValue("7");
     await expect(page.getByText("有未保存的修改", { exact: true })).toBeVisible();
