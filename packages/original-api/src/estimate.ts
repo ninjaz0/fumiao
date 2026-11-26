@@ -1,6 +1,7 @@
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one } from "@fumiao/platform/db.js";
 import { requireValue, DomainError } from "@fumiao/platform/security.js";
+import { hasStudioPackages } from "@fumiao/platform/studio-plugin-profile.js";
 import {
   QueueForecasts,
   type ForecastCandidate,
@@ -182,10 +183,13 @@ export class OriginalEstimates {
                 queue_health_revision: null,
                 allowed: true,
               });
+        const hasPackages = await hasStudioPackages(sql);
         const policy = await one(
           sql,
-          "SELECT studio_model_allowed($1,$2) AS allowed",
-          [prepared.model, workspace.id],
+          `SELECT ${hasPackages ? "studio_plugin_accepts($3) AND " : ""}studio_model_allowed($1,$2) AS allowed`,
+          hasPackages
+            ? [prepared.model, workspace.id, catalog.plugin_id]
+            : [prepared.model, workspace.id],
         );
         const candidate: ForecastCandidate = {
           connection: connection as ForecastCandidate["connection"],

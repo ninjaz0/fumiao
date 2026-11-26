@@ -1,4 +1,7 @@
-import { queuedModelPolicy } from "./studio-plugin-profile.js";
+import {
+  hasStudioPackages,
+  queuedModelPolicy,
+} from "./studio-plugin-profile.js";
 import { loadProgram } from "./plugin-program.js";
 import { randomUUID } from "node:crypto";
 import { one, type Sql } from "./db.js";
@@ -800,9 +803,10 @@ export class Executor {
     const existingParams = (job.input?.params ?? {}) as Record<string, unknown>;
     if (existingParams._fallback_from) return false;
 
+    const hasPackages = await hasStudioPackages(sql);
     const allowed = await one(
       sql,
-      "SELECT studio_model_allowed('edge-tts', $1) AS ok",
+      `SELECT ${hasPackages ? "studio_plugin_accepts('edge-tts') AND " : ""}studio_model_allowed('edge-tts', $1) AS ok`,
       [job.workspace_id],
     );
     if (!allowed?.ok) return false;

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { RequestDisposition } from "@fumiao/plugin-sdk/lifecycle.js";
 import { one, type Sql } from "./db.js";
 import type { Platform } from "./platform.js";
+import { hasStudioPackages } from "./studio-plugin-profile.js";
 
 export function isModerationRejectionMessage(message: string): boolean {
   const lower = String(message || "").toLowerCase();
@@ -230,6 +231,9 @@ export async function tryModerationEquivalentFallback(
   const originalPrice = Number(job.price ?? 0);
 
   // Candidate enabled same-kind models excluding current model, prioritizing explicit fallbackModel
+  const pkgFilter = (await hasStudioPackages(sql))
+    ? "AND studio_plugin_accepts(c.plugin_id) AND (m.catalog_id IS NULL OR studio_service_selected(m.catalog_id, c.id))"
+    : "";
   const candidateRows = (
     await sql.query(
       `SELECT m.id, m.connection_id, m.catalog_id, m.provider_model,
@@ -244,6 +248,7 @@ export async function tryModerationEquivalentFallback(
           AND m.enabled = TRUE
           AND c.enabled = TRUE
           AND NOT c.removed
+          ${pkgFilter}
           AND COALESCE(m.catalog_id, m.provider_model) <> $2
         ORDER BY CASE WHEN m.catalog_id = $4 OR m.provider_model = $4 THEN 0 ELSE 1 END,
                  min_price ASC, m.id ASC

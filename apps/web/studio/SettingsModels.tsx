@@ -1,13 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { AdminSave } from "./settings-admin";
+import { summarizeModelSections } from "./settings-models-helpers";
 import type { StudioState } from "./state";
-
-const sections = [
-  ["video", "视频生成"],
-  ["image", "图片生成"],
-  ["audio", "语音生成"],
-  ["chat", "AI 对话"],
-] as const;
 
 function ModelSearch({
   search,
@@ -107,49 +101,7 @@ export function ModelSettings({
   }
 
   const term = search.trim().toLowerCase();
-  const groups = sections.map(([kind, title]) => {
-    const rows = Object.entries(state.model_groups || {})
-      .filter(([, group]) => group.kind === kind)
-      .map(([id, group]) => {
-        const open = group.models.filter(
-          (model) => policy?.enabled[model],
-        ).length;
-        const globalOpen = group.models.filter(
-          (model) => global.enabled[model],
-        ).length;
-        const partial = open > 0 && open < group.models.length;
-        const notes = [
-          partial ? "部分开放" : "",
-          scope === "global" || globalOpen === group.models.length
-            ? ""
-            : globalOpen === 0
-              ? "全站已关闭"
-              : "全站部分开放",
-          id === "gpt-image-2.6-sunburst" && !state.images.configured
-            ? "未配置"
-            : "",
-        ]
-          .filter(Boolean)
-          .join(" · ");
-        return {
-          id,
-          label: group.label,
-          open,
-          partial,
-          notes,
-          hidden: ![
-            group.label,
-            notes,
-            ...group.models.map((model) => state.model_catalog[model]?.provider),
-          ]
-            .join(" ")
-            .toLowerCase()
-            .includes(term),
-        };
-      });
-    const visibleRows = rows.filter(({ hidden }) => !hidden);
-    return { kind, title, rows, visibleRows };
-  });
+  const groups = summarizeModelSections(state, scope, search);
   const noResults =
     term !== "" && groups.every(({ visibleRows }) => !visibleRows.length);
 
@@ -241,7 +193,7 @@ export function ModelSettings({
       <div role="status">
         {noResults && <p className="console-empty">没有匹配的模型</p>}
       </div>
-      {groups.map(({ kind, title, rows, visibleRows }) => {
+      {groups.map(({ kind, title, rows, visibleRows, openCount }) => {
         return (
           <section
             key={kind}
@@ -251,33 +203,38 @@ export function ModelSettings({
             <h3 className="console-model-heading">
               {title}
               <small>
-                {visibleRows.filter(({ open }) => open > 0).length} /{" "}
-                {visibleRows.length} 开放
+                {openCount} / {visibleRows.length} 开放
               </small>
             </h3>
-            {rows.map(({ id, label, open, partial, notes, hidden }) => (
-              <div key={id} className="setting-row" hidden={hidden}>
-                <div className="model-setting-name">
-                  <span>{label}</span>
-                  {notes && <small>{notes}</small>}
+            {rows.map(({ id, label, open, partial, pluginDisabled, notes, hidden }) => {
+              const qualifiers = [
+                pluginDisabled ? "插件已停用" : "",
+                partial ? "部分开放" : "",
+              ].filter(Boolean);
+              return (
+                <div key={id} className="setting-row" hidden={hidden}>
+                  <div className="model-setting-name">
+                    <span>{label}</span>
+                    {notes && <small>{notes}</small>}
+                  </div>
+                  <label className="model-switch">
+                    <input
+                      key={JSON.stringify([scope, open > 0])}
+                      type="checkbox"
+                      role="switch"
+                      data-model={id}
+                      aria-label={`开放${title}模型 ${label}${qualifiers.length ? `（${qualifiers.join("，")}）` : ""}`}
+                      checked={pending?.id === id ? pending.enabled : open > 0}
+                      disabled={!!pending}
+                      onChange={(event) =>
+                        void toggle(id, event.currentTarget.checked)
+                      }
+                    />
+                    <span aria-hidden="true" />
+                  </label>
                 </div>
-                <label className="model-switch">
-                  <input
-                    key={JSON.stringify([scope, open > 0])}
-                    type="checkbox"
-                    role="switch"
-                    data-model={id}
-                    aria-label={`开放${title}模型 ${label}${partial ? "（部分开放）" : ""}`}
-                    checked={pending?.id === id ? pending.enabled : open > 0}
-                    disabled={!!pending}
-                    onChange={(event) =>
-                      void toggle(id, event.currentTarget.checked)
-                    }
-                  />
-                  <span aria-hidden="true" />
-                </label>
-              </div>
-            ))}
+              );
+            })}
           </section>
         );
       })}

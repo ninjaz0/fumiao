@@ -284,6 +284,15 @@ export class StudioCatalog {
       ).rows.map((r) => [r.id, r.enabled]),
     );
   }
+  async pluginAccess(sql: Sql) {
+    return Object.fromEntries(
+      (
+        await sql.query(
+          `SELECT id,${(await hasStudioPackages(sql)) ? "studio_plugin_accepts(plugin_id)" : "true"} AS enabled FROM ${await listedStudioCatalog(sql, "models")} c ORDER BY position,id`,
+        )
+      ).rows.map((r) => [r.id, r.enabled]),
+    );
+  }
   async prices(sql: Sql = this.db) {
     // A single statement keeps the amount list and revision in the same snapshot.
     const rows = (
@@ -437,17 +446,21 @@ export class StudioCatalog {
     );
     requireValue(
       catalog &&
-        (!(await hasStudioPackages(sql)) ||
-          (
-            await one(sql, "SELECT studio_plugin_accepts($1) AS ok", [
-              catalog.plugin_id,
-            ])
-          ).ok) &&
         catalog.plugin_id === model.plugin_id &&
         catalog.plugin_version === model.plugin_version,
       409,
       "连接版本与模型目录不一致，请升级连接",
     );
+    if (await hasStudioPackages(sql))
+      requireValue(
+        (
+          await one(sql, "SELECT studio_plugin_accepts($1) AS ok", [
+            catalog.plugin_id,
+          ])
+        ).ok,
+        409,
+        "插件已停用",
+      );
     await sql.query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE", [
       workspace,
     ]);
@@ -516,6 +529,24 @@ export class StudioCatalog {
         reason: `模型“${modelId}”未安装或已下架`,
       };
     }
+    const hasPackages = await hasStudioPackages(sql);
+    if (hasPackages) {
+      const accepts = await one(
+        sql,
+        "SELECT studio_plugin_accepts($1) AS ok",
+        [catalog.plugin_id],
+      );
+      if (!accepts?.ok) {
+        return {
+          allowed: false,
+          priced: false,
+          amount: 0,
+          key: null,
+          revision,
+          reason: "插件已停用",
+        };
+      }
+    }
     const policy = await one(
       sql,
       "SELECT studio_model_allowed($1,$2) AS allowed",
@@ -532,7 +563,7 @@ export class StudioCatalog {
       };
     }
     if (requireConnection) {
-      const pkgFilter = (await hasStudioPackages(sql))
+      const pkgFilter = hasPackages
         ? "AND studio_service_selected(m.catalog_id, c.id)"
         : "";
       const activeConn = await one(

@@ -33,7 +33,7 @@ export class CanvasSubmissionModels {
       rules.set(r.id, rule);
     }
     const pkgFilter = (await hasStudioPackages(sql))
-      ? "AND studio_service_selected(m.catalog_id, c.id)"
+      ? "AND studio_plugin_accepts(c.plugin_id) AND studio_service_selected(m.catalog_id, c.id)"
       : "";
     const connRows = (
       await sql.query(
