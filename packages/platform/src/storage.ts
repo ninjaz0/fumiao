@@ -19,6 +19,10 @@ import {
   unlink,
 } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  contentDisposition,
+  type ContentDispositionType,
+} from "@fumiao/plugin-sdk/media-filename.js";
 /** Convert seconds and nanoseconds separately, preserving source FileResponse validators. */
 export function modifiedSeconds(nanoseconds: bigint) {
   return (
@@ -47,7 +51,11 @@ export interface Storage {
   availableBytes?(): Promise<number>;
   downloadUrl?(
     key: string,
-    response?: { mime: string; filename?: string },
+    response?: {
+      mime: string;
+      filename?: string;
+      disposition?: ContentDispositionType;
+    },
   ): Promise<string>;
 }
 export class DiskStorage implements Storage {
@@ -186,7 +194,11 @@ export class S3Storage implements Storage {
   }
   async downloadUrl(
     key: string,
-    response?: { mime: string; filename?: string },
+    response?: {
+      mime: string;
+      filename?: string;
+      disposition?: ContentDispositionType;
+    },
   ) {
     return getSignedUrl(
       this.client,
@@ -196,12 +208,10 @@ export class S3Storage implements Storage {
         ...(response ? { ResponseContentType: response.mime } : {}),
         ...(response?.filename
           ? {
-              ResponseContentDisposition:
-                "attachment; filename*=UTF-8''" +
-                encodeURIComponent(response.filename).replace(
-                  /[!'()*]/g,
-                  (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
-                ),
+              ResponseContentDisposition: contentDisposition(
+                response.filename,
+                response.disposition ?? "attachment",
+              ),
             }
           : {}),
       }),

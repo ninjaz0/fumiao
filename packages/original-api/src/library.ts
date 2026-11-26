@@ -12,6 +12,8 @@ import {
 import { collectDerivativeObjectKeys } from "@fumiao/platform/derivatives.js";
 import { OriginalIdentity } from "./identity.js";
 import { OriginalMedia } from "./media.js";
+import { disposition } from "./files.js";
+import { normalizeMediaMime } from "@fumiao/plugin-sdk/media-filename.js";
 import { parseBody } from "./validation.js";
 import { identityBodies } from "./contracts.js";
 import { zipStream, type ArchiveEntry } from "./zip.js";
@@ -19,6 +21,12 @@ type Selection = { kind: "job" | "asset"; row: any };
 const terminal = ["completed", "failed", "cancelled"];
 const extensions: Record<string, string> = {
   "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/wave": "wav",
+  "audio/mpeg": "mp3",
+  "audio/mp3": "mp3",
+  "audio/flac": "flac",
+  "audio/ogg": "ogg",
   "video/mp4": "mp4",
   "video/webm": "webm",
   "image/png": "png",
@@ -29,8 +37,9 @@ export function archiveEntry(
   asset: { public_id: string; size: number | string; mime: string },
   name: string,
 ): ArchiveEntry {
-  const extension = Object.hasOwn(extensions, asset.mime)
-    ? extensions[asset.mime]
+  const mime = normalizeMediaMime(asset.mime);
+  const extension = Object.hasOwn(extensions, mime)
+    ? extensions[mime]
     : undefined;
   requireValue(extension, 400, "不支持下载此文件类型");
   return {
@@ -507,14 +516,7 @@ export class OriginalLibrary {
       }
       res.status(200);
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader(
-        "Content-Disposition",
-        "attachment; filename*=UTF-8''" +
-          encodeURIComponent(this.filename(entries)).replace(
-            /[!'()*]/g,
-            (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
-          ),
-      );
+      res.setHeader("Content-Disposition", disposition(this.filename(entries)));
       res.setHeader("X-Accel-Buffering", "no");
       await pipeline(Readable.from(zipStream(entries, streams)), res).catch(
         (error) => {

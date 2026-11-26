@@ -13,21 +13,8 @@ import {
   getReadyDerivative,
   type DerivativeVariant,
 } from "@fumiao/platform/derivatives.js";
+import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename.js";
 import { sendFile } from "./files.js";
-const extension: Record<string, string> = {
-  "audio/wav": ".wav",
-  "audio/mpeg": ".mp3",
-  "audio/flac": ".flac",
-  "audio/ogg": ".ogg",
-  "video/mp4": ".mp4",
-  "video/webm": ".webm",
-  "image/png": ".png",
-  "image/jpeg": ".jpg",
-  "image/webp": ".webp",
-  "application/zip": ".zip",
-  "application/xml": ".fcpxml",
-  "text/plain": ".edl",
-};
 function safeDownloadFilename(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const cleaned = raw.replace(/[\r\n\0"/\\]/g, "").trim();
@@ -49,7 +36,8 @@ export class OriginalMedia {
     }
     const asset = await one(
       sql,
-      `SELECT a.* FROM assets a JOIN workspaces w ON w.id=a.workspace_id
+      `SELECT a.*, r.name FROM assets a JOIN workspaces w ON w.id=a.workspace_id
+    LEFT JOIN asset_reference_media r ON r.asset_id=a.id
     WHERE a.public_id=$1 AND a.state='ready' AND ($4::uuid IS NULL OR w.id=$4)
     AND ((w.kind='personal' AND w.owner_id=$2) OR (w.kind='team' AND ($3='admin' OR EXISTS(SELECT 1 FROM members m WHERE m.workspace_id=w.id AND m.user_id=$2))))`,
       [key, user.id, user.role, effectiveWorkspace],
@@ -66,7 +54,8 @@ export class OriginalMedia {
         // Still permit read-only access to explicitly published global AssetPack media
         const globalAsset = await one(
           sql,
-          `SELECT a.* FROM assets a
+          `SELECT a.*, r.name FROM assets a
+           LEFT JOIN asset_reference_media r ON r.asset_id=a.id
            WHERE a.public_id=$1 AND a.state='ready'
            AND EXISTS (
              SELECT 1 FROM document_assets da
@@ -85,7 +74,8 @@ export class OriginalMedia {
     if (!workspace) {
       const globalAsset = await one(
         sql,
-        `SELECT a.* FROM assets a
+        `SELECT a.*, r.name FROM assets a
+         LEFT JOIN asset_reference_media r ON r.asset_id=a.id
          WHERE a.public_id=$1 AND a.state='ready'
          AND EXISTS (
            SELECT 1 FROM document_assets da
@@ -111,17 +101,25 @@ export class OriginalMedia {
     const asset = await this.resource(this.p.db, user, key);
     let objectKey: string = asset.object_key;
     let mime: string = asset.mime;
+    let usingDerivative = false;
     if (variant && !download) {
       const deriv = await getReadyDerivative(this.p.db, asset.id, variant);
       if (deriv) {
         objectKey = deriv.object_key;
         mime = deriv.mime;
+        usingDerivative = true;
       }
     }
-    const filename = download
-      ? (safeDownloadFilename(asset.metadata?.filename) ??
-        "弗淼-" + key.slice(0, 8) + (extension[mime] || ""))
+    const explicitMetadataName = !usingDerivative
+      ? safeDownloadFilename(asset.metadata?.filename)
       : undefined;
+    const filename =
+      explicitMetadataName ??
+      mediaDownloadFilename(
+        key,
+        mime,
+        usingDerivative ? undefined : asset.name,
+      );
     // Keep embedded S3 media on its stable same-origin URL across refreshes.
     // Explicit downloads and API clients still receive a short-lived signed URL.
     const embedded = ["image", "audio", "video"].includes(
@@ -135,6 +133,7 @@ export class OriginalMedia {
         await this.p.storage.downloadUrl(objectKey, {
           mime,
           filename,
+          ...(download ? {} : { disposition: "inline" }),
         }),
       );
       res.setHeader("Content-Length", "0");
@@ -154,6 +153,7 @@ export class OriginalMedia {
           this.p.storage.stream(objectKey, start, end),
       },
       filename,
+      download ? "attachment" : "inline",
     );
   }
   async builtin(filename: string, req: Request, res: Response) {

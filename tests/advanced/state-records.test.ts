@@ -543,3 +543,86 @@ test("schema upgrade recovers known historical facts and keeps unknown facts exp
     await f.cleanup();
   }
 });
+
+test("legacy importer archive jobs with populated result.assets and original_view.result expose result_mime only for same-workspace assets", async () => {
+  const f = await databaseFixture();
+  try {
+    const data = archive();
+    const sameWsKey = "c".repeat(32);
+    const crossWsKey = "d".repeat(32);
+    const webmBytes = Buffer.from("1a45dfa3", "hex");
+    await writeFile(join(f.directory, sameWsKey), webmBytes);
+    await writeFile(join(f.directory, crossWsKey), webmBytes);
+    data.tables.media.push(
+      {
+        id: sameWsKey,
+        original_order: 20,
+        workspace: 4,
+        owner: 15,
+        kind: "video",
+        mime: "video/webm",
+        size: webmBytes.length,
+        w: 864,
+        h: 480,
+      },
+      {
+        id: crossWsKey,
+        original_order: 21,
+        workspace: 9,
+        owner: 15,
+        kind: "video",
+        mime: "video/webm",
+        size: webmBytes.length,
+        w: 864,
+        h: 480,
+      },
+    );
+    const baseJob = data.tables.jobs[0];
+    data.tables.jobs.push(
+      {
+        ...baseJob,
+        id: 43,
+        workspace: 4,
+        status: "done",
+        result: sameWsKey,
+        note: "",
+      },
+      {
+        ...baseJob,
+        id: 44,
+        workspace: 4,
+        status: "done",
+        result: crossWsKey,
+        note: "",
+      },
+    );
+    await importLegacy(f.p, data, f.directory);
+
+    const crossJobRow = await one(
+      f.db,
+      "SELECT result, original_view FROM jobs WHERE public_id=44",
+    );
+    assert.deepEqual(crossJobRow.result, {
+      assets: [legacyId(data.source, "asset", crossWsKey)],
+    });
+    assert.equal(crossJobRow.original_view.result, crossWsKey);
+
+    const wid = legacyId(data.source, "workspace", 4);
+    const archived = await new OriginalStateRecords().archivedJobs(
+      f.db,
+      wid,
+      1080,
+    );
+    const sameWsJob = archived.find((j) => j.id === 43);
+    const crossWsJob = archived.find((j) => j.id === 44);
+    assert.ok(sameWsJob);
+    assert.equal(sameWsJob.result, sameWsKey);
+    assert.equal(sameWsJob.result_mime, "video/webm");
+
+    assert.ok(crossWsJob);
+    assert.equal(crossWsJob.result, crossWsKey);
+    assert.equal(Object.hasOwn(crossWsJob, "result_mime"), false);
+  } finally {
+    await f.cleanup();
+  }
+});

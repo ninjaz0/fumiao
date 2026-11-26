@@ -64,16 +64,18 @@ export function Favorite({
 
 export function Download({
   id,
+  filename,
   detail = false,
 }: {
   id: string;
+  filename?: string;
   detail?: boolean;
 }) {
   return (
     <a
       className={detail ? "download-action" : undefined}
       href={mediaURL(id) + "?download=true"}
-      download
+      download={filename || true}
       title={detail ? undefined : "下载"}
     >
       <Icon name="download" />
