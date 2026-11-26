@@ -556,7 +556,7 @@ export class OriginalBillingExtras {
       const subscriptions = (
         await sql.query(
           `SELECT s.id, s.status, s.current_period_start, s.current_period_end, s.order_id, s.created_at,
-                  p.code AS plan_code, p.name AS plan_name, p.period_credits, p.period_days,
+                  p.code AS plan_code, p.name AS plan_name, s.period_credits, p.period_days,
                   EXISTS (
                     SELECT 1 FROM subscription_grants g
                      WHERE g.subscription_id = s.id AND g.period_start = s.current_period_start
@@ -660,13 +660,6 @@ export class OriginalBillingExtras {
       );
       requireValue(wallet, 404, "工作区钱包不存在");
 
-      const plan = await one(
-        sql,
-        "SELECT * FROM subscription_plans WHERE code = $1 AND enabled = TRUE",
-        [input.plan_code.trim().toLowerCase()],
-      );
-      requireValue(plan, 404, "周期配额包套餐不存在或已下架");
-
       const orderId = input.order_id?.trim() || null;
       const uid = input.uid?.trim() || "";
       const idempotencyKey = uid || (orderId ? `order:${orderId}` : randomUUID());
@@ -682,7 +675,7 @@ export class OriginalBillingExtras {
           sql,
           `SELECT a.workspace_id, a.cost_credits, a.payment_mode,
                   s.id, s.status, s.current_period_start, s.current_period_end, s.order_id,
-                  p.code AS plan_code, p.name AS plan_name, p.period_credits
+                  p.code AS plan_code, p.name AS plan_name, s.period_credits
              FROM subscription_activations a
              JOIN workspace_subscriptions s ON s.id = a.subscription_id
              JOIN subscription_plans p ON p.id = s.plan_id
@@ -719,6 +712,13 @@ export class OriginalBillingExtras {
           };
         }
       }
+
+      const plan = await one(
+        sql,
+        "SELECT * FROM subscription_plans WHERE code = $1 AND enabled = TRUE",
+        [input.plan_code.trim().toLowerCase()],
+      );
+      requireValue(plan, 404, "周期配额包套餐不存在或已下架");
 
       const priceFen = Number(plan.price_fen);
       const costCredits = Math.round(priceFen / 10);
@@ -848,10 +848,10 @@ export class OriginalBillingExtras {
 
       const created = await one(
         sql,
-        `INSERT INTO workspace_subscriptions(workspace_id, plan_id, status, current_period_start, current_period_end, order_id)
-         VALUES ($1, $2, 'active', $3, $4, $5)
+        `INSERT INTO workspace_subscriptions(workspace_id, plan_id, status, current_period_start, current_period_end, order_id, period_credits)
+         VALUES ($1, $2, 'active', $3, $4, $5, $6)
          RETURNING id, current_period_start, current_period_end`,
-        [ws.id, plan.id, start, end, orderId],
+        [ws.id, plan.id, start, end, orderId, plan.period_credits],
       );
 
       if (hasActTable?.ok) {

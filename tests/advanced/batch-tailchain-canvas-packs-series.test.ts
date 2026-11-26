@@ -918,3 +918,50 @@ test("#9 F010 concurrent retry & crash recovery: in-flight retry waits for full 
   ).rows[0];
   assert.equal(finalStatus?.status, "completed");
 });
+
+test("recovering an interrupted batch after a canvas edit preserves accepted jobs and skips remaining work", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+
+  const nodeIds = ["accepted", "pending"];
+  const projectKey = await f.project(
+    nodeIds.map((id, index) => ({
+      id,
+      type: "image",
+      x: index * 340,
+      y: 0,
+      prompt: `Batch image ${id}`,
+      params: { ratio: "16:9", resolution: "1K" },
+    })),
+  );
+  const uid = randomUUID();
+  const selection = { expected_revision: 2, node_ids: nodeIds, stages: ["image"] };
+  const payload = { ...selection, uid };
+  const precheck = await new OriginalBatchPrecheck(f.p).precheckCanvas(f.admin, projectKey, selection);
+  assert.deepEqual([...precheck.executable_keys].sort(), ["accepted:image", "pending:image"]);
+  const { uuid5 } = await import("@fumiao/platform/uuid.js");
+  const { hash } = await import("@fumiao/platform/security.js");
+  const accepted = await f.runs.generate(f.admin, projectKey, "accepted", {
+    expected_revision: 2,
+    uid: uuid5(uid, `batch:${projectKey}:accepted:image`),
+  });
+  await f.p.db.query(
+    `INSERT INTO canvas_batch_runs(owner_id, project_id, uid, request_hash, status, expected_revision, allowed_keys, response, updated_at)
+     SELECT $1, id, $2, $3, 'in_progress', 2, $4::text[], '{}'::jsonb, now() - interval '2 minutes'
+       FROM documents WHERE public_id = $5`,
+    [f.admin.id, uid, hash(JSON.stringify({ node_ids: nodeIds, stages: ["image"] })), precheck.executable_keys, projectKey],
+  );
+  await f.canvases.save(f.admin, projectKey, {
+    title: "画布节点已删除",
+    expected_revision: 2,
+    document: { nodes: [], edges: [] },
+  });
+
+  const receipt = await f.runs.batchRun(f.admin, projectKey, payload);
+  assert.deepEqual(receipt.submitted, [{ node: "accepted", stage: "image", job_id: accepted.id }]);
+  assert.deepEqual(receipt.skipped.map(({ node, stage }) => ({ node, stage })), [{ node: "pending", stage: "image" }]);
+  assert.equal(receipt.total_credits, 2);
+  assert.deepEqual(await f.runs.batchRun(f.admin, projectKey, payload), receipt);
+  const wallet = await f.p.db.query("SELECT held FROM wallets WHERE workspace_id=$1", [f.workspace.id]);
+  assert.equal(Number(wallet.rows[0].held), 2);
+});

@@ -783,10 +783,12 @@ test("#4 + #8 F034: subscription zero double-counting, single-use order_id, idem
   );
 
   // 4. Concurrent double-renewal race with 350 balance (enough for strictly ONE 290-credit renewal!)
-  const race = await Promise.allSettled([
-    billing.subscribe(f.admin, { plan_code: "starter-monthly", uid: randomUUID() }, wsPublicId),
-    billing.subscribe(f.admin, { plan_code: "starter-monthly", uid: randomUUID() }, wsPublicId),
-  ]);
+  const renewalUids = [randomUUID(), randomUUID()];
+  const race = await Promise.allSettled(
+    renewalUids.map((uid) =>
+      billing.subscribe(f.admin, { plan_code: "starter-monthly", uid }, wsPublicId),
+    ),
+  );
   const raceOk = race.filter((r) => r.status === "fulfilled");
   const raceErr = race.filter((r) => r.status === "rejected");
   assert.equal(raceOk.length, 1);
@@ -804,6 +806,16 @@ test("#4 + #8 F034: subscription zero double-counting, single-use order_id, idem
   // Running sweep early grants 0
   assert.equal(await grantDueSubscriptions(f.p), 0);
 
+  // Editing the catalog cannot change the credits for an already purchased period.
+  await billing.createPlan(f.admin, {
+    code: "starter-monthly",
+    name: "创作起步包（调整后）",
+    price_fen: 2900,
+    period_days: 30,
+    period_credits: 100,
+    enabled: false,
+  });
+
   // When next billing cycle arrives -> grantDueSubscriptions drops +350 ONCE (balance -> 410)
   await f.p.db.query(
     "UPDATE workspace_subscriptions SET current_period_start = now() - interval '1 minute' WHERE id = $1",
@@ -813,6 +825,16 @@ test("#4 + #8 F034: subscription zero double-counting, single-use order_id, idem
   assert.equal(await grantDueSubscriptions(f.p), 0);
   const wAfterCycle = (await f.p.db.query("SELECT balance FROM wallets WHERE workspace_id=$1", [f.workspace.id])).rows[0];
   assert.equal(Number(wAfterCycle.balance), 410);
+  const renewalReplay = await billing.subscribe(
+    f.admin,
+    { plan_code: "starter-monthly", uid: renewalUids[race.findIndex((r) => r.status === "fulfilled")] },
+    wsPublicId,
+  );
+  assert.equal(renewalReplay.idempotent_replay, true);
+  assert.equal(renewalReplay.subscription.id, renewed.subscription.id);
+  assert.equal(renewalReplay.subscription.period_credits, 350);
+  const planList = await billing.listPlans(f.admin, wsPublicId);
+  assert.equal(planList.subscriptions.find((sub) => sub.id === renewed.subscription.id)?.period_credits, 350);
 
   // 5. #8 Chinese Multi-Page PDF + Explicit Date-Range CSV Reconciliation
   await f.p.db.query("UPDATE workspaces SET name = '测试中文制片空间' WHERE id = $1", [f.workspace.id]);

@@ -44,7 +44,7 @@ export async function grantDueSubscriptions(p: Platform): Promise<number> {
       const sub = await one(
         sql,
         `SELECT s.id, s.workspace_id, s.current_period_start, s.current_period_end, s.status,
-                p.name AS plan_name, p.period_credits
+                p.name AS plan_name, s.period_credits
            FROM workspace_subscriptions s
            JOIN subscription_plans p ON p.id = s.plan_id
           WHERE s.id = $1 FOR UPDATE OF s`,

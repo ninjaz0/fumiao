@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
@@ -980,6 +981,33 @@ export class OriginalCanvasRuns {
         stages: [...new Set(body.stages)].sort(),
       }),
     );
+    const claimId = randomUUID();
+    const itemUid = (node: string, stage: PrecheckStage) =>
+      uuid5(body.uid, `batch:${projectKey}:${node}:${stage}`);
+    const ensureClaim = (row: unknown) =>
+      requireValue(
+        row,
+        409,
+        "该批量提交已由其他请求恢复，请使用同一 UID 重试获取回执",
+      );
+    const complete = async (
+      sql: Sql,
+      projectUuid: string,
+      response: BatchRunResponse,
+    ) => {
+      ensureClaim(
+        await one(
+          sql,
+          `UPDATE canvas_batch_runs
+            SET status='completed', response=$5::jsonb, updated_at=now()
+          WHERE owner_id=$1 AND project_id=$2 AND uid=$3
+            AND claim_id=$4 AND status='in_progress'
+          RETURNING uid`,
+          [user.id, projectUuid, body.uid, claimId, JSON.stringify(response)],
+        ),
+      );
+      return response;
+    };
 
     const waitOrReclaim = async (
       projectUuid: string,
@@ -1017,12 +1045,12 @@ export class OriginalCanvasRuns {
           const reclaimed = await one(
             this.p.db,
             `UPDATE canvas_batch_runs
-                SET updated_at = now()
+                SET updated_at = now(), claim_id=$4
               WHERE owner_id=$1 AND project_id=$2 AND uid=$3
                 AND status = 'in_progress'
                 AND updated_at < now() - interval '60 seconds'
              RETURNING expected_revision, allowed_keys`,
-            [user.id, projectUuid, body.uid],
+            [user.id, projectUuid, body.uid, claimId],
           );
           if (reclaimed) {
             return {
@@ -1071,6 +1099,87 @@ export class OriginalCanvasRuns {
           effectiveShots.map((id, idx) => [id, idx]),
         ),
       };
+    };
+
+    // The original executable keys and deterministic link UIDs survive document edits.
+    // Match dialogue by its persisted line identifier because all lines submit atomically.
+    const recoverEditedBatch = async (
+      sql: Sql,
+      projectUuid: string,
+      allowed: Set<string>,
+    ) => {
+      const submitted: BatchRunResponse["submitted"] = [];
+      const skipped: BatchRunResponse["skipped"] = [];
+      const targetsByUid = new Map<
+        string,
+        { node: string; stage: PrecheckStage }
+      >();
+      const dialogueNodes: string[] = [];
+      for (const key of allowed) {
+        const [node, stage] = key.split(":") as [string, PrecheckStage];
+        if (stage === "dialogue") {
+          dialogueNodes.push(node);
+        } else {
+          const uid = itemUid(node, stage);
+          targetsByUid.set(stage === "narration" ? uuid5(uid, "narration") : uid, {
+            node,
+            stage,
+          });
+        }
+      }
+      const { rows } = await sql.query<{
+        uid: string;
+        node: string;
+        job_id: string;
+        price: string;
+      }>(
+        `SELECT l.uid, l.node, j.public_id AS job_id, j.price
+           FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
+          WHERE l.project_id=$1 AND l.owner_id=$2 AND (
+            l.uid=ANY($3::uuid[]) OR (
+              l.node LIKE 'dialogue:%' AND split_part(l.node, ':', 2)=ANY($4::text[])
+            )
+          ) ORDER BY l.id`,
+        [projectUuid, user.id, [...targetsByUid.keys()], dialogueNodes],
+      );
+      const accepted = new Set<string>();
+      let totalCredits = 0;
+      for (const row of rows) {
+        const target = targetsByUid.get(row.uid);
+        if (target) {
+          submitted.push({ ...target, job_id: Number(row.job_id) });
+          accepted.add(`${target.node}:${target.stage}`);
+        } else {
+          const [, node, line_id] = row.node.split(":");
+          const uid = uuid5(
+            itemUid(node, "dialogue"),
+            `dialogue:${projectKey}:${node}:${line_id}`,
+          );
+          if (row.uid !== uid) continue;
+          submitted.push({
+            node,
+            stage: "dialogue",
+            job_id: Number(row.job_id),
+            line_id,
+          });
+          accepted.add(`${node}:dialogue`);
+        }
+        totalCredits += Number(row.price);
+      }
+      for (const key of allowed) {
+        if (accepted.has(key)) continue;
+        const [node, stage] = key.split(":") as [string, PrecheckStage];
+        skipped.push({
+          node,
+          stage,
+          reason: "画布版本已变更，未提交此项。请按当前画布重新预检。",
+        });
+      }
+      return complete(sql, projectUuid, {
+        submitted,
+        skipped,
+        total_credits: totalCredits,
+      });
     };
 
     // 1. Check persisted `canvas_batch_runs` row FIRST (BEFORE revision/precheck checks!)
@@ -1184,23 +1293,10 @@ export class OriginalCanvasRuns {
 
     let plan = init.plan;
     let shotIndexMap = init.shotIndexMap;
-    let allowedKeys: Set<string>;
+    let allowedKeys = new Set<string>();
     let effectiveExpectedRevision: number | bigint = body.expected_revision;
-
-    if (init.kind === "in_progress") {
-      const outcome = await waitOrReclaim(init.projectUuid);
-      if (outcome.mode === "completed") {
-        return outcome.response;
-      }
-      effectiveExpectedRevision = outcome.expectedRevision;
-      allowedKeys = outcome.allowedKeys;
-      const reloaded = await this.p.db.transaction(async (sql) => {
-        const p = await this.canvases.project(sql, user, projectKey, false);
-        return loadExecutionPlan(p);
-      });
-      plan = reloaded.plan;
-      shotIndexMap = reloaded.shotIndexMap;
-    } else {
+    let resume = init.kind === "in_progress";
+    if (!resume) {
       // 3. Re-verify fresh read-only precheck right before claiming `in_progress` so
       // concurrent price changes, busy jobs, or budget exhaustion are caught cleanly.
       // If a concurrent identical request already claimed the same `uid` while we were
@@ -1214,11 +1310,8 @@ export class OriginalCanvasRuns {
         );
       };
 
-      let freshPrecheck: Awaited<
-        ReturnType<OriginalBatchPrecheck["precheckCanvas"]>
-      >;
       try {
-        freshPrecheck = await new OriginalBatchPrecheck(this.p).precheckCanvas(
+        const freshPrecheck = await new OriginalBatchPrecheck(this.p).precheckCanvas(
           user,
           projectKey,
           {
@@ -1254,74 +1347,55 @@ export class OriginalCanvasRuns {
             freshPrecheck.summary.budget_blocks[0] || "已超出预算硬上限",
           );
         }
-      } catch (err) {
-        if (await checkConcurrentTwin()) {
-          const outcome = await waitOrReclaim(init.projectUuid);
-          if (outcome.mode === "completed") {
-            return outcome.response;
-          }
-          effectiveExpectedRevision = outcome.expectedRevision;
-          allowedKeys = outcome.allowedKeys;
-          const reloaded = await this.p.db.transaction(async (sql) => {
-            const p = await this.canvases.project(sql, user, projectKey, false);
-            return loadExecutionPlan(p);
-          });
-          plan = reloaded.plan;
-          shotIndexMap = reloaded.shotIndexMap;
-          // Proceed directly to Step 5 (we already own the reclaimed in_progress row)
-          freshPrecheck = null as unknown as Awaited<
-            ReturnType<OriginalBatchPrecheck["precheckCanvas"]>
-          >;
-        } else {
-          throw err;
-        }
-      }
-
-      if (freshPrecheck) {
         allowedKeys =
           init.serverAllowedKeys ?? new Set(freshPrecheck.executable_keys);
-        // 4. Persist fixed request + `in_progress` state BEFORE dispatching item 1!
-        // Only the winning caller dispatches; concurrent identical retries wait for completion.
-        if (init.hasRunsTable) {
-          const claimed = await one(
-            this.p.db,
-            `INSERT INTO canvas_batch_runs(
+      } catch (err) {
+        if (!(await checkConcurrentTwin())) throw err;
+        resume = true;
+      }
+
+      // Persist the original executable targets before dispatching any jobs.
+      if (!resume && init.hasRunsTable) {
+        const claimed = await one(
+          this.p.db,
+          `INSERT INTO canvas_batch_runs(
                owner_id, project_id, uid, request_hash, status,
-               expected_revision, allowed_keys, response, updated_at
+               expected_revision, allowed_keys, response, updated_at, claim_id
              )
-             VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], '{}'::jsonb, now())
+             VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], '{}'::jsonb, now(), $7)
              ON CONFLICT (owner_id, project_id, uid) DO NOTHING
              RETURNING uid`,
-            [
-              user.id,
-              init.projectUuid,
-              body.uid,
-              requestHash,
-              Number(body.expected_revision),
-              [...allowedKeys].sort(),
-            ],
-          );
-          if (!claimed) {
-            const outcome = await waitOrReclaim(init.projectUuid);
-            if (outcome.mode === "completed") {
-              return outcome.response;
-            }
-            effectiveExpectedRevision = outcome.expectedRevision;
-            allowedKeys = outcome.allowedKeys;
-            const reloaded = await this.p.db.transaction(async (sql) => {
-              const p = await this.canvases.project(
-                sql,
-                user,
-                projectKey,
-                false,
-              );
-              return loadExecutionPlan(p);
-            });
-            plan = reloaded.plan;
-            shotIndexMap = reloaded.shotIndexMap;
-          }
-        }
+          [
+            user.id,
+            init.projectUuid,
+            body.uid,
+            requestHash,
+            Number(body.expected_revision),
+            [...allowedKeys].sort(),
+            claimId,
+          ],
+        );
+        resume = !claimed;
       }
+    }
+
+    if (resume) {
+      const outcome = await waitOrReclaim(init.projectUuid);
+      if (outcome.mode === "completed") return outcome.response;
+      effectiveExpectedRevision = outcome.expectedRevision;
+      allowedKeys = outcome.allowedKeys;
+      const reloaded = await this.p.db.transaction(async (sql) => {
+        const project = await this.canvases.project(sql, user, projectKey, true);
+        if (project.revision !== effectiveExpectedRevision) {
+          return {
+            kind: "edited" as const,
+            receipt: await recoverEditedBatch(sql, init.projectUuid, allowedKeys),
+          };
+        }
+        return { kind: "unchanged" as const, ...loadExecutionPlan(project) };
+      });
+      if (reloaded.kind === "edited") return reloaded.receipt;
+      ({ plan, shotIndexMap } = reloaded);
     }
 
     // 5. Dispatch all items with deterministic per-item idempotency keys while refreshing
@@ -1357,7 +1431,7 @@ export class OriginalCanvasRuns {
         )
           continue;
 
-        if (!allowedKeys!.has(`${node.id}:${stage}`)) {
+        if (!allowedKeys.has(`${node.id}:${stage}`)) {
           skipped.push({
             node: node.id,
             stage,
@@ -1367,24 +1441,26 @@ export class OriginalCanvasRuns {
         }
 
         if (init.hasRunsTable) {
-          await this.p.db.query(
-            `UPDATE canvas_batch_runs
+          ensureClaim(
+            await one(
+              this.p.db,
+              `UPDATE canvas_batch_runs
                 SET updated_at = now()
-              WHERE owner_id=$1 AND project_id=$2 AND uid=$3 AND status='in_progress'`,
-            [user.id, init.projectUuid, body.uid],
+              WHERE owner_id=$1 AND project_id=$2 AND uid=$3
+                AND claim_id=$4 AND status='in_progress'
+              RETURNING uid`,
+              [user.id, init.projectUuid, body.uid, claimId],
+            ),
           );
         }
 
-        const itemUid = uuid5(
-          body.uid,
-          `batch:${projectKey}:${node.id}:${stage}`,
-        );
+        const uid = itemUid(node.id, stage);
         try {
           if (stage === "image" || stage === "video") {
             const res = await this.generate(user, projectKey, node.id, {
               expected_revision: effectiveExpectedRevision,
               price_revision: body.price_revision,
-              uid: itemUid,
+              uid,
             });
             submitted.push({ node: node.id, stage, job_id: res.id });
           } else if (stage === "narration") {
@@ -1399,7 +1475,7 @@ export class OriginalCanvasRuns {
             const res = await this.narrate(user, projectKey, node.id, {
               expected_revision: effectiveExpectedRevision,
               price_revision: body.price_revision,
-              uid: itemUid,
+              uid,
             });
             submitted.push({ node: node.id, stage, job_id: res.id });
           } else if (stage === "dialogue") {
@@ -1417,7 +1493,7 @@ export class OriginalCanvasRuns {
             const res = await this.narrateDialogue(user, projectKey, node.id, {
               expected_revision: effectiveExpectedRevision,
               price_revision: body.price_revision,
-              uid: itemUid,
+              uid,
             });
             for (const item of res.items) {
               submitted.push({
@@ -1453,16 +1529,14 @@ export class OriginalCanvasRuns {
       skipped,
       total_credits: totalCredits,
     };
-    if (init.hasRunsTable) {
-      await this.p.db.query(
-        `UPDATE canvas_batch_runs
-            SET status = 'completed',
-                response = $4::jsonb,
-                updated_at = now()
-          WHERE owner_id = $1 AND project_id = $2 AND uid = $3`,
-        [user.id, init.projectUuid, body.uid, JSON.stringify(response)],
-      );
+    if (resume) {
+      return this.p.db.transaction(async (sql) => {
+        const project = await this.canvases.project(sql, user, projectKey, true);
+        return project.revision === effectiveExpectedRevision
+          ? complete(sql, init.projectUuid, response)
+          : recoverEditedBatch(sql, init.projectUuid, allowedKeys);
+      });
     }
-    return response;
+    return init.hasRunsTable ? complete(this.p.db, init.projectUuid, response) : response;
   }
 }
