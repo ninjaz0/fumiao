@@ -355,37 +355,50 @@ export class Executor {
                 connection.id,
                 job.config_snapshot,
               );
-          const jobEndpointKey = submissionEndpointKey(
-            p,
-            job.config_snapshot ?? connection.config,
-            plugin.manifest,
+          const usesSharedCapacityPool = Boolean(
+            plugin.queueHealth &&
+              plugin.manifest.id === "muse" &&
+              plugin.manifest.queue?.strategy === "capacity",
           );
-          const shareAcrossConnections =
-            Boolean(plugin.queueHealth) &&
-            jobEndpointKey !== "" &&
-            jobEndpointKey !== "{}";
-          if (shareAcrossConnections)
-            await sql.query(
-              "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-              [`queue-endpoint:${job.plugin_id}:${jobEndpointKey}`],
+          let endpointActive: any[];
+          if (usesSharedCapacityPool) {
+            const jobEndpointKey = submissionEndpointKey(
+              p,
+              job.config_snapshot ?? connection.config,
+              plugin.manifest,
             );
-          const active = (
-            await sql.query(
-              `SELECT j.id,j.provider_model,j.kind,j.remote_id,j.input,j.config_snapshot,c.config AS connection_config
-               FROM jobs j JOIN connections c ON c.id=j.connection_id
-               WHERE j.plugin_id=$1 AND ($2::boolean OR j.connection_id=$3)
-               AND j.state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
-              [job.plugin_id, shareAcrossConnections, connection.id],
-            )
-          ).rows;
-          const endpointActive = active.filter(
-            (j) =>
-              submissionEndpointKey(
-                p,
-                j.config_snapshot ?? j.connection_config,
-                plugin.manifest,
-              ) === jobEndpointKey,
-          );
+            const shareAcrossConnections =
+              jobEndpointKey !== "" && jobEndpointKey !== "{}";
+            if (shareAcrossConnections)
+              await sql.query(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                [`queue-endpoint:${job.plugin_id}:${jobEndpointKey}`],
+              );
+            const active = (
+              await sql.query(
+                `SELECT j.id,j.provider_model,j.kind,j.remote_id,j.input,j.config_snapshot,c.config AS connection_config
+                 FROM jobs j JOIN connections c ON c.id=j.connection_id
+                 WHERE j.plugin_id=$1 AND ($2::boolean OR j.connection_id=$3)
+                 AND j.state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
+                [job.plugin_id, shareAcrossConnections, connection.id],
+              )
+            ).rows;
+            endpointActive = active.filter(
+              (j) =>
+                submissionEndpointKey(
+                  p,
+                  j.config_snapshot ?? j.connection_config,
+                  plugin.manifest,
+                ) === jobEndpointKey,
+            );
+          } else {
+            endpointActive = (
+              await sql.query(
+                `SELECT id,provider_model,kind,remote_id,input FROM jobs j WHERE connection_id=$1 AND state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
+                [connection.id],
+              )
+            ).rows;
+          }
           const capacity = plugin.requestCapacity({
             stamp: Date.now() / 1000,
             job: { kind: job.kind, model: job.provider_model },

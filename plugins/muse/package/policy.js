@@ -56,6 +56,15 @@ function normalizeQueueTaskKind(task) {
   }
   return undefined;
 }
+function earliestLane(lanes) {
+  return lanes.reduce((a, b) => (laneRank(b) < laneRank(a) ? b : a));
+}
+function pickLaneForStart(lanes, reqRank) {
+  const ready = lanes.filter((l) => laneRank(l) <= reqRank);
+  return ready.length
+    ? ready.reduce((a, b) => (laneRank(b) > laneRank(a) ? b : a))
+    : earliestLane(lanes);
+}
 const muse21QueuePolicy = {
   requestCapacity(context) {
     if (
@@ -71,7 +80,7 @@ const muse21QueuePolicy = {
     return Math.min(shared, activeNonImage + localImageLimit(context, shared));
   },
   queuePlan(context, tools) {
-    const { health, jobs, runs, stamp } = context,
+    const { health, jobs, runs, stamp, connectionLimits } = context,
       available = health.ready && stamp - (health.checked ?? 0) < 90,
       capacity = museCapacity(context),
       imageCap = localImageLimit(context, capacity);
@@ -85,6 +94,23 @@ const muse21QueuePolicy = {
       median: 0,
       high: 0,
     }));
+    const connLanes = new Map();
+    const connBusyIndex = new Map();
+    if (connectionLimits && typeof connectionLimits === "object") {
+      for (const [cid, limit] of Object.entries(connectionLimits)) {
+        if (typeof limit === "number" && Number.isFinite(limit)) {
+          connLanes.set(
+            cid,
+            Array.from({ length: Math.max(1, limit) }, () => ({
+              low: 0,
+              median: 0,
+              high: 0,
+            })),
+          );
+          connBusyIndex.set(cid, 0);
+        }
+      }
+    }
     const busy = jobs.filter(
       (j) => j.status === "running" && runs[j.id]?.phase !== "queued",
     );
@@ -102,6 +128,12 @@ const muse21QueuePolicy = {
         );
         imageBusyIndex++;
       }
+      if (job.connection && connLanes.has(job.connection)) {
+        const lanes = connLanes.get(job.connection);
+        const idx = connBusyIndex.get(job.connection);
+        applyBusyLane(lanes[Math.min(idx, lanes.length - 1)], eta);
+        connBusyIndex.set(job.connection, idx + 1);
+      }
     }
     const plans = {};
     let ahead = 0;
@@ -118,53 +150,42 @@ const muse21QueuePolicy = {
         continue;
       }
       const prediction = tools.predict(job);
-      const effectiveCapacity = isImageJob ? imageCap : capacity;
-      let sLane, start;
-      if (isImageJob) {
-        const iLane = imageLanes.reduce((a, b) =>
-          laneRank(b) < laneRank(a) ? b : a,
-        );
-        const iRank = laneRank(iLane);
-        const readyByImage = sharedLanes.filter((l) => laneRank(l) <= iRank);
-        sLane = readyByImage.length
-          ? readyByImage.reduce((a, b) => (laneRank(b) > laneRank(a) ? b : a))
-          : sharedLanes.reduce((a, b) => (laneRank(b) < laneRank(a) ? b : a));
-        start = {
-          low:
-            sLane.low !== null && iLane.low !== null
-              ? Math.max(sLane.low, iLane.low)
-              : null,
-          median:
-            sLane.median !== null && iLane.median !== null
-              ? Math.max(sLane.median, iLane.median)
-              : null,
-          high:
-            sLane.high !== null && iLane.high !== null
-              ? Math.max(sLane.high, iLane.high)
-              : null,
-        };
-        if (effectiveCapacity > 0) {
-          for (const key of ["low", "median", "high"]) {
-            const end =
-              start[key] !== null && prediction[key] != null
-                ? start[key] + prediction[key]
-                : null;
-            sLane[key] = end;
-            iLane[key] = end;
-          }
-        }
-      } else {
-        sLane = sharedLanes.reduce((a, b) =>
-          laneRank(b) < laneRank(a) ? b : a,
-        );
-        start = { low: sLane.low, median: sLane.median, high: sLane.high };
-        if (effectiveCapacity > 0) {
-          for (const key of ["low", "median", "high"]) {
-            sLane[key] =
-              start[key] !== null && prediction[key] != null
-                ? start[key] + prediction[key]
-                : null;
-          }
+      const cLimit =
+        job.connection &&
+        connectionLimits &&
+        typeof connectionLimits === "object" &&
+        Object.hasOwn(connectionLimits, job.connection) &&
+        typeof connectionLimits[job.connection] === "number"
+          ? connectionLimits[job.connection]
+          : Infinity;
+      const effectiveCapacity = Math.min(
+        isImageJob ? imageCap : capacity,
+        cLimit,
+      );
+      const cPool = job.connection ? connLanes.get(job.connection) : undefined;
+      const reqRank = Math.max(
+        laneRank(earliestLane(sharedLanes)),
+        isImageJob ? laneRank(earliestLane(imageLanes)) : 0,
+        cPool ? laneRank(earliestLane(cPool)) : 0,
+      );
+      const chosen = [
+        pickLaneForStart(sharedLanes, reqRank),
+        ...(isImageJob ? [pickLaneForStart(imageLanes, reqRank)] : []),
+        ...(cPool ? [pickLaneForStart(cPool, reqRank)] : []),
+      ];
+      const start = { low: 0, median: 0, high: 0 };
+      for (const key of ["low", "median", "high"]) {
+        start[key] = chosen.every((l) => l[key] !== null)
+          ? Math.max(...chosen.map((l) => l[key]))
+          : null;
+      }
+      if (effectiveCapacity > 0) {
+        for (const key of ["low", "median", "high"]) {
+          const end =
+            start[key] !== null && prediction[key] != null
+              ? start[key] + prediction[key]
+              : null;
+          for (const l of chosen) l[key] = end;
         }
       }
       const plan =

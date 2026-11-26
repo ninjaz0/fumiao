@@ -175,6 +175,7 @@ export class QueueForecasts {
       const toQueueJob = (j: any): QueueJob => ({
         id: Number(j.public_id),
         node: nodePublic.get(j.remote_id) ?? null,
+        connection: String(j.connection_id),
         remoteId: j.remote_id,
         model: j.provider_model,
         kind: j.kind,
@@ -264,6 +265,13 @@ export class QueueForecasts {
           policy,
         );
         const usesQueueHealth = Boolean(plugin.queueHealth);
+        const usesSharedCapacityPool = Boolean(
+          usesQueueHealth &&
+            connection.plugin_id === "muse" &&
+            plugin.manifest.queue?.strategy === "capacity",
+        );
+        const supportsConnectionLimits =
+          usesSharedCapacityPool && plugin.manifest.queue?.version === 2;
         const superseded =
           usesQueueHealth &&
           (targetVersion !== String(connection.plugin_version) ||
@@ -277,7 +285,8 @@ export class QueueForecasts {
         let cohortRawJobs: any[];
         let otherEndpointActiveCount = 0;
         let otherConnSameEndpointActiveCount = 0;
-        if (usesQueueHealth) {
+        const connectionLimits: Record<string, number> = {};
+        if (usesSharedCapacityPool) {
           const targetEndpointKey = endpointOf(sampleJob, plugin.manifest);
           const shareAcrossConnections =
             targetEndpointKey !== "" && targetEndpointKey !== "{}";
@@ -303,7 +312,7 @@ export class QueueForecasts {
               endpointOf(j, plugin.manifest) !== targetEndpointKey,
           ).length;
           const siblingWaiting: any[] = [];
-          if (shareAcrossConnections && !superseded) {
+          if (shareAcrossConnections) {
             const upstreamCap =
               typeof rawHealth.capacity === "number" &&
               Number.isFinite(rawHealth.capacity)
@@ -311,22 +320,12 @@ export class QueueForecasts {
                 : 1;
             const siblingIds = new Set(
               samePluginJobs
-                .filter(
-                  (j) =>
-                    j.state === "queued" && j.connection_id !== connection.id,
-                )
+                .filter((j) => j.connection_id !== connection.id)
                 .map((j) => j.connection_id),
             );
             for (const sibId of siblingIds) {
               const sibConn = connectionMap.get(sibId);
-              if (
-                !sibConn?.enabled ||
-                sibConn.queue_health_revision !== sibConn.revision ||
-                !sibConn.queue_health?.ready ||
-                stamp - Number(sibConn.queue_health.checked ?? 0) >= 90
-              )
-                continue;
-              const sibConfigKey = healthConfigKey(this.p, sibConn.config);
+              if (!sibConn) continue;
               const sibJobs = samePluginJobs.filter(
                 (j) => j.connection_id === sibId,
               );
@@ -335,16 +334,27 @@ export class QueueForecasts {
                   j.state !== "queued" &&
                   endpointOf(j, plugin.manifest) !== targetEndpointKey,
               ).length;
+              const sibMaxOnEndpoint =
+                typeof sibConn.concurrency === "number"
+                  ? Math.max(0, sibConn.concurrency - sibDiffEndpointActive)
+                  : undefined;
+              if (typeof sibMaxOnEndpoint === "number")
+                connectionLimits[sibId] = sibMaxOnEndpoint;
+              if (
+                superseded ||
+                !sibConn.enabled ||
+                sibConn.queue_health_revision !== sibConn.revision ||
+                !sibConn.queue_health?.ready ||
+                stamp - Number(sibConn.queue_health.checked ?? 0) >= 90 ||
+                (typeof sibMaxOnEndpoint === "number" && sibMaxOnEndpoint <= 0)
+              )
+                continue;
+              const sibConfigKey = healthConfigKey(this.p, sibConn.config);
               const sibSameEndpointActive = sibJobs.filter(
                 (j) =>
                   j.state !== "queued" &&
                   endpointOf(j, plugin.manifest) === targetEndpointKey,
               ).length;
-              const sibMaxOnEndpoint =
-                typeof sibConn.concurrency === "number"
-                  ? Math.max(0, sibConn.concurrency - sibDiffEndpointActive)
-                  : Infinity;
-              if (sibMaxOnEndpoint <= 0) continue;
               const runnableOnSib = sibJobs.filter(
                 (j) =>
                   j.state === "queued" &&
@@ -355,11 +365,15 @@ export class QueueForecasts {
                   endpointOf(j, plugin.manifest) === targetEndpointKey,
               );
               siblingWaiting.push(
-                ...(sibMaxOnEndpoint >= upstreamCap
+                ...(supportsConnectionLimits ||
+                (sibMaxOnEndpoint ?? Infinity) >= upstreamCap
                   ? runnableOnSib
                   : runnableOnSib.slice(
                       0,
-                      Math.max(0, sibMaxOnEndpoint - sibSameEndpointActive),
+                      Math.max(
+                        0,
+                        (sibMaxOnEndpoint ?? Infinity) - sibSameEndpointActive,
+                      ),
                     )),
               );
             }
@@ -369,6 +383,14 @@ export class QueueForecasts {
             ...siblingWaiting,
           ];
           cohortRawJobs = [...sameEndpointActive, ...cohortWaiting].sort(
+            (a, b) => Number(a.public_id) - Number(b.public_id),
+          );
+        } else if (usesQueueHealth) {
+          const activeAll = owned.filter((j) => j.state !== "queued");
+          const cohortWaiting = owned.filter(
+            (j) => j.state === "queued" && inCohort(j),
+          );
+          cohortRawJobs = [...activeAll, ...cohortWaiting].sort(
             (a, b) => Number(a.public_id) - Number(b.public_id),
           );
         } else {
@@ -416,10 +438,13 @@ export class QueueForecasts {
           typeof connection.concurrency === "number"
             ? Math.max(0, connection.concurrency - otherEndpointActiveCount)
             : undefined;
-        const health =
-          typeof rawHealth.capacity === "number" &&
-          Number.isFinite(rawHealth.capacity) &&
-          typeof availableConcurrency === "number"
+        if (supportsConnectionLimits && typeof availableConcurrency === "number")
+          connectionLimits[connection.id] = availableConcurrency;
+        const health = supportsConnectionLimits
+          ? rawHealth
+          : typeof rawHealth.capacity === "number" &&
+              Number.isFinite(rawHealth.capacity) &&
+              typeof availableConcurrency === "number"
             ? {
                 ...rawHealth,
                 capacity:
@@ -450,6 +475,7 @@ export class QueueForecasts {
           stamp,
           health,
           imageEnabled: (options.imageEnabled ?? true) && connection.enabled,
+          ...(supportsConnectionLimits ? { connectionLimits } : {}),
         };
         if (
           options.candidate &&

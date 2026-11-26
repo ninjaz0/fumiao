@@ -2585,37 +2585,56 @@ test("Muse 2.1.0 shares active occupancy and serializes concurrent claims across
     await new Executor(f.p).execute(queuedSecond.id);
     assert.equal(maxConcurrentOnA, 1);
 
-    // 2. Per-connection concurrency limits (connImage=1, connVideo=2) remain enforced when upstream has 4 accounts
+    // 2. On 4-account upstream with connImage.concurrency=1 and connVideo.concurrency=2:
+    //    - When queue is empty and 1 image + 2 videos are queued, ALL THREE predict immediate start (median 0/0/0)
+    //      because siblingWaiting on connImage consumes 1 shared upstream slot + connImage's own slot, NOT connVideo's 2 slots!
+    //    - Then concurrent dispatch claims all 3 simultaneously, while a 2nd image and 3rd video stay capped by per-connection concurrency.
     accountsA = 4;
     await f.db.query("UPDATE connections SET queue_refresh_until=NULL");
     await new QueueHealthPoller(f.p).refreshEnabled();
 
     const imgA = await submitImg("4账号限流图A");
-    const imgB = await submitImg("4账号限流图B");
     const vidA = await submitVid("4账号限流视频A");
     const vidB = await submitVid("4账号限流视频B");
-    const vidC = await submitVid("4账号限流视频C");
 
-    await new Executor(f.p).execute(imgA.id);
-    await new Executor(f.p).execute(imgA.id); // generating on connImage (saturates connImage.concurrency=1)
-    await new Executor(f.p).execute(imgB.id);
+    const emptyPoolOnePlusTwoForecast = await new QueueForecasts(
+      f.p,
+    ).forWorkspace(actor, ws.id);
+    assert.equal(emptyPoolOnePlusTwoForecast.jobs[imgA.id].eta.median, 0);
+    assert.equal(emptyPoolOnePlusTwoForecast.jobs[vidA.id].eta.median, 0);
     assert.equal(
-      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [imgB.id])).state,
-      "queued",
-      "connImage.concurrency=1 must still cap connImage at 1 active job even when upstream has 4 accounts",
+      emptyPoolOnePlusTwoForecast.jobs[vidB.id].eta.median,
+      0,
+      "2nd video on connVideo (concurrency=2) must predict immediate start (median=0) when 4-account upstream only has 1 image on connImage + 1 earlier video on connVideo",
     );
-    // Meanwhile vidA and vidB on connVideo (concurrency=2) still see 2 open lanes on 4-account upstream (not blocked by imgB!)
-    const perConnForecast = await new QueueForecasts(f.p).forWorkspace(
+
+    const imgB = await submitImg("4账号限流图B");
+    const vidC = await submitVid("4账号限流视频C");
+    const cappedQueuedForecast = await new QueueForecasts(f.p).forWorkspace(
       actor,
       ws.id,
     );
-    assert.equal(perConnForecast.jobs[vidA.id].eta.median, 0);
-    assert.equal(perConnForecast.jobs[vidB.id].eta.median, 0);
-    assert.ok(perConnForecast.jobs[vidC.id].eta.median > 0);
+    assert.ok(
+      cappedQueuedForecast.jobs[imgB.id].eta.median > 0,
+      "2nd image on connImage (concurrency=1) must wait behind imgA",
+    );
+    assert.ok(
+      cappedQueuedForecast.jobs[vidC.id].eta.median > 0,
+      "3rd video on connVideo (concurrency=2) must wait behind vidA/vidB",
+    );
 
-    await new Executor(f.p).execute(vidA.id);
-    await new Executor(f.p).execute(vidB.id);
+    await Promise.all([
+      new Executor(f.p).execute(imgA.id),
+      new Executor(f.p).execute(vidA.id),
+      new Executor(f.p).execute(vidB.id),
+    ]);
+    await new Executor(f.p).execute(imgA.id); // generating on connImage
+    await new Executor(f.p).execute(imgB.id);
     await new Executor(f.p).execute(vidC.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [imgA.id])).state,
+      "running",
+    );
     assert.equal(
       (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [vidA.id])).state,
       "running",
@@ -2623,6 +2642,11 @@ test("Muse 2.1.0 shares active occupancy and serializes concurrent claims across
     assert.equal(
       (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [vidB.id])).state,
       "running",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [imgB.id])).state,
+      "queued",
+      "connImage.concurrency=1 must still cap connImage at 1 active job even when upstream has 4 accounts",
     );
     assert.equal(
       (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [vidC.id])).state,
@@ -2696,6 +2720,212 @@ test("Muse 2.1.0 shares active occupancy and serializes concurrent claims across
       new Promise<void>((done) => serverA.close(() => done())),
       new Promise<void>((done) => serverB.close(() => done())),
     ]);
+    await f.cleanup();
+  }
+});
+
+test("Flow 2.0.0 opaque queue strategy stays per-connection across shared baseUrl credentials and across address edits on one connection", async () => {
+  const f = await databaseFixture();
+  const flowServer = createServer((req, res) => {
+    const token = String(req.headers.authorization ?? "");
+    if (token !== "Bearer flow-key-1" && token !== "Bearer flow-key-2")
+      return void res.writeHead(401).end();
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/v1/models")
+      return void res.end(
+        JSON.stringify({
+          data: [
+            { id: "veo-3.1-quality-8s-landscape" },
+            { id: "omni-1.2-flash-8s-landscape" },
+          ],
+        }),
+      );
+    if (req.url === "/health")
+      return void res.end(
+        JSON.stringify({ backend_running: true, has_active_tokens: true }),
+      );
+    res.writeHead(404).end();
+  });
+  flowServer.listen(0, "127.0.0.1");
+  await once(flowServer, "listening");
+  const flowBase =
+    "http://127.0.0.1:" + (flowServer.address() as { port: number }).port;
+  const sandboxSend: typeof chatHttp = (url, options) => {
+    assert.ok(options.lookup);
+    return chatHttp(new URL(url.pathname, flowBase), {
+      ...options,
+      lookup: undefined,
+    });
+  };
+  f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+  try {
+    await f.p.registry.initializeStudio(f.db, false);
+    const identity = new OriginalIdentity(f.p);
+    const creds = { name: "admin", password: "flow-opaque-password" };
+    await identity.bootstrap({ ...creds, nickname: "管理员" });
+    const actor = await identity.actor(await identity.login(creds, "fixture"));
+    const packages = new StudioPackages(f.p);
+    const flowPkg = JSON.parse(
+      await readFile("plugins/flow/flow.fmplugin.json", "utf8"),
+    );
+    await packages.install(actor, flowPkg);
+
+    const { id: connFlow1 } = await f.p.createConnection(
+      actor,
+      {
+        name: "Flow 连接 1",
+        pluginId: "flow",
+        version: flowPkg.adapterVersion,
+        concurrency: 2,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "flow-key-1" },
+      },
+      true,
+    );
+    const { id: connFlow2 } = await f.p.createConnection(
+      actor,
+      {
+        name: "Flow 连接 2",
+        pluginId: "flow",
+        version: flowPkg.adapterVersion,
+        concurrency: 2,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "flow-key-2" },
+      },
+      true,
+    );
+    await f.db.query(
+      "INSERT INTO studio_model_service VALUES('flow:veo-3.1-quality',$1),('flow:veo-3.1-quality-8s-landscape',$1),('flow:omni-1.2-flash',$2),('flow:omni-1.2-flash-8s-landscape',$2) ON CONFLICT(model_id) DO UPDATE SET connection_id=excluded.connection_id",
+      [connFlow1, connFlow2],
+    );
+    const catalog = new StudioCatalog(f.db);
+    const prices = await catalog.prices();
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        Object.fromEntries(prices.items.map((i) => [i.key, 1])),
+        prices.revision,
+      ),
+    );
+    const flowListed = (await packages.list(actor)).find(
+      (p) => p.id === "flow",
+    )!;
+    await packages.change(actor, "flow", flowListed.revision, "enable");
+    const ws = await one(
+      f.db,
+      "SELECT * FROM workspaces WHERE owner_id=$1 AND kind='personal'",
+      [actor.id],
+    );
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, ws.id, 100, randomUUID(), "adjust"),
+    );
+    await new QueueHealthPoller(f.p).refreshEnabled();
+
+    const g = new OriginalGeneration(f.p);
+    const submitFlowVid = async (prompt: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "flow:veo-3.1-quality",
+          prompt,
+          ratio: "16:9",
+          seconds: 8,
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+    const submitFlowImg = async (prompt: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "flow:omni-1.2-flash",
+          prompt,
+          ratio: "16:9",
+          seconds: 8,
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+
+    // 1. Two enabled Flow connections with same baseUrl and different credentials must NOT block each other
+    const flowJob1 = await submitFlowVid("Flow 连接1首单");
+    const flowJob2 = await submitFlowImg("Flow 连接2首单");
+    assert.equal(flowJob1.connection_id, connFlow1);
+    assert.equal(flowJob2.connection_id, connFlow2);
+
+    const executor = new Executor(f.p);
+    assert.ok(await executor.claim(flowJob1.id));
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [flowJob1.id]))
+        .state,
+      "dispatching",
+    );
+
+    const forecastConn2BeforeClaim = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(
+      forecastConn2BeforeClaim.jobs[flowJob2.id].eta.reason,
+      "observing",
+      "second Flow connection must not inherit flow_busy from first Flow connection",
+    );
+    assert.ok(
+      await executor.claim(flowJob2.id),
+      "second Flow connection sharing baseUrl with distinct credentials must still claim independently",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [flowJob2.id]))
+        .state,
+      "dispatching",
+    );
+
+    // 2. Single Flow connection (concurrency=2) with flowJob1 dispatching on old address 1.1.1.1:
+    //    after editing connFlow1 to 8.8.8.8 and refreshing health, a second job on connFlow1 must stay serial (queued + flow_busy)
+    const conn1Row = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connFlow1,
+    )!;
+    await f.p.updateConnection(actor, connFlow1, {
+      revision: conn1Row.revision,
+      enabled: true,
+      concurrency: 2,
+      config: { baseUrl: "https://8.8.8.8", apiKey: "flow-key-1" },
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connFlow1],
+    );
+    await new QueueHealthPoller(f.p).refresh(connFlow1);
+
+    const flowJob1Second = await submitFlowVid("Flow 连接1改地址后第二单");
+    assert.equal(flowJob1Second.connection_id, connFlow1);
+    const forecastConn1Serial = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.equal(
+      forecastConn1Serial.jobs[flowJob1Second.id].eta.reason,
+      "flow_busy",
+      "single Flow connection must still report flow_busy when an earlier job is dispatching on old address",
+    );
+    assert.equal(
+      await executor.claim(flowJob1Second.id),
+      undefined,
+      "single Flow connection must not bypass serial execution after editing baseUrl",
+    );
+    assert.equal(
+      (
+        await one(f.db, "SELECT state FROM jobs WHERE id=$1", [
+          flowJob1Second.id,
+        ])
+      ).state,
+      "queued",
+    );
+  } finally {
+    flowServer.closeAllConnections();
+    await new Promise<void>((done) => flowServer.close(() => done()));
     await f.cleanup();
   }
 });

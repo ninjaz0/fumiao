@@ -130,8 +130,9 @@ export function requestWorkbenchAdapter(
       }),
     queuePlan(ctx, tools) {
       const predict = requestQueueTools(tools).predict;
-      const jobs = ctx.jobs.map(({ id, kind, status, remoteId }) => ({
+      const jobs = ctx.jobs.map(({ id, connection, kind, status, remoteId }) => ({
         id,
+        ...(connection ? { connection } : {}),
         kind,
         status,
         remoteId,
@@ -160,6 +161,9 @@ export function requestWorkbenchAdapter(
           stamp: ctx.stamp,
           imageEnabled: ctx.imageEnabled,
           runs,
+          ...(ctx.connectionLimits
+            ? { connectionLimits: ctx.connectionLimits }
+            : {}),
         },
         predictions,
         remaining,

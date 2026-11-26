@@ -19,6 +19,7 @@ export type QueuePlans = Record<string, QueueEstimate>;
 export type QueueJob = {
   id: QueueId;
   node: QueueId | null;
+  connection?: string;
   model: string;
   kind: Kind;
   status: string;
@@ -98,6 +99,7 @@ export type QueueContext = {
   stamp: number;
   health: z.infer<typeof queueHealthSchema>;
   imageEnabled: boolean;
+  connectionLimits?: Record<string, number>;
 };
 export type QueueSlot = {
   node?: QueueNode;
