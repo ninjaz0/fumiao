@@ -106,6 +106,11 @@ for (const { id, archive, archiveDigest, sandboxBuild } of releases) {
     if (hash(bytes) !== "2472ea9dae334bf15e9fee4c105bb2f2cbab8ed22913abad7ccf1b633932bd4d")
       throw Error("Published sandbox package digest mismatch: " + id);
   }
+  if (id === "muse") {
+    const bytes = await readFile(join(root, "package/legacy-2.0.0.fmplugin.json"));
+    if (hash(bytes) !== "a332a61eb35e7d1f3dfb1070052a073e88729b0bf658d01da4665bbc097f7257")
+      throw Error("Published sandbox package digest mismatch: " + id);
+  }
   if (sandboxBuild) {
     Object.assign(
       file,
@@ -139,13 +144,17 @@ for (const { id, archive, archiveDigest, sandboxBuild } of releases) {
           ? "创作对话支持调用已启用的插件工具"
           : id === "gpu"
             ? "节点池协议升级，排空任务后重新接入实例"
-            : id === "muse" || id === "flow"
-              ? "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS"
-              : id === "bgm-generator"
-                ? "修复 BGM 原生任务计划校验、参数冻结与沙箱成品下载路径解析"
-                : id === "tts-commercial"
-                  ? "修复商业 TTS 原生任务计划校验与参数冻结"
-                  : "首次发布",
+            : id === "muse"
+              ? "支持按 Muse2API 启用账号数自动并发派发图片与视频任务"
+              : id === "flow"
+                ? "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS"
+                : id === "bgm-generator"
+                  ? "修复 BGM 原生任务计划校验、参数冻结与沙箱成品下载路径解析"
+                  : id === "tts-commercial"
+                    ? "修复商业 TTS 原生任务计划校验与参数冻结"
+                    : id === "example-extension"
+                      ? "修复工作区备注数量较多时无法打开的问题，自动整理旧备注"
+                      : "首次发布",
       package: path,
       sha256: hash(data),
     }),

@@ -88,6 +88,19 @@ function polled(value, status, id) {
   return { ...obs, receipt: pending(id) };
 }
 
+function accountCapacity(accounts) {
+  if (Array.isArray(accounts))
+    return accounts.length > 0 ? Math.min(16, accounts.length) : 0;
+  if (typeof accounts === "number")
+    return Number.isInteger(accounts) && accounts > 0
+      ? Math.min(16, accounts)
+      : 0;
+  if (typeof accounts === "boolean") return accounts ? 1 : 0;
+  if (accounts && typeof accounts === "object")
+    return Object.keys(accounts).length > 0 ? 1 : 0;
+  return 0;
+}
+
 export default {
   ...requestWorkbench(
     submissionPolicy(pythonStrip),
@@ -140,13 +153,26 @@ export default {
     }
     try {
       const ready = await read("/readyz");
-      if (ready.status !== "ready" || !healthTruthy(ready.accounts))
+      const fallbackCapacity = accountCapacity(ready.accounts);
+      if (ready.status !== "ready" || fallbackCapacity <= 0)
         return { ready: false };
       const models = await read("/v1/models");
       if (!Array.isArray(models.data) || !models.data.length)
         return { ready: false };
+      const queueReply = await host.service.read("/v1/queue");
+      if (
+        queueReply.status < 200 ||
+        queueReply.status >= 300 ||
+        queueReply.text === null
+      )
+        return {
+          ready: true,
+          capacity: fallbackCapacity,
+          maintenance: 0,
+          tasks: [],
+        };
       try {
-        const q = await read("/v1/queue");
+        const q = JSON.parse(queueReply.text);
         const tasks = (q.tasks === undefined ? [] : q.tasks)
           .slice(0, 10000)
           .map((t) => (typeof t.id === "string" ? { id: t.id } : {}));
@@ -157,7 +183,9 @@ export default {
             0,
             Math.min(
               16,
-              healthInteger(q.capacity === undefined ? 1 : q.capacity),
+              q.capacity === undefined
+                ? fallbackCapacity
+                : healthInteger(q.capacity),
             ),
           ),
           maintenance: Math.max(

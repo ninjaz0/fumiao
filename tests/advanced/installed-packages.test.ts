@@ -2516,3 +2516,145 @@ for (const id of ["muse", "flow"])
       }
     },
   );
+
+test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video work and preserves saved connection concurrency", async () => {
+  const f = await setup();
+  const v20 = JSON.parse(
+    await readFile("plugins/muse/package/legacy-2.0.0.fmplugin.json", "utf8"),
+  ) as PackageFile;
+  const v21 = await load("muse");
+  const mp4Path = join(f.directory, "muse-upgrade.mp4");
+  execFileSync("ffmpeg", [
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=s=32x18:r=8",
+    "-t",
+    "1",
+    "-pix_fmt",
+    "yuv420p",
+    mp4Path,
+  ]);
+  const media = await readFile(mp4Path);
+  let createdTasks = 0;
+  const fixture = createServer(async (req, res) => {
+    if (req.headers.authorization !== "Bearer muse-key")
+      return void res.writeHead(401).end();
+    if (req.url === "/readyz")
+      return void res.end('{"status":"ready","accounts":3}');
+    if (req.url === "/v1/models")
+      return void res.end('{"data":[{"id":"muse-video"}]}');
+    if (req.method === "POST" && req.url === "/v1/videos") {
+      for await (const _ of req) {
+        // consume body
+      }
+      const n = String(++createdTasks).padStart(32, "0");
+      return void res.end(
+        JSON.stringify({ id: "task_" + n, status: "queued" }),
+      );
+    }
+    if (req.url?.startsWith("/v1/videos/task_"))
+      return void res.end(
+        '{"status":"completed","url":"/v1/media/upgrade.mp4"}',
+      );
+    if (req.url === "/v1/media/upgrade.mp4") return void res.end(media);
+    res.writeHead(404).end();
+  });
+  fixture.listen(0, "127.0.0.1");
+  await once(fixture, "listening");
+  const base =
+    "http://127.0.0.1:" + (fixture.address() as { port: number }).port;
+  const sandboxSend: typeof chatHttp = (url, options) => {
+    assert.equal(url.origin, "https://1.1.1.1");
+    assert.ok(options.lookup);
+    return chatHttp(new URL(url.pathname, base), {
+      ...options,
+      lookup: undefined,
+    });
+  };
+  f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+  try {
+    assert.equal(v20.version, "2.0.0");
+    assert.equal(v21.version, "2.1.0");
+    await f.packages.install(f.actor, v20);
+    const { id: connId } = await f.p.createConnection(
+      f.actor,
+      {
+        name: "Muse 存量连接",
+        pluginId: "muse",
+        version: "2.0.0",
+        concurrency: 3,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "muse-key" },
+      },
+      true,
+    );
+    const catalog = new StudioCatalog(f.db),
+      prices = await catalog.prices();
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        Object.fromEntries(prices.items.map((i) => [i.key, 5])),
+        prices.revision,
+      ),
+    );
+    await f.packages.change(f.actor, "muse", 1, "enable");
+    const team = await one(
+      f.db,
+      "SELECT * FROM workspaces WHERE kind='team'",
+    );
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, team.id, 100, randomUUID(), "adjust"),
+    );
+    const g = new OriginalGeneration(f.p);
+    const accepted20 = await g.submit(
+      f.actor,
+      await g.parse("video", {
+        uid: randomUUID(),
+        model: "muse-video",
+        prompt: "旧版在途视频",
+        ratio: "16:9",
+        seconds: 5,
+      }),
+      String(team.public_id),
+    );
+    const pkgBefore = (await f.packages.list(f.actor)).find(
+      (p) => p.id === "muse",
+    )!;
+    await f.packages.install(f.actor, v21, pkgBefore.revision);
+    const [savedConn] = await f.p.studioConnections(f.actor);
+    assert.equal(savedConn.id, connId);
+    assert.equal(savedConn.plugin_version, "2.1.0");
+    assert.equal(savedConn.concurrency, 3);
+
+    await new QueueHealthPoller(f.p).refresh(connId);
+    const connHealth = await one(
+      f.db,
+      "SELECT queue_health FROM connections WHERE id=$1",
+      [connId],
+    );
+    assert.equal(connHealth.queue_health.capacity, 3);
+
+    const executor = new Executor(f.p);
+    const row20 = await one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [
+      accepted20.id,
+    ]);
+    assert.equal(row20.plugin_version, "2.0.0");
+    await executor.execute(row20.id);
+    await executor.execute(row20.id);
+    const done20 = await one(f.db, "SELECT * FROM jobs WHERE id=$1", [
+      row20.id,
+    ]);
+    assert.equal(done20.state, "completed", done20.error);
+    assert.equal(done20.plugin_version, "2.0.0");
+    assert.equal(
+      Number((await f.p.wallet(f.actor, team.id)).balance),
+      95,
+    );
+  } finally {
+    fixture.closeAllConnections();
+    await new Promise<void>((done) => fixture.close(() => done()));
+    await f.cleanup();
+  }
+});

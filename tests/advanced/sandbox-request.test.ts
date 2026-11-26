@@ -165,6 +165,90 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
     assert.equal(await adapter.health({ ...config, baseUrl }, signal), false);
   }
   assert.equal(calls, count);
+
+  let readyBody: unknown = {
+      status: "ready",
+      accounts: 4,
+      browser_running: true,
+    },
+    queueReply: { status: number; body: unknown } = {
+      status: 404,
+      body: null,
+    };
+  const queueProbe: typeof chatHttp = async (url, options) => {
+    assert.ok(options.lookup);
+    let replyStatus = 200;
+    let payload: unknown = {};
+    if (url.pathname.endsWith("/readyz")) payload = readyBody;
+    else if (url.pathname.endsWith("/v1/models"))
+      payload = { data: [{ id: "muse-video" }] };
+    else if (url.pathname.endsWith("/v1/queue")) {
+      replyStatus = queueReply.status;
+      payload = queueReply.body;
+    }
+    return {
+      status: replyStatus,
+      headers: {},
+      body: (async function* () {
+        if (payload !== null) yield Buffer.from(JSON.stringify(payload));
+      })(),
+      close() {},
+    };
+  };
+  const healthAdapter = await sandboxRequest(
+    manifestSchema.parse(release.manifest),
+    release.studioProgram,
+    queueProbe,
+  );
+  assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
+    ready: true,
+    capacity: 4,
+    maintenance: 0,
+    tasks: [],
+  });
+  readyBody = { status: "ready", accounts: 30 };
+  assert.equal((await healthAdapter.queueHealth!(config, signal)).capacity, 16);
+  readyBody = { status: "ready", accounts: [1, 2, 3] };
+  assert.equal((await healthAdapter.queueHealth!(config, signal)).capacity, 3);
+  for (const badAccounts of [0, -2, 1.5, [], {}, null, ""]) {
+    readyBody = { status: "ready", accounts: badAccounts };
+    assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
+      ready: false,
+    });
+  }
+  readyBody = { status: "ready", accounts: 4 };
+  queueReply = {
+    status: 200,
+    body: { tasks: [{ id: "ext-1", prompt: "secret" }] },
+  };
+  assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
+    ready: true,
+    capacity: 4,
+    maintenance: 0,
+    tasks: [{ id: "ext-1" }],
+  });
+  queueReply = {
+    status: 200,
+    body: { capacity: 2, maintenance: 1, tasks: [{ id: "ext-1" }] },
+  };
+  assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
+    ready: true,
+    capacity: 2,
+    maintenance: 1,
+    tasks: [{ id: "ext-1" }],
+  });
+  for (const invalidCap of [null, "2.5", "", []]) {
+    queueReply = {
+      status: 200,
+      body: { capacity: invalidCap, tasks: [{ id: "ext-1" }] },
+    };
+    assert.deepEqual(await healthAdapter.queueHealth!(config, signal), {
+      ready: true,
+      capacity: 1,
+      maintenance: 0,
+      tasks: [],
+    });
+  }
 });
 
 test("Flow's installed sandbox streams split and large results, scopes service credentials and preserves recovery decisions", async () => {

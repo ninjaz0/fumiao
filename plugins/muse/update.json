@@ -1,7 +1,7 @@
 {
   "id": "muse",
-  "version": "2.0.0",
-  "notes": "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS",
+  "version": "2.1.0",
+  "notes": "支持按 Muse2API 启用账号数自动并发派发图片与视频任务",
   "package": "muse.fmplugin.json",
-  "sha256": "a332a61eb35e7d1f3dfb1070052a073e88729b0bf658d01da4665bbc097f7257"
+  "sha256": "72a8bb98c57688a1cd148653b8dade4c2fd0b7837824eb3812af81c9b46145a8"
 }
