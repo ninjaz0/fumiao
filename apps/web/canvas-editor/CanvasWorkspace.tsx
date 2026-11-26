@@ -1052,6 +1052,7 @@ export function CanvasWorkspace({
   };
 
   const notify = useCallback((text: string) => setToast(text), []);
+  const { hasUnsavedChanges } = doc;
   const closeProjectMenu = useCallback(() => {
     if (projectMenu.current?.contains(document.activeElement))
       projectMenuTrigger.current?.querySelector("button")?.focus();
@@ -1113,7 +1114,7 @@ export function CanvasWorkspace({
         return data.runs;
       } catch (e) {
         if (aliveRef.current && seq === runsReqSeqRef.current) {
-          if (shouldRedirectRunsError(e)) {
+          if (shouldRedirectRunsError(e) && !hasUnsavedChanges()) {
             location.assign("/studio");
           } else {
             setRunsError(formatRunsError(e));
@@ -1128,7 +1129,7 @@ export function CanvasWorkspace({
         }
       }
     },
-    [project.id],
+    [project.id, hasUnsavedChanges],
   );
   const fetchRuns = useCallback(
     () => loadRuns({ showLoading: true }),

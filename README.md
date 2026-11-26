@@ -43,7 +43,7 @@
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Compose" />
 </p>
 
-弗淼（Fumiao）是面向个人与团队的自部署多模型 AI 创作工作台：在 `/studio` 完成对话构思、节点画布与分镜编排、视频 / 图片 / 语音生成及成片合成，并通过版本化插件自由接入云端模型服务与自建 GPU / ComfyUI 节点。<br />
+弗淼（Fumiao）是面向个人与团队的自部署多模型 AI 创作工作台：在 `/studio` 完成对话构思、节点画布与分镜编排、视频 / 图片 / 语音生成及成片合成，并通过版本化插件自由接入云端模型服务与自建 GPU 节点。<br />
 <sub>Self-hosted multi-model AI creative studio for individuals &amp; teams · node canvas &amp; storyboard · multi-tenant workspaces · versioned plugin &amp; GPU node-pool platform</sub>
 
 <p align="center">
@@ -70,7 +70,7 @@
 | 🧩 **节点画布与分镜成片** | 基于可视化节点画布连线传递提示词与有序参考图；支持 AI 拟定 1–12 镜头分镜、双候选对比采用、末帧衔接、分镜旁白与 MP4 / SRT / VTT 导出。 |
 | 👥 **个人与团队多空间隔离** | 每个账号拥有独立个人空间，管理员可创建团队空间并分配成员；资产、画布、任务与对话严格按空间隔离，团队共用积分池。 |
 | 🔌 **版本化插件与沙箱扩展** | 单文件 `.fmplugin.json` 导入与签名校验升级；支持模型接入、QuickJS 沙箱扩展页、工作区事件订阅、资源菜单、自定义导出器与支付渠道。 |
-| ⚡ **分布式 GPU / ComfyUI 节点池** | Pull 模式节点执行协议，支持自建算力机配对、180s 租约续期、成片 FFprobe / 完整解码验收，内置 MiniMax H3、Breeze TTS 2 与 ComfyUI 示例。 |
+| ⚡ **分布式 GPU 节点池** | Pull 模式节点执行协议，支持自建算力机配对、180s 租约续期、成片 FFprobe / 完整解码验收，内置 MiniMax H3、Breeze TTS 2。 |
 | 💰 **账本级积分与幂等结算** | 提交即冻结积分、插件版本与配置快照；重试、进程重启与并发回调均只结算一次，失败或取消自动退回；支持支付宝与 USDT 充值扩展。 |
 | 🛡️ **私有媒体与企业级安全** | 凭据采用 AES-256-GCM 加密存储；支持私有磁盘与 S3 分段（Range）流式传输及原子计量存储配额（默认 20 GiB），可多副本水平扩容。 |
 | 🐳 **Docker Compose 开箱即用** | 完整编排 PostgreSQL 18、Redis 8 / BullMQ、NestJS API、Worker 与 Next.js 前端，支持全量备份演练与旧版 Pure 工作区平滑迁移。 |
@@ -81,7 +81,7 @@
 
 **弗淼（Fumiao）适合谁？** 适合需要统一管理多模型生成、分镜画布制作、团队素材共享、精细权限与积分结算的创作团队及自部署开发者。
 
-**支持接入哪些模型和算力？** 官方提供 Flow2API、Muse2API、OpenAI 兼容流式对话（DeepSeek / OpenAI / 自建兼容接口）及自建 GPU 节点（MiniMax H3、Breeze TTS 2）等插件包，同时支持按开放契约接入第三方远程 HTTP 模型服务与 ComfyUI 节点池。
+**支持接入哪些模型和算力？** 官方提供 Flow2API、Muse2API、OpenAI 兼容流式对话（DeepSeek / OpenAI / 自建兼容接口）及自建 GPU 节点（MiniMax H3、Breeze TTS 2）等插件包，同时支持按开放契约接入第三方远程 HTTP 模型服务与自建节点池。
 
 **团队协作时数据会串空间吗？** 不会。个人空间与团队空间的素材、任务、画布、草稿与对话按工作区严格隔离，私有媒体每次访问均做工作区鉴权，画布自动保存携带乐观并发版本校验，冲突时保留用户草稿且不静默覆盖。
 
@@ -154,13 +154,12 @@ flowchart LR
 - **声明式设置页 (`settingsPages`) & 持久化设置 (`settings`)**：一个插件最多贡献 8 个设置页（支持管理员 / 成员受众与乐观并发修订号），宿主统一渲染视图块（统计、列表、内联 / 弹窗表单）并在版本升级时执行 `migrate`。
 - **宿主受控能力 (`hostCapabilities`)**：按需申请 `media`（探测 / 转码 / 拼接 / 抽帧）、`data`（插件私有键值存储）、`http`（白名单 HTTPS 出站请求，阻断内网与重定向）与 `nodes`（节点池管理）。
 - **工作区事件 (`events`) & 资源菜单 (`actions`)**：订阅 `job.completed`、`job.failed`、`asset.created`、`member.added` / `removed`，或在素材 / 任务详情菜单追加自定义操作，失败自动退避重试并记录死信。
-- **远程 HTTP 提供方 & Pull 节点池**：支持任意语言实现 `/health`、`/submit`、`/inspect` 远程模型服务，或通过节点池协议接入 ComfyUI 等自有算力集群。
+- **远程 HTTP 提供方 & Pull 节点池**：支持任意语言实现 `/health`、`/submit`、`/inspect` 远程模型服务，或通过节点池协议接入自有算力集群。
 
 仓库内置以下参考示例包，可直接导入体验或运行 `pnpm plugins:pack` 重新打包：
 
 | 示例包 | 文件 | 演示内容 |
 | --- | --- | --- |
-| **ComfyUI 节点池** | [`example-node-pool.fmplugin.json`](plugins/example-node-pool/example-node-pool.fmplugin.json) | Pull 模式节点池 v1 接入 Linux ComfyUI 机器，附带工作区媒体处理演示页 |
 | **模型目录示例** | [`example-extension.fmplugin.json`](plugins/example-extension/example-extension.fmplugin.json) | 全站 / 工作区双层设置、版本迁移回滚与 `host.data` 键值存储 |
 | **素材自动分类** | [`example-asset-tags.fmplugin.json`](plugins/example-asset-tags/example-asset-tags.fmplugin.json) | 订阅 `asset.created` 事件按 MIME 自动归类，并提供详情菜单查看 |
 | **审片备注** | [`example-review-notes.fmplugin.json`](plugins/example-review-notes/example-review-notes.fmplugin.json) | 在任务详情「更多」菜单保存和读取当前工作区的审片备注 |
@@ -323,7 +322,7 @@ flowchart LR
   E --> P
   E --> S
   E --> M["云端模型 / 远程插件 / QuickJS 沙箱"]
-  G["自建 GPU / ComfyUI 节点 (/agent)"] --> A
+  G["自建 GPU 节点 (/agent)"] --> A
 ```
 
 ### Monorepo 目录结构

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Platform } from "./platform.js";
 import { executableJob } from "./retired-jobs.js";
 import { one } from "./db.js";
+import { hasStudioPackages } from "./studio-plugin-profile.js";
 import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 import {
   queueHealthSchema,
@@ -62,12 +63,19 @@ export class FrozenQueueHealth {
   }
 }
 
+function activeConnectionPredicate(hasPackages: boolean) {
+  return hasPackages
+    ? `AND (studio_plugin_accepts(c.plugin_id) OR EXISTS(SELECT 1 FROM jobs j WHERE j.connection_id=c.id AND j.plugin_version=c.plugin_version AND j.state IN ('queued','dispatching','running','finalizing','uncertain') AND ${executableJob}))`
+    : "";
+}
+
 export class QueueHealthPoller {
   constructor(readonly p: Platform) {}
   async refresh(id: string) {
+    const hasPackages = await hasStudioPackages(this.p.db);
     const current = await one(
       this.p.db,
-      "SELECT plugin_id,plugin_version,revision FROM connections c WHERE id=$1 AND enabled AND to_jsonb(c)->>'sandbox_address_pause' IS NULL",
+      `SELECT c.plugin_id,c.plugin_version,c.revision FROM connections c WHERE c.id=$1 AND c.enabled AND to_jsonb(c)->>'sandbox_address_pause' IS NULL ${activeConnectionPredicate(hasPackages)}`,
       [id],
     );
     if (!current) return;
@@ -109,10 +117,12 @@ export class QueueHealthPoller {
     );
   }
   async refreshEnabled() {
+    const hasPackages = await hasStudioPackages(this.p.db);
     const pending = (
       await this.p.db
         .query(`SELECT c.id FROM connections c JOIN plugin_versions p ON p.id=c.plugin_id AND p.version=c.plugin_version
    WHERE c.enabled AND to_jsonb(c)->>'sandbox_address_pause' IS NULL AND p.manifest->'queue' IS NOT NULL AND p.manifest->>'mode'='request'
+   ${activeConnectionPredicate(hasPackages)}
    AND (c.queue_refresh_until IS NULL OR c.queue_refresh_until<now()) ORDER BY c.id`)
     ).rows;
     let next = 0;

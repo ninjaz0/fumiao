@@ -106,9 +106,20 @@ try {
         const apiPath = `/api/canvases/${project.id}`;
         const editPath = `/canvas/${project.id}?workspace=${workspace}`;
         let failSave = status === 503;
+        let allowMissingRuns = false;
+        if (status === 404) {
+          await page.route(`**${apiPath}/runs`, (route) =>
+            allowMissingRuns ? route.continue() : route.fulfill({ json: { runs: [] } }),
+          );
+        }
         await page.route(`**${apiPath}/document`, async (route) => {
           assert.equal(route.request().method(), "PUT");
           putCount++;
+          // Delete only after the editor starts saving, so initial loads succeed.
+          if (status === 404 && putCount === 1) {
+            const removed = await context.request.delete(apiPath, { headers });
+            assert.ok(removed.ok(), await removed.text());
+          }
           if (failSave) {
             await route.fulfill({ status: 503, json: { detail: "保存服务暂时不可用" } });
           } else {
@@ -139,10 +150,6 @@ try {
           });
           assert.equal(remote.status(), 200, await remote.text());
         }
-        if (status === 404) {
-          const removed = await context.request.delete(apiPath, { headers });
-          assert.ok(removed.ok(), await removed.text());
-        }
         if (conflictOnExit) {
           const now = new Date();
           await page.clock.install({ time: now });
@@ -161,6 +168,13 @@ try {
         }
         await failedSave;
         await expect(page.locator(".save-state")).toHaveText(status === 409 ? "保存冲突" : "保存失败，重试");
+        if (status === 404) {
+          const missingRuns = page.waitForResponse((response) =>
+            new URL(response.url()).pathname === `${apiPath}/runs` && response.status() === 404,
+          );
+          allowMissingRuns = true;
+          await missingRuns;
+        }
         if (!conflictOnExit) await exit.click(page);
         const dialog = page.getByRole("dialog", { name: "保存失败，仍要离开？" });
         if (capture) {
@@ -172,7 +186,7 @@ try {
           await page.screenshot({ path: join(evidence, `canvas-leave-${label}.png`) });
         }
         if (beforeUnload) {
-          throw new Error("logo bypassed the app's save guard and triggered native beforeunload");
+          throw new Error("Canvas navigated outside the save guard and triggered native beforeunload");
         }
         await expect(dialog).toBeVisible({ timeout: 2_000 });
         await expect(page).toHaveURL(origin + editPath);

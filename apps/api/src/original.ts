@@ -23,7 +23,6 @@ import {
 } from "@nestjs/common";
 import express, { type Request, type Response } from "express";
 import { Platform } from "@fumiao/platform/platform.js";
-import { ComfyMicroAppCompiler } from "@fumiao/platform/comfy-compiler.js";
 import { DomainError } from "@fumiao/platform/security.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import {
@@ -519,7 +518,6 @@ class OriginalApi {
   private skills: OriginalSkills;
   private proposals: OriginalCanvasProposals;
   private agentPolicies: OriginalAgentPolicies;
-  private comfyCompiler: ComfyMicroAppCompiler;
   private observability: OriginalObservability;
   private budgets: OriginalBudgets;
   private billingExtras: OriginalBillingExtras;
@@ -539,7 +537,6 @@ class OriginalApi {
     this.skills = new OriginalSkills(identity.p);
     this.proposals = new OriginalCanvasProposals(identity.p);
     this.agentPolicies = new OriginalAgentPolicies(identity.p);
-    this.comfyCompiler = new ComfyMicroAppCompiler(identity.p);
     this.observability = new OriginalObservability(identity.p);
     this.budgets = new OriginalBudgets(identity.p, identity);
     this.billingExtras = new OriginalBillingExtras(identity.p, identity);
@@ -872,26 +869,6 @@ class OriginalApi {
   @HttpCode(200)
   adjustCredits(@Req() req: AuthRequest, @Body() body: unknown) {
     return this.credits.adjust(req.actor, body);
-  }
-  @Post("api/admin/comfy/analyze")
-  @HttpCode(200)
-  analyzeComfyWorkflow(
-    @Req() req: AuthRequest,
-    @Body() body: { workflow?: unknown },
-  ) {
-    return this.comfyCompiler.analyzeWorkflow(req.actor, body?.workflow);
-  }
-  @Post("api/admin/comfy/publish")
-  @HttpCode(200)
-  publishComfyMicroApp(
-    @Req() req: AuthRequest,
-    @Body()
-    body: { spec?: unknown; dry_run?: boolean; auto_enable?: boolean },
-  ) {
-    return this.comfyCompiler.publish(req.actor, body?.spec, {
-      dryRun: Boolean(body?.dry_run),
-      autoEnable: Boolean(body?.auto_enable),
-    });
   }
   @Get("api/admin/observability/summary")
   observabilitySummary(@Req() req: AuthRequest) {
