@@ -109,6 +109,11 @@ try {
         await page.route(`**${apiPath}/document`, async (route) => {
           assert.equal(route.request().method(), "PUT");
           putCount++;
+          // Delete only after the editor starts saving, so initial loads succeed.
+          if (status === 404 && putCount === 1) {
+            const removed = await context.request.delete(apiPath, { headers });
+            assert.ok(removed.ok(), await removed.text());
+          }
           if (failSave) {
             await route.fulfill({ status: 503, json: { detail: "保存服务暂时不可用" } });
           } else {
@@ -138,10 +143,6 @@ try {
             },
           });
           assert.equal(remote.status(), 200, await remote.text());
-        }
-        if (status === 404) {
-          const removed = await context.request.delete(apiPath, { headers });
-          assert.ok(removed.ok(), await removed.text());
         }
         if (conflictOnExit) {
           const now = new Date();

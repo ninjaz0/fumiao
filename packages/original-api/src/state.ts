@@ -5,6 +5,7 @@ import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import {
+  hasStudioPackages,
   studioPluginProfile,
   pairedPluginAvailable,
   listedStudioCatalog,
@@ -251,6 +252,7 @@ export class OriginalState {
               })),
               invite_codes: (await identity.invites(actor, sql)).items,
               team_model_policies: policies,
+              model_plugin_access: await catalog.pluginAccess(sql),
               credit_accounts: await credits.accountRows(sql),
             });
           }
@@ -272,6 +274,7 @@ export class OriginalState {
         `SELECT DISTINCT v.id,v.version,v.manifest FROM ${await listedStudioCatalog(sql)} c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE v.manifest->'originalState' IS NOT NULL`,
       )
     ).rows;
+    const hasPackages = await hasStudioPackages(sql);
     const fields: Record<string, unknown> = {},
       byModel = new Map<string, ProviderPlugin>();
     for (const v of rows) {
@@ -279,12 +282,17 @@ export class OriginalState {
         adapter = plugin.originalState!,
         policy = v.manifest.originalState;
       requireValue(adapter, 503, "原状态插件尚未安装");
-      const connections = (
-        await sql.query(
-          "SELECT * FROM connections WHERE plugin_id=$1 AND plugin_version=$2 AND NOT removed ORDER BY enabled DESC,id",
-          [v.id, v.version],
-        )
-      ).rows;
+      const accepts =
+        !hasPackages ||
+        (await one(sql, "SELECT studio_plugin_accepts($1) AS ok", [v.id])).ok;
+      const connections = accepts
+        ? (
+            await sql.query(
+              "SELECT * FROM connections WHERE plugin_id=$1 AND plugin_version=$2 AND NOT removed ORDER BY enabled DESC,id",
+              [v.id, v.version],
+            )
+          ).rows
+        : [];
       requireValue(connections.length <= 1 || await one(sql,"SELECT id FROM studio_packages WHERE id=$1 AND installed",[v.id]), 503, "原状态提供方连接存在歧义");
       const connection = connections[0];
       const configured = connection
