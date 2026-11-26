@@ -18,6 +18,11 @@ import {
 } from "lucide-react";
 import { reducedMotion, reducedMotionQuery } from "../app/motion";
 import { CinematographyPanel } from "./CinematographyPanel";
+import { OptionSelect } from "./OptionSelect";
+import {
+  GENERATION_MODE_OPTIONS,
+  countActiveCinematography,
+} from "./composer-options";
 import type { CanvasGenerationMode, CanvasNode, CinematographySpec } from "./types";
 
 export type Shot = {
@@ -253,7 +258,13 @@ export function ShotList({
                   {onEditShot && (
                     <button
                       type="button"
-                      className="icon-button"
+                      className={
+                        "icon-button" +
+                        (cineNode === shot.id ||
+                        countActiveCinematography(shot.cinematography) > 0
+                          ? " active"
+                          : "")
+                      }
                       title="导演镜头参数"
                       aria-label={`镜头 ${index + 1} 导演参数`}
                       aria-expanded={cineNode === shot.id}
@@ -339,24 +350,17 @@ export function ShotList({
                     }
                   />
                   <div className="fm-shot-mode-row">
-                    <label>
-                      链路：
-                      <select
-                        aria-label={`镜头 ${index + 1} 分镜链路`}
-                        value={shot.generation_mode ?? "first_last_frame"}
-                        onChange={(e) =>
-                          onEditShot(shot.id, {
-                            generation_mode: e.target
-                              .value as CanvasGenerationMode,
-                          })
-                        }
-                      >
-                        <option value="first_frame">单首帧</option>
-                        <option value="first_last_frame">经典首尾帧</option>
-                        <option value="omni_ref">全能 @图N 多参考</option>
-                        <option value="grid_preview">宫格构图预览</option>
-                      </select>
-                    </label>
+                    <span className="fm-shot-mode-label">分镜链路</span>
+                    <OptionSelect
+                      ariaLabel={`镜头 ${index + 1} 分镜链路`}
+                      value={shot.generation_mode ?? "first_last_frame"}
+                      options={GENERATION_MODE_OPTIONS}
+                      onChange={(mode) =>
+                        onEditShot(shot.id, {
+                          generation_mode: mode,
+                        })
+                      }
+                    />
                   </div>
                 </div>
               )}
