@@ -1621,6 +1621,12 @@ test("a portable node pool pairs, claims and settles its pinned release alongsid
   assert.equal(claim.id, job.id);
   assert.deepEqual(claim.instruction, { prompt: "test" });
   assert.equal((await request(root + "/claim", {})).job.ticket, claim.ticket);
+  const heartbeat = await request(root + "/heartbeat", {
+    stage: "busy",
+    ticket: claim.ticket,
+    capabilities: { ready: true, comfy_object_info_hash: "legacy-info-hash" },
+  });
+  assert.equal(heartbeat.held, true);
   const bytes = await sharp({
     create: { width: 12, height: 12, channels: 3, background: "white" },
   })

@@ -121,5 +121,5 @@
       }
     ]
   },
-  "program": "{\n  capabilities(report) {\n    return { ready_models: report.ready === true ? [\"pool-fixture-image\"] : [] };\n  },\n  eligible(node, job) {\n    return node.ready_models.includes(job.model) && job.kind === \"image\";\n  },\n  dispatch(job) {\n    return { prompt: job.input.prompt };\n  },\n  receipt(job, report) {\n    return job.kind === \"image\" && typeof report.prompt_id === \"string\" && report.prompt_id.length > 0;\n  },\n  artifactRules() {\n    return { mime: \"image/png\", maxBytes: 32 * 1024 * 1024 };\n  },\n}"
+  "program": "{\n  capabilities(report) {\n    return { ready_models: report.ready === true ? [\"pool-fixture-image\"] : [], comfy_object_info_hash: report.comfy_object_info_hash };\n  },\n  eligible(node, job) {\n    return node.ready_models.includes(job.model) && job.kind === \"image\";\n  },\n  dispatch(job) {\n    return { prompt: job.input.prompt };\n  },\n  receipt(job, report) {\n    return job.kind === \"image\" && typeof report.prompt_id === \"string\" && report.prompt_id.length > 0;\n  },\n  artifactRules() {\n    return { mime: \"image/png\", maxBytes: 32 * 1024 * 1024 };\n  },\n}"
 }
