@@ -42,10 +42,6 @@ import {
   tokenCreateFields,
 } from "./wave4-fields.js";
 import {
-  comfyAnalyzeFields,
-  comfyPublishFields,
-} from "./wave5-fields.js";
-import {
   budgetUpsertFields,
   moderationSettingsFields,
   reconcileJobFields,
@@ -78,8 +74,6 @@ export const identityBodies: Record<string, Fields> = {
   agentPolicy: agentPolicyFields,
   proposalCreate: proposalCreateFields,
   proposalApply: proposalApplyFields,
-  comfyAnalyze: comfyAnalyzeFields,
-  comfyPublish: comfyPublishFields,
   budgetUpsert: budgetUpsertFields,
   moderationSettings: moderationSettingsFields,
   reconcileJob: reconcileJobFields,
@@ -469,16 +463,6 @@ export const identityContracts: Contract[] = [
     body: "adjustCredits",
   },
   {
-    method: "POST",
-    path: /^\/api\/admin\/comfy\/analyze$/,
-    body: "comfyAnalyze",
-  },
-  {
-    method: "POST",
-    path: /^\/api\/admin\/comfy\/publish$/,
-    body: "comfyPublish",
-  },
-  {
     method: "GET",
     path: /^\/api\/admin\/observability\/summary$/,
     query: ["days"],
@@ -575,8 +559,6 @@ export function validateIdentityRequest(
           "agentPolicy",
           "proposalCreate",
           "proposalApply",
-          "comfyAnalyze",
-          "comfyPublish",
           "budgetUpsert",
           "moderationSettings",
           "reconcileJob",

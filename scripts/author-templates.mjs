@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-// Ship editable sources from the examples exercised in Studio integration tests.
+// Ship editable sources exercised by the Studio author integration tests.
 export async function writeAuthorTemplates(root, destination) {
   const sharpPackage = JSON.parse(
     await readFile(join(root, "node_modules/sharp/package.json"), "utf8"),
@@ -9,7 +9,7 @@ export async function writeAuthorTemplates(root, destination) {
   const templates = {
     importers: "example-importers",
     providers: "example-studio",
-    nodePools: "example-node-pool",
+    nodePools: "node-pool",
     settingsPages: "example-extension",
     settings: "example-extension",
     pages: "example-review-board",
@@ -21,7 +21,10 @@ export async function writeAuthorTemplates(root, destination) {
     paymentMethods: "payments",
   };
   for (const [type, source] of Object.entries(templates)) {
-    const input = join(root, "plugins", source),
+    const input =
+      type === "nodePools"
+        ? join(root, "packages", "plugin-sdk", "scaffolds", source)
+        : join(root, "plugins", source),
       files = {};
     const read = (path) => readFile(join(input, path), "utf8");
     let release;

@@ -39,6 +39,13 @@ const load = async (id: string): Promise<PackageFile> =>
   JSON.parse(
     await readFile("plugins/" + id + "/" + id + ".fmplugin.json", "utf8"),
   );
+async function nodePoolFixture(): Promise<PackageFile> {
+  const [fixture, gpu] = await Promise.all([
+    readFile("tests/fixtures/node-pool-package.json", "utf8"),
+    load("gpu"),
+  ]);
+  return { ...JSON.parse(fixture), nodeClient: gpu.nodeClient };
+}
 async function setup(through?: string) {
   const f = await databaseFixture(through);
   await f.p.registry.initializeStudio(f.db, false);
@@ -1520,7 +1527,7 @@ test("blank canvases save sticky edits and list runs across zero-plugin, v3 pack
 test("a portable node pool pairs, claims and settles its pinned release alongside GPU", async (t) => {
   const f = await setup();
   t.after(() => f.cleanup());
-  const file = await load("example-node-pool");
+  const file = await nodePoolFixture();
   const gpu = await legacyPackage("gpu");
   await seedLegacyPackage(f.p, gpu);
   await assert.rejects(
@@ -1570,7 +1577,7 @@ test("a portable node pool pairs, claims and settles its pinned release alongsid
   );
   const pair = await request(
     "/api/plugins/" + file.id + "/pages/nodes/actions/pair",
-    { payload: { name: "test", models: ["comfy-image"] } },
+    { payload: { name: "test", models: ["pool-fixture-image"] } },
   );
   const code = pair.result.value.split(" ").at(-1);
   await request("/agent/enroll", { code, secret: token }, 403);
@@ -1595,7 +1602,7 @@ test("a portable node pool pairs, claims and settles its pinned release alongsid
     f.actor,
     await gen.parse("image", {
       uid: randomUUID(),
-      model: "comfy-image",
+      model: "pool-fixture-image",
       prompt: "test",
       params: {},
     }),
@@ -1614,6 +1621,12 @@ test("a portable node pool pairs, claims and settles its pinned release alongsid
   assert.equal(claim.id, job.id);
   assert.deepEqual(claim.instruction, { prompt: "test" });
   assert.equal((await request(root + "/claim", {})).job.ticket, claim.ticket);
+  const heartbeat = await request(root + "/heartbeat", {
+    stage: "busy",
+    ticket: claim.ticket,
+    capabilities: { ready: true, comfy_object_info_hash: "legacy-info-hash" },
+  });
+  assert.equal(heartbeat.held, true);
   const bytes = await sharp({
     create: { width: 12, height: 12, channels: 3, background: "white" },
   })
@@ -1885,7 +1898,7 @@ test("sandbox media tools process private workspace assets and remove rolled-bac
   const { PluginPages } = await import("@fumiao/platform/plugin-pages.js");
   const f = await setup();
   t.after(() => f.cleanup());
-  const file = await load("example-node-pool");
+  const file = await nodePoolFixture();
   assert.match(
     (await f.packages.preview(f.actor, file)).changes.join(" "),
     /私有素材/,

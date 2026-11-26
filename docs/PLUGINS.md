@@ -307,9 +307,7 @@ POST /api/admin/connections/:id/upgrade
 
 ### 节点池 v1
 
-管理员可以从 Studio 的插件设置导入 `plugins/example-node-pool/example-node-pool.fmplugin.json`，启用后在「ComfyUI 节点」生成接入命令。准备一台运行 ComfyUI 的 Linux 机器，导出 API 格式的工作流，设置 `COMFY_WORKFLOW` 为文件路径，`COMFY_PROMPT_NODE` 为文本节点 ID。工作流需要一个保存 PNG 的输出节点。节点端默认连接本机 8188 端口，通过 `COMFY_URL` 可以指定自己的 ComfyUI 服务。在该机器运行接入命令，保持进程在线，然后在 Studio 选择「ComfyUI 图像」提交任务。
-
-清单使用 `mode: "pull"`、Studio 提交契约 v3、`contributes.nodePools: { "version": 1 }` 和 `hostCapabilities: ["nodes", "media"]`。模型参数、表单和价格沿用 Studio 模型清单。节点安装器、压缩包和 SHA-256 摘要放在 `nodeClient` 中。管理员页面使用设置页的 `nodes` 读取范围和 `nodes.pair` 等宿主操作。示例的全部策略在 `plugins/example-node-pool/package/program.js`。
+清单使用 `mode: "pull"`、Studio 提交契约 v3、`contributes.nodePools: { "version": 1 }` 和 `nodes` 宿主能力。模型参数、表单和价格沿用 Studio 模型清单。节点安装器、压缩包和 SHA-256 摘要放在 `nodeClient` 中。管理员页面使用设置页的 `nodes` 读取范围和 `nodes.pair` 等宿主操作。
 
 节点池的五个策略是同步 QuickJS 扩展点。宿主根据节点当前安装版本处理能力上报，用接单时冻结的包版本执行四项任务策略。
 
@@ -339,7 +337,7 @@ POST /api/admin/connections/:id/upgrade
 
 调用传入当前工作区素材的 32 位公开 ID。探测返回 MIME、秒数、尺寸、编码、声道和采样率。转码、拼接与抽帧在管理员操作中可用，返回相同类型的信息以及新素材 ID。原素材继续可读。输出计入存储配额，操作失败或事务回滚会清理新文件。审计记录调用名称、次数、工作区和操作结果。
 
-`format` 接受 `mp4`（H.264 视频，有音轨时为 AAC）或 `wav`（PCM 音频）。抽帧输出 PNG。拼接接受 2–8 个按播放顺序排列的 ID，视频需全部带音轨或全部无音轨。单次输入合计上限为 64 MiB、120 秒，输入画面上限为 16777216 像素。单个 API 进程最多并行处理两项操作。FFmpeg 和临时目录由宿主管理。ComfyUI 节点池示例包在设置的「素材处理示例」页提供这四项操作。
+`format` 接受 `mp4`（H.264 视频，有音轨时为 AAC）或 `wav`（PCM 音频）。抽帧输出 PNG。拼接接受 2–8 个按播放顺序排列的 ID，视频需全部带音轨或全部无音轨。单次输入合计上限为 64 MiB、120 秒，输入画面上限为 16777216 像素。单个 API 进程最多并行处理两项操作。FFmpeg 和临时目录由宿主管理。
 
 ### GPU 2.0 切换和回退
 

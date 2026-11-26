@@ -47,8 +47,6 @@ export async function createProject(kind: string, path?: string) {
       const dest = join(target, name);
       await mkdir(dirname(dest), { recursive: true });
       let source = original.replaceAll(template.sourceId, id);
-      if (kind === "nodePools")
-        source = source.replaceAll("comfy-image", id + "-image");
       if (name === "package/release.json") {
         const release = JSON.parse(source);
         release.version = "1.0.0";

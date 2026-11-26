@@ -1,0 +1,125 @@
+{
+  "format": 1,
+  "id": "test-node-pool",
+  "label": "测试节点池",
+  "version": "1.2.0",
+  "adapterVersion": "1.0.0",
+  "contributes": {
+    "version": 1,
+    "nodePools": {
+      "version": 1
+    },
+    "hostCapabilities": [
+      "nodes",
+      "media"
+    ],
+    "settingsPages": [
+      {
+        "id": "nodes",
+        "title": "测试节点",
+        "icon": "gpu",
+        "scopes": [
+          "nodes"
+        ],
+        "actions": [
+          {
+            "id": "pair",
+            "kind": "host",
+            "operation": "nodes.pair"
+          },
+          {
+            "id": "drain",
+            "kind": "host",
+            "operation": "nodes.drain"
+          },
+          {
+            "id": "resume",
+            "kind": "host",
+            "operation": "nodes.resume"
+          },
+          {
+            "id": "remove",
+            "kind": "host",
+            "operation": "nodes.remove"
+          }
+        ],
+        "program": "{\n  view(input) {\n    return { schema: 1, title: \"测试节点\", blocks: [\n      { type: \"form\", id: \"pair\", title: \"接入工作机\", fields: [\n        {name:\"name\", type:\"text\",label:\"实例名称\"},\n        {name:\"models\",type:\"multiselect\",label:\"模型\",required:true,\n         options:[{value:\"pool-fixture-image\",label:\"测试图像\"}],value:[\"pool-fixture-image\"]}\n      ],submit:{action:\"pair\",label:\"生成接入命令\"} },\n      {type:\"list\",empty:\"暂无工作机\",rows:input.nodes.nodes.map(n => ({\n        id:n.id,title:n.name,status:n.stage,detail:n.detail,\n        actions:[{action:n.control===\"active\"?\"drain\":\"resume\",label:n.control===\"active\"?\"排空\":\"恢复\",target:n.id},\n          {action:\"remove\",label:\"移除\",target:n.id}]\n      }))}\n    ] };\n  },\n}"
+      },
+      {
+        "id": "media",
+        "title": "素材处理示例",
+        "icon": "film",
+        "group": "services",
+        "scopes": [],
+        "actions": [
+          {
+            "id": "probe",
+            "kind": "program"
+          },
+          {
+            "id": "transcode",
+            "kind": "program"
+          },
+          {
+            "id": "concat",
+            "kind": "program"
+          },
+          {
+            "id": "frame",
+            "kind": "program"
+          }
+        ],
+        "program": "{\n  view() {\n    const source = {\n      name: \"asset\",\n      type: \"text\",\n      label: \"素材 ID\",\n      required: true,\n      maxLength: 32,\n    };\n    const format = {\n      name: \"format\",\n      type: \"select\",\n      label: \"输出格式\",\n      value: \"mp4\",\n      options: [\n        { value: \"mp4\", label: \"MP4 视频\" },\n        { value: \"wav\", label: \"WAV 音频\" },\n      ],\n    };\n    const form = (id, title, fields) => ({\n      type: \"form\",\n      id,\n      title,\n      fields,\n      submit: { action: id, label: title },\n    });\n    return {\n      schema: 1,\n      title: \"素材处理示例\",\n      description:\n        \"使用当前工作区素材地址末尾的 32 位 ID。生成的素材保存在同一工作区。\",\n      blocks: [\n        form(\"probe\", \"读取媒体信息\", [source]),\n        form(\"transcode\", \"转码\", [source, format]),\n        form(\"concat\", \"拼接\", [\n          {\n            name: \"assets\",\n            type: \"textarea\",\n            label: \"素材 ID，按拼接顺序每行一个\",\n            required: true,\n          },\n          format,\n        ]),\n        form(\"frame\", \"提取视频帧\", [\n          source,\n          {\n            name: \"seconds\",\n            type: \"number\",\n            label: \"时间（秒）\",\n            value: 0,\n            min: 0,\n            max: 120,\n          },\n        ]),\n      ],\n    };\n  },\n  async action(id, payload, _input, host) {\n    if (id === \"probe\") {\n      const m = await host.media.probe(payload.asset);\n      return {\n        notice: [\n          m.mime,\n          m.width && m.width + \" × \" + m.height,\n          m.seconds + \" 秒\",\n        ]\n          .filter(Boolean)\n          .join(\" · \"),\n      };\n    }\n    const m =\n      id === \"transcode\"\n        ? await host.media.transcode(payload.asset, { format: payload.format })\n        : id === \"concat\"\n          ? await host.media.concat(payload.assets.trim().split(/\\s+/), {\n              format: payload.format,\n            })\n          : await host.media.extractFrame(payload.asset, {\n              seconds: Number(payload.seconds),\n            });\n    return { notice: \"已生成素材 \" + m.id };\n  },\n}"
+      }
+    ]
+  },
+  "manifest": {
+    "id": "test-node-pool",
+    "label": "测试节点池",
+    "version": "1.0.0",
+    "contractVersion": 1,
+    "mode": "pull",
+    "originalSubmission": {
+      "version": 3
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "models": [
+      {
+        "id": "pool-fixture-image",
+        "label": "测试图像",
+        "kind": "image",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {},
+          "x-references": {
+            "max": 0
+          }
+        },
+        "studio": {
+          "order": 1000,
+          "priceOrder": 1000,
+          "descriptor": {
+            "kind": "image",
+            "label": "测试图像"
+          },
+          "prices": [
+            {
+              "tier": "standard",
+              "label": "标准",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "program": "{\n  capabilities(report) {\n    return { ready_models: report.ready === true ? [\"pool-fixture-image\"] : [], comfy_object_info_hash: report.comfy_object_info_hash };\n  },\n  eligible(node, job) {\n    return node.ready_models.includes(job.model) && job.kind === \"image\";\n  },\n  dispatch(job) {\n    return { prompt: job.input.prompt };\n  },\n  receipt(job, report) {\n    return job.kind === \"image\" && typeof report.prompt_id === \"string\" && report.prompt_id.length > 0;\n  },\n  artifactRules() {\n    return { mime: \"image/png\", maxBytes: 32 * 1024 * 1024 };\n  },\n}"
+}
