@@ -240,6 +240,7 @@ export function useDocument(project: Project, userId: number) {
   }, [remember]);
   const acceptRemote = (result: Project, expectedDraft: string, operation = "采用回答") => {
     if (JSON.stringify(ref.current) !== expectedDraft) {
+      if (serial.current === ack.current) serial.current++;
       blocked.current = true; setStatus("conflict");
       setError(operation + "期间画布发生了修改，请先处理保存冲突。");
       remember(); throw new Error("画布有新的本地修改，请先处理保存冲突");

@@ -6,6 +6,7 @@ import { canvasLoginPath } from "../auth/return-path";
 import { api, initializeWorkspace, setWorkspace, workspaceURL } from "./api";
 import { CanvasWorkspace } from "./CanvasWorkspace";
 import "./canvas-overrides.css";
+import "./script-workspace.css";
 import type { Project, Studio } from "./types";
 
 export default function CanvasEditor({ loadingLogo }: { loadingLogo: string }) {

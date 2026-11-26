@@ -139,7 +139,8 @@ export class OriginalChats {
       );
       if (
         project &&
-        (!/^[a-f0-9]{32}$/.test(project) || !/^[A-Za-z0-9_-]{1,80}$/.test(node))
+        (!/^[a-f0-9]{32}$/.test(project) ||
+          (node !== "" && !/^[A-Za-z0-9_-]{1,80}$/.test(node)))
       )
         return { conversations: [] };
       const rows = (

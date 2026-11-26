@@ -51,15 +51,44 @@ export function chatContext(
       latest = context;
       if (pythonTruthy(context.text) && typeof context.text !== "string")
         throw new Error("Invalid canvas context text");
+      const refBlocks = Array.isArray(context.references)
+        ? context.references
+            .filter(
+              (r: any) =>
+                r &&
+                typeof r.label === "string" &&
+                typeof r.content === "string" &&
+                r.content.length > 0,
+            )
+            .map((r: any) => {
+              const truncSuffix = r.truncated
+                ? `（已按配额截断，原文共 ${r.total_chars ?? r.content.length} 字）`
+                : "";
+              return `[${r.kind === "script" ? "剧本" : "节点"} · ${r.label}${truncSuffix}]\n${r.content}`;
+            })
+        : [];
+      const omittedBlocks = Array.isArray(context.omitted_references)
+        ? context.omitted_references.filter((x: any) => typeof x === "string")
+        : [];
+      const omittedLine = omittedBlocks.length
+        ? `\n\n[未加载引用说明：${omittedBlocks.join("；")}]`
+        : "";
+      const refPrefix =
+        refBlocks.length || omittedBlocks.length
+          ? "已引用的工作区上下文：\n<workspace_references>\n" +
+            refBlocks.join("\n\n---\n\n") +
+            omittedLine +
+            "\n</workspace_references>\n\n"
+          : "";
+      const canvasPrefix = pythonTruthy(context.text)
+        ? "当前画布文本（待编辑材料）：\n<canvas_text>\n" +
+          context.text +
+          "\n</canvas_text>\n\n"
+        : "";
       groups.push([
         {
           role: "user",
-          content: pythonTruthy(context.text)
-            ? "当前画布文本（待编辑材料）：\n<canvas_text>\n" +
-              context.text +
-              "\n</canvas_text>\n\n" +
-              row.content
-            : row.content,
+          content: refPrefix + canvasPrefix + row.content,
         },
       ]);
     } else if (row.state === "complete" && groups.length)

@@ -170,6 +170,15 @@ export const TOKEN_REST_ALLOWLIST: readonly TokenRouteRule[] = [
   tokenRule("POST", "/api/series/:key/episodes/:ep/scenes", "canvas:write", "Series", "在指定分集下创建分场与绑定画布"),
   tokenRule("PUT", "/api/series/:key/episodes/:ep/scenes/:scene", "canvas:write", "Series", "更新分场标题、场号或分组映射"),
   tokenRule("DELETE", "/api/series/:key/episodes/:ep/scenes/:scene", "canvas:write", "Series", "删除分场"),
+  // Workspace script documents (Canvas × Script fusion)
+  tokenRule("GET", "/api/workspace/scripts", "canvas:read", "Scripts", "列出当前工作区剧本文档与文件夹树"),
+  tokenRule("POST", "/api/workspace/scripts", "canvas:write", "Scripts", "创建工作区剧本文档或文件夹"),
+  tokenRule("POST", "/api/workspace/scripts/suite", "canvas:write", "Scripts", "一键初始化短剧四件套剧本文档组"),
+  tokenRule("POST", "/api/workspace/scripts/search", "canvas:read", "Scripts", "工作区剧本文档全文检索"),
+  tokenRule("POST", "/api/workspace/scripts/replace", "canvas:write", "Scripts", "按乐观锁批量替换剧本文档内容"),
+  tokenRule("GET", "/api/workspace/scripts/:key", "canvas:read", "Scripts", "读取单个剧本文档完整正文与版本号"),
+  tokenRule("PUT", "/api/workspace/scripts/:key", "canvas:write", "Scripts", "按乐观锁更新或移动剧本文档"),
+  tokenRule("DELETE", "/api/workspace/scripts/:key", "canvas:write", "Scripts", "删除剧本文档或文件夹"),
   // MCP Streamable HTTP
   tokenRule("POST", "/api/mcp", "mcp:use", "MCP", "Fumiao MCP Server Streamable HTTP JSON-RPC 2.0 入口"),
   tokenRule("GET", "/api/mcp", "mcp:use", "MCP", "Fumiao MCP Server SSE 事件通道"),

@@ -565,3 +565,93 @@ test("Conversation/message bounds include superseded history, while restore and 
     await f.cleanup();
   }
 });
+
+test("Canvas-level chat conversations (empty node) can be listed while preserving project, node, and workspace isolation", async () => {
+  const f = await chatsFixture();
+  try {
+    const canvasA = await f.canvas();
+    const canvasB = await f.canvas();
+
+    // 1. Canvas-level chat on canvasA (node === "")
+    const canvasLevelA = await f.chats.create(f.admin, {
+      context: {
+        project: canvasA.public_id,
+        node: "",
+        expected_revision: 1,
+      },
+    });
+    // 2. Node-scoped chat on canvasA (node === "text-node")
+    const nodeLevelA = await f.chats.create(f.admin, {
+      context: {
+        project: canvasA.public_id,
+        node: "text-node",
+        expected_revision: 1,
+      },
+    });
+    // 3. Canvas-level chat on canvasB (node === "")
+    const canvasLevelB = await f.chats.create(f.admin, {
+      context: {
+        project: canvasB.public_id,
+        node: "",
+        expected_revision: 1,
+      },
+    });
+
+    // Listing canvas-level chats for canvasA returns ONLY canvasLevelA
+    const listCanvasA = await f.chats.list(
+      f.admin,
+      undefined,
+      canvasA.public_id,
+      "",
+    );
+    assert.deepEqual(
+      listCanvasA.conversations.map((c) => c.id),
+      [canvasLevelA.conversation.id],
+    );
+
+    // Listing node-scoped chats for canvasA returns ONLY nodeLevelA
+    const listNodeA = await f.chats.list(
+      f.admin,
+      undefined,
+      canvasA.public_id,
+      "text-node",
+    );
+    assert.deepEqual(
+      listNodeA.conversations.map((c) => c.id),
+      [nodeLevelA.conversation.id],
+    );
+
+    // Listing canvas-level chats for canvasB returns ONLY canvasLevelB
+    const listCanvasB = await f.chats.list(
+      f.admin,
+      undefined,
+      canvasB.public_id,
+      "",
+    );
+    assert.deepEqual(
+      listCanvasB.conversations.map((c) => c.id),
+      [canvasLevelB.conversation.id],
+    );
+
+    // Cross-workspace query (team workspace) must not leak admin's personal workspace canvasA chat
+    const team = await one(f.db, "SELECT * FROM workspaces WHERE kind='team'");
+    const listFromTeam = await f.chats.list(
+      f.admin,
+      String(team.public_id),
+      canvasA.public_id,
+      "",
+    );
+    assert.deepEqual(listFromTeam.conversations, []);
+
+    // Malformed node identifier with valid project still returns empty
+    const listMalformedNode = await f.chats.list(
+      f.admin,
+      undefined,
+      canvasA.public_id,
+      "bad\u0000node",
+    );
+    assert.deepEqual(listMalformedNode.conversations, []);
+  } finally {
+    await f.cleanup();
+  }
+});
