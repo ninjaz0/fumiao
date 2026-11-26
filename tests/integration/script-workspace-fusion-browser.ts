@@ -102,6 +102,32 @@ try {
     assert.equal(createdA.status(), 200);
     const canvasA: Project = await createdA.json();
 
+    // Seed canvasA with a text node containing heroBefore so post-replace re-search can verify current-canvas node freshness
+    const putA = await context.request.put(
+      `/api/canvases/${canvasA.id}/document`,
+      {
+        headers,
+        data: {
+          title: canvasA.title,
+          expected_revision: canvasA.revision,
+          document: {
+            schemaVersion: 1,
+            nodes: [
+              {
+                ...newNode("text", 120, 80, 1),
+                id: "main-shop-text-1",
+                title: "钟表铺门口场记",
+                text: `${heroBefore}站在钟表铺门口冒雨驻足`,
+              },
+            ],
+            edges: [],
+            shots: [],
+          },
+        },
+      },
+    );
+    assert.equal(putA.status(), 200, await putA.text());
+
     const createdB = await context.request.post("/api/canvases", {
       headers,
       data: { title: canvasBTitle },
@@ -169,6 +195,31 @@ try {
     assert.equal(scriptBRes.status(), 200, await scriptBRes.text());
     const docB = await scriptBRes.json();
 
+    // Create a directory + child script to verify open child session alignment on directory rename
+    const folderOrigName = `第1季_${runTag}`;
+    const folderRenamedName = `第一季精修_${runTag}`;
+    const childFileName = `${runTag}_EP03_支线.md`;
+    const dirRes = await context.request.post("/api/workspace/scripts", {
+      headers,
+      data: {
+        path: folderOrigName,
+        entry_type: "directory",
+      },
+    });
+    assert.equal(dirRes.status(), 200, await dirRes.text());
+    const childScriptRes = await context.request.post("/api/workspace/scripts", {
+      headers,
+      data: {
+        path: `${folderOrigName}/${childFileName}`,
+        entry_type: "file",
+        doc_kind: "script",
+        canvas_id: canvasA.id,
+        body_md: `# EP03 支线\n\n### S01 档案室 夜 内\n\n△翻阅旧卷宗。`,
+      },
+    });
+    assert.equal(childScriptRes.status(), 200, await childScriptRes.text());
+    const childDoc = await childScriptRes.json();
+
     const page = await context.newPage();
     let failDocBSave = false;
     await page.route(`**/api/workspace/scripts/${docB.id}`, async (route) => {
@@ -182,27 +233,152 @@ try {
       await route.continue();
     });
 
+    let releaseSlowSearch: (() => void) | null = null;
+    await page.route("**/api/workspace/scripts/search", async (route) => {
+      const postBody = route.request().postDataJSON?.() as
+        | { query?: string }
+        | undefined;
+      if (postBody?.query === heroBefore && !releaseSlowSearch) {
+        await new Promise<void>((resolve) => {
+          releaseSlowSearch = resolve;
+        });
+      }
+      await route.continue();
+    });
+
     const editPath = `/canvas/${canvasA.id}?workspace=${workspace}`;
     await page.goto(editPath);
 
-    // 1. Narrow viewport layout check: switcher does not overlap header or document workspace
-    await page.setViewportSize({ width: 840, height: 780 });
+    // 1. Narrow viewport (<= 760px) layout check: switcher does not overlap header or document workspace
+    await page.setViewportSize({ width: 720, height: 780 });
     await page.getByRole("tab", { name: "文档" }).click();
     await expect(page.getByText(fileAName).first()).toBeVisible();
+    await page.getByRole("treeitem").filter({ hasText: fileAName }).dblclick();
     const headerBox = await page.locator(".canvas-header").boundingBox();
     const switcherBox = await page.locator(".fm-surface-switcher").boundingBox();
     const docWsBox = await page.locator(".fm-doc-workspace").boundingBox();
     assert.ok(headerBox && switcherBox && docWsBox);
     assert.ok(
       switcherBox.y >= headerBox.y + headerBox.height - 2,
-      `switcher (${switcherBox.y}) must sit below header (${headerBox.y + headerBox.height})`,
+      `switcher (${switcherBox.y}) must sit below header (${headerBox.y + headerBox.height}) at <=760px`,
     );
     assert.ok(
       docWsBox.y >= switcherBox.y + switcherBox.height - 2,
-      `doc workspace (${docWsBox.y}) must sit below switcher (${switcherBox.y + switcherBox.height})`,
+      `doc workspace (${docWsBox.y}) must sit below switcher (${switcherBox.y + switcherBox.height}) at <=760px`,
     );
 
+    // 1a. Mobile 375x812 check: 2-row wrapped header vs switcher/doc, touch directory row buttons without hover, bottom .viewport-dock vs .fm-agent-orb, and docked/floating AI assistant bounds
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.waitForTimeout(120);
+    const header375 = await page.locator(".canvas-header").boundingBox();
+    const switcher375 = await page.locator(".fm-surface-switcher").boundingBox();
+    const docWs375 = await page.locator(".fm-doc-workspace").boundingBox();
+    assert.ok(header375 && switcher375 && docWs375);
+    assert.ok(
+      switcher375.y >= header375.y + header375.height - 2,
+      `375px switcher (${switcher375.y}) must sit below wrapped header (${header375.y + header375.height})`,
+    );
+    assert.ok(
+      docWs375.y >= switcher375.y + switcher375.height - 2,
+      `375px doc workspace (${docWs375.y}) must sit below switcher (${switcher375.y + switcher375.height})`,
+    );
+    // Directory row action buttons must be visible at 375px without pointer hover
+    const folderRowMobile = page
+      .getByRole("treeitem")
+      .filter({ hasText: folderOrigName })
+      .first();
+    await expect(
+      folderRowMobile.getByRole("button", { name: `重命名 ${folderOrigName}` }),
+    ).toBeVisible();
+
+    // Switch to Canvas surface at 375x812 and check .fm-agent-orb does not overlap .viewport-dock
+    await page.getByRole("tab", { name: "画布" }).click();
+    const orbBox375 = await page.locator(".fm-agent-orb").boundingBox();
+    const dockBox375 = await page.locator(".viewport-dock").boundingBox();
+    assert.ok(orbBox375 && dockBox375);
+    const orbIntersectsDock =
+      orbBox375.x < dockBox375.x + dockBox375.width &&
+      orbBox375.x + orbBox375.width > dockBox375.x &&
+      orbBox375.y < dockBox375.y + dockBox375.height &&
+      orbBox375.y + orbBox375.height > dockBox375.y;
+    assert.equal(
+      orbIntersectsDock,
+      false,
+      `375px .fm-agent-orb (${JSON.stringify(orbBox375)}) must not overlap .viewport-dock (${JSON.stringify(dockBox375)})`,
+    );
+
+    // Open AI assistant at 375x812: check docked bounds, then floating bounds, then restore docked & close
+    await page.locator(".fm-agent-orb").click();
+    const agentPanel = page.locator(".fm-floating-agent");
+    await expect(agentPanel).toBeVisible();
+    const dockedAgentBox = await agentPanel.boundingBox();
+    assert.ok(dockedAgentBox);
+    assert.ok(
+      dockedAgentBox.x >= -1 && dockedAgentBox.x + dockedAgentBox.width <= 376,
+      `375px docked AI assistant must fit viewport width: ${JSON.stringify(dockedAgentBox)}`,
+    );
+    assert.ok(
+      dockedAgentBox.y >= header375.y + header375.height - 2,
+      `375px docked AI assistant (${dockedAgentBox.y}) must sit below wrapped header (${header375.y + header375.height})`,
+    );
+    await agentPanel.getByRole("button", { name: "切换为悬浮" }).click();
+    const floatAgentBox = await agentPanel.boundingBox();
+    assert.ok(floatAgentBox);
+    assert.ok(
+      floatAgentBox.x >= 0 && floatAgentBox.x + floatAgentBox.width <= 376,
+      `375px floating AI assistant must fit viewport width: ${JSON.stringify(floatAgentBox)}`,
+    );
+    assert.ok(
+      floatAgentBox.y >= header375.y + header375.height - 4 &&
+        floatAgentBox.y + floatAgentBox.height <= 813,
+      `375px floating AI assistant must fit viewport height: ${JSON.stringify(floatAgentBox)}`,
+    );
+    await agentPanel.getByRole("button", { name: "停靠到右侧" }).click();
+    await agentPanel.getByRole("button", { name: "关闭 Agent 提案箱" }).click();
+    await page.getByRole("tab", { name: "文档" }).click();
+
     await page.setViewportSize({ width: 1360, height: 860 });
+
+    // 1b. Open child script inside folderOrigName, rename folderOrigName -> folderRenamedName, and verify subsequent edit saves cleanly!
+    await page.getByRole("treeitem").filter({ hasText: childFileName }).dblclick();
+    await expect(
+      page.getByRole("tab", { selected: true }).filter({ hasText: childFileName }),
+    ).toBeVisible();
+    const folderRow = page
+      .getByRole("treeitem")
+      .filter({ hasText: folderOrigName })
+      .first();
+    await folderRow.hover();
+    await folderRow
+      .getByRole("button", { name: `重命名 ${folderOrigName}` })
+      .click();
+    const renameInput = page.locator(".fm-tree-rename-input");
+    await expect(renameInput).toBeVisible();
+    await renameInput.fill(folderRenamedName);
+    await renameInput.press("Enter");
+    await expect(
+      page.getByRole("treeitem").filter({ hasText: folderRenamedName }).first(),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "原文", exact: true }).click();
+    const sourceEditor = page.getByRole("textbox", {
+      name: "剧本文档原文编辑器",
+    });
+    await sourceEditor.fill(
+      `# EP03 支线\n\n### S01 档案室 夜 内\n\n△目录改名后继续编辑子文件并正常保存。`,
+    );
+    await expect(page.getByText(/✓ 已保存/).first()).toBeVisible({
+      timeout: 5000,
+    });
+    const childAfterDirRename = await (
+      await context.request.get(`/api/workspace/scripts/${childDoc.id}`, {
+        headers,
+      })
+    ).json();
+    assert.equal(
+      childAfterDirRename.path,
+      `${folderRenamedName}/${childFileName}`,
+    );
+    assert.match(childAfterDirRename.body_md, /目录改名后继续编辑子文件并正常保存/);
 
     // 2. Make an unsaved local draft in fileBName, then batch-replace heroBefore -> heroAfter across workspace
     failDocBSave = true;
@@ -211,9 +387,6 @@ try {
       page.getByRole("tab", { selected: true }).filter({ hasText: fileBName }),
     ).toBeVisible();
     await page.getByRole("button", { name: "原文", exact: true }).click();
-    const sourceEditor = page.getByRole("textbox", {
-      name: "剧本文档原文编辑器",
-    });
     const docBUnsavedDraft = `# EP02 雨巷\n\n### S01 雨巷 夜 外\n\n△${heroBefore}撑伞走过青石板路。\n△本地未保存草稿绝不能被替换清空！`;
     await sourceEditor.fill(docBUnsavedDraft);
     await expect(page.getByText("保存失败（本地草稿已保留）")).toBeVisible({
@@ -232,6 +405,23 @@ try {
     const replaceInput = searchDialog.getByRole("textbox", {
       name: "替换文本",
     });
+    await replaceInput.fill(heroAfter);
+
+    // 2a. Slow in-flight search invalidation: start searching heroBefore (held in flight), switch query to "不存在的词_xyz", then release slow search
+    await queryInput.fill(heroBefore);
+    await searchDialog.getByRole("button", { name: "搜索", exact: true }).click();
+    await expect
+      .poll(() => Boolean(releaseSlowSearch), { timeout: 5000 })
+      .toBe(true);
+    await queryInput.fill(`不存在的词_${runTag}`);
+    releaseSlowSearch!();
+    await page.waitForTimeout(250);
+    await expect(
+      searchDialog.getByRole("button", { name: /预览替换/ }),
+    ).toBeDisabled();
+    await expect(searchDialog.getByText(fileAName)).toHaveCount(0);
+
+    // Now run normal search for heroBefore
     await queryInput.fill(heroBefore);
     await searchDialog.getByRole("button", { name: "搜索", exact: true }).click();
 
@@ -240,7 +430,6 @@ try {
     await expect(searchDialog.getByText(new RegExp(canvasBTitle))).toBeVisible();
     await expect(searchDialog.getByText(/有未保存草稿，已保护跳过/)).toBeVisible();
 
-    await replaceInput.fill(heroAfter);
     await searchDialog.getByRole("button", { name: /预览替换/ }).click();
     await expect(
       searchDialog.getByRole("button", { name: /确认替换已选/ }),
@@ -256,9 +445,17 @@ try {
     await queryInput.fill(heroBefore);
     await searchDialog.getByRole("button", { name: "搜索", exact: true }).click();
     await expect(searchDialog.getByText(fileAName)).toBeVisible();
+    await expect(searchDialog.getByText(/钟表铺门口场记/)).toBeVisible();
     await searchDialog.getByRole("button", { name: /预览替换/ }).click();
     await searchDialog.getByRole("button", { name: /确认替换已选/ }).click();
     await expect(searchDialog.getByText(/已完成替换/)).toBeVisible();
+    // Current-canvas node (钟表铺门口场记), script fileAName, and cross-canvas node must NOT reappear with stale text or checked state!
+    await expect(searchDialog.getByText(/钟表铺门口场记/)).toHaveCount(0);
+    await expect(searchDialog.getByText(fileAName)).toHaveCount(0);
+    await expect(searchDialog.getByText(new RegExp(canvasBTitle))).toHaveCount(0);
+    await expect(
+      searchDialog.getByRole("button", { name: /预览替换/ }),
+    ).toBeDisabled();
     await searchDialog.getByRole("button", { name: "关闭全文搜索" }).click();
 
     // Verify fileBName unsaved draft was NOT overwritten!
@@ -373,24 +570,91 @@ try {
     await expect(page.getByText("版本冲突（本地草稿已保留）").first()).toBeVisible();
     await expect(page.getByText("剧本文档已保存")).toHaveCount(0);
 
-    // Attempting to leave canvas must open the guarded leave dialog due to conflicted script
-    await page.getByRole("button", { name: "所有画布", exact: true }).click();
+    // Attempting to create/duplicate/leave canvas must open the guarded leave dialog due to conflicted script
     const leaveDialog = page.getByRole("dialog", {
       name: "保存失败，仍要离开？",
     });
+
+    // 4a. "新建画布" and "复制画布" must NOT bypass script draft protection, and "下载本地副本" must bundle unsaved_scripts!
+    await page.getByRole("button", { name: "项目菜单", exact: true }).click();
+    await page.getByRole("button", { name: "新建画布", exact: true }).click();
+    await expect(leaveDialog).toBeVisible();
+    await expect(
+      leaveDialog.getByRole("button", { name: "重试保存", exact: true }),
+    ).toBeDisabled();
+    const [backupDownload] = await Promise.all([
+      page.waitForEvent("download"),
+      leaveDialog
+        .getByRole("button", { name: "下载本地副本", exact: true })
+        .click(),
+    ]);
+    const backupFilePath = await backupDownload.path();
+    assert.ok(backupFilePath, "expected downloaded local backup path");
+    const backupJson = JSON.parse(await readFile(backupFilePath, "utf8")) as {
+      title: string;
+      document: { nodes: unknown[] };
+      unsaved_scripts?: Array<{
+        id: string;
+        path: string;
+        status: string;
+        saved_body_md: string;
+        draft_body_md: string;
+      }>;
+    };
+    assert.equal(backupJson.title, canvasA.title);
+    assert.ok(Array.isArray(backupJson.document?.nodes));
+    const exportedDocA = backupJson.unsaved_scripts?.find(
+      (s) => s.id === String(docA.id),
+    );
+    assert.ok(exportedDocA, "unsaved_scripts must include conflicted docA");
+    assert.equal(exportedDocA.path, fileAName);
+    assert.equal(exportedDocA.status, "conflict");
+    assert.match(exportedDocA.draft_body_md, new RegExp(conflictMarker));
+    await leaveDialog.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(leaveDialog).toHaveCount(0);
+
+    await page.getByRole("button", { name: "项目菜单", exact: true }).click();
+    await page.getByRole("button", { name: "复制画布", exact: true }).click();
+    await expect(leaveDialog).toBeVisible();
+    await leaveDialog.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(leaveDialog).toHaveCount(0);
+
+    await page.getByRole("button", { name: "所有画布", exact: true }).click();
     await expect(leaveDialog).toBeVisible();
     await leaveDialog.getByRole("button", { name: "仍要离开", exact: true }).click();
     await expect(page).toHaveURL(`${origin}/canvas?workspace=${workspace}`);
 
-    // Re-open the canvas and switch to Document Workspace: local conflict draft must still be preserved!
+    // Re-open the canvas (1st reopen) and switch to Document Workspace: local conflict draft must be preserved!
     await page.goto(editPath);
     await page.getByRole("tab", { name: "文档" }).click();
+    await page.getByRole("treeitem").filter({ hasText: fileAName }).click();
     await page.getByRole("button", { name: "原文", exact: true }).click();
     await expect(sourceEditor).toHaveValue(new RegExp(conflictMarker));
     await expect(page.getByText("版本冲突（本地草稿已保留）").first()).toBeVisible();
 
+    // Close/leave and re-open a 2nd time: conflict status MUST remain "conflict" (never turning dirty or auto-saving over collaborator body!)
+    await page.getByRole("button", { name: "所有画布", exact: true }).click();
+    await expect(leaveDialog).toBeVisible();
+    await leaveDialog.getByRole("button", { name: "仍要离开", exact: true }).click();
+    await expect(page).toHaveURL(`${origin}/canvas?workspace=${workspace}`);
+
+    await page.goto(editPath);
+    await page.getByRole("tab", { name: "文档" }).click();
+    await page.getByRole("treeitem").filter({ hasText: fileAName }).click();
+    await page.getByRole("button", { name: "原文", exact: true }).click();
+    await expect(sourceEditor).toHaveValue(new RegExp(conflictMarker));
+    await expect(page.getByText("版本冲突（本地草稿已保留）").first()).toBeVisible();
+    // Wait past the 700ms auto-save debounce and verify collaborator's body on server was NEVER overwritten
+    await page.waitForTimeout(1100);
+    await expect(page.getByText("版本冲突（本地草稿已保留）").first()).toBeVisible();
+    const serverDocAfter2Reopens = await (
+      await context.request.get(`/api/workspace/scripts/${docA.id}`, { headers })
+    ).json();
+    assert.match(serverDocAfter2Reopens.body_md, /> 协作者远端备注/);
+    assert.doesNotMatch(serverDocAfter2Reopens.body_md, new RegExp(conflictMarker));
+
     console.log(
-      "PASS script-workspace-fusion-browser: narrow layout, draft-safe search/replace, rich+source jump, conflict Cmd+S, and guarded leave retention verified",
+      "PASS script-workspace-fusion-browser: <=760px layout, directory-rename child alignment, slow-search invalidation, draft-safe search/replace, rich+source jump, and 2x close/reopen conflict retention verified",
     );
     await page.close();
   } finally {

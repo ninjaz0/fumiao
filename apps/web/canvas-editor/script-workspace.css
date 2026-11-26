@@ -393,8 +393,19 @@
 }
 
 .fm-doc-tree-row:hover .fm-tree-row-btns,
+.fm-doc-tree-row:focus-within .fm-tree-row-btns,
 .fm-doc-tree-row.active .fm-tree-row-btns {
   display: inline-flex;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .fm-tree-row-btns {
+    display: inline-flex;
+  }
+  .fm-tree-row-btns button {
+    width: 26px;
+    height: 26px;
+  }
 }
 
 .fm-tree-row-btns button {
@@ -1853,13 +1864,13 @@
   .fm-surface-switcher,
   .canvas-workspace:has(.fm-floating-agent.is-docked) .fm-surface-switcher {
     position: absolute;
-    top: 68px;
+    top: calc(var(--fm-header-bottom, 62px) + 6px);
     left: calc((100% - var(--fm-agent-width, 0px)) / 2);
     transform: translateX(-50%);
     z-index: 22;
   }
   .fm-doc-workspace {
-    top: 108px;
+    top: calc(var(--fm-header-bottom, 62px) + 46px);
   }
 }
 
@@ -1868,7 +1879,7 @@
     --fm-agent-width: 0px !important;
   }
   .fm-doc-workspace {
-    top: 108px;
+    top: calc(var(--fm-header-bottom, 62px) + 46px);
     right: 0;
     flex-direction: column;
   }
@@ -1879,6 +1890,13 @@
     border-right: 0;
     border-bottom: 1px solid var(--cv-line);
   }
+  .fm-tree-row-btns {
+    display: inline-flex;
+  }
+  .fm-tree-row-btns button {
+    width: 26px;
+    height: 26px;
+  }
   .fm-doc-resizer {
     display: none;
   }
@@ -1886,7 +1904,41 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .fm-floating-agent.is-docked {
-    width: min(380px, 94vw) !important;
-    top: 56px;
+    width: min(380px, 100vw) !important;
+    top: var(--fm-header-bottom, 56px);
+  }
+  .fm-floating-agent.is-floating {
+    max-width: calc(100vw - 16px) !important;
+    right: 8px !important;
+    bottom: 8px !important;
+    max-height: calc(100dvh - var(--fm-header-bottom, 56px) - 16px) !important;
+  }
+  .fm-floating-agent-tabs > button {
+    padding: 4px 8px;
+    font-size: 11.5px;
+  }
+  /* Keep bottom AI orb above mobile .viewport-dock (bottom: 12px..56px) and out of .node-composer */
+  .canvas-workspace[data-surface="canvas"] .fm-agent-orb {
+    bottom: 66px;
+    right: 12px;
+  }
+  .canvas-workspace[data-surface="canvas"][data-composer-open="true"] .fm-agent-orb {
+    top: calc(var(--fm-header-bottom, 62px) + 6px);
+    bottom: auto;
+    right: 12px;
+    height: 30px;
+    padding: 0 10px 0 7px;
+    font-size: 11.5px;
+  }
+  .canvas-workspace[data-surface="document"] .fm-agent-orb {
+    bottom: 10px;
+    right: 10px;
+    height: 32px;
+    padding: 0 10px 0 7px;
+    font-size: 11.5px;
+  }
+  .fm-rich-screenplay,
+  .fm-source-textarea {
+    padding-bottom: 54px;
   }
 }

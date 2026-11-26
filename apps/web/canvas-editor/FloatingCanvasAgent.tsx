@@ -10,7 +10,11 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { ChatWorkspace, type Message } from "./chat/ChatWorkspace";
+import {
+  ChatWorkspace,
+  type ApplyOptions,
+  type Message,
+} from "./chat/ChatWorkspace";
 import { ProposalDiffPreview } from "./ProposalDiffPreview";
 import { scriptApi, type ScriptDocumentSummary } from "./script-api";
 import type { CanvasNode } from "./types";
@@ -33,6 +37,7 @@ export function FloatingCanvasAgent({
   selectedNode,
   activeScript,
   canvasNodes,
+  flushScripts,
   getCanvasRevision,
   onApplyChatToCanvas,
   onProposalApplied,
@@ -58,11 +63,13 @@ export function FloatingCanvasAgent({
   selectedNode: CanvasNode | null;
   activeScript: { id: string; path: string; body_md: string } | null;
   canvasNodes: CanvasNode[];
+  flushScripts?: (docIds: string[]) => Promise<void>;
   getCanvasRevision: () => Promise<number>;
   onApplyChatToCanvas: (
     cid: string,
     message: Message,
     mode: "new" | "replace",
+    options?: ApplyOptions,
   ) => Promise<void>;
   onProposalApplied: (canvas: any) => void;
   onOpenSkills: () => void;
@@ -126,14 +133,21 @@ export function FloatingCanvasAgent({
     const el = e.currentTarget;
     el.setPointerCapture(e.pointerId);
     const onMove = (ev: PointerEvent) => {
+      const effectiveW = Math.min(width, window.innerWidth - 16);
       setFloatPos({
         right: Math.max(
-          12,
-          Math.min(window.innerWidth - width - 12, orig.right + (startX - ev.clientX)),
+          8,
+          Math.min(
+            Math.max(8, window.innerWidth - effectiveW - 8),
+            orig.right + (startX - ev.clientX),
+          ),
         ),
         bottom: Math.max(
-          12,
-          Math.min(window.innerHeight - 360, orig.bottom + (startY - ev.clientY)),
+          8,
+          Math.min(
+            Math.max(8, window.innerHeight - 320),
+            orig.bottom + (startY - ev.clientY),
+          ),
         ),
       });
     };
@@ -270,22 +284,35 @@ export function FloatingCanvasAgent({
                 {selectedNode.title}
               </span>
             )}
-            {pinnedMentions.map((m) => (
-              <span key={m.key} className="fm-agent-ctx-chip pinned">
-                @{m.label}
-                <button
-                  type="button"
-                  aria-label={`移除引用 ${m.label}`}
-                  onClick={() =>
-                    setPinnedMentions((prev) =>
-                      prev.filter((item) => item.key !== m.key),
-                    )
+            {pinnedMentions.map((m) => {
+              const missingNode =
+                m.kind === "node" && !canvasNodes.some((n) => n.id === m.id);
+              return (
+                <span
+                  key={m.key}
+                  className="fm-agent-ctx-chip pinned"
+                  title={
+                    missingNode
+                      ? `节点「${m.label}」已从当前画布移除，发送时会自动忽略`
+                      : `@${m.label}`
                   }
                 >
-                  <X size={10} />
-                </button>
-              </span>
-            ))}
+                  @{m.label}
+                  {missingNode ? "（已移除）" : ""}
+                  <button
+                    type="button"
+                    aria-label={`移除引用 ${m.label}`}
+                    onClick={() =>
+                      setPinnedMentions((prev) =>
+                        prev.filter((item) => item.key !== m.key),
+                      )
+                    }
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              );
+            })}
 
             <div className="fm-agent-mention-wrap">
               <button
@@ -352,7 +379,12 @@ export function FloatingCanvasAgent({
               onConfigureModels={onConfigureModels}
               onRecharge={onRecharge}
               project={projectId}
-              node={selectedNode?.id}
+              node={
+                selectedNode &&
+                (selectedNode.type === "text" || selectedNode.type === "sticky")
+                  ? selectedNode.id
+                  : undefined
+              }
               nodeTitle={
                 selectedNode?.title ||
                 (activeScript
@@ -365,23 +397,36 @@ export function FloatingCanvasAgent({
                   ...pinnedMentions
                     .filter((m) => m.kind === "script")
                     .map((m) => m.id),
-                ].filter((v, i, arr) => Boolean(v) && arr.indexOf(v) === i);
+                ]
+                  .filter((v, i, arr) => Boolean(v) && arr.indexOf(v) === i)
+                  .slice(0, 6);
+                if (scriptIds.length && flushScripts) {
+                  await flushScripts(scriptIds);
+                }
                 const nodeIds = [
                   ...(selectedNode ? [selectedNode.id] : []),
                   ...pinnedMentions
                     .filter((m) => m.kind === "node")
                     .map((m) => m.id),
-                ].filter((v, i, arr) => Boolean(v) && arr.indexOf(v) === i);
+                ]
+                  .filter((v, i, arr) => Boolean(v) && arr.indexOf(v) === i)
+                  .slice(0, 6);
+                const replaceableNodeId =
+                  selectedNode &&
+                  (selectedNode.type === "text" ||
+                    selectedNode.type === "sticky")
+                    ? selectedNode.id
+                    : "";
                 return {
                   project: projectId,
-                  node: selectedNode?.id || "",
+                  node: replaceableNodeId,
                   expected_revision: await getCanvasRevision(),
-                  ...(scriptIds.length ? { script_ids: scriptIds.slice(0, 6) } : {}),
-                  ...(nodeIds.length ? { node_ids: nodeIds.slice(0, 6) } : {}),
+                  ...(scriptIds.length ? { script_ids: scriptIds } : {}),
+                  ...(nodeIds.length ? { node_ids: nodeIds } : {}),
                 };
               }}
-              onApply={async (cid, message, mode) => {
-                await onApplyChatToCanvas(cid, message, mode);
+              onApply={async (cid, message, mode, options) => {
+                await onApplyChatToCanvas(cid, message, mode, options);
               }}
             />
           </div>
@@ -393,6 +438,7 @@ export function FloatingCanvasAgent({
             workspace={workspace}
             projectId={projectId}
             revision={revision}
+            getCanvasRevision={getCanvasRevision}
             canEditPolicy={canEditPolicy}
             onApplied={onProposalApplied}
             onOpenSkills={onOpenSkills}

@@ -148,6 +148,10 @@ import {
   type ScriptWorkspaceHandle,
 } from "./ScriptWorkspace";
 import { scriptApi, type WorkspaceCanvasSummary } from "./script-api";
+import {
+  buildCanvasLocalBackup,
+  resolveChatReplaceTarget,
+} from "./script-fusion";
 import { SkillEditorModal } from "./SkillEditorModal";
 import { captureFrame } from "./videoFrame";
 import { VideoThumb } from "./VideoThumb";
@@ -733,12 +737,18 @@ export function CanvasWorkspace({
   const projectMenuTrigger = useRef<HTMLSpanElement>(null);
   const projectMenu = useRef<HTMLDivElement>(null);
   const canvasListPath = archived ? "/canvas?view=archived" : "/canvas";
+  type LeaveTarget =
+    | { kind: "navigate"; path: string }
+    | { kind: "create" }
+    | { kind: "duplicate" }
+    | { kind: "reload" };
   const [leaveFailure, setLeaveFailure] = useState<{
-    path: string;
+    target: LeaveTarget;
     message: string;
     retained: boolean;
   } | null>(null);
   const [retryingLeave, setRetryingLeave] = useState(false);
+  const [headerBottom, setHeaderBottom] = useState(60);
   const leaveInFlight = useRef(false);
   const [activeTextNodes,setActiveTextNodes]=useState<string[]>([]);
   const textApplyQueue=useRef<Promise<void>>(Promise.resolve());
@@ -2445,32 +2455,101 @@ export function CanvasWorkspace({
     event.stopPropagation();
     generate();
   };
-  const closeAndLeave = async (url: string) => {
+  useEffect(() => {
+    const root = workspaceRef.current;
+    const headerEl = root?.querySelector<HTMLElement>(".canvas-header");
+    if (!root || !headerEl) return;
+    const measure = () => {
+      const rootRect = root.getBoundingClientRect();
+      const rect = headerEl.getBoundingClientRect();
+      const next = Math.max(52, Math.ceil(rect.bottom - rootRect.top));
+      setHeaderBottom((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const obs = new ResizeObserver(measure);
+    obs.observe(headerEl);
+    obs.observe(root);
+    return () => obs.disconnect();
+  }, []);
+
+  const downloadLocalBackup = (baseDraft: {
+    title: string;
+    document: Project["document"];
+  }) => {
+    const unsavedScripts =
+      scriptWorkspaceRef.current?.exportUnsavedScripts() ?? [];
+    downloadJSON(
+      baseDraft.title + "-本地副本",
+      buildCanvasLocalBackup(baseDraft, unsavedScripts),
+    );
+  };
+
+  const executeLeaveTarget = async (target: LeaveTarget) => {
+    if (target.kind === "reload") {
+      scriptWorkspaceRef.current?.prepareLeave();
+      doc.reload();
+      return;
+    }
+    if (target.kind === "create") {
+      const p = await api<Project>("/api/canvases", {});
+      scriptWorkspaceRef.current?.prepareLeave();
+      doc.leave(workspaceURL("/canvas/" + p.id));
+      return;
+    }
+    if (target.kind === "duplicate") {
+      const p = await api<Project>(
+        `/api/canvases/${project.id}/duplicate`,
+        {},
+      );
+      scriptWorkspaceRef.current?.prepareLeave();
+      doc.leave(workspaceURL("/canvas/" + p.id));
+      return;
+    }
+    scriptWorkspaceRef.current?.prepareLeave();
+    doc.leave(workspaceURL(target.path));
+  };
+
+  const guardedTransition = async (target: LeaveTarget) => {
     if (leaveInFlight.current) return;
     leaveInFlight.current = true;
     setRetryingLeave(true);
     setMenu(null);
     try {
-      await Promise.all([
-        doc.flush(),
-        scriptWorkspaceRef.current?.flushAll() ?? Promise.resolve(),
-      ]);
-      scriptWorkspaceRef.current?.prepareLeave();
-      doc.leave(workspaceURL(url));
+      if (target.kind === "reload") {
+        await (scriptWorkspaceRef.current?.flushAll() ?? Promise.resolve());
+      } else {
+        await Promise.all([
+          doc.flush(),
+          scriptWorkspaceRef.current?.flushAll() ?? Promise.resolve(),
+        ]);
+      }
     } catch (e) {
-      const canvasRetained = doc.remember();
+      const canvasRetained =
+        target.kind === "reload" ? true : doc.remember();
       const scriptsRetained =
         scriptWorkspaceRef.current?.rememberAll() ?? true;
       setLeaveFailure({
-        path: url,
+        target,
         message: (e as Error).message,
         retained: canvasRetained && scriptsRetained,
       });
+      leaveInFlight.current = false;
+      setRetryingLeave(false);
+      return;
+    }
+    try {
+      await executeLeaveTarget(target);
+    } catch (e) {
+      notify((e as Error).message);
     } finally {
       leaveInFlight.current = false;
       setRetryingLeave(false);
     }
   };
+
+  const closeAndLeave = async (url: string) =>
+    guardedTransition({ kind: "navigate", path: url });
   const openCredits = () => void closeAndLeave("/studio?settings=credits");
   const showComposer =
     single && ["image", "video"].includes(single.type) && !editing;
@@ -2900,6 +2979,7 @@ export function CanvasWorkspace({
       style={
         {
           "--fm-agent-width": `${agentDockedWidth}px`,
+          "--fm-header-bottom": `${headerBottom}px`,
         } as React.CSSProperties
       }
       tabIndex={-1}
@@ -3331,31 +3411,18 @@ export function CanvasWorkspace({
             所有画布
           </button>
           <button
-            onClick={async () => {
-              try {
-                await doc.flush();
-                const p = await api<Project>("/api/canvases", {});
-                location.assign(workspaceURL("/canvas/" + p.id));
-              } catch (e) {
-                notify((e as Error).message);
-              }
+            onClick={() => {
+              closeProjectMenu();
+              void guardedTransition({ kind: "create" });
             }}
           >
             <Plus size={16} />
             新建画布
           </button>
           <button
-            onClick={async () => {
-              try {
-                await doc.flush();
-                const p = await api<Project>(
-                  `/api/canvases/${project.id}/duplicate`,
-                  {},
-                );
-                location.assign(workspaceURL("/canvas/" + p.id));
-              } catch (e) {
-                notify((e as Error).message);
-              }
+            onClick={() => {
+              closeProjectMenu();
+              void guardedTransition({ kind: "duplicate" });
             }}
           >
             <Copy size={16} />
@@ -4425,14 +4492,16 @@ export function CanvasWorkspace({
       {doc.status === "conflict" && (
         <div className="save-banner" role="alert">
           <span>画布已被其他成员修改，你的修改尚未保存到服务器。</span>
-          <button
-            onClick={() =>
-              downloadJSON(doc.value.title + "-本地副本", doc.value)
-            }
-          >
+          <button onClick={() => downloadLocalBackup(doc.value)}>
             下载本地副本
           </button>
-          <button onClick={() => setConfirm(() => () => doc.reload())}>
+          <button
+            onClick={() =>
+              setConfirm(() => () =>
+                void guardedTransition({ kind: "reload" }),
+              )
+            }
+          >
             重新载入
           </button>
         </div>
@@ -5294,32 +5363,109 @@ export function CanvasWorkspace({
         selectedNode={single}
         activeScript={activeScript}
         canvasNodes={doc.value.document.nodes}
+        flushScripts={(ids) =>
+          scriptWorkspaceRef.current?.flushScripts(ids) ?? Promise.resolve()
+        }
         getCanvasRevision={() => doc.flush()}
-        onApplyChatToCanvas={async (cid, message, mode) => {
-          const revision = await doc.flush();
-          const snapshot = JSON.stringify(doc.ref.current);
-          const result = await chatRequest<Project & { applied_node: string }>(
-            project.workspace,
-            "/api/chats/" + cid + "/apply",
-            {
-              uid: crypto.randomUUID(),
+        onApplyChatToCanvas={(cid, message, mode, options) => {
+          const apply = async () => {
+            if (mode === "replace") {
+              const precheck = resolveChatReplaceTarget({
+                currentProjectId: project.id,
+                nodes: doc.ref.current.document.nodes,
+                messageContent: message.content,
+                options,
+              });
+              const revision = await doc.flush();
+              const postFlush = resolveChatReplaceTarget({
+                currentProjectId: project.id,
+                nodes: doc.ref.current.document.nodes,
+                messageContent: message.content,
+                options: {
+                  ...options,
+                  targetProject: project.id,
+                  targetNode: precheck.nodeId,
+                  expectedText: precheck.expectedText,
+                },
+              });
+              const snapshot = JSON.stringify(doc.ref.current);
+              const result = await chatRequest<
+                Project & { applied_node: string }
+              >(project.workspace, "/api/chats/" + cid + "/apply", {
+                uid: options?.uid || crypto.randomUUID(),
+                message: message.id,
+                project: project.id,
+                expected_revision: revision,
+                mode: "replace",
+                node: postFlush.nodeId,
+                expected_text: postFlush.expectedText,
+              });
+              doc.acceptRemote(result, snapshot);
+              return;
+            }
+
+            const revision = await doc.flush();
+            const anchorId =
+              (options?.targetProject === project.id
+                ? options?.targetNode
+                : undefined) || single?.id;
+            const snapshot = JSON.stringify(doc.ref.current);
+            const result = await chatRequest<
+              Project & { applied_node: string }
+            >(project.workspace, "/api/chats/" + cid + "/apply", {
+              uid: options?.uid || crypto.randomUUID(),
               message: message.id,
               project: project.id,
               expected_revision: revision,
-              mode,
-              ...(mode === "replace" && single?.type === "text"
-                ? { node: single.id, expected_text: single.text }
-                : {}),
-            },
-          );
-          doc.acceptRemote(result, snapshot);
+              mode: "new",
+              ...(anchorId ? { node: anchorId } : {}),
+            });
+            doc.acceptRemote(result, snapshot);
+          };
+          const queued = textApplyQueue.current.then(apply);
+          textApplyQueue.current = queued.catch(() => {});
+          return queued;
         }}
-        onProposalApplied={() => {
+        onProposalApplied={(appliedCanvas) => {
+          if (
+            appliedCanvas &&
+            typeof appliedCanvas === "object" &&
+            "document" in appliedCanvas &&
+            typeof appliedCanvas.revision === "number" &&
+            !doc.dirty
+          ) {
+            try {
+              doc.acceptRemote(
+                appliedCanvas as Project,
+                JSON.stringify(doc.ref.current),
+                "批准提案",
+              );
+              notify("提案已批准并落图到当前画布");
+              return;
+            } catch {
+              // Fall through to safe reload check
+            }
+          }
           void (async () => {
+            let scriptsFlushed = false;
             try {
               await scriptWorkspaceRef.current?.flushAll();
+              scriptsFlushed = true;
             } catch {
-              scriptWorkspaceRef.current?.rememberAll();
+              scriptsFlushed = false;
+            }
+            const hasUnsavedScripts =
+              scriptWorkspaceRef.current?.hasUnsavedChanges() ?? false;
+            const okScripts =
+              !hasUnsavedScripts ||
+              scriptsFlushed ||
+              (scriptWorkspaceRef.current?.rememberAll() ?? true);
+            const okCanvas = !doc.dirty || doc.remember();
+            if (!(okScripts && okCanvas)) {
+              notify(
+                "提案已在服务器落图；当前有未保存草稿且浏览器存储不可用，已跳过自动刷新以保护草稿",
+              );
+              return;
             }
             scriptWorkspaceRef.current?.prepareLeave();
             doc.reload();
@@ -5352,26 +5498,38 @@ export function CanvasWorkspace({
             <button
               className="secondary"
               disabled={retryingLeave}
-              onClick={() => downloadJSON(doc.ref.current.title + "-本地副本", doc.ref.current)}
+              onClick={() => downloadLocalBackup(doc.ref.current)}
             >
               下载本地副本
             </button>
-            <button className="secondary" disabled={retryingLeave} onClick={() => {
-              const okCanvas = doc.remember();
-              const okScripts = scriptWorkspaceRef.current?.rememberAll() ?? true;
-              if (leaveFailure.retained && !(okCanvas && okScripts)) {
-                setLeaveFailure({ ...leaveFailure, retained: false });
-                return;
-              }
-              scriptWorkspaceRef.current?.prepareLeave();
-              doc.leave(workspaceURL(leaveFailure.path));
-            }}>
+            <button
+              className="secondary"
+              disabled={retryingLeave}
+              onClick={() => {
+                const okCanvas =
+                  leaveFailure.target.kind === "reload" ? true : doc.remember();
+                const okScripts =
+                  scriptWorkspaceRef.current?.rememberAll() ?? true;
+                if (leaveFailure.retained && !(okCanvas && okScripts)) {
+                  setLeaveFailure({ ...leaveFailure, retained: false });
+                  return;
+                }
+                void executeLeaveTarget(leaveFailure.target).catch((e) =>
+                  notify((e as Error).message),
+                );
+              }}
+            >
               仍要离开
             </button>
             <button
               className="primary"
-              disabled={retryingLeave || doc.status === "conflict"}
-              onClick={() => closeAndLeave(leaveFailure.path)}
+              disabled={
+                retryingLeave ||
+                (leaveFailure.target.kind !== "reload" &&
+                  doc.status === "conflict") ||
+                Boolean(scriptWorkspaceRef.current?.hasConflictChanges())
+              }
+              onClick={() => void guardedTransition(leaveFailure.target)}
             >
               重试保存
             </button>

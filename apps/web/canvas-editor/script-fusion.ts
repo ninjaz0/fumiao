@@ -131,27 +131,86 @@ function normalizeSig(text: string): string {
     .slice(0, 160);
 }
 
-export function stampScriptShotIds(markdown: string): {
+export function stampScriptShotIds(
+  markdown: string,
+  preferredLineByShotId: Record<string, number> = {},
+): {
   markdown: string;
   changed: boolean;
 } {
   const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
   let changed = false;
+
+  const idCounts = new Map<string, number>();
+  for (const line of lines) {
+    const m = line.match(SHOT_COMMENT_SINGLE_RE);
+    if (m?.[1]) {
+      idCounts.set(m[1], (idCounts.get(m[1]) ?? 0) + 1);
+    }
+  }
+  const keptDuplicateIds = new Set<string>();
   let pendingIdForNextBeat = false;
   const out: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
+    const lineNum = i + 1;
     const trimmed = lines[i].trim();
-    if (SHOT_COMMENT_SINGLE_RE.test(trimmed) && !/^[△▲]/.test(trimmed)) {
+    const match = trimmed.match(SHOT_COMMENT_SINGLE_RE);
+
+    if (match && !/^[△▲]/.test(trimmed)) {
+      const id = match[1];
+      if ((idCounts.get(id) ?? 0) > 1) {
+        const preferredLine = preferredLineByShotId[id];
+        const keepHere =
+          !keptDuplicateIds.has(id) &&
+          (preferredLine === lineNum || preferredLine === lineNum + 1);
+        if (keepHere) {
+          keptDuplicateIds.add(id);
+          out.push(lines[i]);
+        } else {
+          const freshId = `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+          out.push(
+            lines[i].replace(
+              SHOT_COMMENT_SINGLE_RE,
+              `<!-- fm-shot:${freshId} -->`,
+            ),
+          );
+          changed = true;
+        }
+      } else {
+        out.push(lines[i]);
+      }
       pendingIdForNextBeat = true;
-      out.push(lines[i]);
       continue;
     }
+
     if (/^[△▲]/.test(trimmed)) {
-      if (!SHOT_COMMENT_SINGLE_RE.test(trimmed) && !pendingIdForNextBeat) {
+      if (!match && !pendingIdForNextBeat) {
         const shotUid = `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
         out.push(`${lines[i]} <!-- fm-shot:${shotUid} -->`);
         changed = true;
+      } else if (match) {
+        const id = match[1];
+        if ((idCounts.get(id) ?? 0) > 1) {
+          const preferredLine = preferredLineByShotId[id];
+          const keepHere =
+            !keptDuplicateIds.has(id) && preferredLine === lineNum;
+          if (keepHere) {
+            keptDuplicateIds.add(id);
+            out.push(lines[i]);
+          } else {
+            const freshId = `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+            out.push(
+              lines[i].replace(
+                SHOT_COMMENT_SINGLE_RE,
+                `<!-- fm-shot:${freshId} -->`,
+              ),
+            );
+            changed = true;
+          }
+        } else {
+          out.push(lines[i]);
+        }
       } else {
         out.push(lines[i]);
       }
@@ -164,6 +223,33 @@ export function stampScriptShotIds(markdown: string): {
     out.push(lines[i]);
   }
   return { markdown: out.join("\n"), changed };
+}
+
+export function resolvePreferredShotIdLines(
+  doc: Doc,
+  breakdown: ScriptBreakdown,
+  explicitBindings: Record<string, string> = {},
+): Record<string, number> {
+  const plan = computeShotBindingPlan(
+    doc.nodes,
+    breakdown.docId,
+    breakdown.shots,
+    explicitBindings,
+  );
+  const preferred: Record<string, number> = {};
+  for (const shot of breakdown.shots) {
+    const boundId = plan.anchorToVideoId.get(shot.anchor);
+    if (!boundId) continue;
+    const vNode = doc.nodes.find((n) => n.id === boundId && n.type === "video");
+    const vShotId =
+      typeof vNode?.extra_params?.script_shot_id === "string"
+        ? vNode.extra_params.script_shot_id
+        : "";
+    if (vShotId) {
+      preferred[vShotId] = shot.lineStart;
+    }
+  }
+  return preferred;
 }
 
 function sanitizeIdPart(raw: string): string {
@@ -733,20 +819,34 @@ export function syncScriptBreakdownToCanvas(
 
   // 1. Sync Asset Reference Image Nodes (Characters / Scenes / Props)
   const assetKeyToNodeId = new Map<string, string>();
+  const claimedAssetNodeIds = new Set<string>();
   if (includeAssets) {
+    const isCandidateAssetImage = (n: CanvasNode) =>
+      n.type === "image" &&
+      !claimedAssetNodeIds.has(n.id) &&
+      n.generation_mode !== "grid_preview" &&
+      n.extra_params?.script_role !== "grid_preview";
     breakdown.assets.forEach((asset, idx) => {
       const expectedTitle = `资产 · ${asset.code} ${asset.name}`.slice(0, 80);
-      let existing = nextNodes.find(
-        (n) =>
-          n.type === "image" &&
-          (n.extra_params?.script_asset_key === asset.key ||
-            n.title.trim() === expectedTitle ||
-            n.title.includes(asset.name)),
-      );
+      const existing =
+        nextNodes.find(
+          (n) =>
+            isCandidateAssetImage(n) &&
+            n.extra_params?.script_asset_key === asset.key,
+        ) ??
+        nextNodes.find(
+          (n) =>
+            isCandidateAssetImage(n) &&
+            !n.extra_params?.script_asset_key &&
+            (n.title.trim() === expectedTitle || n.title.trim() === asset.name),
+        );
 
       if (existing) {
+        claimedAssetNodeIds.add(existing.id);
         assetKeyToNodeId.set(asset.key, existing.id);
-        const nextPrompt = existing.prompt.trim() ? existing.prompt : asset.prompt;
+        const nextPrompt = (existing.prompt ?? "").trim()
+          ? existing.prompt
+          : asset.prompt;
         const nextExtra = {
           ...(existing.extra_params ?? {}),
           script_doc_id: breakdown.docId,
@@ -798,12 +898,21 @@ export function syncScriptBreakdownToCanvas(
     });
   }
 
-  const ensureEdge = (source: string, target: string): string | null => {
+  // Only returns a managed pair key if the edge was newly created by sync OR was already in prevManagedSet.
+  // Pre-existing manual user edges are left intact and NEVER claimed as script-managed!
+  const ensureManagedEdge = (
+    source: string,
+    target: string,
+    prevManagedSet?: ReadonlySet<string>,
+  ): string | null => {
     if (source === target) return null;
+    const pairKey = `${source}>${target}`;
     const existing = nextEdges.find(
       (e) => e.source === source && e.target === target,
     );
-    if (existing) return `${source}>${target}`;
+    if (existing) {
+      return prevManagedSet?.has(pairKey) ? pairKey : null;
+    }
     if (nextEdges.length >= 1200) return null;
     const sourceNode = nextNodes.find((n) => n.id === source);
     if (sourceNode?.type === "image") {
@@ -819,15 +928,42 @@ export function syncScriptBreakdownToCanvas(
       source,
       target,
     });
-    return `${source}>${target}`;
+    return pairKey;
   };
 
+  // Compute binding plan across the full breakdown so partial selection never shifts scene positions
   const bindingPlan = computeShotBindingPlan(
     nextNodes,
     breakdown.docId,
-    activeShots,
+    breakdown.shots,
     options.explicitNodeBindings ?? {},
   );
+
+  // Track assigned shotIds across all canvas video nodes so duplicate script lines never share a shotId on canvas
+  const assignedShotIds = new Set<string>();
+  const matchedExistingIds = new Set(bindingPlan.anchorToVideoId.values());
+  for (const n of nextNodes) {
+    if (
+      n.type === "video" &&
+      !matchedExistingIds.has(n.id) &&
+      typeof n.extra_params?.script_shot_id === "string" &&
+      n.extra_params.script_shot_id
+    ) {
+      assignedShotIds.add(n.extra_params.script_shot_id);
+    }
+  }
+  const allocateUniqueShotId = (preferred?: string): string => {
+    if (preferred && !assignedShotIds.has(preferred)) {
+      assignedShotIds.add(preferred);
+      return preferred;
+    }
+    let fresh = `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+    while (assignedShotIds.has(fresh)) {
+      fresh = `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+    }
+    assignedShotIds.add(fresh);
+    return fresh;
+  };
 
   // 2. Sync Shot Chains (Text Prompt Node + Optional Grid Image + Video Shot Node)
   activeShots.forEach((shot, index) => {
@@ -851,10 +987,14 @@ export function syncScriptBreakdownToCanvas(
         typeof existingVideo.extra_params?.script_shot_id === "string"
           ? existingVideo.extra_params.script_shot_id
           : "";
-      const effectiveShotId =
-        shot.shotId ||
-        prevShotId ||
-        `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+      const prevManagedRaw =
+        typeof existingVideo.extra_params?.script_managed_edges === "string"
+          ? existingVideo.extra_params.script_managed_edges
+          : "";
+      const prevManagedSet = new Set(
+        prevManagedRaw.split("|").map((s) => s.trim()).filter(Boolean),
+      );
+      const effectiveShotId = allocateUniqueShotId(prevShotId || shot.shotId);
 
       let existingText = nextNodes.find(
         (n) =>
@@ -965,19 +1105,25 @@ export function syncScriptBreakdownToCanvas(
         !existingGrid.media_id &&
         !existingGrid.active_job
       ) {
-        // Switching away from grid_preview when grid node has no generated media: clean up unused grid node
-        const gridIdToRemove = existingGrid.id;
-        const gIdx = nextNodes.findIndex((n) => n.id === gridIdToRemove);
-        if (gIdx >= 0) nextNodes.splice(gIdx, 1);
-        for (let eIdx = nextEdges.length - 1; eIdx >= 0; eIdx--) {
-          if (
-            nextEdges[eIdx].source === gridIdToRemove ||
-            nextEdges[eIdx].target === gridIdToRemove
-          ) {
-            nextEdges.splice(eIdx, 1);
+        const gridIdCandidate = existingGrid.id;
+        const hasManualEdgesOnGrid = nextEdges.some(
+          (e) =>
+            (e.source === gridIdCandidate || e.target === gridIdCandidate) &&
+            !prevManagedSet.has(`${e.source}>${e.target}`),
+        );
+        if (!hasManualEdgesOnGrid) {
+          const gIdx = nextNodes.findIndex((n) => n.id === gridIdCandidate);
+          if (gIdx >= 0) nextNodes.splice(gIdx, 1);
+          for (let eIdx = nextEdges.length - 1; eIdx >= 0; eIdx--) {
+            if (
+              nextEdges[eIdx].source === gridIdCandidate ||
+              nextEdges[eIdx].target === gridIdCandidate
+            ) {
+              nextEdges.splice(eIdx, 1);
+            }
           }
+          existingGrid = undefined;
         }
-        existingGrid = undefined;
       }
 
       // Preserve audio_job / audio_pending when speaker + text unchanged, update changed lines
@@ -995,14 +1141,6 @@ export function syncScriptBreakdownToCanvas(
         };
       });
 
-      // Reconcile script-managed edges: remove obsolete script-managed pairs, keep manual edges!
-      const prevManagedRaw =
-        typeof existingVideo.extra_params?.script_managed_edges === "string"
-          ? existingVideo.extra_params.script_managed_edges
-          : "";
-      const prevManagedSet = new Set(
-        prevManagedRaw.split("|").map((s) => s.trim()).filter(Boolean),
-      );
       const desiredManagedPairs = new Set<string>();
       if (isGridPreview && existingGrid) {
         if (existingText) desiredManagedPairs.add(`${existingText.id}>${existingGrid.id}`);
@@ -1030,7 +1168,7 @@ export function syncScriptBreakdownToCanvas(
       const activeManagedPairs: string[] = [];
       for (const pair of desiredManagedPairs) {
         const [src, tgt] = pair.split(">");
-        const added = ensureEdge(src, tgt);
+        const added = ensureManagedEdge(src, tgt, prevManagedSet);
         if (added) activeManagedPairs.push(added);
       }
 
@@ -1071,9 +1209,7 @@ export function syncScriptBreakdownToCanvas(
     const neededNodes = isGridPreview ? 3 : 2;
     if (nextNodes.length + neededNodes > 400) return;
 
-    const effectiveShotId =
-      shot.shotId ||
-      `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+    const effectiveShotId = allocateUniqueShotId(shot.shotId);
     const colX = shotStartX + index * 420;
     const textNode = newNode("text", colX, 60, nextNodes.length + 1);
     textNode.id = `scr_${sanitizeIdPart(shot.anchor)}_${crypto.randomUUID().slice(0, 6)}`;
@@ -1139,19 +1275,19 @@ export function syncScriptBreakdownToCanvas(
 
     const managedPairs: string[] = [];
     if (gridNode) {
-      const p1 = ensureEdge(textNode.id, gridNode.id);
-      const p2 = ensureEdge(gridNode.id, videoNode.id);
+      const p1 = ensureManagedEdge(textNode.id, gridNode.id);
+      const p2 = ensureManagedEdge(gridNode.id, videoNode.id);
       if (p1) managedPairs.push(p1);
       if (p2) managedPairs.push(p2);
     } else {
-      const p1 = ensureEdge(textNode.id, videoNode.id);
+      const p1 = ensureManagedEdge(textNode.id, videoNode.id);
       if (p1) managedPairs.push(p1);
     }
 
     for (const assetKey of shot.referencedAssets) {
       const assetNodeId = assetKeyToNodeId.get(assetKey);
       if (assetNodeId) {
-        const pRef = ensureEdge(
+        const pRef = ensureManagedEdge(
           assetNodeId,
           gridNode ? gridNode.id : videoNode.id,
         );
@@ -1177,10 +1313,59 @@ export function syncScriptBreakdownToCanvas(
     anchorToNodeId[shot.anchor] = videoNode.id;
   });
 
-  // Maintain shot list in script order for synced shots while preserving other manual shots
-  const syncedSet = new Set(shotNodeIds);
-  const nonSyncedShots = nextShots.filter((id) => !syncedSet.has(id));
-  const orderedShots = [...nonSyncedShots, ...shotNodeIds].slice(0, 200);
+  // Maintain shot list: partial sync updates existing shots in-place and inserts newly-created shots
+  // next to their script neighbors; full sync orders this script's shots in script sequence in-place.
+  const isPartialSync = activeShots.length < breakdown.shots.length;
+  let orderedShots: string[];
+  if (isPartialSync) {
+    const merged = [...nextShots];
+    const resolveKnownVideoId = (anchor: string): string | undefined =>
+      anchorToNodeId[anchor] ?? bindingPlan.anchorToVideoId.get(anchor);
+
+    for (let sIdx = 0; sIdx < breakdown.shots.length; sIdx++) {
+      const anchor = breakdown.shots[sIdx].anchor;
+      const vidId = anchorToNodeId[anchor];
+      if (!vidId || merged.includes(vidId)) continue;
+
+      let inserted = false;
+      for (let prev = sIdx - 1; prev >= 0; prev--) {
+        const prevVid = resolveKnownVideoId(breakdown.shots[prev].anchor);
+        const pos = prevVid ? merged.indexOf(prevVid) : -1;
+        if (pos >= 0) {
+          merged.splice(pos + 1, 0, vidId);
+          inserted = true;
+          break;
+        }
+      }
+      if (!inserted) {
+        for (let nxt = sIdx + 1; nxt < breakdown.shots.length; nxt++) {
+          const nextVid = resolveKnownVideoId(breakdown.shots[nxt].anchor);
+          const pos = nextVid ? merged.indexOf(nextVid) : -1;
+          if (pos >= 0) {
+            merged.splice(pos, 0, vidId);
+            inserted = true;
+            break;
+          }
+        }
+      }
+      if (!inserted) merged.push(vidId);
+    }
+    orderedShots = merged.slice(0, 200);
+  } else {
+    const syncedSet = new Set(shotNodeIds);
+    const firstExistingIdx = nextShots.findIndex((id) => syncedSet.has(id));
+    if (firstExistingIdx < 0) {
+      orderedShots = [...nextShots, ...shotNodeIds].slice(0, 200);
+    } else {
+      const before = nextShots
+        .slice(0, firstExistingIdx)
+        .filter((id) => !syncedSet.has(id));
+      const after = nextShots
+        .slice(firstExistingIdx + 1)
+        .filter((id) => !syncedSet.has(id));
+      orderedShots = [...before, ...shotNodeIds, ...after].slice(0, 200);
+    }
+  }
 
   return {
     document: {
@@ -1211,7 +1396,41 @@ function computeShotBindingPlan(
   const claimedVideoIds = new Set<string>();
   const anchorToVideoId = new Map<string, string>();
 
-  // Count existing vs current shots per scene so positional fallback is NEVER used when shots were inserted/deleted on media nodes!
+  // Detect duplicate shotIds in script (e.g. copy-pasted line in source mode) and on canvas
+  const scriptShotIdCounts = new Map<string, number>();
+  for (const s of shots) {
+    if (s.shotId) {
+      scriptShotIdCounts.set(
+        s.shotId,
+        (scriptShotIdCounts.get(s.shotId) ?? 0) + 1,
+      );
+    }
+  }
+  const duplicateScriptShotIds = new Set<string>(
+    [...scriptShotIdCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([id]) => id),
+  );
+
+  const canvasShotIdCounts = new Map<string, number>();
+  for (const v of existingVideos) {
+    const vidShotId =
+      typeof v.extra_params?.script_shot_id === "string"
+        ? v.extra_params.script_shot_id
+        : "";
+    if (vidShotId) {
+      canvasShotIdCounts.set(
+        vidShotId,
+        (canvasShotIdCounts.get(vidShotId) ?? 0) + 1,
+      );
+    }
+  }
+  const duplicateCanvasShotIds = new Set<string>(
+    [...canvasShotIdCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([id]) => id),
+  );
+
   const existingSceneCounts = new Map<string, number>();
   for (const v of existingVideos) {
     const sc =
@@ -1230,7 +1449,21 @@ function computeShotBindingPlan(
     );
   }
 
-  // Pass 1: Explicit user confirmation bindings & persistent shotId
+  const isIdentityCompatible = (
+    s: ScriptExtractedShot,
+    v: CanvasNode,
+  ): boolean => {
+    const vShotId =
+      typeof v.extra_params?.script_shot_id === "string"
+        ? v.extra_params.script_shot_id
+        : "";
+    if (!s.shotId || !vShotId) return true;
+    if (s.shotId === vShotId) return true;
+    // Allow content match ONLY if s.shotId was duplicated from copy-paste; two distinct unique shotIds never auto-merge!
+    return duplicateScriptShotIds.has(s.shotId);
+  };
+
+  // Pass 1a: Explicit user confirmation bindings
   for (const s of shots) {
     const explicitId = explicitBindings[s.anchor];
     if (explicitId && !claimedVideoIds.has(explicitId)) {
@@ -1238,29 +1471,23 @@ function computeShotBindingPlan(
       if (found) {
         claimedVideoIds.add(found.id);
         anchorToVideoId.set(s.anchor, found.id);
-        continue;
-      }
-    }
-    if (s.shotId) {
-      const byShotId = existingVideos.find(
-        (v) =>
-          !claimedVideoIds.has(v.id) &&
-          v.extra_params?.script_shot_id === s.shotId,
-      );
-      if (byShotId) {
-        claimedVideoIds.add(byShotId.id);
-        anchorToVideoId.set(s.anchor, byShotId.id);
       }
     }
   }
 
-  // Pass 2: Unique fingerprint match (exact scene + action + dialogue signature)
+  // Pass 1b: Unique persistent shotId (skipped when duplicated in script or canvas so copy-pasted lines never steal media)
   for (const s of shots) {
-    if (anchorToVideoId.has(s.anchor)) continue;
+    if (anchorToVideoId.has(s.anchor) || !s.shotId) continue;
+    if (
+      duplicateScriptShotIds.has(s.shotId) ||
+      duplicateCanvasShotIds.has(s.shotId)
+    ) {
+      continue;
+    }
     const candidates = existingVideos.filter(
       (v) =>
         !claimedVideoIds.has(v.id) &&
-        v.extra_params?.script_fingerprint === s.fingerprint,
+        v.extra_params?.script_shot_id === s.shotId,
     );
     if (candidates.length === 1) {
       claimedVideoIds.add(candidates[0].id);
@@ -1268,9 +1495,36 @@ function computeShotBindingPlan(
     }
   }
 
-  // Pass 3: Unique actionSig match within same scene (handles dialogue tweaks even when a shot was inserted!)
+  // Pass 2: Two-sided unique fingerprint match (unique in remaining shots AND unique in remaining videos, compatible identity)
+  for (const s of shots) {
+    if (anchorToVideoId.has(s.anchor)) continue;
+    const sameFpShots = shots.filter(
+      (x) =>
+        !anchorToVideoId.has(x.anchor) && x.fingerprint === s.fingerprint,
+    );
+    if (sameFpShots.length !== 1) continue;
+    const candidates = existingVideos.filter(
+      (v) =>
+        !claimedVideoIds.has(v.id) &&
+        v.extra_params?.script_fingerprint === s.fingerprint &&
+        isIdentityCompatible(s, v),
+    );
+    if (candidates.length === 1) {
+      claimedVideoIds.add(candidates[0].id);
+      anchorToVideoId.set(s.anchor, candidates[0].id);
+    }
+  }
+
+  // Pass 3: Two-sided unique actionSig match within same scene
   for (const s of shots) {
     if (anchorToVideoId.has(s.anchor) || !s.actionSig) continue;
+    const sameActionShots = shots.filter(
+      (x) =>
+        !anchorToVideoId.has(x.anchor) &&
+        x.sceneCode === s.sceneCode &&
+        x.actionSig === s.actionSig,
+    );
+    if (sameActionShots.length !== 1) continue;
     const candidates = existingVideos.filter((v) => {
       if (claimedVideoIds.has(v.id)) return false;
       const vScene =
@@ -1281,7 +1535,8 @@ function computeShotBindingPlan(
             : "";
       return (
         vScene === s.sceneCode &&
-        v.extra_params?.script_action_sig === s.actionSig
+        v.extra_params?.script_action_sig === s.actionSig &&
+        isIdentityCompatible(s, v)
       );
     });
     if (candidates.length === 1) {
@@ -1290,20 +1545,23 @@ function computeShotBindingPlan(
     }
   }
 
-  // Pass 4: Safe positional anchor fallback ONLY when scene shot count is unchanged OR old node has no generated media
+  // Pass 4: Positional anchor fallback ONLY for empty placeholder nodes (!hasMedia) with compatible identity.
+  // Media-bearing nodes that did not match by shotId, fingerprint, or actionSig NEVER auto-bind by position!
   for (const s of shots) {
     if (anchorToVideoId.has(s.anchor)) continue;
-    const posCandidate = existingVideos.find(
-      (v) =>
-        !claimedVideoIds.has(v.id) &&
-        v.extra_params?.script_anchor === s.anchor,
-    );
-    if (!posCandidate) continue;
-    const hasMedia = Boolean(posCandidate.media_id || posCandidate.active_job);
     const sameSceneCount =
       existingSceneCounts.get(s.sceneCode) ===
       currentSceneCounts.get(s.sceneCode);
-    if (!hasMedia || sameSceneCount) {
+    if (!sameSceneCount) continue;
+    const posCandidate = existingVideos.find(
+      (v) =>
+        !claimedVideoIds.has(v.id) &&
+        v.extra_params?.script_anchor === s.anchor &&
+        !v.media_id &&
+        !v.active_job &&
+        isIdentityCompatible(s, v),
+    );
+    if (posCandidate) {
       claimedVideoIds.add(posCandidate.id);
       anchorToVideoId.set(s.anchor, posCandidate.id);
     }
@@ -1481,6 +1739,8 @@ export function searchCanvasTextNodes(
   return results;
 }
 
+export const MAX_CANVAS_NODE_TEXT_CHARS = 12000;
+
 export function replaceCanvasNodeText(
   doc: Doc,
   nodeId: string,
@@ -1497,10 +1757,183 @@ export function replaceCanvasNodeText(
   if (current !== expectedText) {
     throw new Error(`节点「${target.title}」内容已变化，请重新搜索后再替换`);
   }
+  if ([...nextText].length > MAX_CANVAS_NODE_TEXT_CHARS) {
+    throw new Error(
+      `节点「${target.title || target.id}」替换后超出 ${MAX_CANVAS_NODE_TEXT_CHARS} 字上限，已保留原文`,
+    );
+  }
   return {
     ...doc,
     nodes: doc.nodes.map((n) =>
-      n.id === nodeId ? { ...n, [field]: nextText.slice(0, 12000) } : n,
+      n.id === nodeId ? { ...n, [field]: nextText } : n,
     ),
+  };
+}
+
+export type PersistedScriptDraftRecord = {
+  draftBody: string;
+  savedBody: string;
+  baseRevision: number;
+  conflicted?: boolean;
+  updatedAt: number;
+};
+
+export function reconcileLoadedScriptDraft(
+  server: { body_md: string; revision: number },
+  persisted: PersistedScriptDraftRecord | null,
+): {
+  draftBody: string;
+  savedBody: string;
+  baseRevision: number;
+  revision: number;
+  status: "saved" | "dirty" | "conflict";
+  error: string;
+  storageAction: "none" | "clear" | "keep" | "persist_conflict";
+  nextPersisted: PersistedScriptDraftRecord | null;
+} {
+  if (!persisted) {
+    return {
+      draftBody: server.body_md,
+      savedBody: server.body_md,
+      baseRevision: server.revision,
+      revision: server.revision,
+      status: "saved",
+      error: "",
+      storageAction: "none",
+      nextPersisted: null,
+    };
+  }
+  if (!persisted.conflicted && persisted.draftBody === server.body_md) {
+    return {
+      draftBody: server.body_md,
+      savedBody: server.body_md,
+      baseRevision: server.revision,
+      revision: server.revision,
+      status: "saved",
+      error: "",
+      storageAction: "clear",
+      nextPersisted: null,
+    };
+  }
+  if (!persisted.conflicted && server.revision === persisted.baseRevision) {
+    return {
+      draftBody: persisted.draftBody,
+      savedBody: server.body_md,
+      baseRevision: persisted.baseRevision,
+      revision: server.revision,
+      status: "dirty",
+      error: "",
+      storageAction: "keep",
+      nextPersisted: persisted,
+    };
+  }
+  const conflictRecord: PersistedScriptDraftRecord = {
+    draftBody: persisted.draftBody,
+    savedBody: persisted.savedBody,
+    baseRevision: persisted.baseRevision,
+    conflicted: true,
+    updatedAt: persisted.updatedAt,
+  };
+  return {
+    draftBody: persisted.draftBody,
+    savedBody: persisted.savedBody,
+    baseRevision: persisted.baseRevision,
+    revision: server.revision,
+    status: "conflict",
+    error:
+      "检测到未同步的本地剧本草稿与服务器新版本冲突，本地草稿已为你保留。",
+    storageAction: "persist_conflict",
+    nextPersisted: conflictRecord,
+  };
+}
+
+export function buildPersistedScriptDraftForSession(
+  session: {
+    draftBody: string;
+    savedBody: string;
+    baseRevision: number;
+    revision: number;
+    status: "saved" | "dirty" | "saving" | "conflict" | "error";
+  },
+  now = Date.now(),
+): PersistedScriptDraftRecord | null {
+  if (session.status === "conflict") {
+    return {
+      draftBody: session.draftBody,
+      savedBody: session.savedBody,
+      baseRevision: session.baseRevision,
+      conflicted: true,
+      updatedAt: now,
+    };
+  }
+  if (session.draftBody === session.savedBody) {
+    return null;
+  }
+  return {
+    draftBody: session.draftBody,
+    savedBody: session.savedBody,
+    baseRevision: session.revision,
+    conflicted: false,
+    updatedAt: now,
+  };
+}
+
+export function resolveChatReplaceTarget(params: {
+  currentProjectId: string;
+  nodes: Pick<CanvasNode, "id" | "type" | "text">[];
+  messageContent: string;
+  options?: {
+    expectedText?: string;
+    targetNode?: string;
+    targetProject?: string;
+  };
+}): { nodeId: string; expectedText: string } {
+  const { currentProjectId, nodes, messageContent, options } = params;
+  if (options?.targetProject && options.targetProject !== currentProjectId) {
+    throw new Error("该回复来自其他画布，请使用「新建文本节点」放入当前画布。");
+  }
+  const targetNodeId = options?.targetNode;
+  if (!targetNodeId || typeof options?.expectedText !== "string") {
+    throw new Error(
+      "提问时未选中文本节点，请使用「新建文本节点」或选中文本节点后重新提问。",
+    );
+  }
+  const target = nodes.find(
+    (n) => n.id === targetNodeId && (n.type === "text" || n.type === "sticky"),
+  );
+  if (!target) {
+    throw new Error("文本节点已删除，未写入结果");
+  }
+  if (
+    target.text !== options.expectedText &&
+    target.text !== messageContent
+  ) {
+    throw new Error("节点文字已被修改，未覆盖。请基于当前文字重新生成。");
+  }
+  return {
+    nodeId: target.id,
+    expectedText: target.text,
+  };
+}
+
+export type ExportedUnsavedScript = {
+  id: string;
+  path: string;
+  doc_kind: string;
+  status: string;
+  base_revision: number;
+  server_revision: number;
+  saved_body_md: string;
+  draft_body_md: string;
+};
+
+export function buildCanvasLocalBackup<T extends Record<string, unknown>>(
+  canvasDraft: T,
+  unsavedScripts: ExportedUnsavedScript[],
+): T & { unsaved_scripts?: ExportedUnsavedScript[] } {
+  if (!unsavedScripts.length) return { ...canvasDraft };
+  return {
+    ...canvasDraft,
+    unsaved_scripts: unsavedScripts,
   };
 }

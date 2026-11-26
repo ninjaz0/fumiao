@@ -88,7 +88,7 @@ export const scriptReplaceFields: Fields = {
             fields: {
               node_id: { kind: "string", min: 1, max: 80 },
               expected_text: { kind: "string", max: 12000 },
-              next_text: { kind: "string", max: 12000 },
+              next_text: { kind: "string", max: MAX_SCRIPT_BYTES },
             },
           },
         },

@@ -462,6 +462,179 @@ test("Unicode case-insensitive search, cross-canvas node search/replace, and ser
     ]);
     assert.match(builtMessages[1].content, /林默推开审讯室大门/);
     assert.match(builtMessages[1].content, /unicode\.md/);
+
+    // 4. Oversized canvas_replacements (> 12,000 chars) rejected cleanly without truncating original node text
+    const overLimitAttempt: any = await scripts.replace(
+      f.member,
+      {
+        replacements: [],
+        canvas_replacements: [
+          {
+            canvas_id: c1.id,
+            expected_revision: c1Saved.revision,
+            nodes: [
+              {
+                node_id: "n_a",
+                expected_text: "林默推开审讯室大门",
+                next_text: "长".repeat(12001),
+              },
+            ],
+          },
+        ],
+      },
+      ws,
+    );
+    assert.equal(overLimitAttempt.canvas_results[0].saved, false);
+    assert.match(String(overLimitAttempt.canvas_results[0].error), /12000/);
+    const c1Unchanged = await f.canvases.get(f.member, c1.id);
+    assert.equal(c1Unchanged.document.nodes[0].text, "林默推开审讯室大门");
+
+    // 5. Fair @ reference budget: 3 long scripts (4,500 chars each) NEVER starve an explicit @ canvas node
+    const longScripts = await Promise.all(
+      [1, 2, 3].map((idx) =>
+        scripts.create(
+          f.member,
+          {
+            path: `long_${idx}.md`,
+            doc_kind: "script",
+            body_md: `剧本${idx}开头 ` + "剧".repeat(4500),
+          },
+          ws,
+        ),
+      ),
+    );
+    const fairCtx: any = await f.p.db.transaction((sql) =>
+      chatCanvasContext(f.p, sql, f.member, String(f.team.id), {
+        project: c1.id,
+        node: "",
+        expected_revision: c1Saved.revision,
+        writeback: false,
+        script_ids: longScripts.map((d) => d.id),
+        node_ids: ["n_a", "missing_node_id"],
+      } as any),
+    );
+    assert.equal(fairCtx.references?.length, 4);
+    assert.ok(
+      fairCtx.references?.some(
+        (r: any) =>
+          r.kind === "node" &&
+          r.label === "镜头文稿" &&
+          r.content.includes("林默推开审讯室大门"),
+      ),
+    );
+    assert.ok(
+      fairCtx.references
+        ?.filter((r: any) => r.kind === "script")
+        .every((r: any) => r.truncated === true),
+    );
+    assert.ok(
+      fairCtx.omitted_references?.some((s: string) =>
+        s.includes("missing_node_id"),
+      ),
+    );
+    const fairPrompt = chatContext([
+      {
+        role: "user",
+        content: "综合三份长剧本与审讯室节点给出建议",
+        state: "complete",
+        context: JSON.stringify(fairCtx),
+      },
+    ]);
+    assert.match(fairPrompt[1].content, /林默推开审讯室大门/);
+    assert.match(fairPrompt[1].content, /已按配额截断/);
+    assert.match(fairPrompt[1].content, /missing_node_id/);
+
+    // 6. Delete confirmation guards protect concurrent updates and newly added descendants
+    const guardedDir = await scripts.create(
+      f.member,
+      { path: "受保护目录", entry_type: "directory" },
+      ws,
+    );
+    const guardedChild = await scripts.create(
+      f.member,
+      {
+        path: "受保护目录/子剧本A.md",
+        doc_kind: "script",
+        body_md: "初始版本",
+      },
+      ws,
+    );
+
+    // Collaborator adds a new file after user opened delete confirmation (expectedDescendants = 1)
+    const lateSibling = await scripts.create(
+      f.admin,
+      {
+        path: "受保护目录/确认后新增B.md",
+        doc_kind: "script",
+        body_md: "确认弹窗打开后才新增的剧本",
+      },
+      ws,
+    );
+    await assert.rejects(
+      () =>
+        scripts.remove(f.admin, guardedDir.id, true, ws, {
+          expectedRevision: guardedDir.revision,
+          expectedDescendants: 1,
+          expectedRevisionSum: guardedChild.revision,
+        }),
+      (err: any) => err?.status === 409,
+    );
+    // Collaborator updates file revision after delete confirmation opened -> single-file delete rejected with 409
+    const updatedSibling = await scripts.update(
+      f.admin,
+      lateSibling.id,
+      {
+        expected_revision: lateSibling.revision,
+        body_md: "确认弹窗打开后刚保存的新内容",
+      },
+      ws,
+    );
+    await assert.rejects(
+      () =>
+        scripts.remove(f.admin, lateSibling.id, false, ws, {
+          expectedRevision: lateSibling.revision,
+        }),
+      (err: any) => err?.status === 409,
+    );
+    const stillIntact = await scripts.get(f.member, lateSibling.id, ws);
+    assert.equal(stillIntact.revision, updatedSibling.revision);
+    assert.equal(stillIntact.body_md, "确认弹窗打开后刚保存的新内容");
+
+    // 7. Cross-canvas search scans > 100 canvases (up to 200) and reports accurate scanned_canvases / total_canvases
+    // Note: original per-workspace canvas limit is 100 (`canvases.ts`); create up to 96 more canvases (total ~98 in ws) and verify full scan + accurate counts!
+    let extraLastId = "";
+    for (let i = 0; i < 95; i++) {
+      const extra = await f.canvases.create(
+        f.member,
+        { title: `批量画布_${i}` },
+        ws,
+      );
+      extraLastId = extra.id;
+      if (i === 94) {
+        await f.canvases.save(f.member, extra.id, {
+          title: extra.title,
+          expected_revision: extra.revision,
+          document: {
+            nodes: [baseNode("deep_node_97", "深层跨画布命中标记_97")],
+            edges: [],
+            shots: [],
+          },
+        });
+      }
+    }
+    assert.ok(extraLastId);
+    const wideSearch: any = await scripts.search(
+      f.member,
+      {
+        query: "深层跨画布命中标记_97",
+        case_sensitive: false,
+      },
+      ws,
+    );
+    assert.ok(wideSearch.total_canvases >= 97);
+    assert.equal(wideSearch.scanned_canvases, wideSearch.total_canvases);
+    assert.equal(wideSearch.truncated, false);
+    assert.equal(wideSearch.canvases.length, 1);
   } finally {
     await f.cleanup();
   }

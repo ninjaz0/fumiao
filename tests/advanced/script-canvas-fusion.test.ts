@@ -2,15 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyMatchSpansReplacement,
+  buildCanvasLocalBackup,
+  buildPersistedScriptDraftForSession,
   detectAmbiguousShotMatches,
   extractScriptAnchorsMap,
   parseScriptBreakdown,
+  reconcileLoadedScriptDraft,
   replaceCanvasNodeText,
+  resolveChatReplaceTarget,
+  resolvePreferredShotIdLines,
   searchCanvasTextNodes,
   stampScriptShotIds,
   syncScriptBreakdownToCanvas,
 } from "../../apps/web/canvas-editor/script-fusion.js";
-import type { Doc } from "../../apps/web/canvas-editor/types.js";
+import { newNode, type Doc } from "../../apps/web/canvas-editor/types.js";
 import { canvasesFixture } from "../helpers/canvases.js";
 
 const SAMPLE_SCRIPT = `# 《说谎者》· 分集剧本 EP01
@@ -491,4 +496,487 @@ test("searchCanvasTextNodes handles Unicode case-folding accurately, reports tru
   const manyHits = searchCanvasTextNodes(doc, { id: "c1", title: "画布" }, "林默", false, 50);
   assert.equal(manyHits[0].matches.length, 50);
   assert.equal(manyHits[0].truncated, true);
+
+  // Oversized replacement (> 12,000 chars) rejects instead of silently truncating tail text
+  const maxText = "hit" + "x".repeat(11993) + "TAIL";
+  assert.equal([...maxText].length, 12000);
+  const maxDoc: Doc = {
+    schemaVersion: 1,
+    edges: [],
+    shots: [],
+    nodes: [
+      {
+        ...doc.nodes[0],
+        id: "n_max",
+        text: maxText,
+      },
+    ],
+  };
+  assert.throws(
+    () =>
+      replaceCanvasNodeText(
+        maxDoc,
+        "n_max",
+        maxText,
+        "longer" + "x".repeat(11993) + "TAIL",
+      ),
+    /12000/,
+  );
+  assert.equal(maxDoc.nodes[0].text.endsWith("TAIL"), true);
+});
+
+test("media-bearing shots never auto-bind on delete+add with distinct shotId or copied duplicate fm-shot comments, and manual edges/grids stay intact", () => {
+  const baseScript = `# 审讯
+
+## 角色资产
+- **CH01 林默**：年轻刑警
+
+### S01 走廊 夜 内
+人物：林默
+
+△林默握紧手电筒走向铁门。 <!-- fm-shot:sh_orig1 -->
+`;
+  const b1 = parseScriptBreakdown(baseScript, { docId: "doc_safe", docPath: "safe.md" });
+  const sync1 = syncScriptBreakdownToCanvas(
+    { schemaVersion: 1, nodes: [], edges: [], shots: [] },
+    b1,
+    { includeAssets: true, generationMode: "grid_preview" },
+  );
+  const origVideoId = sync1.anchorToNodeId["S01-01"];
+  const docWithMedia: Doc = {
+    ...sync1.document,
+    nodes: sync1.document.nodes.map((n) =>
+      n.id === origVideoId
+        ? { ...n, media_id: "c".repeat(32), active_job: 101 }
+        : n,
+    ),
+  };
+
+  // Case A: Delete old shot and add a brand new shot in the same scene (count stays 1, different shotId)
+  const replacedShotScript = `# 审讯
+### S01 走廊 夜 内
+人物：林默
+
+△天花板通风口突然掉落一把钥匙。 <!-- fm-shot:sh_new2 -->
+`;
+  const bReplaced = parseScriptBreakdown(replacedShotScript, {
+    docId: "doc_safe",
+    docPath: "safe.md",
+  });
+  const ambA = detectAmbiguousShotMatches(docWithMedia, bReplaced);
+  assert.equal(ambA.length, 1);
+  assert.equal(ambA[0].existingVideoNodeId, origVideoId);
+  const syncA = syncScriptBreakdownToCanvas(docWithMedia, bReplaced, {
+    includeAssets: true,
+    generationMode: "omni_ref",
+  });
+  // Without explicit user confirmation, new shot MUST NOT steal old media_id!
+  const newShotNodeA = syncA.document.nodes.find(
+    (n) => n.id === syncA.anchorToNodeId["S01-01"],
+  )!;
+  assert.notEqual(newShotNodeA.id, origVideoId);
+  assert.equal(newShotNodeA.media_id, null);
+  assert.ok(syncA.document.nodes.some((n) => n.id === origVideoId && n.media_id === "c".repeat(32)));
+
+  // Case B: Copy-paste line with <!-- fm-shot:sh_orig1 --> above the original line and edit the copy
+  const duplicatedCommentScript = `# 审讯
+### S01 走廊 夜 内
+人物：林默
+
+△走廊尽头红灯闪烁，脚步声逼近。 <!-- fm-shot:sh_orig1 -->
+
+△林默握紧手电筒走向铁门。 <!-- fm-shot:sh_orig1 -->
+`;
+  const bDupRaw = parseScriptBreakdown(duplicatedCommentScript, {
+    docId: "doc_safe",
+    docPath: "safe.md",
+  });
+  const preferred = resolvePreferredShotIdLines(docWithMedia, bDupRaw);
+  const deduped = stampScriptShotIds(duplicatedCommentScript, preferred);
+  assert.equal(deduped.changed, true);
+  const bDedup = parseScriptBreakdown(deduped.markdown, {
+    docId: "doc_safe",
+    docPath: "safe.md",
+  });
+  assert.notEqual(bDedup.shots[0].shotId, bDedup.shots[1].shotId);
+  assert.equal(bDedup.shots[1].shotId, "sh_orig1");
+  const syncB = syncScriptBreakdownToCanvas(docWithMedia, bDedup, {
+    includeAssets: true,
+    generationMode: "omni_ref",
+  });
+  assert.equal(syncB.anchorToNodeId["S01-02"], origVideoId);
+  const copyNode = syncB.document.nodes.find(
+    (n) => n.id === syncB.anchorToNodeId["S01-01"],
+  )!;
+  assert.equal(copyNode.media_id, null);
+
+  // Case C: Unused grid_preview node manually wired to another video AND pre-existing manual edge matching script endpoint
+  const gridNode = sync1.document.nodes.find(
+    (n) => n.extra_params?.script_role === "grid_preview",
+  )!;
+  const charNode = sync1.document.nodes.find(
+    (n) => n.extra_params?.script_asset_category === "character",
+  )!;
+  const docManualGridAndEdge: Doc = {
+    ...sync1.document,
+    nodes: [
+      ...sync1.document.nodes,
+      { ...docWithMedia.nodes.find((n) => n.id === origVideoId)!, id: "manual_vid", media_id: null, active_job: null, extra_params: undefined },
+    ],
+    edges: [
+      ...sync1.document.edges,
+      {
+        id: "manual_preexisting_char_edge",
+        source: charNode.id,
+        target: origVideoId,
+      },
+      { id: "manual_grid_to_vid", source: gridNode.id, target: "manual_vid" },
+    ],
+  };
+
+  // Sync once in omni_ref (switches away from grid_preview while林默 is still in script)
+  const syncKeepGrid = syncScriptBreakdownToCanvas(docManualGridAndEdge, b1, {
+    includeAssets: true,
+    generationMode: "omni_ref",
+  });
+  assert.ok(
+    syncKeepGrid.document.nodes.some((n) => n.id === gridNode.id),
+    "grid node with manual edge must not be deleted",
+  );
+
+  // Now remove 林默 from script -> pre-existing manual edge must STILL survive!
+  const noCharScript = `# 审讯
+### S01 走廊 夜 内
+
+△空旷走廊尽头铁门紧闭。 <!-- fm-shot:sh_orig1 -->
+`;
+  const bNoChar = parseScriptBreakdown(noCharScript, {
+    docId: "doc_safe",
+    docPath: "safe.md",
+  });
+  const syncAfterRemoveChar = syncScriptBreakdownToCanvas(
+    syncKeepGrid.document,
+    bNoChar,
+    { includeAssets: true, generationMode: "omni_ref" },
+  );
+  assert.ok(
+    syncAfterRemoveChar.document.edges.some(
+      (e) => e.id === "manual_preexisting_char_edge",
+    ),
+    "pre-existing manual edge matching script endpoint must survive when script removes character",
+  );
+});
+
+test("partial sync updates selected existing shots in-place without reordering 01, 02, 03 to 02, 03, 01", () => {
+  const threeShotsScript = `# 三镜测试
+### S01 密室 夜 内
+
+△第一镜：特写怀表秒针跳动。 <!-- fm-shot:sh_01 -->
+
+△第二镜：中景众人抬头对视。 <!-- fm-shot:sh_02 -->
+
+△第三镜：全景铁门缓缓开启。 <!-- fm-shot:sh_03 -->
+`;
+  const bInitial = parseScriptBreakdown(threeShotsScript, {
+    docId: "doc_order",
+    docPath: "order.md",
+  });
+  const fullSync = syncScriptBreakdownToCanvas(
+    { schemaVersion: 1, nodes: [], edges: [], shots: [] },
+    bInitial,
+    { includeAssets: false, generationMode: "omni_ref" },
+  );
+  const id01 = fullSync.anchorToNodeId["S01-01"];
+  const id02 = fullSync.anchorToNodeId["S01-02"];
+  const id03 = fullSync.anchorToNodeId["S01-03"];
+  assert.deepEqual(fullSync.document.shots, [id01, id02, id03]);
+
+  // Edit shot 01 and run partial sync ONLY for ["S01-01"]
+  const editedShot01Script = threeShotsScript.replace(
+    "特写怀表秒针跳动",
+    "微距特写怀表齿轮停转",
+  );
+  const bEdited = parseScriptBreakdown(editedShot01Script, {
+    docId: "doc_order",
+    docPath: "order.md",
+  });
+  const partialSync = syncScriptBreakdownToCanvas(fullSync.document, bEdited, {
+    includeAssets: false,
+    generationMode: "omni_ref",
+    selectedAnchors: ["S01-01"],
+  });
+  assert.deepEqual(
+    partialSync.document.shots,
+    [id01, id02, id03],
+    "syncing only S01-01 must keep [01, 02, 03] in-place instead of moving 01 to tail",
+  );
+  const updatedText01 = partialSync.document.nodes.find(
+    (n) => n.type === "text" && n.extra_params?.script_anchor === "S01-01",
+  )!;
+  assert.match(updatedText01.text, /微距特写怀表齿轮停转/);
+});
+
+test("conflict draft recovery preserves baseRevision and conflict status across repeated close/reopen cycles", () => {
+  // User edited from v1 ("原始版本 v1") to "本地未同步草稿"
+  const initialPersisted = {
+    draftBody: "本地未同步草稿",
+    savedBody: "原始版本 v1",
+    baseRevision: 1,
+    updatedAt: 1000,
+  };
+  const collaboratorServer = {
+    body_md: "协作者已保存正文 v2",
+    revision: 2,
+  };
+
+  // 1st reopen: detects v1 vs v2 conflict and persists conflict flag while keeping baseRevision = 1
+  const load1 = reconcileLoadedScriptDraft(
+    collaboratorServer,
+    initialPersisted,
+  );
+  assert.equal(load1.status, "conflict");
+  assert.equal(load1.baseRevision, 1);
+  assert.equal(load1.revision, 2);
+  assert.equal(load1.draftBody, "本地未同步草稿");
+  assert.equal(load1.nextPersisted?.conflicted, true);
+  assert.equal(load1.nextPersisted?.baseRevision, 1);
+
+  // User closes workspace (or types further while conflicted and closes)
+  const persistedOnClose1 = buildPersistedScriptDraftForSession(
+    {
+      draftBody: load1.draftBody + "\n补充一句",
+      savedBody: load1.savedBody,
+      baseRevision: load1.baseRevision,
+      revision: load1.revision,
+      status: load1.status,
+    },
+    2000,
+  );
+  assert.ok(persistedOnClose1);
+  assert.equal(persistedOnClose1.conflicted, true);
+  assert.equal(persistedOnClose1.baseRevision, 1);
+
+  // 2nd reopen against the same server v2: MUST remain "conflict" (never turning "dirty" to auto-save over v2!)
+  const load2 = reconcileLoadedScriptDraft(
+    collaboratorServer,
+    persistedOnClose1,
+  );
+  assert.equal(load2.status, "conflict");
+  assert.equal(load2.baseRevision, 1);
+  assert.equal(load2.revision, 2);
+  assert.equal(load2.draftBody, "本地未同步草稿\n补充一句");
+});
+
+test("resolveChatReplaceTarget enforces question-time node and expectedText baseline instead of click-time selection", () => {
+  const nodes = [
+    { id: "node_a", type: "text" as const, text: "修改后的新正文 v2" },
+    { id: "node_b", type: "text" as const, text: "另一节点的无辜正文" },
+  ];
+
+  // Stale reply generated when node_a was "旧正文 v1" must NOT overwrite node_a ("v2") OR currently-selected node_b
+  assert.throws(
+    () =>
+      resolveChatReplaceTarget({
+        currentProjectId: "proj_1",
+        nodes,
+        messageContent: "AI 基于 v1 生成的旧回复",
+        options: {
+          targetProject: "proj_1",
+          targetNode: "node_a",
+          expectedText: "旧正文 v1",
+        },
+      }),
+    /节点文字已被修改/,
+  );
+
+  // Reply generated without a selected text node cannot replace an arbitrary later-clicked node
+  assert.throws(
+    () =>
+      resolveChatReplaceTarget({
+        currentProjectId: "proj_1",
+        nodes,
+        messageContent: "通用对话回复",
+        options: {},
+      }),
+    /提问时未选中文本节点/,
+  );
+
+  // When question-time node_a still matches expectedText, replace targets node_a cleanly even if user clicked node_b
+  const resolved = resolveChatReplaceTarget({
+    currentProjectId: "proj_1",
+    nodes: [
+      { id: "node_a", type: "text" as const, text: "旧正文 v1" },
+      { id: "node_b", type: "text" as const, text: "另一节点的无辜正文" },
+    ],
+    messageContent: "AI 基于 v1 生成的回复",
+    options: {
+      targetProject: "proj_1",
+      targetNode: "node_a",
+      expectedText: "旧正文 v1",
+    },
+  });
+  assert.deepEqual(resolved, {
+    nodeId: "node_a",
+    expectedText: "旧正文 v1",
+  });
+});
+
+test("syncScriptBreakdownToCanvas keeps similar-named assets distinct and never reuses grid_preview images as asset nodes", () => {
+  const similarAssetsScript = [
+    "# EP04 相近资产防串绑",
+    "",
+    "## 角色资产",
+    "- **CH01 林默**：成年男性，黑色风衣。",
+    "- **CH02 林默少年**：十二岁少年，校服衬衫。",
+    "",
+    "## 场景资产",
+    "- **SC01 客厅**：暖光吊灯与老式沙发。",
+    "- **SC02 客厅走廊**：狭长木地板走廊与壁灯。",
+    "",
+    "### S01 客厅 夜 内",
+    "人物：林默、林默少年",
+    "",
+    "△林默从客厅走廊走进客厅，望向墙上的林默少年旧照。",
+  ].join("\n");
+
+  const breakdown = parseScriptBreakdown(similarAssetsScript, {
+    docId: "404",
+    docPath: "EP04.md",
+  });
+
+  // Pre-seed canvas with two grid_preview image nodes whose titles match "客厅" and "资产 · SC01 客厅",
+  // plus a standalone unbound reusable image node titled exactly "客厅走廊".
+  const seededDoc: Doc = {
+    schemaVersion: 1,
+    nodes: [
+      {
+        ...newNode("image", 100, 100, 1),
+        id: "grid_prev_exact_name",
+        title: "客厅",
+        prompt: "九宫格预览",
+        media_id: "media_grid_1",
+        generation_mode: "grid_preview",
+        extra_params: { script_role: "grid_preview" },
+      },
+      {
+        ...newNode("image", 100, 280, 2),
+        id: "grid_prev_expected_title",
+        title: "资产 · SC01 客厅",
+        prompt: "九宫格预览2",
+        media_id: "media_grid_2",
+        extra_params: { script_role: "grid_preview" },
+      },
+      {
+        ...newNode("image", 100, 460, 3),
+        id: "unbound_corridor_img",
+        title: "客厅走廊",
+        prompt: "手工上传走廊参考图",
+        media_id: "media_corridor_manual",
+      },
+    ],
+    edges: [],
+    shots: [],
+  };
+
+  const firstSync = syncScriptBreakdownToCanvas(seededDoc, breakdown, {
+    includeAssets: true,
+    generationMode: "omni_ref",
+    tailChain: false,
+    videoModel: "MiniMax H3",
+    imageModel: "gpt-image-2.6-sunburst",
+    ratio: "9:16",
+  });
+
+  // 1. Neither grid_preview node may be reused or have script_asset_key overwritten onto it
+  const gridNode1 = firstSync.document.nodes.find(
+    (n) => n.id === "grid_prev_exact_name",
+  )!;
+  const gridNode2 = firstSync.document.nodes.find(
+    (n) => n.id === "grid_prev_expected_title",
+  )!;
+  assert.equal(gridNode1.extra_params?.script_role, "grid_preview");
+  assert.equal(gridNode1.extra_params?.script_asset_key, undefined);
+  assert.equal(gridNode2.extra_params?.script_role, "grid_preview");
+  assert.equal(gridNode2.extra_params?.script_asset_key, undefined);
+
+  // 2. Unbound exact-title image "客厅走廊" IS reused for scene:客厅走廊, while "客厅" gets its own fresh asset node!
+  const corridorNode = firstSync.document.nodes.find(
+    (n) => n.extra_params?.script_asset_key === "scene:客厅走廊",
+  );
+  const livingRoomNode = firstSync.document.nodes.find(
+    (n) => n.extra_params?.script_asset_key === "scene:客厅",
+  );
+  assert.ok(corridorNode && livingRoomNode);
+  assert.equal(corridorNode.id, "unbound_corridor_img");
+  assert.notEqual(livingRoomNode.id, corridorNode.id);
+  assert.notEqual(livingRoomNode.id, "grid_prev_exact_name");
+  assert.notEqual(livingRoomNode.id, "grid_prev_expected_title");
+
+  // 3. Similar character names "林默" vs "林默少年" stay distinct and never overwrite each other's script_asset_key
+  const adultHeroNode = firstSync.document.nodes.find(
+    (n) => n.extra_params?.script_asset_key === "character:林默",
+  );
+  const youngHeroNode = firstSync.document.nodes.find(
+    (n) => n.extra_params?.script_asset_key === "character:林默少年",
+  );
+  assert.ok(adultHeroNode && youngHeroNode);
+  assert.notEqual(adultHeroNode.id, youngHeroNode.id);
+
+  // 4. Second sync reuses all 4 asset nodes cleanly without creating duplicates
+  const secondSync = syncScriptBreakdownToCanvas(firstSync.document, breakdown, {
+    includeAssets: true,
+    generationMode: "omni_ref",
+    tailChain: false,
+    videoModel: "MiniMax H3",
+    imageModel: "gpt-image-2.6-sunburst",
+    ratio: "9:16",
+  });
+  assert.equal(secondSync.createdNodeIds.length, 0);
+  assert.equal(
+    secondSync.document.nodes.find(
+      (n) => n.extra_params?.script_asset_key === "scene:客厅",
+    )?.id,
+    livingRoomNode.id,
+  );
+  assert.equal(
+    secondSync.document.nodes.find(
+      (n) => n.extra_params?.script_asset_key === "scene:客厅走廊",
+    )?.id,
+    corridorNode.id,
+  );
+});
+
+test("buildCanvasLocalBackup preserves top-level canvas draft format and embeds unsaved_scripts when present", () => {
+  const sampleDoc: Doc = { schemaVersion: 1, nodes: [], edges: [], shots: [] };
+  const canvasOnly = buildCanvasLocalBackup(
+    { title: "纯画布草稿", document: sampleDoc },
+    [],
+  );
+  assert.equal(canvasOnly.title, "纯画布草稿");
+  assert.deepEqual(canvasOnly.document, sampleDoc);
+  assert.equal("unsaved_scripts" in canvasOnly, false);
+
+  const withScripts = buildCanvasLocalBackup(
+    { title: "含剧本冲突画布", document: sampleDoc },
+    [
+      {
+        id: "12",
+        path: "01_EP01.md",
+        doc_kind: "script",
+        status: "conflict",
+        base_revision: 3,
+        server_revision: 4,
+        saved_body_md: "# EP01\n> 远端版本",
+        draft_body_md: "# EP01\n△本地冲突草稿",
+      },
+    ],
+  );
+  assert.equal(withScripts.title, "含剧本冲突画布");
+  assert.equal(withScripts.unsaved_scripts?.length, 1);
+  assert.equal(withScripts.unsaved_scripts?.[0]?.path, "01_EP01.md");
+  assert.equal(withScripts.unsaved_scripts?.[0]?.status, "conflict");
+  assert.match(
+    withScripts.unsaved_scripts?.[0]?.draft_body_md ?? "",
+    /本地冲突草稿/,
+  );
 });

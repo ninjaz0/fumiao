@@ -61,11 +61,16 @@ import {
   type WorkspaceCanvasSummary,
 } from "./script-api";
 import {
+  buildPersistedScriptDraftForSession,
   extractScriptAnchorsMap,
   parseScriptBreakdown,
+  reconcileLoadedScriptDraft,
+  resolvePreferredShotIdLines,
   stampScriptShotIds,
   stripShotCommentMarkers,
   syncScriptBreakdownToCanvas,
+  type ExportedUnsavedScript,
+  type PersistedScriptDraftRecord,
   type ScriptAnchorLink,
   type ScriptSyncOptions,
 } from "./script-fusion";
@@ -83,8 +88,11 @@ import {
 
 export type ScriptWorkspaceHandle = {
   flushAll: () => Promise<void>;
+  flushScripts: (docIds: string[]) => Promise<void>;
   rememberAll: () => boolean;
   hasUnsavedChanges: () => boolean;
+  hasConflictChanges: () => boolean;
+  exportUnsavedScripts: () => ExportedUnsavedScript[];
   prepareLeave: () => void;
 };
 
@@ -109,29 +117,38 @@ export type OpenDocTab =
       preview?: boolean;
     };
 
-type PersistedScriptDraft = {
-  draftBody: string;
-  savedBody: string;
-  baseRevision: number;
-  updatedAt: number;
-};
+type PersistedScriptDraft = PersistedScriptDraftRecord;
+
+function getOrCreateEditorSessionId(): string {
+  try {
+    const existing = sessionStorage.getItem("fm-canvas-editor");
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    sessionStorage.setItem("fm-canvas-editor", created);
+    return created;
+  } catch {
+    return "default";
+  }
+}
 
 function scriptDraftStorageKey(
   userId: number,
   workspace: number,
   docId: string,
+  editorId = getOrCreateEditorSessionId(),
 ): string {
-  return `fm-script-draft:${userId}:${workspace}:${docId}`;
+  return `fm-script-draft:${userId}:${workspace}:${docId}:${editorId}`;
 }
 
 function readPersistedScriptDraft(
   userId: number,
   workspace: number,
   docId: string,
+  editorId = getOrCreateEditorSessionId(),
 ): PersistedScriptDraft | null {
   try {
     const raw = localStorage.getItem(
-      scriptDraftStorageKey(userId, workspace, docId),
+      scriptDraftStorageKey(userId, workspace, docId, editorId),
     );
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PersistedScriptDraft>;
@@ -144,6 +161,7 @@ function readPersistedScriptDraft(
         draftBody: parsed.draftBody,
         savedBody: parsed.savedBody,
         baseRevision: parsed.baseRevision,
+        conflicted: Boolean(parsed.conflicted),
         updatedAt: Number(parsed.updatedAt) || Date.now(),
       };
     }
@@ -158,10 +176,11 @@ function writePersistedScriptDraft(
   workspace: number,
   docId: string,
   draft: PersistedScriptDraft,
+  editorId = getOrCreateEditorSessionId(),
 ): boolean {
   try {
     localStorage.setItem(
-      scriptDraftStorageKey(userId, workspace, docId),
+      scriptDraftStorageKey(userId, workspace, docId, editorId),
       JSON.stringify(draft),
     );
     return true;
@@ -174,9 +193,12 @@ function clearPersistedScriptDraft(
   userId: number,
   workspace: number,
   docId: string,
+  editorId = getOrCreateEditorSessionId(),
 ): void {
   try {
-    localStorage.removeItem(scriptDraftStorageKey(userId, workspace, docId));
+    localStorage.removeItem(
+      scriptDraftStorageKey(userId, workspace, docId, editorId),
+    );
   } catch {
     // Ignore storage errors
   }
@@ -186,6 +208,7 @@ type LoadedScriptState = {
   detail: ScriptDocumentDetail;
   draftBody: string;
   savedBody: string;
+  baseRevision: number;
   revision: number;
   status: "saved" | "dirty" | "saving" | "conflict" | "error";
   error: string;
@@ -512,16 +535,37 @@ export const ScriptWorkspace = forwardRef<
   } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [deletingItem, setDeletingItem] =
-    useState<ScriptDocumentSummary | null>(null);
+  const [deletingTarget, setDeletingTarget] = useState<{
+    item: ScriptDocumentSummary;
+    guards: {
+      expectedRevision: number;
+      expectedDescendants?: number;
+      expectedRevisionSum?: number;
+    };
+  } | null>(null);
   const [suiteBusy, setSuiteBusy] = useState(false);
 
   // Loaded script sessions
   const [sessions, setSessions] = useState<Record<string, LoadedScriptState>>(
     {},
   );
-  const sessionsRef = useRef(sessions);
-  sessionsRef.current = sessions;
+  const sessionsRef = useRef<Record<string, LoadedScriptState>>({});
+  const commitSessions = useCallback(
+    (
+      updater: (
+        prev: Record<string, LoadedScriptState>,
+      ) => Record<string, LoadedScriptState>,
+    ) => {
+      const prev = sessionsRef.current;
+      const next = updater(prev);
+      if (next !== prev) {
+        sessionsRef.current = next;
+        setSessions(next);
+      }
+      return next;
+    },
+    [],
+  );
   const saveChainRef = useRef<Record<string, Promise<void>>>({});
   const allowUnloadRef = useRef(false);
   const jumpCounterRef = useRef(0);
@@ -541,41 +585,37 @@ export const ScriptWorkspace = forwardRef<
       if (sessionsRef.current[docId]) return sessionsRef.current[docId];
       const detail = await scriptApi.get(docId);
       const persisted = readPersistedScriptDraft(userId, workspace, docId);
-      let draftBody = detail.body_md;
-      let status: LoadedScriptState["status"] = "saved";
-      let error = "";
-      if (persisted) {
-        if (persisted.draftBody === detail.body_md) {
-          clearPersistedScriptDraft(userId, workspace, docId);
-        } else if (detail.revision === persisted.baseRevision) {
-          draftBody = persisted.draftBody;
-          status = "dirty";
-        } else {
-          draftBody = persisted.draftBody;
-          status = "conflict";
-          error =
-            "检测到未同步的本地剧本草稿与服务器新版本冲突，本地草稿已为你保留。";
-        }
+      const reconciled = reconcileLoadedScriptDraft(detail, persisted);
+      if (reconciled.storageAction === "clear") {
+        clearPersistedScriptDraft(userId, workspace, docId);
+      } else if (
+        reconciled.storageAction === "persist_conflict" &&
+        reconciled.nextPersisted
+      ) {
+        writePersistedScriptDraft(
+          userId,
+          workspace,
+          docId,
+          reconciled.nextPersisted,
+        );
       }
       const loaded: LoadedScriptState = {
         detail,
-        draftBody,
-        savedBody: detail.body_md,
-        revision: detail.revision,
-        status,
-        error,
+        draftBody: reconciled.draftBody,
+        savedBody: reconciled.savedBody,
+        baseRevision: reconciled.baseRevision,
+        revision: reconciled.revision,
+        status: reconciled.status,
+        error: reconciled.error,
         undoStack: [],
         redoStack: [],
       };
-      setSessions((prev) => {
-        if (prev[docId]) return prev;
-        const next = { ...prev, [docId]: loaded };
-        sessionsRef.current = next;
-        return next;
-      });
+      commitSessions((prev) =>
+        prev[docId] ? prev : { ...prev, [docId]: loaded },
+      );
       return sessionsRef.current[docId] ?? loaded;
     },
-    [userId, workspace],
+    [commitSessions, userId, workspace],
   );
 
   const loadWorkspaceTree = useCallback(async () => {
@@ -783,7 +823,7 @@ export const ScriptWorkspace = forwardRef<
       );
   }, [externalOpenRequest, onNotify, openScriptTab]);
 
-  // Serialized per-document save queue with follow-up edit chaining
+  // Serialized per-document save queue with synchronous follow-up edit chaining
   const flushScript = useCallback(
     async (
       docId: string,
@@ -805,15 +845,13 @@ export const ScriptWorkspace = forwardRef<
           if (current.draftBody === current.savedBody) {
             clearPersistedScriptDraft(userId, workspace, docId);
             if (current.status !== "saved") {
-              setSessions((prev) => {
+              commitSessions((prev) => {
                 const cur = prev[docId];
                 if (!cur || cur.draftBody !== cur.savedBody) return prev;
-                const next = {
+                return {
                   ...prev,
                   [docId]: { ...cur, status: "saved" as const, error: "" },
                 };
-                sessionsRef.current = next;
-                return next;
               });
             }
             return;
@@ -821,15 +859,13 @@ export const ScriptWorkspace = forwardRef<
 
           const bodySnapshot = current.draftBody;
           const expectedRev = current.revision;
-          setSessions((prev) => {
+          commitSessions((prev) => {
             const cur = prev[docId];
             if (!cur) return prev;
-            const next = {
+            return {
               ...prev,
               [docId]: { ...cur, status: "saving" as const, error: "" },
             };
-            sessionsRef.current = next;
-            return next;
           });
 
           try {
@@ -838,7 +874,7 @@ export const ScriptWorkspace = forwardRef<
               body_md: bodySnapshot,
             });
             let hasMoreEdits = false;
-            setSessions((prev) => {
+            commitSessions((prev) => {
               const latest = prev[docId];
               if (!latest) return prev;
               hasMoreEdits = latest.draftBody !== bodySnapshot;
@@ -852,65 +888,74 @@ export const ScriptWorkspace = forwardRef<
               } else {
                 clearPersistedScriptDraft(userId, workspace, docId);
               }
-              const nextMap: Record<string, LoadedScriptState> = {
-                ...prev,
-                [docId]: {
-                  ...latest,
-                  detail: updated,
-                  savedBody: bodySnapshot,
-                  revision: updated.revision,
-                  status: hasMoreEdits ? "dirty" : "saved",
-                  error: "",
-                },
-              };
-              sessionsRef.current = nextMap;
-              return nextMap;
-            });
-            setItems((prev) =>
-              prev.map((item) =>
-                item.id === docId
-                  ? {
-                      ...item,
-                      revision: updated.revision,
-                      char_count: updated.char_count,
-                      line_count: updated.line_count,
-                      preview: updated.preview,
-                      updated: updated.updated,
-                    }
-                  : item,
-              ),
-            );
-            if (!hasMoreEdits) return;
-          } catch (e: unknown) {
-            const httpStatus = (e as { status?: number })?.status;
-            const isConflict = httpStatus === 409;
-            const docName =
-              sessionsRef.current[docId]?.detail.name || "剧本文档";
-            const errMsg = isConflict
-              ? `剧本「${docName}」已被其他协作者修改，本地草稿已保留`
-              : e instanceof Error
-                ? e.message
-                : `剧本「${docName}」保存失败，本地草稿已保留`;
-            setSessions((prev) => {
-              const latest = prev[docId];
-              if (!latest) return prev;
-              writePersistedScriptDraft(userId, workspace, docId, {
-                draftBody: latest.draftBody,
-                savedBody: latest.savedBody,
-                baseRevision: latest.revision,
-                updatedAt: Date.now(),
+                return {
+                  ...prev,
+                  [docId]: {
+                    ...latest,
+                    detail: updated,
+                    savedBody: bodySnapshot,
+                    baseRevision: updated.revision,
+                    revision: updated.revision,
+                    status: hasMoreEdits ? "dirty" : "saved",
+                    error: "",
+                  },
+                };
               });
-              const nextMap: Record<string, LoadedScriptState> = {
-                ...prev,
-                [docId]: {
-                  ...latest,
-                  status: isConflict ? "conflict" : "error",
-                  error: errMsg,
-                },
-              };
-              sessionsRef.current = nextMap;
-              return nextMap;
-            });
+              setItems((prev) =>
+                prev.map((item) =>
+                  item.id === docId
+                    ? {
+                        ...item,
+                        revision: updated.revision,
+                        char_count: updated.char_count,
+                        line_count: updated.line_count,
+                        preview: updated.preview,
+                        updated: updated.updated,
+                      }
+                    : item,
+                ),
+              );
+              if (!hasMoreEdits) return;
+            } catch (e: unknown) {
+              const httpStatus = (e as { status?: number })?.status;
+              const isConflict = httpStatus === 409;
+              const docName =
+                sessionsRef.current[docId]?.detail.name || "剧本文档";
+              const errMsg = isConflict
+                ? `剧本「${docName}」已被其他协作者修改，本地草稿已保留`
+                : e instanceof Error
+                  ? e.message
+                  : `剧本「${docName}」保存失败，本地草稿已保留`;
+              commitSessions((prev) => {
+                const latest = prev[docId];
+                if (!latest) return prev;
+                const nextStatus: LoadedScriptState["status"] = isConflict
+                  ? "conflict"
+                  : "error";
+                const nextPersisted = buildPersistedScriptDraftForSession({
+                  draftBody: latest.draftBody,
+                  savedBody: latest.savedBody,
+                  baseRevision: latest.baseRevision,
+                  revision: latest.revision,
+                  status: nextStatus,
+                });
+                if (nextPersisted) {
+                  writePersistedScriptDraft(
+                    userId,
+                    workspace,
+                    docId,
+                    nextPersisted,
+                  );
+                }
+                return {
+                  ...prev,
+                  [docId]: {
+                    ...latest,
+                    status: nextStatus,
+                    error: errMsg,
+                  },
+                };
+              });
             if (options.throwOnError) {
               throw new Error(errMsg);
             }
@@ -930,7 +975,7 @@ export const ScriptWorkspace = forwardRef<
         }
       }
     },
-    [userId, workspace],
+    [commitSessions, userId, workspace],
   );
 
   useEffect(() => {
@@ -952,7 +997,7 @@ export const ScriptWorkspace = forwardRef<
       mutator: (currentBody: string) => string,
       recordUndo = true,
     ) => {
-      setSessions((prev) => {
+      commitSessions((prev) => {
         const cur = prev[docId];
         if (!cur) return prev;
         const nextBody = mutator(cur.draftBody);
@@ -960,16 +1005,6 @@ export const ScriptWorkspace = forwardRef<
         const undoStack = recordUndo
           ? [...cur.undoStack.slice(-50), cur.draftBody]
           : cur.undoStack;
-        if (nextBody === cur.savedBody) {
-          clearPersistedScriptDraft(userId, workspace, docId);
-        } else {
-          writePersistedScriptDraft(userId, workspace, docId, {
-            draftBody: nextBody,
-            savedBody: cur.savedBody,
-            baseRevision: cur.revision,
-            updatedAt: Date.now(),
-          });
-        }
         const nextStatus: LoadedScriptState["status"] =
           cur.status === "conflict"
             ? "conflict"
@@ -978,7 +1013,19 @@ export const ScriptWorkspace = forwardRef<
               : nextBody === cur.savedBody
                 ? "saved"
                 : "dirty";
-        const nextMap: Record<string, LoadedScriptState> = {
+        const nextPersisted = buildPersistedScriptDraftForSession({
+          draftBody: nextBody,
+          savedBody: cur.savedBody,
+          baseRevision: cur.baseRevision,
+          revision: cur.revision,
+          status: nextStatus,
+        });
+        if (nextPersisted) {
+          writePersistedScriptDraft(userId, workspace, docId, nextPersisted);
+        } else {
+          clearPersistedScriptDraft(userId, workspace, docId);
+        }
+        return {
           ...prev,
           [docId]: {
             ...cur,
@@ -988,8 +1035,6 @@ export const ScriptWorkspace = forwardRef<
             status: nextStatus,
           },
         };
-        sessionsRef.current = nextMap;
-        return nextMap;
       });
       setTabs((prev) =>
         prev.map((t) =>
@@ -999,7 +1044,7 @@ export const ScriptWorkspace = forwardRef<
         ),
       );
     },
-    [userId, workspace],
+    [commitSessions, userId, workspace],
   );
 
   const updateScriptDraft = useCallback(
@@ -1011,7 +1056,7 @@ export const ScriptWorkspace = forwardRef<
 
   const travelScriptHistory = useCallback(
     (docId: string, redo = false) => {
-      setSessions((prev) => {
+      commitSessions((prev) => {
         const cur = prev[docId];
         if (!cur) return prev;
         const source = redo ? cur.redoStack : cur.undoStack;
@@ -1023,16 +1068,6 @@ export const ScriptWorkspace = forwardRef<
         const nextRedo = redo
           ? cur.redoStack.slice(0, -1)
           : [...cur.redoStack, cur.draftBody];
-        if (targetBody === cur.savedBody) {
-          clearPersistedScriptDraft(userId, workspace, docId);
-        } else {
-          writePersistedScriptDraft(userId, workspace, docId, {
-            draftBody: targetBody,
-            savedBody: cur.savedBody,
-            baseRevision: cur.revision,
-            updatedAt: Date.now(),
-          });
-        }
         const nextStatus: LoadedScriptState["status"] =
           cur.status === "conflict"
             ? "conflict"
@@ -1041,7 +1076,19 @@ export const ScriptWorkspace = forwardRef<
               : targetBody === cur.savedBody
                 ? "saved"
                 : "dirty";
-        const nextMap: Record<string, LoadedScriptState> = {
+        const nextPersisted = buildPersistedScriptDraftForSession({
+          draftBody: targetBody,
+          savedBody: cur.savedBody,
+          baseRevision: cur.baseRevision,
+          revision: cur.revision,
+          status: nextStatus,
+        });
+        if (nextPersisted) {
+          writePersistedScriptDraft(userId, workspace, docId, nextPersisted);
+        } else {
+          clearPersistedScriptDraft(userId, workspace, docId);
+        }
+        return {
           ...prev,
           [docId]: {
             ...cur,
@@ -1051,25 +1098,30 @@ export const ScriptWorkspace = forwardRef<
             status: nextStatus,
           },
         };
-        sessionsRef.current = nextMap;
-        return nextMap;
       });
     },
-    [userId, workspace],
+    [commitSessions, userId, workspace],
   );
 
   const rememberAllScripts = useCallback((): boolean => {
     let allSavedToStorage = true;
     for (const [docId, s] of Object.entries(sessionsRef.current)) {
-      if (s.draftBody === s.savedBody) {
+      const nextPersisted = buildPersistedScriptDraftForSession({
+        draftBody: s.draftBody,
+        savedBody: s.savedBody,
+        baseRevision: s.baseRevision,
+        revision: s.revision,
+        status: s.status,
+      });
+      if (!nextPersisted) {
         clearPersistedScriptDraft(userId, workspace, docId);
       } else {
-        const ok = writePersistedScriptDraft(userId, workspace, docId, {
-          draftBody: s.draftBody,
-          savedBody: s.savedBody,
-          baseRevision: s.revision,
-          updatedAt: Date.now(),
-        });
+        const ok = writePersistedScriptDraft(
+          userId,
+          workspace,
+          docId,
+          nextPersisted,
+        );
         if (!ok) allSavedToStorage = false;
       }
     }
@@ -1101,8 +1153,43 @@ export const ScriptWorkspace = forwardRef<
           await flushScript(docId, { throwOnError: true });
         }
       },
+      flushScripts: async (docIds: string[]) => {
+        for (const docId of docIds) {
+          const s = sessionsRef.current[docId];
+          if (!s) continue;
+          if (
+            s.draftBody !== s.savedBody ||
+            s.status === "saving" ||
+            s.status === "conflict" ||
+            s.status === "error"
+          ) {
+            await flushScript(docId, { throwOnError: true });
+          }
+        }
+      },
       rememberAll: rememberAllScripts,
       hasUnsavedChanges: hasUnsavedScripts,
+      hasConflictChanges: () =>
+        Object.values(sessionsRef.current).some((s) => s.status === "conflict"),
+      exportUnsavedScripts: () =>
+        Object.entries(sessionsRef.current)
+          .filter(
+            ([, s]) =>
+              s.draftBody !== s.savedBody ||
+              s.status === "saving" ||
+              s.status === "conflict" ||
+              s.status === "error",
+          )
+          .map(([docId, s]) => ({
+            id: docId,
+            path: s.detail.path,
+            doc_kind: s.detail.doc_kind,
+            status: s.status,
+            base_revision: s.baseRevision,
+            server_revision: s.revision,
+            saved_body_md: s.savedBody,
+            draft_body_md: s.draftBody,
+          })),
       prepareLeave: () => {
         allowUnloadRef.current = true;
       },
@@ -1221,12 +1308,13 @@ export const ScriptWorkspace = forwardRef<
       setCreatingEntry(null);
       await loadWorkspaceTree();
       if (created.entry_type === "file") {
-        setSessions((prev) => ({
+        commitSessions((prev) => ({
           ...prev,
           [created.id]: {
             detail: created,
             draftBody: created.body_md,
             savedBody: created.body_md,
+            baseRevision: created.revision,
             revision: created.revision,
             status: "saved",
             error: "",
@@ -1251,47 +1339,199 @@ export const ScriptWorkspace = forwardRef<
       ? `${item.parent_path}/${trimmed}`
       : trimmed;
     try {
-      const curRev = sessions[item.id]?.revision ?? item.revision;
+      const curRev = sessionsRef.current[item.id]?.revision ?? item.revision;
       const updated = await scriptApi.update(item.id, {
         expected_revision: curRev,
         path: nextPath,
       });
-      await loadWorkspaceTree();
-      setSessions((prev) =>
-        prev[item.id]
-          ? {
-              ...prev,
-              [item.id]: {
-                ...prev[item.id],
-                detail: updated,
-                revision: updated.revision,
-              },
+      const freshItems = await loadWorkspaceTree();
+      const summaryById = new Map(freshItems.map((x) => [x.id, x]));
+      if (item.entry_type === "directory") {
+        setExpandedFolders((prev) => {
+          const next = new Set<string>();
+          const oldPrefix = `dir:${item.path}`;
+          const newPrefix = `dir:${updated.path}`;
+          for (const key of prev) {
+            if (key === oldPrefix) {
+              next.add(newPrefix);
+            } else if (key.startsWith(oldPrefix + "/")) {
+              next.add(newPrefix + key.slice(oldPrefix.length));
+            } else {
+              next.add(key);
             }
-          : prev,
-      );
+          }
+          return next;
+        });
+      }
+      commitSessions((prev) => {
+        let changed = false;
+        const next: Record<string, LoadedScriptState> = { ...prev };
+        for (const [docId, sess] of Object.entries(prev)) {
+          const summary = summaryById.get(docId);
+          if (!summary) continue;
+          if (docId !== item.id && summary.path === sess.detail.path) continue;
+          changed = true;
+          const nextDetail: ScriptDocumentDetail =
+            docId === item.id
+              ? updated
+              : {
+                  ...sess.detail,
+                  name: summary.name,
+                  path: summary.path,
+                  parent_path: summary.parent_path,
+                  revision: summary.revision,
+                  updated: summary.updated,
+                };
+          const purePathBump =
+            sess.status !== "conflict" && summary.revision === sess.revision + 1;
+          const nextBaseRev = purePathBump ? summary.revision : sess.baseRevision;
+          const nextStatus: LoadedScriptState["status"] =
+            !purePathBump &&
+            summary.revision !== sess.revision &&
+            sess.draftBody !== sess.savedBody
+              ? "conflict"
+              : sess.status;
+          const updatedSess: LoadedScriptState = {
+            ...sess,
+            detail: nextDetail,
+            baseRevision: nextBaseRev,
+            revision: summary.revision,
+            status: nextStatus,
+            error:
+              nextStatus === "conflict" && !sess.error
+                ? "目录重命名期间该文档也被其他成员修改，本地草稿已保留。"
+                : sess.error,
+          };
+          const persisted = buildPersistedScriptDraftForSession(updatedSess);
+          if (persisted) {
+            writePersistedScriptDraft(userId, workspace, docId, persisted);
+          } else {
+            clearPersistedScriptDraft(userId, workspace, docId);
+          }
+          next[docId] = updatedSess;
+        }
+        return changed ? next : prev;
+      });
       setTabs((prev) =>
-        prev.map((t) =>
-          t.kind === "script" && t.docId === item.id
-            ? { ...t, title: updated.name, path: updated.path }
-            : t,
-        ),
+        prev.map((t) => {
+          if (t.kind !== "script") return t;
+          const summary = summaryById.get(t.docId);
+          if (!summary) return t;
+          return t.title !== summary.name || t.path !== summary.path
+            ? { ...t, title: summary.name, path: summary.path }
+            : t;
+        }),
       );
     } catch (e) {
       onNotify(e instanceof Error ? e.message : "重命名失败");
     }
   };
 
+  const overwriteScriptConflict = useCallback(
+    async (docId: string) => {
+      const cur = sessionsRef.current[docId];
+      if (!cur) return;
+      const draftSnapshot = cur.draftBody;
+      try {
+        const fresh = await scriptApi.get(docId);
+        const updated = await scriptApi.update(docId, {
+          expected_revision: fresh.revision,
+          body_md: draftSnapshot,
+        });
+        commitSessions((prev) => {
+          const latest = prev[docId];
+          if (!latest) return prev;
+          const hasMore = latest.draftBody !== draftSnapshot;
+          if (hasMore) {
+            writePersistedScriptDraft(userId, workspace, docId, {
+              draftBody: latest.draftBody,
+              savedBody: draftSnapshot,
+              baseRevision: updated.revision,
+              updatedAt: Date.now(),
+            });
+          } else {
+            clearPersistedScriptDraft(userId, workspace, docId);
+          }
+          return {
+            ...prev,
+            [docId]: {
+              ...latest,
+              detail: updated,
+              savedBody: draftSnapshot,
+              baseRevision: updated.revision,
+              revision: updated.revision,
+              status: hasMore ? "dirty" : "saved",
+              error: "",
+            },
+          };
+        });
+        setItems((prev) =>
+          prev.map((item) =>
+            item.id === docId
+              ? {
+                  ...item,
+                  revision: updated.revision,
+                  char_count: updated.char_count,
+                  line_count: updated.line_count,
+                  preview: updated.preview,
+                  updated: updated.updated,
+                }
+              : item,
+          ),
+        );
+        onNotify("已以当前草稿覆盖保存剧本文档");
+      } catch (e) {
+        onNotify(e instanceof Error ? e.message : "覆盖保存失败");
+      }
+    },
+    [commitSessions, onNotify, userId, workspace],
+  );
+
+  const openDeleteDialog = (item: ScriptDocumentSummary) => {
+    const expectedRevision =
+      sessionsRef.current[item.id]?.revision ?? item.revision;
+    if (item.entry_type === "directory") {
+      const prefix = item.path.toLowerCase() + "/";
+      const desc = items.filter((x) =>
+        x.path.toLowerCase().startsWith(prefix),
+      );
+      const expectedDescendants = desc.length;
+      const expectedRevisionSum = desc.reduce(
+        (sum, x) => sum + (sessionsRef.current[x.id]?.revision ?? x.revision),
+        0,
+      );
+      setDeletingTarget({
+        item,
+        guards: {
+          expectedRevision,
+          expectedDescendants,
+          expectedRevisionSum,
+        },
+      });
+    } else {
+      setDeletingTarget({
+        item,
+        guards: { expectedRevision },
+      });
+    }
+  };
+
   const handleConfirmDelete = async () => {
-    if (!deletingItem) return;
-    const target = deletingItem;
-    setDeletingItem(null);
+    if (!deletingTarget) return;
+    const { item: target, guards } = deletingTarget;
+    setDeletingTarget(null);
     try {
-      await scriptApi.remove(target.id, target.entry_type === "directory");
+      await scriptApi.remove(
+        target.id,
+        target.entry_type === "directory",
+        guards,
+      );
       const deletedDocIds: string[] = [];
+      const targetPrefix = target.path.toLowerCase() + "/";
       for (const [docId, s] of Object.entries(sessionsRef.current)) {
         if (
           docId === target.id ||
-          s.detail.path.startsWith(target.path + "/")
+          s.detail.path.toLowerCase().startsWith(targetPrefix)
         ) {
           deletedDocIds.push(docId);
         }
@@ -1300,12 +1540,11 @@ export const ScriptWorkspace = forwardRef<
         clearPersistedScriptDraft(userId, workspace, docId);
       }
       if (deletedDocIds.length > 0) {
-        setSessions((prev) => {
+        commitSessions((prev) => {
           const next = { ...prev };
           for (const docId of deletedDocIds) {
             delete next[docId];
           }
-          sessionsRef.current = next;
           return next;
         });
       }
@@ -1314,7 +1553,8 @@ export const ScriptWorkspace = forwardRef<
       for (const tab of tabs) {
         if (
           tab.kind === "script" &&
-          (tab.docId === target.id || tab.path.startsWith(target.path + "/"))
+          (tab.docId === target.id ||
+            tab.path.toLowerCase().startsWith(targetPrefix))
         ) {
           closedKeys.add(tab.key);
         }
@@ -1326,6 +1566,7 @@ export const ScriptWorkspace = forwardRef<
       }
       onNotify(`已删除「${target.name}」`);
     } catch (e) {
+      await loadWorkspaceTree();
       onNotify(e instanceof Error ? e.message : "删除失败");
     }
   };
@@ -1451,7 +1692,12 @@ export const ScriptWorkspace = forwardRef<
     const curSession = sessionsRef.current[syncModalDocId];
     if (!curSession) return;
 
-    const stamped = stampScriptShotIds(curSession.draftBody);
+    const preferredLines = resolvePreferredShotIdLines(
+      canvasDoc,
+      syncModalState.breakdown,
+      options.explicitNodeBindings ?? {},
+    );
+    const stamped = stampScriptShotIds(curSession.draftBody, preferredLines);
     if (stamped.changed) {
       updateScriptDraft(syncModalDocId, stamped.markdown, false);
     }
@@ -1798,7 +2044,7 @@ export const ScriptWorkspace = forwardRef<
                         type="button"
                         title="删除"
                         aria-label={`删除 ${item.name}`}
-                        onClick={() => setDeletingItem(item)}
+                        onClick={() => openDeleteDialog(item)}
                       >
                         <Trash2 size={12} />
                       </button>
@@ -2010,24 +2256,22 @@ export const ScriptWorkspace = forwardRef<
                 onReloadScript={async (docId) => {
                   const fresh = await scriptApi.get(docId);
                   clearPersistedScriptDraft(userId, workspace, docId);
-                  setSessions((prev) => {
-                    const next: Record<string, LoadedScriptState> = {
-                      ...prev,
-                      [docId]: {
-                        detail: fresh,
-                        draftBody: fresh.body_md,
-                        savedBody: fresh.body_md,
-                        revision: fresh.revision,
-                        status: "saved",
-                        error: "",
-                        undoStack: [],
-                        redoStack: [],
-                      },
-                    };
-                    sessionsRef.current = next;
-                    return next;
-                  });
+                  commitSessions((prev) => ({
+                    ...prev,
+                    [docId]: {
+                      detail: fresh,
+                      draftBody: fresh.body_md,
+                      savedBody: fresh.body_md,
+                      baseRevision: fresh.revision,
+                      revision: fresh.revision,
+                      status: "saved",
+                      error: "",
+                      undoStack: [],
+                      redoStack: [],
+                    },
+                  }));
                 }}
+                onOverwriteScriptConflict={overwriteScriptConflict}
                 onOpenSyncModal={(docId) => setSyncModalDocId(docId)}
                 onEditCanvasNode={onEditCanvasNode}
                 onFocusCanvasNode={onFocusCanvasNode}
@@ -2117,24 +2361,22 @@ export const ScriptWorkspace = forwardRef<
                   onReloadScript={async (docId) => {
                     const fresh = await scriptApi.get(docId);
                     clearPersistedScriptDraft(userId, workspace, docId);
-                    setSessions((prev) => {
-                      const next: Record<string, LoadedScriptState> = {
-                        ...prev,
-                        [docId]: {
-                          detail: fresh,
-                          draftBody: fresh.body_md,
-                          savedBody: fresh.body_md,
-                          revision: fresh.revision,
-                          status: "saved",
-                          error: "",
-                          undoStack: [],
-                          redoStack: [],
-                        },
-                      };
-                      sessionsRef.current = next;
-                      return next;
-                    });
+                    commitSessions((prev) => ({
+                      ...prev,
+                      [docId]: {
+                        detail: fresh,
+                        draftBody: fresh.body_md,
+                        savedBody: fresh.body_md,
+                        baseRevision: fresh.revision,
+                        revision: fresh.revision,
+                        status: "saved",
+                        error: "",
+                        undoStack: [],
+                        redoStack: [],
+                      },
+                    }));
                   }}
+                  onOverwriteScriptConflict={overwriteScriptConflict}
                   onOpenSyncModal={(docId) => setSyncModalDocId(docId)}
                   onEditCanvasNode={onEditCanvasNode}
                   onFocusCanvasNode={onFocusCanvasNode}
@@ -2188,7 +2430,7 @@ export const ScriptWorkspace = forwardRef<
       </div>
 
       {/* Delete confirmation dialog */}
-      {deletingItem && (
+      {deletingTarget && (
         <div
           className="fm-modal-backdrop"
           role="dialog"
@@ -2196,9 +2438,9 @@ export const ScriptWorkspace = forwardRef<
           aria-label="确认删除文档"
         >
           <div className="fm-confirm-card">
-            <h3>删除「{deletingItem.name}」？</h3>
+            <h3>删除「{deletingTarget.item.name}」？</h3>
             <p>
-              {deletingItem.entry_type === "directory"
+              {deletingTarget.item.entry_type === "directory"
                 ? "将删除该文件夹及其内部剧本文档，画布上的已生成节点与媒体不受影响。"
                 : "删除该剧本文档后，画布上已同步的镜头节点仍会保留。"}
             </p>
@@ -2206,7 +2448,7 @@ export const ScriptWorkspace = forwardRef<
               <button
                 type="button"
                 className="secondary"
-                onClick={() => setDeletingItem(null)}
+                onClick={() => setDeletingTarget(null)}
               >
                 取消
               </button>
@@ -2258,7 +2500,7 @@ export const ScriptWorkspace = forwardRef<
               if (!sessionsRef.current[docId]) continue;
               const fresh = await scriptApi.get(docId).catch(() => null);
               if (!fresh) continue;
-              setSessions((prev) => {
+              commitSessions((prev) => {
                 const cur = prev[docId];
                 if (!cur) return prev;
                 const editedLocallyDuringReplace =
@@ -2270,17 +2512,21 @@ export const ScriptWorkspace = forwardRef<
                   } else {
                     writePersistedScriptDraft(userId, workspace, docId, {
                       draftBody: cur.draftBody,
-                      savedBody: fresh.body_md,
-                      baseRevision: fresh.revision,
+                      savedBody: cur.savedBody,
+                      baseRevision: cur.baseRevision,
+                      conflicted: true,
                       updatedAt: Date.now(),
                     });
                   }
-                  const nextMap: Record<string, LoadedScriptState> = {
+                  return {
                     ...prev,
                     [docId]: {
                       ...cur,
                       detail: fresh,
-                      savedBody: fresh.body_md,
+                      savedBody: isNowEqual ? fresh.body_md : cur.savedBody,
+                      baseRevision: isNowEqual
+                        ? fresh.revision
+                        : cur.baseRevision,
                       revision: fresh.revision,
                       status: isNowEqual ? "saved" : "conflict",
                       error: isNowEqual
@@ -2288,8 +2534,6 @@ export const ScriptWorkspace = forwardRef<
                         : "批量替换期间该文档有新的本地改动，已保留本地草稿，请核对后保存。",
                     },
                   };
-                  sessionsRef.current = nextMap;
-                  return nextMap;
                 }
 
                 clearPersistedScriptDraft(userId, workspace, docId);
@@ -2297,13 +2541,14 @@ export const ScriptWorkspace = forwardRef<
                   cur.savedBody !== fresh.body_md
                     ? [...cur.undoStack.slice(-50), cur.savedBody]
                     : cur.undoStack;
-                const nextMap: Record<string, LoadedScriptState> = {
+                return {
                   ...prev,
                   [docId]: {
                     ...cur,
                     detail: fresh,
                     draftBody: fresh.body_md,
                     savedBody: fresh.body_md,
+                    baseRevision: fresh.revision,
                     revision: fresh.revision,
                     status: "saved",
                     error: "",
@@ -2311,8 +2556,6 @@ export const ScriptWorkspace = forwardRef<
                     redoStack: [],
                   },
                 };
-                sessionsRef.current = nextMap;
-                return nextMap;
               });
             }
           }}
@@ -2417,6 +2660,7 @@ function EditorPaneBody({
   onTravelHistory,
   onFlushScript,
   onReloadScript,
+  onOverwriteScriptConflict,
   onOpenSyncModal,
   onEditCanvasNode,
   onFocusCanvasNode,
@@ -2442,6 +2686,7 @@ function EditorPaneBody({
     options?: { throwOnError?: boolean },
   ) => Promise<void>;
   onReloadScript: (docId: string) => Promise<void>;
+  onOverwriteScriptConflict: (docId: string) => Promise<void>;
   onOpenSyncModal: (docId: string) => void;
   onEditCanvasNode: (
     nodeId: string,
@@ -2503,6 +2748,7 @@ function EditorPaneBody({
       onRedo={() => onTravelHistory(tab.docId, true)}
       onFlush={(opts) => onFlushScript(tab.docId, opts)}
       onReload={() => onReloadScript(tab.docId)}
+      onOverwriteConflict={() => onOverwriteScriptConflict(tab.docId)}
       onOpenSync={() => onOpenSyncModal(tab.docId)}
       onFocusCanvasNode={onFocusCanvasNode}
       onOpenNodeInSplit={onOpenNodeInSplit}
@@ -2526,6 +2772,7 @@ function MarkdownScriptEditor({
   onRedo,
   onFlush,
   onReload,
+  onOverwriteConflict,
   onOpenSync,
   onFocusCanvasNode,
   onOpenNodeInSplit,
@@ -2545,6 +2792,7 @@ function MarkdownScriptEditor({
   onRedo: () => void;
   onFlush: (options?: { throwOnError?: boolean }) => Promise<void>;
   onReload: () => Promise<void>;
+  onOverwriteConflict: () => Promise<void>;
   onOpenSync: () => void;
   onFocusCanvasNode: (nodeId: string) => void;
   onOpenNodeInSplit: (nodeId: string) => void;
@@ -2884,13 +3132,22 @@ function MarkdownScriptEditor({
             {session.error ||
               "该剧本文档已被其他协作者修改，你的修改已保留在当前编辑器中。"}
           </span>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => void onReload()}
-          >
-            读取服务器最新版
-          </button>
+          <div style={{ display: "inline-flex", gap: 8, flexShrink: 0 }}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void onOverwriteConflict()}
+            >
+              以当前草稿覆盖保存
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void onReload()}
+            >
+              读取服务器最新版
+            </button>
+          </div>
         </div>
       )}
 

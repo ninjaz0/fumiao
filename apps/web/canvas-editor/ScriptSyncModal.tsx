@@ -46,7 +46,8 @@ export function ScriptSyncModal({
   const [selectedAnchors, setSelectedAnchors] = useState<Set<string>>(
     () => new Set(breakdown.shots.map((s) => s.anchor)),
   );
-  const [explicitBindings, setExplicitBindings] = useState<
+  // Keyed by existingVideoNodeId -> "__keep_separate__" | targetAnchor
+  const [ambiguousDecisions, setAmbiguousDecisions] = useState<
     Record<string, string>
   >({});
   const [busy, setBusy] = useState(false);
@@ -56,6 +57,14 @@ export function ScriptSyncModal({
     () =>
       detectAmbiguousShotMatches(canvasDoc, breakdown, [...selectedAnchors]),
     [canvasDoc, breakdown, selectedAnchors],
+  );
+
+  const hasUnresolvedAmbiguity = useMemo(
+    () =>
+      ambiguousMediaNodes.some(
+        (amb) => !ambiguousDecisions[amb.existingVideoNodeId],
+      ),
+    [ambiguousMediaNodes, ambiguousDecisions],
   );
 
   const toggleAnchor = (anchor: string) => {
@@ -81,6 +90,18 @@ export function ScriptSyncModal({
   }, [breakdown.shots, existingLinks, selectedAnchors]);
 
   const submit = async (switchAfterSync: boolean) => {
+    if (hasUnresolvedAmbiguity) {
+      setError(
+        "请先确认上方已出片视频节点的归属方式（选择保留原节点独立或绑定到指定镜号）",
+      );
+      return;
+    }
+    const explicitBindings: Record<string, string> = {};
+    for (const [videoNodeId, decision] of Object.entries(ambiguousDecisions)) {
+      if (decision && decision !== "__keep_separate__") {
+        explicitBindings[decision] = videoNodeId;
+      }
+    }
     setBusy(true);
     setError("");
     try {
@@ -211,10 +232,8 @@ export function ScriptSyncModal({
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {ambiguousMediaNodes.map((amb) => {
-                  const chosenAnchor =
-                    Object.entries(explicitBindings).find(
-                      ([, vid]) => vid === amb.existingVideoNodeId,
-                    )?.[0] || "";
+                  const chosenValue =
+                    ambiguousDecisions[amb.existingVideoNodeId] ?? "";
                   return (
                     <label
                       key={amb.existingVideoNodeId}
@@ -235,24 +254,30 @@ export function ScriptSyncModal({
                         {amb.previousAnchor ? ` (${amb.previousAnchor})` : ""}
                       </span>
                       <select
-                        value={chosenAnchor}
+                        aria-label={`确认已出片节点 ${amb.existingTitle} 的归属`}
+                        value={chosenValue}
                         disabled={busy}
                         onChange={(e) => {
-                          const targetAnchor = e.target.value;
-                          setExplicitBindings((prev) => {
-                            const cleaned = Object.fromEntries(
-                              Object.entries(prev).filter(
-                                ([, vid]) => vid !== amb.existingVideoNodeId,
-                              ),
-                            );
-                            if (targetAnchor) {
-                              cleaned[targetAnchor] = amb.existingVideoNodeId;
+                          const decision = e.target.value;
+                          setError("");
+                          setAmbiguousDecisions((prev) => {
+                            const next = { ...prev };
+                            if (decision && decision !== "__keep_separate__") {
+                              for (const [vid, val] of Object.entries(next)) {
+                                if (val === decision && vid !== amb.existingVideoNodeId) {
+                                  delete next[vid];
+                                }
+                              }
                             }
-                            return cleaned;
+                            next[amb.existingVideoNodeId] = decision;
+                            return next;
                           });
                         }}
                       >
-                        <option value="">不自动复用（保留原视频节点独立）</option>
+                        <option value="">— 请确认此视频的归属 —</option>
+                        <option value="__keep_separate__">
+                          保留原视频节点独立（不绑定新镜头）
+                        </option>
                         {amb.candidateAnchors.map((anc) => {
                           const shot = breakdown.shots.find(
                             (s) => s.anchor === anc,

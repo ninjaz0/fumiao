@@ -117,18 +117,42 @@ export const scriptApi = {
       "PUT",
     ),
 
-  remove: (id: string, recursive = false) =>
-    api<{ ok: boolean }>(
-      `/api/workspace/scripts/${encodeURIComponent(id)}${recursive ? "?recursive=true" : ""}`,
+  remove: (
+    id: string,
+    recursive = false,
+    guards?: {
+      expectedRevision?: number;
+      expectedDescendants?: number;
+      expectedRevisionSum?: number;
+    },
+  ) => {
+    const sp = new URLSearchParams();
+    if (recursive) sp.set("recursive", "true");
+    if (guards?.expectedRevision !== undefined) {
+      sp.set("expected_revision", String(guards.expectedRevision));
+    }
+    if (guards?.expectedDescendants !== undefined) {
+      sp.set("expected_descendants", String(guards.expectedDescendants));
+    }
+    if (guards?.expectedRevisionSum !== undefined) {
+      sp.set("expected_revision_sum", String(guards.expectedRevisionSum));
+    }
+    const qs = sp.toString();
+    return api<{ ok: boolean }>(
+      `/api/workspace/scripts/${encodeURIComponent(id)}${qs ? `?${qs}` : ""}`,
       undefined,
       "DELETE",
-    ),
+    );
+  },
 
   search: (query: string, caseSensitive = false) =>
     api<{
       scanned_files: number;
+      total_files?: number;
       scanned_canvases?: number;
+      total_canvases?: number;
       total_matches: number;
+      truncated?: boolean;
       files: ScriptSearchFileResult[];
       canvases?: ScriptSearchCanvasResult[];
     }>(

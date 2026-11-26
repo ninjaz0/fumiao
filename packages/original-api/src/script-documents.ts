@@ -924,6 +924,11 @@ export class OriginalScriptDocuments {
     key: string,
     recursive = false,
     selected?: string,
+    guards?: {
+      expectedRevision?: number;
+      expectedDescendants?: number;
+      expectedRevisionSum?: number;
+    },
   ) {
     return this.p.db.transaction(async (sql) => {
       const workspace = await this.resolveWorkspace(sql, user, selected);
@@ -936,12 +941,22 @@ export class OriginalScriptDocuments {
         403,
         "只有文档创建者或管理员可以删除该条目",
       );
+      if (
+        guards?.expectedRevision !== undefined &&
+        Number.isFinite(guards.expectedRevision)
+      ) {
+        requireValue(
+          Number(row.revision) === Number(guards.expectedRevision),
+          409,
+          "该条目在确认删除期间已被修改，已中止删除以保护新内容",
+        );
+      }
 
       if (row.entry_type === "directory") {
         const prefixPattern =
           String(row.path).toLowerCase().replace(/[%_\\]/g, "\\$&") + "/%";
         const { rows: descendants } = await sql.query(
-          `SELECT id, owner_id FROM workspace_script_documents
+          `SELECT id, owner_id, revision FROM workspace_script_documents
            WHERE workspace_id=$1 AND NOT deleted AND lower(path) LIKE $2 FOR UPDATE`,
           [workspace.id, prefixPattern],
         );
@@ -959,6 +974,31 @@ export class OriginalScriptDocuments {
             403,
             "文件夹中包含其他成员创建的文档，只有对应创建者或管理员可删除",
           );
+        }
+        if (
+          guards?.expectedDescendants !== undefined &&
+          Number.isFinite(guards.expectedDescendants) &&
+          descendants.length !== Number(guards.expectedDescendants)
+        ) {
+          throw new DomainError(
+            409,
+            "文件夹内条目在确认删除期间有新增或变动，已中止删除，请刷新后核对",
+          );
+        }
+        if (
+          guards?.expectedRevisionSum !== undefined &&
+          Number.isFinite(guards.expectedRevisionSum)
+        ) {
+          const actualSum = descendants.reduce(
+            (sum, d) => sum + Number(d.revision),
+            0,
+          );
+          if (actualSum !== Number(guards.expectedRevisionSum)) {
+            throw new DomainError(
+              409,
+              "文件夹内的子文档在确认删除期间已被更新，已中止删除以保护新内容",
+            );
+          }
         }
         if (descendants.length > 0) {
           await sql.query(
@@ -1005,6 +1045,8 @@ export class OriginalScriptDocuments {
 
       let remaining = MAX_SEARCH_MATCHES;
       let totalMatches = 0;
+      let scannedFiles = 0;
+      let scriptTruncated = false;
       const files: {
         id: string;
         path: string;
@@ -1016,6 +1058,7 @@ export class OriginalScriptDocuments {
       }[] = [];
 
       for (const row of sorted) {
+        scannedFiles++;
         const text = String(row.body_md ?? "");
         if (!text) continue;
         const { matches, truncated } = findLiteralMatches(
@@ -1027,6 +1070,8 @@ export class OriginalScriptDocuments {
         if (!matches.length) continue;
         totalMatches += matches.length;
         remaining = Math.max(0, remaining - matches.length);
+        const fileTrunc = truncated || remaining === 0;
+        if (fileTrunc) scriptTruncated = true;
         files.push({
           id: String(row.public_id),
           path: String(row.path),
@@ -1034,23 +1079,30 @@ export class OriginalScriptDocuments {
           revision: Number(row.revision),
           body_md: text,
           matches,
-          truncated: truncated || remaining === 0,
+          truncated: fileTrunc,
         });
-        if (remaining === 0) break;
+        if (remaining === 0) {
+          if (scannedFiles < sorted.length) scriptTruncated = true;
+          break;
+        }
       }
 
       return {
-        scanned_files: sorted.length,
+        scanned_files: scannedFiles,
+        total_files: sorted.length,
         total_matches: totalMatches,
         files,
         remaining,
+        truncated: scriptTruncated,
       };
     });
 
-    // Also scan all accessible canvases in the workspace
+    // Also scan all accessible canvases in the workspace (workspace cap is 200 canvases)
     const canvasList = await this.canvases.list(user, selected);
-    let remainingNodeBudget = Math.max(50, scriptScan.remaining);
+    let remainingNodeBudget = Math.max(200, scriptScan.remaining);
     let canvasMatchCount = 0;
+    let scannedCanvases = 0;
+    let canvasTruncated = canvasList.projects.length > 200;
     const canvases: {
       canvas_id: string;
       canvas_title: string;
@@ -1066,13 +1118,21 @@ export class OriginalScriptDocuments {
       }[];
     }[] = [];
 
-    for (const proj of canvasList.projects.slice(0, 100)) {
-      if (remainingNodeBudget <= 0) break;
+    for (const proj of canvasList.projects.slice(0, 200)) {
+      if (remainingNodeBudget <= 0) {
+        canvasTruncated = true;
+        break;
+      }
+      scannedCanvases++;
       const detail = await this.canvases.get(user, proj.id).catch(() => null);
       if (!detail?.document?.nodes?.length) continue;
       const hitNodes: (typeof canvases)[number]["nodes"] = [];
-      for (const node of detail.document.nodes) {
-        if (remainingNodeBudget <= 0) break;
+      for (let nIdx = 0; nIdx < detail.document.nodes.length; nIdx++) {
+        if (remainingNodeBudget <= 0) {
+          canvasTruncated = true;
+          break;
+        }
+        const node = detail.document.nodes[nIdx];
         const field: "text" | "prompt" =
           node.type === "text" || node.type === "sticky" ? "text" : "prompt";
         const currentText = String(
@@ -1083,11 +1143,17 @@ export class OriginalScriptDocuments {
           currentText,
           needle,
           body.case_sensitive,
-          Math.min(100, remainingNodeBudget),
+          Math.min(200, remainingNodeBudget),
         );
         if (!matches.length) continue;
         canvasMatchCount += matches.length;
         remainingNodeBudget = Math.max(0, remainingNodeBudget - matches.length);
+        const nodeTrunc =
+          truncated ||
+          (remainingNodeBudget === 0 &&
+            (nIdx < detail.document.nodes.length - 1 ||
+              scannedCanvases < Math.min(200, canvasList.projects.length)));
+        if (nodeTrunc) canvasTruncated = true;
         hitNodes.push({
           node_id: String(node.id),
           node_title: String(node.title ?? ""),
@@ -1095,7 +1161,7 @@ export class OriginalScriptDocuments {
           field,
           current_text: currentText,
           matches,
-          truncated: truncated || remainingNodeBudget === 0,
+          truncated: truncated || nodeTrunc,
         });
       }
       if (hitNodes.length > 0) {
@@ -1110,8 +1176,11 @@ export class OriginalScriptDocuments {
 
     return {
       scanned_files: scriptScan.scanned_files,
-      scanned_canvases: canvasList.projects.length,
+      total_files: scriptScan.total_files,
+      scanned_canvases: scannedCanvases,
+      total_canvases: canvasList.projects.length,
       total_matches: scriptScan.total_matches + canvasMatchCount,
+      truncated: scriptScan.truncated || canvasTruncated,
       files: scriptScan.files,
       canvases,
     };
@@ -1165,12 +1234,18 @@ export class OriginalScriptDocuments {
       }
       try {
         const saved = await this.p.db.transaction(async (sql) => {
+          const txWorkspace = await this.resolveWorkspace(sql, user, selected);
+          requireValue(
+            String(txWorkspace.id) === String(workspace.id),
+            403,
+            "工作区成员权限已变更",
+          );
           const row = await one(
             sql,
             `SELECT * FROM workspace_script_documents
              WHERE workspace_id=$1 AND public_id=$2 AND NOT deleted AND entry_type='file'
              FOR UPDATE`,
-            [workspace.id, item.id],
+            [txWorkspace.id, item.id],
           );
           if (!row) {
             throw new DomainError(404, "文档已删除或无权访问");
@@ -1241,6 +1316,12 @@ export class OriginalScriptDocuments {
               throw new DomainError(
                 409,
                 `节点「${node.title || node.id}」文字已变化，保留原文`,
+              );
+            }
+            if ([...patch.next_text].length > 12000) {
+              throw new DomainError(
+                422,
+                `节点「${node.title || node.id}」替换后超出 12000 字上限，已保留原文`,
               );
             }
             return { ...node, [field]: patch.next_text };

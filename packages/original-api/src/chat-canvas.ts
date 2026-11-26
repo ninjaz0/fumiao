@@ -92,11 +92,19 @@ export async function chatCanvasContext(
   };
 
   if (hasRefs) {
-    const references: { kind: "script" | "node"; label: string; content: string }[] = [];
-    let budget = 8000;
+    const TOTAL_REF_BUDGET = 12000;
+    const candidates: {
+      kind: "script" | "node";
+      label: string;
+      rawContent: string;
+    }[] = [];
+    const omitted_references: string[] = [];
 
     if (input.script_ids?.length) {
-      const uniqueIds = [...new Set(input.script_ids.filter(Boolean))].slice(0, 6);
+      const uniqueIds = [...new Set(input.script_ids.filter(Boolean))].slice(
+        0,
+        6,
+      );
       if (uniqueIds.length) {
         const { rows: scriptRows } = await sql.query(
           `SELECT public_id, path, body_md
@@ -112,38 +120,108 @@ export async function chatCanvasContext(
         );
         for (const sid of uniqueIds) {
           const sRow = byPublicId.get(sid);
-          if (!sRow || budget <= 0) continue;
-          const slice = String(sRow.body_md ?? "").slice(0, Math.min(3000, budget));
-          if (!slice) continue;
-          references.push({
+          if (!sRow) {
+            omitted_references.push(`剧本(${sid})：不存在或无权访问`);
+            continue;
+          }
+          const rawContent = String(sRow.body_md ?? "");
+          if (!rawContent) {
+            omitted_references.push(`剧本「${String(sRow.path)}」：内容为空`);
+            continue;
+          }
+          candidates.push({
             kind: "script",
             label: String(sRow.path),
-            content: slice,
+            rawContent,
           });
-          budget -= slice.length;
         }
       }
     }
 
     if (input.node_ids?.length) {
-      const uniqueNodeIds = [...new Set(input.node_ids.filter(Boolean))].slice(0, 6);
+      const uniqueNodeIds = [...new Set(input.node_ids.filter(Boolean))].slice(
+        0,
+        6,
+      );
       for (const nid of uniqueNodeIds) {
-        if (budget <= 0) break;
         const targetNode = document.nodes.find((n: any) => n.id === nid);
-        if (!targetNode) continue;
-        const rawContent = String(targetNode.text || targetNode.prompt || "");
-        const slice = rawContent.slice(0, Math.min(2000, budget));
-        references.push({
+        if (!targetNode) {
+          omitted_references.push(`节点(${nid})：已从画布移除`);
+          continue;
+        }
+        const rawContent = String(
+          targetNode.text || targetNode.prompt || "",
+        );
+        if (!rawContent) {
+          omitted_references.push(
+            `节点「${String(targetNode.title || targetNode.id)}」：内容为空`,
+          );
+          continue;
+        }
+        candidates.push({
           kind: "node",
           label: String(targetNode.title || targetNode.id),
-          content: slice,
+          rawContent,
         });
-        budget -= slice.length;
       }
     }
 
-    if (references.length > 0) {
+    // Two-pass water-filling budget allocation so explicit @ nodes are NEVER starved by long @ scripts
+    if (candidates.length > 0) {
+      const allocations = new Array<number>(candidates.length).fill(0);
+      const settled = new Array<boolean>(candidates.length).fill(false);
+      let remainingBudget = TOTAL_REF_BUDGET;
+      let unsettledCount = candidates.length;
+
+      while (unsettledCount > 0 && remainingBudget > 0) {
+        const fairShare = Math.max(
+          1,
+          Math.floor(remainingBudget / unsettledCount),
+        );
+        let anyShortSettled = false;
+        for (let i = 0; i < candidates.length; i++) {
+          if (settled[i]) continue;
+          const len = candidates[i].rawContent.length;
+          if (len <= fairShare) {
+            allocations[i] = len;
+            settled[i] = true;
+            remainingBudget -= len;
+            unsettledCount--;
+            anyShortSettled = true;
+          }
+        }
+        if (!anyShortSettled) {
+          for (let i = 0; i < candidates.length; i++) {
+            if (settled[i]) continue;
+            const share = Math.max(
+              1,
+              Math.floor(remainingBudget / unsettledCount),
+            );
+            allocations[i] = share;
+            settled[i] = true;
+            remainingBudget -= share;
+            unsettledCount--;
+          }
+          break;
+        }
+      }
+
+      const references = candidates.map((c, idx) => {
+        const limit = allocations[idx];
+        const truncated = c.rawContent.length > limit;
+        return {
+          kind: c.kind,
+          label: c.label,
+          content: c.rawContent.slice(0, limit),
+          truncated,
+          total_chars: c.rawContent.length,
+        };
+      });
       baseResult.references = references;
+    }
+
+    if (omitted_references.length > 0) {
+      baseResult.omitted_references = omitted_references;
     }
   }
 

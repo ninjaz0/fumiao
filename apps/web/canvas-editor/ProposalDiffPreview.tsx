@@ -36,6 +36,7 @@ export function ProposalDiffPreview({
   workspace,
   projectId,
   revision,
+  getCanvasRevision,
   canEditPolicy,
   onApplied,
   onOpenSkills,
@@ -45,6 +46,7 @@ export function ProposalDiffPreview({
   workspace: number;
   projectId: string;
   revision: number;
+  getCanvasRevision?: () => Promise<number>;
   canEditPolicy: boolean;
   onApplied: (canvas: any) => void;
   onOpenSkills: () => void;
@@ -121,8 +123,11 @@ export function ProposalDiffPreview({
     setError("");
     setNotice("");
     try {
+      const expectedRevision = getCanvasRevision
+        ? await getCanvasRevision()
+        : revision;
       const res = await req(`/api/canvases/${projectId}/proposals/${p.id}/apply`, {
-        expected_revision: revision,
+        expected_revision: expectedRevision,
       });
       onApplied(res.canvas);
       setNotice(`提案「${p.title}」已原子落图（不自动触发扣费生成）`);

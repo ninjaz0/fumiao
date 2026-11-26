@@ -777,11 +777,19 @@ class OriginalApi {
   }
   @Delete("api/workspace/scripts/:key")
   removeWorkspaceScript(@Req() req: AuthRequest, @Param("key") key: string) {
-    const recursive =
-      new URL(req.originalUrl, "http://localhost").searchParams.get(
-        "recursive",
-      ) === "true";
-    return this.scriptDocs.remove(req.actor, key, recursive, this.selected(req));
+    const sp = new URL(req.originalUrl, "http://localhost").searchParams;
+    const recursive = sp.get("recursive") === "true";
+    const parseOptInt = (name: string): number | undefined => {
+      const raw = sp.get(name);
+      if (raw === null || raw === "") return undefined;
+      const n = Number(raw);
+      return Number.isInteger(n) && n >= 0 ? n : undefined;
+    };
+    return this.scriptDocs.remove(req.actor, key, recursive, this.selected(req), {
+      expectedRevision: parseOptInt("expected_revision"),
+      expectedDescendants: parseOptInt("expected_descendants"),
+      expectedRevisionSum: parseOptInt("expected_revision_sum"),
+    });
   }
   @Put("api/favorites") favorites(
     @Req() req: AuthRequest,
