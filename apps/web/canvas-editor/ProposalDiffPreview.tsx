@@ -35,20 +35,16 @@ const POLICY_LABELS: Record<AgentPolicy, string> = {
 export function ProposalDiffPreview({
   workspace,
   projectId,
-  revision,
-  getCanvasRevision,
   canEditPolicy,
-  onApplied,
+  onApproveProposal,
   onOpenSkills,
   onClose,
   embedded = false,
 }: {
   workspace: number;
   projectId: string;
-  revision: number;
-  getCanvasRevision?: () => Promise<number>;
   canEditPolicy: boolean;
-  onApplied: (canvas: any) => void;
+  onApproveProposal: (proposalId: string) => Promise<{ conflict?: string }>;
   onOpenSkills: () => void;
   onClose: () => void;
   embedded?: boolean;
@@ -123,15 +119,13 @@ export function ProposalDiffPreview({
     setError("");
     setNotice("");
     try {
-      const expectedRevision = getCanvasRevision
-        ? await getCanvasRevision()
-        : revision;
-      const res = await req(`/api/canvases/${projectId}/proposals/${p.id}/apply`, {
-        expected_revision: expectedRevision,
-      });
-      onApplied(res.canvas);
-      setNotice(`提案「${p.title}」已原子落图（不自动触发扣费生成）`);
+      const res = await onApproveProposal(p.id);
       await load();
+      if (res?.conflict) {
+        setError(res.conflict);
+      } else {
+        setNotice(`提案「${p.title}」已原子落图（不自动触发扣费生成）`);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {

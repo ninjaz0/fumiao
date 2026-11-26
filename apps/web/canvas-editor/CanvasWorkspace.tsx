@@ -5334,7 +5334,6 @@ export function CanvasWorkspace({
         userId={initial.me.id}
         isAdmin={studio.me.role === "admin"}
         projectId={project.id}
-        revision={doc.revision.current}
         canEditPolicy={
           studio.me.role === "admin" || project.owner === studio.me.id
         }
@@ -5426,51 +5425,31 @@ export function CanvasWorkspace({
           textApplyQueue.current = queued.catch(() => {});
           return queued;
         }}
-        onProposalApplied={(appliedCanvas) => {
-          if (
-            appliedCanvas &&
-            typeof appliedCanvas === "object" &&
-            "document" in appliedCanvas &&
-            typeof appliedCanvas.revision === "number" &&
-            !doc.dirty
-          ) {
+        onApproveProposal={(proposalId) => {
+          const runApprove = async (): Promise<{ conflict?: string }> => {
+            const expectedRevision = await doc.flush();
+            const baselineSnapshot = JSON.stringify(doc.ref.current);
+            const res = await api<{ proposal: unknown; canvas: Project }>(
+              `/api/canvases/${project.id}/proposals/${proposalId}/apply`,
+              { expected_revision: expectedRevision },
+            );
             try {
-              doc.acceptRemote(
-                appliedCanvas as Project,
-                JSON.stringify(doc.ref.current),
-                "批准提案",
-              );
+              doc.acceptRemote(res.canvas, baselineSnapshot, "批准提案");
               notify("提案已批准并落图到当前画布");
-              return;
+              return {};
             } catch {
-              // Fall through to safe reload check
+              const conflictMsg =
+                "提案已在服务器落图，但批准期间画布有新的本地修改，已保留本地草稿并标记冲突，请先处理保存冲突。";
+              notify(conflictMsg);
+              return { conflict: conflictMsg };
             }
-          }
-          void (async () => {
-            let scriptsFlushed = false;
-            try {
-              await scriptWorkspaceRef.current?.flushAll();
-              scriptsFlushed = true;
-            } catch {
-              scriptsFlushed = false;
-            }
-            const hasUnsavedScripts =
-              scriptWorkspaceRef.current?.hasUnsavedChanges() ?? false;
-            const okScripts =
-              !hasUnsavedScripts ||
-              scriptsFlushed ||
-              (scriptWorkspaceRef.current?.rememberAll() ?? true);
-            const okCanvas = !doc.dirty || doc.remember();
-            if (!(okScripts && okCanvas)) {
-              notify(
-                "提案已在服务器落图；当前有未保存草稿且浏览器存储不可用，已跳过自动刷新以保护草稿",
-              );
-              return;
-            }
-            scriptWorkspaceRef.current?.prepareLeave();
-            doc.reload();
-            notify("提案已批准并落图到当前画布");
-          })();
+          };
+          const queued = textApplyQueue.current.then(runApprove);
+          textApplyQueue.current = queued.then(
+            () => {},
+            () => {},
+          );
+          return queued;
         }}
         onOpenSkills={() => setSkillsModal(true)}
         onNotify={notify}

@@ -29,7 +29,6 @@ export function FloatingCanvasAgent({
   userId,
   isAdmin,
   projectId,
-  revision,
   canEditPolicy,
   configureHref,
   onConfigureModels,
@@ -40,7 +39,7 @@ export function FloatingCanvasAgent({
   flushScripts,
   getCanvasRevision,
   onApplyChatToCanvas,
-  onProposalApplied,
+  onApproveProposal,
   onOpenSkills,
   onNotify,
 }: {
@@ -53,7 +52,6 @@ export function FloatingCanvasAgent({
   userId: number;
   isAdmin: boolean;
   projectId: string;
-  revision: number;
   canEditPolicy: boolean;
   configureHref?: string;
   onConfigureModels?: (
@@ -71,7 +69,7 @@ export function FloatingCanvasAgent({
     mode: "new" | "replace",
     options?: ApplyOptions,
   ) => Promise<void>;
-  onProposalApplied: (canvas: any) => void;
+  onApproveProposal: (proposalId: string) => Promise<{ conflict?: string }>;
   onOpenSkills: () => void;
   onNotify: (msg: string) => void;
 }) {
@@ -437,10 +435,8 @@ export function FloatingCanvasAgent({
             embedded
             workspace={workspace}
             projectId={projectId}
-            revision={revision}
-            getCanvasRevision={getCanvasRevision}
             canEditPolicy={canEditPolicy}
-            onApplied={onProposalApplied}
+            onApproveProposal={onApproveProposal}
             onOpenSkills={onOpenSkills}
             onClose={onClose}
           />

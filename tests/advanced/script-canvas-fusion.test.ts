@@ -6,8 +6,10 @@ import {
   buildPersistedScriptDraftForSession,
   detectAmbiguousShotMatches,
   extractScriptAnchorsMap,
+  nodeHasOutputOrActiveRun,
   parseScriptBreakdown,
   reconcileLoadedScriptDraft,
+  reconcileRenamedOpenScriptSession,
   replaceCanvasNodeText,
   resolveChatReplaceTarget,
   resolvePreferredShotIdLines,
@@ -15,7 +17,7 @@ import {
   stampScriptShotIds,
   syncScriptBreakdownToCanvas,
 } from "../../apps/web/canvas-editor/script-fusion.js";
-import { newNode, type Doc } from "../../apps/web/canvas-editor/types.js";
+import { newNode, type Doc, type Job } from "../../apps/web/canvas-editor/types.js";
 import { canvasesFixture } from "../helpers/canvases.js";
 
 const SAMPLE_SCRIPT = `# 《说谎者》· 分集剧本 EP01
@@ -979,4 +981,230 @@ test("buildCanvasLocalBackup preserves top-level canvas draft format and embeds 
     withScripts.unsaved_scripts?.[0]?.draft_body_md ?? "",
     /本地冲突草稿/,
   );
+});
+
+test("runs-derived completed/active jobs protect grid_preview nodes on mode switch and prevent positional video rebinding", () => {
+  const scriptV1 = [
+    "# EP05 任务列表产出保护",
+    "### S01 钟楼 夜 内",
+    "△林默推开钟楼木门。 <!-- fm-shot:sh_bell_01 -->",
+  ].join("\n");
+  const bd1 = parseScriptBreakdown(scriptV1, { docId: "505", docPath: "EP05.md" });
+
+  // 1. Sync in grid_preview mode -> grid node has media_id: null, active_job: null
+  const gridSynced = syncScriptBreakdownToCanvas(
+    { schemaVersion: 1, nodes: [], edges: [], shots: [] },
+    bd1,
+    { generationMode: "grid_preview", gridLayout: "3x3" },
+  );
+  const gridNode = gridSynced.document.nodes.find(
+    (n) => n.extra_params?.script_role === "grid_preview",
+  )!;
+  const videoNode = gridSynced.document.nodes.find((n) => n.type === "video")!;
+  assert.ok(gridNode && videoNode);
+  assert.equal(gridNode.media_id, null);
+  assert.equal(gridNode.active_job, null);
+  assert.equal(videoNode.media_id, null);
+  assert.equal(videoNode.active_job, null);
+
+  // Latest completed jobs exist ONLY in `runs` (exact CanvasWorkspace resolveNode auto-selection behavior!)
+  const runs: Job[] = [
+    {
+      id: 901,
+      canvas_node: gridNode.id,
+      owner: 1,
+      kind: "image",
+      status: "done",
+      result: "c".repeat(32),
+      note: "",
+      prompt: gridNode.prompt,
+      refs: [],
+      width: 1024,
+      height: 1024,
+      created: 1000,
+      seconds: 0,
+      quality: 0,
+      ratio: "16:9",
+      image_quality: "medium",
+      model: "gpt-image-2.6-sunburst",
+    },
+    {
+      id: 902,
+      canvas_node: videoNode.id,
+      owner: 1,
+      kind: "video",
+      status: "done",
+      result: "d".repeat(32),
+      note: "",
+      prompt: videoNode.prompt,
+      refs: [],
+      width: 1280,
+      height: 720,
+      created: 1001,
+      seconds: 5,
+      quality: 720,
+      ratio: "16:9",
+      image_quality: "",
+      model: "MiniMax H3",
+    },
+  ];
+  assert.equal(nodeHasOutputOrActiveRun(gridNode, runs), true);
+  assert.equal(nodeHasOutputOrActiveRun(videoNode, runs), true);
+
+  // 2. Re-sync switching to non-grid omni_ref WITH runs -> gridNode MUST be preserved (not deleted)!
+  const switchedToOmni = syncScriptBreakdownToCanvas(
+    gridSynced.document,
+    bd1,
+    { generationMode: "omni_ref", runs },
+  );
+  assert.ok(
+    switchedToOmni.document.nodes.some((n) => n.id === gridNode.id),
+    "grid_preview node with completed job in runs must NOT be deleted on mode switch",
+  );
+
+  // 3. Delete sh_bell_01 and add a brand-new shot sh_bell_99 in the same scene (sameSceneCount = 1):
+  // videoNode (whose media is only in `runs`) MUST require explicit confirmation and NEVER auto-rebind by position!
+  const scriptV2 = [
+    "# EP05 任务列表产出保护",
+    "### S01 钟楼 夜 内",
+    "△完全不同的新镜头：白鸽飞出钟楼窗外。 <!-- fm-shot:sh_bell_99 -->",
+  ].join("\n");
+  const bd2 = parseScriptBreakdown(scriptV2, { docId: "505", docPath: "EP05.md" });
+  const amb = detectAmbiguousShotMatches(
+    switchedToOmni.document,
+    bd2,
+    undefined,
+    runs,
+  );
+  assert.equal(amb.length, 1);
+  assert.equal(amb[0].existingVideoNodeId, videoNode.id);
+
+  const syncedWithoutExplicit = syncScriptBreakdownToCanvas(
+    switchedToOmni.document,
+    bd2,
+    { generationMode: "omni_ref", runs },
+  );
+  const oldVidAfter = syncedWithoutExplicit.document.nodes.find(
+    (n) => n.id === videoNode.id,
+  )!;
+  assert.equal(oldVidAfter.extra_params?.script_shot_id, "sh_bell_01");
+  assert.notEqual(syncedWithoutExplicit.anchorToNodeId["S01-01"], videoNode.id);
+});
+
+test("explicit node binding aligns script_shot_id on canvas nodes and partial selectedAnchors does not flag bound unselected shots", () => {
+  const initialScript = [
+    "# EP06 显式绑定与局部同步校验",
+    "### S01 书房 夜 内",
+    "△林默翻开日记本。 <!-- fm-shot:sh_old_01 -->",
+    "△林默吹灭蜡烛。 <!-- fm-shot:sh_keep_02 -->",
+    "△林默推窗望月。 <!-- fm-shot:sh_keep_03 -->",
+  ].join("\n");
+  const bdInit = parseScriptBreakdown(initialScript, {
+    docId: "606",
+    docPath: "EP06.md",
+  });
+  const initSync = syncScriptBreakdownToCanvas(
+    { schemaVersion: 1, nodes: [], edges: [], shots: [] },
+    bdInit,
+    { generationMode: "omni_ref" },
+  );
+  const v1Id = initSync.anchorToNodeId["S01-01"];
+  const v2Id = initSync.anchorToNodeId["S01-02"];
+  const v3Id = initSync.anchorToNodeId["S01-03"];
+  const withMedia: Doc = {
+    ...initSync.document,
+    nodes: initSync.document.nodes.map((n) =>
+      n.type === "video" ? { ...n, media_id: "e".repeat(32) } : n,
+    ),
+  };
+
+  // 1. Partial selection ["S01-01"] must NOT report bound unselected S01-02 / S01-03 media nodes as ambiguous!
+  const partialAmb = detectAmbiguousShotMatches(withMedia, bdInit, ["S01-01"]);
+  assert.deepEqual(partialAmb, []);
+
+  // 2. Rewrite S01-01 with a new persistent comment <!-- fm-shot:sh_new_01 --> and explicitly bind old v1Id to S01-01
+  const rewrittenScript = [
+    "# EP06 显式绑定与局部同步校验",
+    "### S01 书房 夜 内",
+    "△全新的第一镜：特写铜钥匙插入抽屉锁孔。 <!-- fm-shot:sh_new_01 -->",
+    "△林默吹灭蜡烛。 <!-- fm-shot:sh_keep_02 -->",
+    "△林默推窗望月。 <!-- fm-shot:sh_keep_03 -->",
+  ].join("\n");
+  const bdRewritten = parseScriptBreakdown(rewrittenScript, {
+    docId: "606",
+    docPath: "EP06.md",
+  });
+  const ambBeforeExplicit = detectAmbiguousShotMatches(withMedia, bdRewritten, [
+    "S01-01",
+  ]);
+  assert.equal(ambBeforeExplicit.length, 1);
+  assert.equal(ambBeforeExplicit[0].existingVideoNodeId, v1Id);
+
+  const boundSync = syncScriptBreakdownToCanvas(withMedia, bdRewritten, {
+    generationMode: "omni_ref",
+    selectedAnchors: ["S01-01"],
+    explicitNodeBindings: { "S01-01": v1Id },
+  });
+  const v1After = boundSync.document.nodes.find((n) => n.id === v1Id)!;
+  assert.equal(
+    v1After.extra_params?.script_shot_id,
+    "sh_new_01",
+    "explicit binding must align canvas node script_shot_id with the script shot's sh_new_01",
+  );
+  // Order of shots [v1Id, v2Id, v3Id] preserved in-place
+  assert.deepEqual(boundSync.document.shots, [v1Id, v2Id, v3Id]);
+
+  // 3. Subsequent sync WITHOUT explicitNodeBindings has ZERO ambiguity and reuses v1Id cleanly!
+  assert.deepEqual(
+    detectAmbiguousShotMatches(boundSync.document, bdRewritten),
+    [],
+  );
+  const resyncAfterExplicit = syncScriptBreakdownToCanvas(
+    boundSync.document,
+    bdRewritten,
+    { generationMode: "omni_ref" },
+  );
+  assert.equal(resyncAfterExplicit.anchorToNodeId["S01-01"], v1Id);
+  assert.equal(resyncAfterExplicit.createdNodeIds.length, 0);
+});
+
+test("reconcileRenamedOpenScriptSession refreshes clean session and flags conflict on dirty session when collaborator edited before directory rename", () => {
+  // User A has clean r1 open; Collaborator B saved r2 ("body_r2"); User A renamed directory -> r3 ("body_r2")
+  const cleanReconciled = reconcileRenamedOpenScriptSession(
+    {
+      draftBody: "body_r1",
+      savedBody: "body_r1",
+      baseRevision: 1,
+      revision: 1,
+      status: "saved",
+      error: "",
+    },
+    { revision: 3, body_md: "body_r2" },
+  );
+  assert.deepEqual(cleanReconciled, {
+    draftBody: "body_r2",
+    savedBody: "body_r2",
+    baseRevision: 3,
+    revision: 3,
+    status: "saved",
+    error: "",
+  });
+
+  // User A had unsaved local draft at r1 ("draft_A_on_r1"); Collaborator B saved r2 ("body_r2"); directory rename -> r3
+  const dirtyReconciled = reconcileRenamedOpenScriptSession(
+    {
+      draftBody: "draft_A_on_r1",
+      savedBody: "body_r1",
+      baseRevision: 1,
+      revision: 1,
+      status: "dirty",
+      error: "",
+    },
+    { revision: 3, body_md: "body_r2" },
+  );
+  assert.equal(dirtyReconciled.status, "conflict");
+  assert.equal(dirtyReconciled.draftBody, "draft_A_on_r1");
+  assert.equal(dirtyReconciled.savedBody, "body_r2");
+  assert.equal(dirtyReconciled.baseRevision, 1);
+  assert.equal(dirtyReconciled.revision, 3);
 });

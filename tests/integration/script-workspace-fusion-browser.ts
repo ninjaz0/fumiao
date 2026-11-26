@@ -339,11 +339,34 @@ try {
 
     await page.setViewportSize({ width: 1360, height: 860 });
 
-    // 1b. Open child script inside folderOrigName, rename folderOrigName -> folderRenamedName, and verify subsequent edit saves cleanly!
+    // 1b. Two-user directory rename concurrency check:
+    // User A opens clean child script at r1 -> Collaborator B saves r2 -> User A renames parent folder (child becomes r3).
+    // User A's clean session MUST refresh to B's r2 body so A's next edit (r4) preserves B's r2 instead of overwriting it!
     await page.getByRole("treeitem").filter({ hasText: childFileName }).dblclick();
     await expect(
       page.getByRole("tab", { selected: true }).filter({ hasText: childFileName }),
     ).toBeVisible();
+    await page.getByRole("button", { name: "原文", exact: true }).click();
+    const sourceEditor = page.getByRole("textbox", {
+      name: "剧本文档原文编辑器",
+    });
+    await expect(sourceEditor).toHaveValue(/△翻阅旧卷宗。/);
+
+    // Collaborator B commits r2 on childDoc before User A renames the parent folder
+    const collabPutR2 = await context.request.put(
+      `/api/workspace/scripts/${childDoc.id}`,
+      {
+        headers,
+        data: {
+          expected_revision: childDoc.revision,
+          body_md: `# EP03 支线\n\n### S01 档案室 夜 内\n\n△翻阅旧卷宗。\n△协作者B在目录改名前提交的r2正文。`,
+        },
+      },
+    );
+    assert.equal(collabPutR2.status(), 200, await collabPutR2.text());
+    const childR2 = await collabPutR2.json();
+    assert.equal(childR2.revision, 2);
+
     const folderRow = page
       .getByRole("treeitem")
       .filter({ hasText: folderOrigName })
@@ -359,12 +382,14 @@ try {
     await expect(
       page.getByRole("treeitem").filter({ hasText: folderRenamedName }).first(),
     ).toBeVisible();
-    await page.getByRole("button", { name: "原文", exact: true }).click();
-    const sourceEditor = page.getByRole("textbox", {
-      name: "剧本文档原文编辑器",
+
+    // Clean session in User A's browser must refresh to Collaborator B's r2 body at r3!
+    await expect(sourceEditor).toHaveValue(/协作者B在目录改名前提交的r2正文/, {
+      timeout: 5000,
     });
+    const refreshedChildVal = await sourceEditor.inputValue();
     await sourceEditor.fill(
-      `# EP03 支线\n\n### S01 档案室 夜 内\n\n△目录改名后继续编辑子文件并正常保存。`,
+      `${refreshedChildVal}\n△用户A在目录改名后继续追加的r4正文。`,
     );
     await expect(page.getByText(/✓ 已保存/).first()).toBeVisible({
       timeout: 5000,
@@ -374,11 +399,13 @@ try {
         headers,
       })
     ).json();
+    assert.equal(childAfterDirRename.revision, 4);
     assert.equal(
       childAfterDirRename.path,
       `${folderRenamedName}/${childFileName}`,
     );
-    assert.match(childAfterDirRename.body_md, /目录改名后继续编辑子文件并正常保存/);
+    assert.match(childAfterDirRename.body_md, /协作者B在目录改名前提交的r2正文/);
+    assert.match(childAfterDirRename.body_md, /用户A在目录改名后继续追加的r4正文/);
 
     // 2. Make an unsaved local draft in fileBName, then batch-replace heroBefore -> heroAfter across workspace
     failDocBSave = true;
@@ -544,10 +571,99 @@ try {
       "typing after 查看源剧本 must not reset cursor position",
     );
 
-    // Wait for auto-save of 01_EP01.md before testing 409 conflict + guarded leave
+    // Wait for auto-save of 01_EP01.md AND canvasA flush before testing delayed proposal approval + 409 conflict
     await expect(page.getByText(/✓ 已保存/).first()).toBeVisible({
       timeout: 5000,
     });
+    await page.getByRole("tab", { name: "画布" }).click();
+    await expect(page.locator(".canvas-header")).toContainText("已保存", {
+      timeout: 5000,
+    });
+
+    // 3b. Proposal approval concurrency check:
+    // While POST /proposals/:id/apply response is in flight, User A edits canvasA locally.
+    // Pre-request snapshot must detect the concurrent edit, preserve local draft without doc.reload(), and restore draft across reopen!
+    const latestCanvasBeforeProp: Project = await (
+      await context.request.get(`/api/canvases/${canvasA.id}`, { headers })
+    ).json();
+    const createPropRes = await context.request.post(
+      `/api/canvases/${canvasA.id}/proposals`,
+      {
+        headers,
+        data: {
+          title: `提案并发测试_${runTag}`,
+          summary: "验证审批延迟响应期间画布编辑不被覆盖",
+          base_revision: latestCanvasBeforeProp.revision,
+          operations: [
+            {
+              op: "add_node",
+              temp_id: "prop_tmp_1",
+              type: "text",
+              title: "提案新增场记节点",
+              x: 680,
+              y: 120,
+              text: "由提案原子新增的内容",
+            },
+          ],
+        },
+      },
+    );
+    assert.equal(createPropRes.status(), 200, await createPropRes.text());
+
+    let releaseProposalApply: (() => void) | null = null;
+    await page.route(
+      `**/api/canvases/${canvasA.id}/proposals/*/apply`,
+      async (route) => {
+        const upstream = await route.fetch();
+        await new Promise<void>((resolve) => {
+          releaseProposalApply = resolve;
+        });
+        await route.fulfill({ response: upstream });
+      },
+    );
+
+    await page.getByRole("button", { name: "画布 Agent 提案箱" }).click();
+    await expect(page.getByText(`提案并发测试_${runTag}`)).toBeVisible();
+    await page.getByRole("button", { name: "批准落图" }).click();
+    await expect
+      .poll(() => Boolean(releaseProposalApply), { timeout: 5000 })
+      .toBe(true);
+
+    // Edit canvas title while proposal apply response is still held in flight!
+    const concurrentCanvasTitle = `${canvasA.title}_审批中本地修改`;
+    const canvasTitleInput = page.getByRole("textbox", { name: "画布名称" });
+    await canvasTitleInput.fill(concurrentCanvasTitle);
+    await canvasTitleInput.press("Enter");
+
+    releaseProposalApply!();
+    await expect(page.locator(".canvas-header")).toContainText("保存冲突", {
+      timeout: 5000,
+    });
+    await expect(canvasTitleInput).toHaveValue(concurrentCanvasTitle);
+    await expect(
+      page.getByText(/批准提案期间画布发生了修改|已保留本地草稿并标记冲突/).first(),
+    ).toBeVisible();
+
+    // Reopen editPath: persisted localStorage draft must restore concurrentCanvasTitle in conflict state (not wiped by doc.reload()!)
+    await page.goto(editPath);
+    await expect(page.getByRole("textbox", { name: "画布名称" })).toHaveValue(
+      concurrentCanvasTitle,
+    );
+    await expect(page.locator(".canvas-header")).toContainText("保存冲突");
+
+    // Resolve canvas conflict cleanly via "重新载入" before running step 4 script conflict tests
+    await page.getByRole("button", { name: "重新载入", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "重新载入画布？" })
+      .getByRole("button", { name: "重新载入", exact: true })
+      .click();
+    await expect(page.getByRole("textbox", { name: "画布名称" })).toHaveValue(
+      canvasA.title,
+      { timeout: 10000 },
+    );
+    await page.getByRole("tab", { name: "文档" }).click();
+    await page.getByRole("treeitem").filter({ hasText: fileAName }).dblclick();
+    await page.getByRole("button", { name: "原文", exact: true }).click();
 
     // 4. Advance server revision of 01_EP01.md to create a 409 conflict, test Cmd+S & guarded leave + draft restore
     const latestDocA = await (

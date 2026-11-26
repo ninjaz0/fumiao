@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chatCanvasContext } from "@fumiao/original-api/chat-canvas.js";
-import { OriginalScriptDocuments } from "@fumiao/original-api/script-documents.js";
+import {
+  OriginalScriptDocuments,
+  computeScriptDescendantsSignature as serverDescendantsSig,
+} from "@fumiao/original-api/script-documents.js";
 import { chatContext } from "@fumiao/platform/chat-context.js";
+import { computeScriptDescendantsSignature as clientDescendantsSig } from "../../apps/web/canvas-editor/script-fusion.js";
 import { canvasesFixture } from "../helpers/canvases.js";
 
 test("Workspace script documents support CRUD, folder tree relocation, and suite templates", async () => {
@@ -599,6 +603,70 @@ test("Unicode case-insensitive search, cross-canvas node search/replace, and ser
     const stillIntact = await scripts.get(f.member, lateSibling.id, ws);
     assert.equal(stillIntact.revision, updatedSibling.revision);
     assert.equal(stillIntact.body_md, "确认弹窗打开后刚保存的新内容");
+
+    // 6b. Same descendant count AND same revision sum (delete a(r1) + create b(r1)) must STILL reject recursive delete via expectedDescendantSig!
+    const swapDir = await scripts.create(
+      f.member,
+      { path: "签名保护目录", entry_type: "directory" },
+      ws,
+    );
+    const childA = await scripts.create(
+      f.member,
+      {
+        path: "签名保护目录/a.md",
+        doc_kind: "script",
+        body_md: "旧子剧本 A(r1)",
+      },
+      ws,
+    );
+    const sigWhenDialogOpened = clientDescendantsSig([
+      { id: childA.id, revision: childA.revision },
+    ]);
+    assert.equal(
+      sigWhenDialogOpened,
+      serverDescendantsSig([{ id: childA.id, revision: childA.revision }]),
+      "client and server descendant signatures must match bit-for-bit",
+    );
+
+    // Another tab deletes a(r1) and creates b(r1) inside the same directory (count=1, revisionSum=1 unchanged!)
+    await scripts.remove(f.member, childA.id, false, ws);
+    const childB = await scripts.create(
+      f.member,
+      {
+        path: "签名保护目录/b.md",
+        doc_kind: "script",
+        body_md: "确认期间新建的子剧本 B(r1)",
+      },
+      ws,
+    );
+    assert.equal(childB.revision, 1);
+
+    await assert.rejects(
+      () =>
+        scripts.remove(f.member, swapDir.id, true, ws, {
+          expectedRevision: swapDir.revision,
+          expectedDescendants: 1,
+          expectedRevisionSum: 1,
+          expectedDescendantSig: sigWhenDialogOpened,
+        }),
+      (err: any) =>
+        err?.status === 409 && /子文档集合或版本/.test(String(err?.message)),
+    );
+    // Verify childB survived untouched!
+    const childBIntact = await scripts.get(f.member, childB.id, ws);
+    assert.equal(childBIntact.body_md, "确认期间新建的子剧本 B(r1)");
+
+    // Refreshing confirmation signature with childB now deletes cleanly
+    const refreshedSig = clientDescendantsSig([
+      { id: childB.id, revision: childB.revision },
+    ]);
+    const deletedSwapDir = await scripts.remove(f.member, swapDir.id, true, ws, {
+      expectedRevision: swapDir.revision,
+      expectedDescendants: 1,
+      expectedRevisionSum: 1,
+      expectedDescendantSig: refreshedSig,
+    });
+    assert.equal(deletedSwapDir.ok, true);
 
     // 7. Cross-canvas search scans > 100 canvases (up to 200) and reports accurate scanned_canvases / total_canvases
     // Note: original per-workspace canvas limit is 100 (`canvases.ts`); create up to 96 more canvases (total ~98 in ws) and verify full scan + accurate counts!

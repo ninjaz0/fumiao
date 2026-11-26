@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { DomainError, requireValue } from "@fumiao/platform/security.js";
@@ -19,6 +19,16 @@ import {
 
 const MAX_DOCS_PER_WORKSPACE = 500;
 const MAX_SEARCH_MATCHES = 500;
+
+export function computeScriptDescendantsSignature(
+  entries: ReadonlyArray<{ id: string; revision: number }>,
+): string {
+  const canonical = entries
+    .map((e) => `${e.id}:${Number(e.revision)}`)
+    .sort()
+    .join(",");
+  return createHash("sha256").update(canonical, "utf8").digest("hex");
+}
 
 export type ScriptDocKind =
   | "outline"
@@ -928,6 +938,7 @@ export class OriginalScriptDocuments {
       expectedRevision?: number;
       expectedDescendants?: number;
       expectedRevisionSum?: number;
+      expectedDescendantSig?: string;
     },
   ) {
     return this.p.db.transaction(async (sql) => {
@@ -956,7 +967,7 @@ export class OriginalScriptDocuments {
         const prefixPattern =
           String(row.path).toLowerCase().replace(/[%_\\]/g, "\\$&") + "/%";
         const { rows: descendants } = await sql.query(
-          `SELECT id, owner_id, revision FROM workspace_script_documents
+          `SELECT id, public_id, owner_id, revision FROM workspace_script_documents
            WHERE workspace_id=$1 AND NOT deleted AND lower(path) LIKE $2 FOR UPDATE`,
           [workspace.id, prefixPattern],
         );
@@ -997,6 +1008,23 @@ export class OriginalScriptDocuments {
             throw new DomainError(
               409,
               "文件夹内的子文档在确认删除期间已被更新，已中止删除以保护新内容",
+            );
+          }
+        }
+        if (
+          typeof guards?.expectedDescendantSig === "string" &&
+          guards.expectedDescendantSig.trim() !== ""
+        ) {
+          const actualSig = computeScriptDescendantsSignature(
+            descendants.map((d) => ({
+              id: String(d.public_id),
+              revision: Number(d.revision),
+            })),
+          );
+          if (actualSig !== guards.expectedDescendantSig.trim().toLowerCase()) {
+            throw new DomainError(
+              409,
+              "文件夹内子文档集合或版本在确认删除期间已发生变化，已中止删除，请刷新后核对",
             );
           }
         }

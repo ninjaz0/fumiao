@@ -15,10 +15,11 @@ import {
   type ScriptBreakdown,
   type ScriptSyncOptions,
 } from "./script-fusion";
-import type { CanvasGenerationMode, Doc } from "./types";
+import type { CanvasGenerationMode, Doc, Job } from "./types";
 
 export function ScriptSyncModal({
   canvasDoc,
+  runs = [],
   breakdown,
   existingLinks,
   defaultVideoModel,
@@ -27,6 +28,7 @@ export function ScriptSyncModal({
   onClose,
 }: {
   canvasDoc: Doc;
+  runs?: Job[];
   breakdown: ScriptBreakdown;
   existingLinks: Record<string, ScriptAnchorLink>;
   defaultVideoModel: string;
@@ -55,8 +57,13 @@ export function ScriptSyncModal({
 
   const ambiguousMediaNodes = useMemo(
     () =>
-      detectAmbiguousShotMatches(canvasDoc, breakdown, [...selectedAnchors]),
-    [canvasDoc, breakdown, selectedAnchors],
+      detectAmbiguousShotMatches(
+        canvasDoc,
+        breakdown,
+        [...selectedAnchors],
+        runs,
+      ),
+    [canvasDoc, breakdown, selectedAnchors, runs],
   );
 
   const hasUnresolvedAmbiguity = useMemo(

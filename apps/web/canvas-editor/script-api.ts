@@ -124,6 +124,7 @@ export const scriptApi = {
       expectedRevision?: number;
       expectedDescendants?: number;
       expectedRevisionSum?: number;
+      expectedDescendantSig?: string;
     },
   ) => {
     const sp = new URLSearchParams();
@@ -136,6 +137,9 @@ export const scriptApi = {
     }
     if (guards?.expectedRevisionSum !== undefined) {
       sp.set("expected_revision_sum", String(guards.expectedRevisionSum));
+    }
+    if (guards?.expectedDescendantSig) {
+      sp.set("expected_descendant_sig", guards.expectedDescendantSig);
     }
     const qs = sp.toString();
     return api<{ ok: boolean }>(

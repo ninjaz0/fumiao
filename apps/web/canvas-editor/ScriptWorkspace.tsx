@@ -62,9 +62,11 @@ import {
 } from "./script-api";
 import {
   buildPersistedScriptDraftForSession,
+  computeScriptDescendantsSignature,
   extractScriptAnchorsMap,
   parseScriptBreakdown,
   reconcileLoadedScriptDraft,
+  reconcileRenamedOpenScriptSession,
   resolvePreferredShotIdLines,
   stampScriptShotIds,
   stripShotCommentMarkers,
@@ -541,6 +543,7 @@ export const ScriptWorkspace = forwardRef<
       expectedRevision: number;
       expectedDescendants?: number;
       expectedRevisionSum?: number;
+      expectedDescendantSig?: string;
     };
   } | null>(null);
   const [suiteBusy, setSuiteBusy] = useState(false);
@@ -1363,6 +1366,7 @@ export const ScriptWorkspace = forwardRef<
           return next;
         });
       }
+      const needsRemoteReconcileIds: string[] = [];
       commitSessions((prev) => {
         let changed = false;
         const next: Record<string, LoadedScriptState> = { ...prev };
@@ -1371,44 +1375,70 @@ export const ScriptWorkspace = forwardRef<
           if (!summary) continue;
           if (docId !== item.id && summary.path === sess.detail.path) continue;
           changed = true;
-          const nextDetail: ScriptDocumentDetail =
-            docId === item.id
-              ? updated
-              : {
-                  ...sess.detail,
-                  name: summary.name,
-                  path: summary.path,
-                  parent_path: summary.parent_path,
-                  revision: summary.revision,
-                  updated: summary.updated,
-                };
+          if (docId === item.id) {
+            const reconciled = reconcileRenamedOpenScriptSession(sess, updated);
+            const updatedSess: LoadedScriptState = {
+              ...sess,
+              detail: updated,
+              draftBody: reconciled.draftBody,
+              savedBody: reconciled.savedBody,
+              baseRevision: reconciled.baseRevision,
+              revision: reconciled.revision,
+              status: reconciled.status,
+              error: reconciled.error,
+            };
+            const persisted = buildPersistedScriptDraftForSession(updatedSess);
+            if (persisted) {
+              writePersistedScriptDraft(userId, workspace, docId, persisted);
+            } else {
+              clearPersistedScriptDraft(userId, workspace, docId);
+            }
+            next[docId] = updatedSess;
+            continue;
+          }
+
           const purePathBump =
             sess.status !== "conflict" && summary.revision === sess.revision + 1;
-          const nextBaseRev = purePathBump ? summary.revision : sess.baseRevision;
-          const nextStatus: LoadedScriptState["status"] =
-            !purePathBump &&
-            summary.revision !== sess.revision &&
-            sess.draftBody !== sess.savedBody
-              ? "conflict"
-              : sess.status;
-          const updatedSess: LoadedScriptState = {
-            ...sess,
-            detail: nextDetail,
-            baseRevision: nextBaseRev,
-            revision: summary.revision,
-            status: nextStatus,
-            error:
-              nextStatus === "conflict" && !sess.error
-                ? "目录重命名期间该文档也被其他成员修改，本地草稿已保留。"
-                : sess.error,
-          };
-          const persisted = buildPersistedScriptDraftForSession(updatedSess);
-          if (persisted) {
-            writePersistedScriptDraft(userId, workspace, docId, persisted);
-          } else {
-            clearPersistedScriptDraft(userId, workspace, docId);
+          if (purePathBump) {
+            const updatedSess: LoadedScriptState = {
+              ...sess,
+              detail: {
+                ...sess.detail,
+                name: summary.name,
+                path: summary.path,
+                parent_path: summary.parent_path,
+                revision: summary.revision,
+                updated: summary.updated,
+              },
+              baseRevision: summary.revision,
+              revision: summary.revision,
+            };
+            const persisted = buildPersistedScriptDraftForSession(updatedSess);
+            if (persisted) {
+              writePersistedScriptDraft(userId, workspace, docId, persisted);
+            } else {
+              clearPersistedScriptDraft(userId, workspace, docId);
+            }
+            next[docId] = updatedSess;
+            continue;
           }
-          next[docId] = updatedSess;
+
+          // Non-single-step revision jump (e.g., collaborator modified descendant before directory rename) or existing conflict:
+          // Do NOT advance sess.revision before fetching authoritative server body_md!
+          needsRemoteReconcileIds.push(docId);
+          const provisionalStatus: LoadedScriptState["status"] =
+            sess.draftBody !== sess.savedBody ? "conflict" : sess.status;
+          next[docId] = {
+            ...sess,
+            detail: {
+              ...sess.detail,
+              name: summary.name,
+              path: summary.path,
+              parent_path: summary.parent_path,
+              updated: summary.updated,
+            },
+            status: provisionalStatus,
+          };
         }
         return changed ? next : prev;
       });
@@ -1422,6 +1452,68 @@ export const ScriptWorkspace = forwardRef<
             : t;
         }),
       );
+      if (needsRemoteReconcileIds.length > 0) {
+        await Promise.all(
+          needsRemoteReconcileIds.map(async (docId) => {
+            try {
+              const remoteDetail = await scriptApi.get(docId);
+              commitSessions((prev) => {
+                const cur = prev[docId];
+                if (!cur) return prev;
+                const reconciled = reconcileRenamedOpenScriptSession(
+                  cur,
+                  remoteDetail,
+                );
+                const nextUndo =
+                  reconciled.status === "saved" &&
+                  cur.savedBody !== remoteDetail.body_md
+                    ? [...cur.undoStack.slice(-50), cur.savedBody]
+                    : cur.undoStack;
+                const updatedSess: LoadedScriptState = {
+                  ...cur,
+                  detail: remoteDetail,
+                  draftBody: reconciled.draftBody,
+                  savedBody: reconciled.savedBody,
+                  baseRevision: reconciled.baseRevision,
+                  revision: reconciled.revision,
+                  status: reconciled.status,
+                  error: reconciled.error,
+                  undoStack: nextUndo,
+                };
+                const persisted =
+                  buildPersistedScriptDraftForSession(updatedSess);
+                if (persisted) {
+                  writePersistedScriptDraft(
+                    userId,
+                    workspace,
+                    docId,
+                    persisted,
+                  );
+                } else {
+                  clearPersistedScriptDraft(userId, workspace, docId);
+                }
+                return { ...prev, [docId]: updatedSess };
+              });
+            } catch {
+              commitSessions((prev) => {
+                const cur = prev[docId];
+                if (!cur) return prev;
+                const nextStatus: LoadedScriptState["status"] =
+                  cur.draftBody !== cur.savedBody ? "conflict" : "error";
+                return {
+                  ...prev,
+                  [docId]: {
+                    ...cur,
+                    status: nextStatus,
+                    error:
+                      "目录重命名后同步子文档最新版本失败，请重新加载该文档",
+                  },
+                };
+              });
+            }
+          }),
+        );
+      }
     } catch (e) {
       onNotify(e instanceof Error ? e.message : "重命名失败");
     }
@@ -1500,12 +1592,19 @@ export const ScriptWorkspace = forwardRef<
         (sum, x) => sum + (sessionsRef.current[x.id]?.revision ?? x.revision),
         0,
       );
+      const expectedDescendantSig = computeScriptDescendantsSignature(
+        desc.map((x) => ({
+          id: x.id,
+          revision: sessionsRef.current[x.id]?.revision ?? x.revision,
+        })),
+      );
       setDeletingTarget({
         item,
         guards: {
           expectedRevision,
           expectedDescendants,
           expectedRevisionSum,
+          expectedDescendantSig,
         },
       });
     } else {
@@ -1680,9 +1779,9 @@ export const ScriptWorkspace = forwardRef<
       docId: syncModalDocId,
       docPath: s.detail.path,
     });
-    const links = extractScriptAnchorsMap(canvasDoc, syncModalDocId);
+    const links = extractScriptAnchorsMap(canvasDoc, syncModalDocId, runs);
     return { breakdown, links };
-  }, [syncModalDocId, sessions, canvasDoc]);
+  }, [syncModalDocId, sessions, canvasDoc, runs]);
 
   const handleApplyScriptSync = async (
     options: ScriptSyncOptions,
@@ -1696,6 +1795,7 @@ export const ScriptWorkspace = forwardRef<
       canvasDoc,
       syncModalState.breakdown,
       options.explicitNodeBindings ?? {},
+      runs,
     );
     const stamped = stampScriptShotIds(curSession.draftBody, preferredLines);
     if (stamped.changed) {
@@ -1715,11 +1815,10 @@ export const ScriptWorkspace = forwardRef<
     let updatedCount = 0;
 
     onChangeCanvasDoc((current) => {
-      const synced = syncScriptBreakdownToCanvas(
-        current,
-        freshBreakdown,
-        options,
-      );
+      const synced = syncScriptBreakdownToCanvas(current, freshBreakdown, {
+        ...options,
+        runs,
+      });
       focusTargets =
         synced.shotNodeIds.length > 0
           ? synced.shotNodeIds
@@ -2468,6 +2567,7 @@ export const ScriptWorkspace = forwardRef<
       {syncModalDocId && syncModalState && (
         <ScriptSyncModal
           canvasDoc={canvasDoc}
+          runs={runs}
           breakdown={syncModalState.breakdown}
           existingLinks={syncModalState.links}
           defaultVideoModel={defaultVideoModel}

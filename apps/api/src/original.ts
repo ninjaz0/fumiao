@@ -785,10 +785,12 @@ class OriginalApi {
       const n = Number(raw);
       return Number.isInteger(n) && n >= 0 ? n : undefined;
     };
+    const sigRaw = sp.get("expected_descendant_sig")?.trim();
     return this.scriptDocs.remove(req.actor, key, recursive, this.selected(req), {
       expectedRevision: parseOptInt("expected_revision"),
       expectedDescendants: parseOptInt("expected_descendants"),
       expectedRevisionSum: parseOptInt("expected_revision_sum"),
+      ...(sigRaw ? { expectedDescendantSig: sigRaw } : {}),
     });
   }
   @Put("api/favorites") favorites(
