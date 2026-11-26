@@ -1,6 +1,14 @@
 import { crc32 } from "node:zlib";
-import type { Readable } from "node:stream";
-export type ArchiveEntry = { key: string; size: number; name: string };
+import { createReadStream, createWriteStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+export type ArchiveEntry = {
+  key: string;
+  size: number;
+  name: string;
+  directory?: boolean;
+};
 const limit = 0x7fffffff;
 function extra64(values: number[]) {
   const out = Buffer.alloc(values.length ? 4 + values.length * 8 : 0);
@@ -19,9 +27,12 @@ export async function* zipStream(entries: ArchiveEntry[], streams: Readable[]) {
   try {
     for (let index = 0; index < entries.length; index++) {
       const entry = entries[index],
-        name = Buffer.from(entry.name),
+        entryName = entry.directory && !entry.name.endsWith("/")
+          ? entry.name + "/"
+          : entry.name,
+        name = Buffer.from(entryName),
         start = offset,
-        flags = /[^\x00-\x7f]/.test(entry.name) ? 0x808 : 8;
+        flags = /[^\x00-\x7f]/.test(entryName) ? 0x808 : 8;
       const local = Buffer.alloc(30);
       local.writeUInt32LE(0x04034b50, 0);
       local.writeUInt16LE(45, 4);
@@ -36,15 +47,17 @@ export async function* zipStream(entries: ArchiveEntry[], streams: Readable[]) {
       yield header;
       let size = 0,
         crc = 0;
-      for await (const chunk of streams[index]) {
-        const data = Buffer.from(chunk);
-        size += data.length;
-        if (size > entry.size) throw new Error("Download source size changed");
-        crc = crc32(data, crc);
-        offset += data.length;
-        yield data;
+      if (!entry.directory) {
+        for await (const chunk of streams[index]) {
+          const data = Buffer.from(chunk);
+          size += data.length;
+          if (size > entry.size) throw new Error("Download source size changed");
+          crc = crc32(data, crc);
+          offset += data.length;
+          yield data;
+        }
+        if (size !== entry.size) throw new Error("Download source is incomplete");
       }
-      if (size !== entry.size) throw new Error("Download source is incomplete");
       const descriptor = Buffer.alloc(24);
       descriptor.writeUInt32LE(0x08074b50, 0);
       descriptor.writeUInt32LE(crc, 4);
@@ -67,7 +80,10 @@ export async function* zipStream(entries: ArchiveEntry[], streams: Readable[]) {
       central.writeUInt32LE(size > limit ? 0xffffffff : size, 24);
       central.writeUInt16LE(name.length, 28);
       central.writeUInt16LE(extra.length, 30);
-      central.writeUInt32LE(0o600 << 16, 38);
+      central.writeUInt32LE(
+        entry.directory ? ((0o040755 << 16) | 0x10) >>> 0 : 0o600 << 16,
+        38,
+      );
       central.writeUInt32LE(start > limit ? 0xffffffff : start, 42);
       directory.push(Buffer.concat([central, name, extra]));
     }
@@ -105,4 +121,56 @@ export async function* zipStream(entries: ArchiveEntry[], streams: Readable[]) {
   } finally {
     for (const stream of streams) stream.destroy();
   }
+}
+
+/** Stream a project bundle (empty dirs, inline files, and materialized media files) into a Zip64 file on disk. */
+export async function writeProjectZipFile(
+  destination: string,
+  spec: {
+    directories?: string[];
+    files: { path: string; data: Buffer }[];
+    mediaFiles?: { archivePath: string; filePath: string }[];
+  },
+  signal?: AbortSignal,
+) {
+  const entries: ArchiveEntry[] = [];
+  const streams: Readable[] = [];
+  const seenDirs = new Set<string>();
+  const addDir = (dir: string) => {
+    const clean = dir.replace(/\/+$/, "");
+    if (!clean) return;
+    const parts = clean.split("/");
+    let acc = "";
+    for (const part of parts) {
+      acc = acc ? `${acc}/${part}` : part;
+      const key = acc.toLowerCase();
+      if (seenDirs.has(key)) continue;
+      seenDirs.add(key);
+      entries.push({ key: "dir:" + acc, name: acc + "/", size: 0, directory: true });
+      streams.push(Readable.from([]));
+    }
+  };
+  for (const dir of spec.directories ?? []) addDir(dir);
+  for (const file of spec.files) {
+    const slash = file.path.lastIndexOf("/");
+    if (slash > 0) addDir(file.path.slice(0, slash));
+    entries.push({ key: "file:" + file.path, name: file.path, size: file.data.length });
+    streams.push(Readable.from([file.data]));
+  }
+  for (const media of spec.mediaFiles ?? []) {
+    const slash = media.archivePath.lastIndexOf("/");
+    if (slash > 0) addDir(media.archivePath.slice(0, slash));
+    const info = await stat(media.filePath);
+    entries.push({
+      key: "media:" + media.archivePath,
+      name: media.archivePath,
+      size: info.size,
+    });
+    streams.push(createReadStream(media.filePath));
+  }
+  await pipeline(
+    Readable.from(zipStream(entries, streams)),
+    createWriteStream(destination, { mode: 0o600 }),
+    ...(signal ? [{ signal }] : []),
+  );
 }

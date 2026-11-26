@@ -9,6 +9,10 @@ import { request, settings, setTab } from "./studio-settings-browser.js";
 export async function verifyChatPackage(page: Page, p: Platform) {
   const provider = await chatProviderFixture();
   try {
+    const stateBeforeRefusal = await (await page.request.get("/api/state")).json();
+    const chatBeforeRefusal = await (
+      await page.request.get("/api/chat/config")
+    ).json();
     await page
       .getByLabel("选择插件文件")
       .setInputFiles(
@@ -17,6 +21,19 @@ export async function verifyChatPackage(page: Page, p: Platform) {
     await expect(
       page.getByText(/旧版原生插件已停止导入/).first(),
     ).toBeVisible();
+    const stateAfterRefusal = await (await page.request.get("/api/state")).json();
+    const chatAfterRefusal = await (
+      await page.request.get("/api/chat/config")
+    ).json();
+    assert.deepEqual(
+      stateAfterRefusal.model_catalog,
+      stateBeforeRefusal.model_catalog,
+    );
+    assert.deepEqual(
+      stateAfterRefusal.model_groups,
+      stateBeforeRefusal.model_groups,
+    );
+    assert.deepEqual(chatAfterRefusal.models, chatBeforeRefusal.models);
     await seedLegacyPackage(p, await legacyPackage("compatible-chat"));
     await page.reload();
     await settings(page);

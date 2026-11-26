@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { runtime } from "@fumiao/platform/runtime.js";
 import { configureCapacity } from "@fumiao/platform/capacity.js";
+import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
 import {
   studioConfiguration,
   checkStudio,
@@ -12,6 +13,7 @@ const p = runtime();
 try {
   await checkStudio(p, process.env);
   await configureCapacity(p.db);
+  await ensureBuiltinEdgeTts(p);
 } catch (error) {
   await p.db.close();
   throw error;

@@ -21,7 +21,7 @@ export class StoryboardQueue {
     this.worker = new Worker(
       name,
       async (job) => service.execute(job.data.id),
-      { connection, concurrency: 1 },
+      { connection, concurrency: Number(process.env.EXPORT_CONCURRENCY || 2) },
     );
     this.queue.on("error", onError);
     this.worker.on("error", onError);

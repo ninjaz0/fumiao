@@ -1600,9 +1600,10 @@ test("a portable node pool pairs, claims and settles its pinned release alongsid
       params: {},
     }),
   );
+  const [maj, min, pat] = file.version.split(".").map(Number);
   const newer = {
     ...file,
-    version: "1.1.1",
+    version: `${maj}.${min}.${pat + 1}`,
     program: file.program!.replace(
       "return { prompt: job.input.prompt };",
       "return { updated: true };",
@@ -1962,7 +1963,8 @@ test("sandbox media tools process private workspace assets and remove rolled-bac
     { status: 422 },
   );
   const updated = structuredClone(file);
-  updated.version = "1.1.1";
+  const [uMaj, uMin, uPat] = file.version.split(".").map(Number);
+  updated.version = `${uMaj}.${uMin}.${uPat + 1}`;
   const page = updated.contributes!.settingsPages.find(
     (p) => p.id === "media",
   )!;

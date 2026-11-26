@@ -5,6 +5,7 @@ import {
 import { packageContributions } from "@fumiao/plugin-sdk/contributions.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import type { Actor } from "@fumiao/platform/platform.js";
+import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
 import { PluginHost } from "@fumiao/platform/plugin-host.js";
 import { PluginMedia } from "@fumiao/platform/plugin-media.js";
 import { runProgram } from "@fumiao/platform/plugin-program.js";
@@ -33,6 +34,15 @@ export async function runCanvasPlugin(
   try {
     return await canvases.p.db.transaction(async (sql) => {
       const row = await canvases.project(sql, actor, project, true);
+      if (actor.tokenId || actor.agentAction) {
+        await enforceAgentPolicyInTx(sql, String(row.workspace_id), {
+          projectId: String(row.id),
+          nodeId,
+          amount: 0,
+          executionKey: `canvas-plugin:${row.id}:${nodeId}:${body.uid}`,
+          approvedProposalId: actor.agentAction?.approvedProposalId ?? null,
+        });
+      }
       const receipt = await one(
         sql,
         "SELECT node,expected_revision FROM canvas_plugin_runs WHERE project_id=$1 AND owner_id=$2 AND uid=$3",

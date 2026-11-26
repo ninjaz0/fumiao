@@ -74,6 +74,21 @@ class Deflate extends Transform {
     callback(error);
   }
 }
+const forbiddenExtraHeaders = new Set([
+  "authorization",
+  "host",
+  "cookie",
+  "content-length",
+  "content-type",
+  "accept-encoding",
+  "connection",
+  "transfer-encoding",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-forwarded-for",
+  "idempotency-key",
+]);
+
 /** One request, no replay/redirect; connect and read-idle budgets match httpx.
  * Closing the consumer closes every decoder and the underlying socket. */
 export async function chatHttp(
@@ -82,6 +97,7 @@ export async function chatHttp(
     method: "GET" | "POST";
     key?: string;
     forwarded?: { host: string; scheme: string };
+    extraHeaders?: Record<string, string>;
     body?: unknown;
     signal: AbortSignal;
     connectMs: number;
@@ -100,7 +116,19 @@ export async function chatHttp(
       : Buffer.from(JSON.stringify(options.body));
   if (body && body.length > (options.maxRequestBytes ?? Infinity))
     throw new ChatTransportError("Provider request exceeds byte limit");
+  const safeExtra: Record<string, string> = {};
+  for (const [name, value] of Object.entries(options.extraHeaders ?? {})) {
+    const lower = name.toLowerCase();
+    if (
+      forbiddenExtraHeaders.has(lower) ||
+      !/^[A-Za-z][A-Za-z0-9-]{0,63}$/.test(name) ||
+      /[\r\n\0]/.test(value)
+    )
+      continue;
+    safeExtra[name] = value;
+  }
   const headers: Record<string, string | number> = {
+    ...safeExtra,
     ...(options.key === undefined
       ? {}
       : { Authorization: "Bearer " + options.key }),

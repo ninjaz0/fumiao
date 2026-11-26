@@ -74,13 +74,21 @@ async function readObject(client: S3Client, bucket: string, key: string) {
 }
 
 /** Export bytes by object key, without depending on the bucket's local volumes. */
-export async function backupStudioObjects(source: Bucket, directory: string) {
+export async function backupStudioObjects(
+  source: Bucket,
+  directory: string,
+  expectedKeys?: string[],
+) {
   const files = join(directory, "objects");
   await mkdir(files, { mode: 0o700 });
   const client = source.openClient();
   try {
     const keys = await objectKeys(client, source.bucket);
-    assert.equal(keys.length, 2);
+    if (expectedKeys) {
+      assert.deepEqual(keys, [...expectedKeys].sort());
+    } else {
+      assert.equal(keys.length, 2);
+    }
     const manifest: ObjectRecord[] = [];
     for (const [index, key] of keys.entries()) {
       const { bytes, record } = await readObject(client, source.bucket, key);
@@ -144,6 +152,7 @@ export async function restoreSnapshot(
     "payment_channels",
     "original_recharge_orders",
     "assets",
+    "asset_derivatives",
     "connections",
     "plugin_versions",
     "studio_catalog",
@@ -412,6 +421,21 @@ export async function prepareStudioRestore(
     await verifyMedia(client, member, anonymous, s3, item);
     media.push(item);
   }
+  await until(
+    "Source uploaded media derivatives settled",
+    async () => {
+      const rows = (
+        await source.db.query<{ state: string }>(
+          "SELECT state FROM asset_derivatives",
+        )
+      ).rows;
+      return rows.length === media.length &&
+        rows.every((r) => r.state === "ready")
+        ? true
+        : undefined;
+    },
+    25_000,
+  );
 
   const canvas = await client.write("/api/canvases", { title: "备份恢复画布" });
   const canvasPath = "/api/canvases/" + canvas.id;
@@ -596,20 +620,67 @@ export async function prepareStudioRestore(
         item,
       );
     const restoredKeys = [...media, ...outputs].map(({ key }) => key).sort();
+    const expectedDerivativeCount = [...media, ...outputs].filter(
+      ({ mime }) => mime.startsWith("image/") || mime.startsWith("video/"),
+    ).length;
     async function verifyBucket() {
-      const assets = await target.db.query("SELECT object_key FROM assets");
+      const assets = await target.db.query<{ id: string; object_key: string }>(
+        "SELECT id, object_key FROM assets",
+      );
       assert.deepEqual(
         assets.rows.map(({ object_key }) => object_key).sort(),
         restoredKeys,
       );
+      const assetIds = new Set(assets.rows.map(({ id }) => id));
+      const derivatives = await until(
+        "Restored target asset derivatives settled",
+        async () => {
+          const rows = (
+            await target.db.query<{
+              asset_id: string;
+              object_key: string;
+              state: string;
+            }>(
+              "SELECT asset_id, object_key, state FROM asset_derivatives ORDER BY object_key",
+            )
+          ).rows;
+          return rows.length >= expectedDerivativeCount &&
+            rows.every((r) => r.state !== "pending")
+            ? rows
+            : undefined;
+        },
+        25_000,
+      );
+      assert.equal(derivatives.length, expectedDerivativeCount);
+      assert.ok(
+        derivatives.every(
+          (d) => d.state === "ready" && assetIds.has(d.asset_id),
+        ),
+        `Unexpected restored derivatives: ${JSON.stringify(derivatives)}`,
+      );
+      const expectedBucketKeys = [
+        ...restoredKeys,
+        ...derivatives.map(({ object_key }) => object_key),
+      ].sort();
       const s3Client = targetS3.openClient();
       try {
-        assert.deepEqual(
-          await objectKeys(s3Client, targetS3.bucket),
-          restoredKeys,
+        const actualBucketKeys = await objectKeys(s3Client, targetS3.bucket);
+        assert.equal(
+          new Set(actualBucketKeys).size,
+          actualBucketKeys.length,
+          "Restored bucket must not contain duplicate keys",
         );
+        assert.deepEqual(actualBucketKeys, expectedBucketKeys);
       } finally {
         s3Client.destroy();
+      }
+      for (const derivative of derivatives) {
+        const unsignedDeriv = await fetch(
+          `${targetS3.endpoint}/${targetS3.bucket}/${derivative.object_key}`,
+          { redirect: "error", signal: AbortSignal.timeout(5000) },
+        );
+        assert.equal(unsignedDeriv.status, 403);
+        await unsignedDeriv.body?.cancel();
       }
     }
     await verifyBucket();

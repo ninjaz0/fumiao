@@ -18,10 +18,12 @@ import {
   Put,
   Post,
   Req,
+  RequestMethod,
   Res,
 } from "@nestjs/common";
 import express, { type Request, type Response } from "express";
 import { Platform } from "@fumiao/platform/platform.js";
+import { ComfyMicroAppCompiler } from "@fumiao/platform/comfy-compiler.js";
 import { DomainError } from "@fumiao/platform/security.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import {
@@ -52,6 +54,21 @@ import { OriginalState } from "@fumiao/original-api/state.js";
 import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
 import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
+import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
+import { OriginalSeries } from "@fumiao/original-api/series.js";
+import {
+  authorizeTokenHttpRequest,
+  OriginalApiTokens,
+} from "@fumiao/original-api/tokens.js";
+import { OriginalSkills } from "@fumiao/original-api/skills.js";
+import {
+  OriginalAgentPolicies,
+  OriginalCanvasProposals,
+} from "@fumiao/original-api/proposals.js";
+import { OriginalObservability } from "@fumiao/original-api/admin-observability.js";
+import { OriginalBudgets } from "@fumiao/original-api/budgets-api.js";
+import { OriginalBillingExtras } from "@fumiao/original-api/billing-extras.js";
+import { buildOpenApiSpec } from "@fumiao/original-api/openapi.js";
 import { readCanvasBody } from "@fumiao/original-api/canvas-http.js";
 import type { OriginalDraft } from "@fumiao/plugin-sdk/original.js";
 import type { ReferenceKind } from "@fumiao/plugin-sdk/references.js";
@@ -75,12 +92,14 @@ import {
   originalNodeRequest,
 } from "./original-nodes.js";
 import { OriginalAgentController } from "./original-agent.js";
+import { OriginalMcpController } from "./original-mcp.js";
 import {
   isOriginalChatRequest,
   originalChatRequest,
 } from "./original-chat-request.js";
 import { ChatAdoptionDocumentError } from "@fumiao/original-api/chat-applications.js";
 import {
+  originalBearerToken,
   originalSessionToken as token,
   originalWorkspace,
   type OriginalAuthRequest,
@@ -285,6 +304,97 @@ class OriginalApi {
   ) {
     return this.canvasRuns.narrate(req.actor, key, node, body);
   }
+  @Post("api/canvases/:key/nodes/:node/dialogue")
+  @HttpCode(200)
+  generateCanvasDialogue(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("node") node: string,
+    @Body() body: unknown,
+  ) {
+    return this.canvasRuns.narrateDialogue(req.actor, key, node, body);
+  }
+  @Post("api/canvases/:key/bgm")
+  @HttpCode(200)
+  generateCanvasBgm(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.canvasRuns.generateBgm(req.actor, key, body);
+  }
+  @Post("api/canvases/:key/nodes/:node/tail-frame")
+  @HttpCode(200)
+  extractCanvasTailFrame(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("node") node: string,
+  ) {
+    return this.canvases.extractTailFrame(req.actor, key, node);
+  }
+  @Post("api/canvases/:key/nodes/:node/grid-crop")
+  @HttpCode(200)
+  cropCanvasGridCell(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("node") node: string,
+    @Body() body: unknown,
+  ) {
+    return this.canvases.gridCrop(req.actor, key, node, body);
+  }
+  @Post("api/canvases/:key/batch-precheck")
+  @HttpCode(200)
+  precheckCanvasBatch(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.batchPrecheck.precheckCanvas(req.actor, key, body);
+  }
+  @Post("api/canvases/:key/batch-runs")
+  @HttpCode(200)
+  runCanvasBatch(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.canvasRuns.batchRun(req.actor, key, body);
+  }
+  @Get("api/canvases/:key/proposals")
+  listCanvasProposals(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+  ) {
+    return this.proposals.list(req.actor, key);
+  }
+  @Post("api/canvases/:key/proposals")
+  @HttpCode(200)
+  createCanvasProposal(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.proposals.create(req.actor, key, body);
+  }
+  @Post("api/canvases/:key/proposals/:pid/apply")
+  @HttpCode(200)
+  applyCanvasProposal(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("pid") pid: string,
+    @Body() body: unknown,
+  ) {
+    return this.proposals.apply(req.actor, key, pid, body);
+  }
+  @Post("api/canvases/:key/proposals/:pid/reject")
+  @HttpCode(200)
+  rejectCanvasProposal(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("pid") pid: string,
+  ) {
+    return this.proposals.reject(req.actor, key, pid);
+  }
   @Get("api/chat/config") chatConfig(@Req() req: AuthRequest) {
     return new OriginalChatSettings(this.identity.p).config(
       req.actor,
@@ -341,6 +451,11 @@ class OriginalApi {
       this.selected(req),
     );
   }
+  @Post("api/quotes/batch")
+  @HttpCode(200)
+  batchQuotes(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.batchPrecheck.quoteBatch(req.actor, body, this.selected(req));
+  }
   @Post(["api/jobs", "api/image-jobs", "api/audio-jobs"])
   @HttpCode(200)
   submitJob(@Req() req: AuthRequest) {
@@ -391,6 +506,16 @@ class OriginalApi {
   private canvases: OriginalCanvases;
   private canvasRuns: OriginalCanvasRuns;
   private storyboardExports: OriginalStoryboardExports;
+  private batchPrecheck: OriginalBatchPrecheck;
+  private series: OriginalSeries;
+  private apiTokens: OriginalApiTokens;
+  private skills: OriginalSkills;
+  private proposals: OriginalCanvasProposals;
+  private agentPolicies: OriginalAgentPolicies;
+  private comfyCompiler: ComfyMicroAppCompiler;
+  private observability: OriginalObservability;
+  private budgets: OriginalBudgets;
+  private billingExtras: OriginalBillingExtras;
   constructor(@Inject(OriginalIdentity) private identity: OriginalIdentity) {
     this.packs = new OriginalPacks(identity.p);
     this.uploads = new OriginalUploads(identity.p);
@@ -401,6 +526,69 @@ class OriginalApi {
     this.canvases = new OriginalCanvases(identity.p);
     this.canvasRuns = new OriginalCanvasRuns(identity.p);
     this.storyboardExports = new OriginalStoryboardExports(identity.p);
+    this.batchPrecheck = new OriginalBatchPrecheck(identity.p);
+    this.series = new OriginalSeries(identity.p);
+    this.apiTokens = new OriginalApiTokens(identity.p);
+    this.skills = new OriginalSkills(identity.p);
+    this.proposals = new OriginalCanvasProposals(identity.p);
+    this.agentPolicies = new OriginalAgentPolicies(identity.p);
+    this.comfyCompiler = new ComfyMicroAppCompiler(identity.p);
+    this.observability = new OriginalObservability(identity.p);
+    this.budgets = new OriginalBudgets(identity.p, identity);
+    this.billingExtras = new OriginalBillingExtras(identity.p, identity);
+  }
+  @Get("api/v1/openapi.json")
+  openApiSpec(@Req() req: Request) {
+    const origin = `${req.protocol}://${req.get("host") || "localhost"}`;
+    return buildOpenApiSpec(origin);
+  }
+  @Get("api/tokens")
+  listTokens(@Req() req: AuthRequest) {
+    return this.apiTokens.list(req.actor, this.selected(req));
+  }
+  @Post("api/tokens")
+  @HttpCode(200)
+  createToken(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.apiTokens.create(req.actor, body, this.selected(req));
+  }
+  @Delete("api/tokens/:id")
+  revokeToken(@Req() req: AuthRequest, @Param("id") id: string) {
+    return this.apiTokens.revoke(req.actor, id, this.selected(req));
+  }
+  @Get("api/skills")
+  listSkills(@Req() req: AuthRequest) {
+    return this.skills.list(req.actor, this.selected(req));
+  }
+  @Post("api/skills")
+  @HttpCode(200)
+  createSkill(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.skills.create(req.actor, body, this.selected(req));
+  }
+  @Post("api/skills/import-zip")
+  @HttpCode(200)
+  importSkillZip(@Req() req: AuthRequest, @Body() body: unknown) {
+    const bytes = Buffer.isBuffer(body) ? body : Buffer.alloc(0);
+    return this.skills.importZip(req.actor, bytes, this.selected(req));
+  }
+  @Put("api/skills/:key")
+  updateSkill(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.skills.update(req.actor, key, body);
+  }
+  @Delete("api/skills/:key")
+  removeSkill(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.skills.remove(req.actor, key);
+  }
+  @Get("api/workspace/agent-policy")
+  getAgentPolicy(@Req() req: AuthRequest) {
+    return this.agentPolicies.get(req.actor, this.selected(req));
+  }
+  @Put("api/workspace/agent-policy")
+  setAgentPolicy(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.agentPolicies.set(req.actor, body, this.selected(req));
   }
   @Post("api/assets")
   @HttpCode(200)
@@ -437,6 +625,113 @@ class OriginalApi {
   deletePack(@Req() req: AuthRequest, @Param("key") key: string) {
     return this.packs.remove(req.actor, key, this.selected(req));
   }
+  @Post("api/asset-packs/:key/lock")
+  @HttpCode(200)
+  lockPack(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.packs.setLock(req.actor, key, true, this.selected(req));
+  }
+  @Post("api/asset-packs/:key/unlock")
+  @HttpCode(200)
+  unlockPack(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.packs.setLock(req.actor, key, false, this.selected(req));
+  }
+  @Put("api/asset-packs/:key/scope")
+  setPackScope(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.packs.setScope(req.actor, key, body, this.selected(req));
+  }
+  @Post("api/asset-packs/:key/turnaround")
+  @HttpCode(200)
+  packTurnaround(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.packs.turnaround(req.actor, key, body, this.selected(req));
+  }
+  @Get("api/series")
+  listSeries(@Req() req: AuthRequest) {
+    return this.series.list(req.actor, this.selected(req));
+  }
+  @Post("api/series")
+  @HttpCode(200)
+  createSeries(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.series.create(req.actor, body, this.selected(req));
+  }
+  @Get("api/series/:key")
+  getSeries(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.series.get(req.actor, key);
+  }
+  @Put("api/series/:key")
+  updateSeries(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.series.update(req.actor, key, body);
+  }
+  @Delete("api/series/:key")
+  removeSeries(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.series.remove(req.actor, key);
+  }
+  @Post("api/series/:key/episodes")
+  @HttpCode(200)
+  createEpisode(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.series.createEpisode(req.actor, key, body);
+  }
+  @Put("api/series/:key/episodes/:ep")
+  updateEpisode(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("ep") ep: string,
+    @Body() body: unknown,
+  ) {
+    return this.series.updateEpisode(req.actor, key, ep, body);
+  }
+  @Delete("api/series/:key/episodes/:ep")
+  removeEpisode(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("ep") ep: string,
+  ) {
+    return this.series.removeEpisode(req.actor, key, ep);
+  }
+  @Post("api/series/:key/episodes/:ep/scenes")
+  @HttpCode(200)
+  createScene(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("ep") ep: string,
+    @Body() body: unknown,
+  ) {
+    return this.series.createScene(req.actor, key, ep, body);
+  }
+  @Put("api/series/:key/episodes/:ep/scenes/:scene")
+  updateScene(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("ep") ep: string,
+    @Param("scene") scene: string,
+    @Body() body: unknown,
+  ) {
+    return this.series.updateScene(req.actor, key, ep, scene, body);
+  }
+  @Delete("api/series/:key/episodes/:ep/scenes/:scene")
+  removeScene(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("ep") ep: string,
+    @Param("scene") scene: string,
+  ) {
+    return this.series.removeScene(req.actor, key, ep, scene);
+  }
   @Put("api/favorites") favorites(
     @Req() req: AuthRequest,
     @Body() body: unknown,
@@ -466,12 +761,18 @@ class OriginalApi {
     @Res() res: Response,
   ) {
     const query = new URL(req.originalUrl, "http://localhost").searchParams;
+    const rawVariant = query.getAll("variant").at(-1);
+    const variant =
+      rawVariant === "thumb" || rawVariant === "poster"
+        ? rawVariant
+        : undefined;
     return this.media.serve(
       req.actor,
       key,
       queryBoolean(query.getAll("download").at(-1), "download"),
       req,
       res,
+      variant,
     );
   }
   @Get("avatars/:filename") builtinAvatar(
@@ -564,6 +865,124 @@ class OriginalApi {
   @HttpCode(200)
   adjustCredits(@Req() req: AuthRequest, @Body() body: unknown) {
     return this.credits.adjust(req.actor, body);
+  }
+  @Post("api/admin/comfy/analyze")
+  @HttpCode(200)
+  analyzeComfyWorkflow(
+    @Req() req: AuthRequest,
+    @Body() body: { workflow?: unknown },
+  ) {
+    return this.comfyCompiler.analyzeWorkflow(req.actor, body?.workflow);
+  }
+  @Post("api/admin/comfy/publish")
+  @HttpCode(200)
+  publishComfyMicroApp(
+    @Req() req: AuthRequest,
+    @Body()
+    body: { spec?: unknown; dry_run?: boolean; auto_enable?: boolean },
+  ) {
+    return this.comfyCompiler.publish(req.actor, body?.spec, {
+      dryRun: Boolean(body?.dry_run),
+      autoEnable: Boolean(body?.auto_enable),
+    });
+  }
+  @Get("api/admin/observability/summary")
+  observabilitySummary(@Req() req: AuthRequest) {
+    const query = new URL(req.originalUrl, "http://localhost").searchParams;
+    const days = queryId(query.getAll("days").at(-1), "days");
+    return this.observability.summary(req.actor, days);
+  }
+  @Get("api/admin/observability/uncertain")
+  observabilityUncertain(@Req() req: AuthRequest) {
+    return this.observability.uncertainJobs(req.actor);
+  }
+  @Post("api/admin/observability/jobs/:id/reconcile")
+  @HttpCode(200)
+  reconcileJob(
+    @Req() req: AuthRequest,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.observability.reconcileJob(req.actor, id, body);
+  }
+  @Get("api/budgets")
+  listBudgets(@Req() req: AuthRequest) {
+    return this.budgets.list(req.actor, this.selected(req));
+  }
+  @Put("api/budgets")
+  upsertBudget(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.budgets.upsertPolicy(req.actor, body, this.selected(req));
+  }
+  @Put("api/budgets/moderation")
+  updateModeration(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.budgets.updateModeration(req.actor, body, this.selected(req));
+  }
+  @Get("api/admin/redeem-codes")
+  listRedeemCodes(@Req() req: AuthRequest) {
+    return this.billingExtras.listRedeemCodes(req.actor);
+  }
+  @Post("api/admin/redeem-codes/batch")
+  @HttpCode(200)
+  createRedeemBatch(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.billingExtras.createRedeemBatch(req.actor, body);
+  }
+  @Post("api/admin/redeem-codes/:id/disable")
+  @HttpCode(200)
+  disableRedeemCode(@Req() req: AuthRequest, @Param("id") id: string) {
+    return this.billingExtras.disableRedeemCode(req.actor, id);
+  }
+  @Post("api/redeem")
+  @HttpCode(200)
+  applyRedeemCode(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.billingExtras.redeem(req.actor, body, this.selected(req));
+  }
+  @Get("api/invites/rewards")
+  listInviteRewards(@Req() req: AuthRequest) {
+    return this.billingExtras.inviteRewards(req.actor);
+  }
+  @Post("api/invites/rewards/claim")
+  @HttpCode(200)
+  claimInviteRewards(@Req() req: AuthRequest) {
+    return this.billingExtras.claimInviteRewards(req.actor, this.selected(req));
+  }
+  @Get("api/subscriptions/plans")
+  listSubscriptionPlans(@Req() req: AuthRequest) {
+    return this.billingExtras.listPlans(req.actor, this.selected(req));
+  }
+  @Post("api/admin/subscriptions/plans")
+  @HttpCode(200)
+  createSubscriptionPlan(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.billingExtras.createPlan(req.actor, body);
+  }
+  @Post("api/subscriptions/subscribe")
+  @HttpCode(200)
+  subscribePlan(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.billingExtras.subscribe(req.actor, body, this.selected(req));
+  }
+  @Get("api/credits/statement")
+  async creditStatement(@Req() req: AuthRequest, @Res() res: Response) {
+    const query = new URL(req.originalUrl, "http://localhost").searchParams;
+    const format = query.getAll("format").at(-1) === "pdf" ? "pdf" : "csv";
+    const from = query.getAll("from").at(-1)?.trim() || undefined;
+    const to = query.getAll("to").at(-1)?.trim() || undefined;
+    const result = await this.billingExtras.exportStatement(
+      req.actor,
+      format,
+      this.selected(req),
+      { from, to },
+    );
+    res.setHeader("Content-Type", result.mime);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${result.filename}"`,
+    );
+    res.setHeader("X-Total-Count", String(result.totalCount));
+    res.setHeader("X-Exported-Count", String(result.exportedCount));
+    res.setHeader("X-Truncated", result.truncated ? "true" : "false");
+    if (result.from) res.setHeader("X-Statement-From", result.from);
+    if (result.to) res.setHeader("X-Statement-To", result.to);
+    res.setHeader("Content-Length", result.bytes.length);
+    res.end(result.bytes);
   }
   @Get("health") health() {
     return { service: "fumiao", ok: true };
@@ -695,6 +1114,7 @@ export async function createOriginalApp(p: Platform) {
       OriginalPluginPagesController,
       OriginalNodesController,
       OriginalAgentController,
+      OriginalMcpController,
       OriginalRechargeController,
     ],
     providers: [
@@ -728,11 +1148,103 @@ export async function createOriginalApp(p: Platform) {
   });
   const parseJSON = express.json({ limit: "3mb", strict: false });
   const parseChatKey = express.raw({ limit: "3mb", type: () => true });
+  const parseSkillZip = express.raw({ limit: "300kb", type: () => true });
+  const apiTokens = new OriginalApiTokens(p);
+  const agentPolicies = new OriginalAgentPolicies(p);
+  const tokenActorWithAgent = (
+    auth: NonNullable<AuthRequest["tokenAuth"]>,
+    req: AuthRequest,
+  ) => {
+    const headerPid = req.headers["x-approved-proposal-id"];
+    const bodyPid =
+      req.body &&
+      typeof req.body === "object" &&
+      !Array.isArray(req.body) &&
+      typeof (req.body as Record<string, unknown>).approved_proposal_id ===
+        "string"
+        ? String((req.body as Record<string, unknown>).approved_proposal_id)
+        : "";
+    const approvedProposalId =
+      typeof headerPid === "string" && headerPid.trim()
+        ? headerPid.trim()
+        : bodyPid.trim() || null;
+    return {
+      ...auth.actor,
+      agentAction: {
+        source: "token" as const,
+        approvedProposalId,
+      },
+    };
+  };
+  const authenticate = async (req: AuthRequest, normalizedPath: string) => {
+    const bearer = originalBearerToken(req);
+    if (bearer) {
+      let auth = req.tokenAuth;
+      if (!auth) {
+        const requestedWs = req.headers["x-workspace-id"]
+          ? String(req.headers["x-workspace-id"])
+          : new URL(req.originalUrl, "http://localhost").searchParams
+              .getAll("workspace")
+              .at(-1);
+        auth = await apiTokens.authenticateBearer(bearer, requestedWs);
+        req.tokenAuth = auth;
+      }
+      const rule = authorizeTokenHttpRequest(auth, req.method, normalizedPath);
+      const actor = tokenActorWithAgent(auth, req);
+      if (rule.paidAgentAction) {
+        // Fast-fail on plan_only / missing-cap / missing proposal header; authoritative locked
+        // target project/node/budget check runs inside acceptTask() & runCanvasPlugin().
+        const policy = await agentPolicies.readPolicy(p.db, auth.workspaceId);
+        if (policy === "plan_only") {
+          await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId, {
+            approvedProposalId: actor.agentAction?.approvedProposalId ?? null,
+          });
+        } else if (policy === "auto_within_budget") {
+          await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId);
+        } else if (policy === "propose_and_confirm") {
+          if (!actor.agentAction?.approvedProposalId) {
+            await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId, {
+              approvedProposalId: null,
+            });
+          }
+        }
+      }
+      return actor;
+    }
+    return identity.actor(token(req));
+  };
   const prepareChat = originalChatRequest(identity, failure);
   const prepareNodes = originalNodeRequest(identity, failure);
   const prepareRecharge = originalRechargeRequest(identity, failure);
   app.use(async (req: AuthRequest, res: Response, next: () => void) => {
     const path = decodePath(req.path);
+    // Reject Bearer tokens on browser-session-only endpoints (admin, chat, recharge, tokens, etc.)
+    // before specialized sub-routers run, while letting valid /api/mcp and allowlisted routes proceed.
+    if (originalBearerToken(req) && path !== "/api/mcp") {
+      try {
+        const requestedWs = req.headers["x-workspace-id"]
+          ? String(req.headers["x-workspace-id"])
+          : new URL(req.originalUrl, "http://localhost").searchParams
+              .getAll("workspace")
+              .at(-1);
+        const auth = await apiTokens.authenticateBearer(
+          originalBearerToken(req),
+          requestedWs,
+        );
+        const rule = authorizeTokenHttpRequest(auth, req.method, path);
+        req.tokenAuth = auth;
+        req.actor = tokenActorWithAgent(auth, req);
+        if (rule.paidAgentAction) {
+          const policy = await agentPolicies.readPolicy(p.db, auth.workspaceId);
+          if (policy === "plan_only" || policy === "auto_within_budget") {
+            await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId);
+          }
+        }
+      } catch (error) {
+        failure(error, res);
+        return;
+      }
+    }
     if (await prepareNodes(path, req, res, next)) return;
     if (isOriginalRechargeRequest(path)) {
       await prepareRecharge(req, res, next);
@@ -772,7 +1284,7 @@ export async function createOriginalApp(p: Platform) {
           req.body,
           new URL(req.originalUrl, "http://localhost").searchParams,
         );
-        req.actor = await identity.actor(token(req));
+        req.actor = await authenticate(req, path);
         // Match the decoded FastAPI path, preserving escaped project IDs for Express.
         req.url =
           path.split("/").map(encodeURIComponent).join("/") +
@@ -808,6 +1320,10 @@ export async function createOriginalApp(p: Platform) {
           error ? failure(error, res) : next(),
         );
       } else next();
+      return;
+    }
+    if (req.method === "POST" && req.path === "/api/skills/import-zip") {
+      parseSkillZip(req, res, (error) => (error ? failure(error, res) : next()));
       return;
     }
     if (
@@ -846,7 +1362,9 @@ export async function createOriginalApp(p: Platform) {
             contract.imageSettings,
             req.body,
           );
-        if (!contract.public) req.actor = await identity.actor(token(req));
+        if (!contract.public) req.actor = await authenticate(req, req.path);
+      } else if (req.tokenAuth) {
+        req.actor = tokenActorWithAgent(req.tokenAuth, req);
       }
       next();
     } catch (error) {
@@ -859,4 +1377,66 @@ export async function createOriginalApp(p: Platform) {
     },
   });
   return app;
+}
+
+const NEST_METHOD_NAMES: Record<number, string> = {
+  [RequestMethod.GET]: "GET",
+  [RequestMethod.POST]: "POST",
+  [RequestMethod.PUT]: "PUT",
+  [RequestMethod.DELETE]: "DELETE",
+  [RequestMethod.PATCH]: "PATCH",
+  [RequestMethod.HEAD]: "HEAD",
+  [RequestMethod.OPTIONS]: "OPTIONS",
+};
+
+/**
+ * Reflects the live NestJS controller route table so tests can verify
+ * `TOKEN_REST_ALLOWLIST` and `buildOpenApiSpec()` stay 1-to-1 with real controllers.
+ */
+export function listRegisteredOriginalRoutes(): Array<{
+  method: string;
+  template: string;
+}> {
+  const controllers = [
+    OriginalApi,
+    OriginalMcpController,
+    OriginalChatController,
+    OriginalNodesController,
+    OriginalPluginPagesController,
+    OriginalProviderController,
+    OriginalRechargeController,
+    OriginalAgentController,
+  ];
+  const out: Array<{ method: string; template: string }> = [];
+  for (const ctrl of controllers) {
+    const prefixRaw = Reflect.getMetadata("path", ctrl);
+    const prefixes = Array.isArray(prefixRaw)
+      ? prefixRaw.map(String)
+      : [typeof prefixRaw === "string" ? prefixRaw : ""];
+    for (const key of Object.getOwnPropertyNames(ctrl.prototype)) {
+      if (key === "constructor") continue;
+      const fn = (ctrl.prototype as unknown as Record<string, unknown>)[key];
+      if (typeof fn !== "function") continue;
+      const methodNum = Reflect.getMetadata("method", fn);
+      const pathRaw = Reflect.getMetadata("path", fn);
+      if (methodNum === undefined || pathRaw === undefined) continue;
+      const method = NEST_METHOD_NAMES[methodNum];
+      if (!method) continue;
+      const paths = Array.isArray(pathRaw)
+        ? pathRaw.map(String)
+        : [String(pathRaw)];
+      for (const prefix of prefixes) {
+        for (const sub of paths) {
+          const joined =
+            "/" +
+            [prefix, sub]
+              .map((s) => s.replace(/^\/+|\/+$/g, ""))
+              .filter(Boolean)
+              .join("/");
+          out.push({ method, template: joined });
+        }
+      }
+    }
+  }
+  return out;
 }

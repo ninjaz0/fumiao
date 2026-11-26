@@ -1,0 +1,548 @@
+{
+  "format": 1,
+  "id": "openrouter-gateway",
+  "label": "OpenRouter / New API 多模态聚合网关",
+  "version": "1.1.0",
+  "adapterVersion": "1.1.0",
+  "manifest": {
+    "id": "openrouter-gateway",
+    "label": "OpenRouter / New API 多模态聚合网关",
+    "version": "1.1.0",
+    "contractVersion": 1,
+    "mode": "request",
+    "configSchema": {
+      "type": "object",
+      "required": [
+        "provider"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "openrouter",
+            "newapi"
+          ]
+        },
+        "apiKey": {
+          "type": "string",
+          "writeOnly": true
+        },
+        "baseUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "upstreamCostFen": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "models": [
+      {
+        "id": "anthropic/claude-sonnet-4",
+        "label": "Claude Sonnet 4 (OpenRouter)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 20,
+          "priceOrder": 200,
+          "descriptor": {
+            "kind": "chat",
+            "label": "Claude Sonnet 4 (OpenRouter)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "openai/gpt-4.1",
+        "label": "GPT-4.1 (OpenRouter)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 21,
+          "priceOrder": 201,
+          "descriptor": {
+            "kind": "chat",
+            "label": "GPT-4.1 (OpenRouter)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "google/gemini-2.5-pro",
+        "label": "Gemini 2.5 Pro (OpenRouter)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 22,
+          "priceOrder": 202,
+          "descriptor": {
+            "kind": "chat",
+            "label": "Gemini 2.5 Pro (OpenRouter)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "deepseek/deepseek-chat-v3-0324",
+        "label": "DeepSeek V3 (OpenRouter)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 23,
+          "priceOrder": 203,
+          "descriptor": {
+            "kind": "chat",
+            "label": "DeepSeek V3 (OpenRouter)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "qwen/qwen3-235b-a22b",
+        "label": "Qwen3 235B (OpenRouter)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 24,
+          "priceOrder": 204,
+          "descriptor": {
+            "kind": "chat",
+            "label": "Qwen3 235B (OpenRouter)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "newapi/gpt-4.1",
+        "label": "GPT-4.1 (New API)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 30,
+          "priceOrder": 210,
+          "descriptor": {
+            "kind": "chat",
+            "label": "GPT-4.1 (New API)",
+            "provider": "newapi"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "newapi/claude-sonnet-4",
+        "label": "Claude Sonnet 4 (New API)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 31,
+          "priceOrder": 211,
+          "descriptor": {
+            "kind": "chat",
+            "label": "Claude Sonnet 4 (New API)",
+            "provider": "newapi"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "newapi/gemini-2.5-pro",
+        "label": "Gemini 2.5 Pro (New API)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 32,
+          "priceOrder": 212,
+          "descriptor": {
+            "kind": "chat",
+            "label": "Gemini 2.5 Pro (New API)",
+            "provider": "newapi"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "newapi/deepseek-chat",
+        "label": "DeepSeek Chat (New API)",
+        "kind": "chat",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "studio": {
+          "order": 33,
+          "priceOrder": 213,
+          "descriptor": {
+            "kind": "chat",
+            "label": "DeepSeek Chat (New API)",
+            "provider": "newapi"
+          },
+          "prices": [
+            {
+              "tier": "reply",
+              "label": "每条完整回复",
+              "amount": 1,
+              "match": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "openrouter/flux-1.1-pro",
+        "label": "Flux 1.1 Pro (OpenRouter 图像)",
+        "kind": "image",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {}
+        },
+        "studio": {
+          "order": 40,
+          "priceOrder": 220,
+          "descriptor": {
+            "kind": "image",
+            "label": "Flux 1.1 Pro (OpenRouter 图像)",
+            "provider": "openrouter"
+          },
+          "prices": [
+            {
+              "tier": "standard",
+              "label": "单张图片生成",
+              "amount": 2,
+              "match": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "newapi/gpt-image-1",
+        "label": "GPT-Image-1 (New API 图像)",
+        "kind": "image",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {}
+        },
+        "studio": {
+          "order": 41,
+          "priceOrder": 221,
+          "descriptor": {
+            "kind": "image",
+            "label": "GPT-Image-1 (New API 图像)",
+            "provider": "newapi"
+          },
+          "prices": [
+            {
+              "tier": "standard",
+              "label": "单张图片生成",
+              "amount": 3,
+              "match": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "newapi/sora-2",
+        "label": "Sora 2 (New API 视频)",
+        "kind": "video",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {}
+        },
+        "studio": {
+          "order": 42,
+          "priceOrder": 222,
+          "descriptor": {
+            "kind": "video",
+            "label": "Sora 2 (New API 视频)",
+            "provider": "newapi"
+          },
+          "prices": [
+            {
+              "tier": "video",
+              "label": "单次视频生成",
+              "amount": 10,
+              "match": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "canvas": {
+      "version": 1,
+      "models": [
+        {
+          "model": "openrouter/flux-1.1-pro",
+          "kind": "image",
+          "defaultForKind": false
+        },
+        {
+          "model": "newapi/gpt-image-1",
+          "kind": "image",
+          "defaultForKind": false
+        },
+        {
+          "model": "newapi/sora-2",
+          "kind": "video",
+          "defaultForKind": false
+        }
+      ]
+    },
+    "canvasSubmission": {
+      "version": 1,
+      "models": [
+        {
+          "model": "openrouter/flux-1.1-pro",
+          "kind": "image",
+          "defaultForKind": false
+        },
+        {
+          "model": "newapi/gpt-image-1",
+          "kind": "image",
+          "defaultForKind": false
+        },
+        {
+          "model": "newapi/sora-2",
+          "kind": "video",
+          "defaultForKind": false
+        }
+      ]
+    },
+    "artifactDownload": {
+      "version": 1
+    },
+    "artifactValidation": {
+      "version": 3,
+      "errors": {
+        "imageFormat": "聚合网关返回的图片格式无效",
+        "imageDecode": "聚合网关返回的图片无法解码",
+        "video": "聚合网关返回的视频无法解码",
+        "audio": "聚合网关返回的音频无法解码",
+        "failed": "媒体成品保存失败，请重试"
+      }
+    },
+    "requestLifecycle": {
+      "version": 3,
+      "honorImageEnabled": false,
+      "cancelDisabled": true,
+      "referenceKinds": [
+        "ref"
+      ],
+      "queueOrder": "fifo",
+      "progressUpdatesHealth": false,
+      "recordCancelledRun": false,
+      "preferFinalizing": false,
+      "requireConfigured": true,
+      "atomicReferences": false,
+      "resumeAccepted": true,
+      "cancelOnlyWhenAvailable": false,
+      "executionDeadlineMs": 240000,
+      "notes": {
+        "submitting": "正在通过聚合网关生成媒体",
+        "unavailable": "等待聚合网关就绪",
+        "inputUnavailable": "参考图不可用",
+        "inputFailed": "输入准备失败",
+        "saveFailed": "媒体成品保存失败",
+        "recoverySaveFailed": "媒体成品恢复保存失败",
+        "submitFailed": "聚合网关媒体提交失败",
+        "unknownSubmission": "聚合网关任务状态未确认",
+        "disabled": "账号已停用"
+      }
+    },
+    "originalSubmission": {
+      "version": 5,
+      "studioDigest": "d7ddb878e5126c1044c8d1b2849f454606908168f1a3ebde4781038c7d2d693d"
+    },
+    "chat": {
+      "version": 1,
+      "providers": [
+        {
+          "id": "openrouter",
+          "label": "OpenRouter 统一网关",
+          "models": [
+            "anthropic/claude-sonnet-4",
+            "openai/gpt-4.1",
+            "google/gemini-2.5-pro",
+            "deepseek/deepseek-chat-v3-0324",
+            "qwen/qwen3-235b-a22b"
+          ],
+          "defaultConfig": {
+            "provider": "openrouter",
+            "baseUrl": "https://openrouter.ai/api/v1/",
+            "apiKey": ""
+          }
+        },
+        {
+          "id": "newapi",
+          "label": "New API / One API 中转站",
+          "models": [
+            "newapi/gpt-4.1",
+            "newapi/claude-sonnet-4",
+            "newapi/gemini-2.5-pro",
+            "newapi/deepseek-chat"
+          ],
+          "defaultConfig": {
+            "provider": "newapi",
+            "baseUrl": "https://api.openai.com/v1/",
+            "apiKey": ""
+          }
+        }
+      ],
+      "sandbox": {
+        "tools": true,
+        "origins": [
+          "https://openrouter.ai",
+          "https://api.openai.com"
+        ],
+        "allowedHeaders": [
+          "HTTP-Referer",
+          "X-Title"
+        ],
+        "program": "(()=>{\"use strict\";var policy=(()=>{var p=Object.defineProperty;var y=Object.getOwnPropertyDescriptor;var w=Object.getOwnPropertyNames;var I=Object.prototype.hasOwnProperty;var S=(e,t)=>{for(var r in t)p(e,r,{get:t[r],enumerable:!0})},_=(e,t,r,s)=>{if(t&&typeof t==\"object\"||typeof t==\"function\")for(let n of w(t))!I.call(e,n)&&n!==r&&p(e,n,{get:()=>t[n],enumerable:!(s=y(t,n))||s.enumerable});return e};var k=e=>_(p({},\"__esModule\",{value:!0}),e);var j={};S(j,{default:()=>A});function d(e,t){try{return JSON.parse(e,t)}catch{}let r=[],s=[];for(let c=0;c<e.length;)if(e.charCodeAt(c)===34){let i=c++;for(;;){if(c>=e.length)throw new Error(\"Invalid JSON string\");let l=e.charCodeAt(c++);if(l===92)c++;else if(l===34)break}r.push(JSON.parse(e.slice(i,c)))}else{let i=e.startsWith(\"-Infinity\",c)?\"-Infinity\":e.startsWith(\"Infinity\",c)?\"Infinity\":e.startsWith(\"NaN\",c)?\"NaN\":null;i?(s.push({start:c,end:c+i.length,value:i===\"NaN\"?NaN:i===\"Infinity\"?1/0:-1/0}),c+=i.length):c++}let n=\"__muse_json_constant__\";for(;r.some(c=>c.startsWith(n));)n+=\"_\";let a={},o=[],u=0;for(let[c,i]of s.entries()){let l=n+c;a[l]=i.value,o.push(e.slice(u,i.start),\"[\"+JSON.stringify(l)+\"]\"),u=i.end}return o.push(e.slice(u)),JSON.parse(o.join(\"\"),function(c,i,l={}){return Array.isArray(i)&&i.length===1&&typeof i[0]==\"string\"&&Object.hasOwn(a,i[0])&&(i=a[i[0]],l={}),t?t.call(this,c,i,l):i})}var m=\"\\\\t-\\\\r\\\\x1c-\\\\x20\\\\x85\\\\xa0\\\\u1680\\\\u2000-\\\\u200a\\\\u2028\\\\u2029\\\\u202f\\\\u205f\\\\u3000\",N=new RegExp(\"^[\"+m+\"]+|[\"+m+\"]+$\",\"g\"),g=e=>e.replace(N,\"\"),h=e=>e!=null&&e!==!1&&e!==0&&e!==\"\"&&(!Array.isArray(e)||e.length>0)&&(typeof e!=\"object\"||Array.isArray(e)||Object.keys(e).length>0);var O=\"\\u4F60\\u662F\\u5BF9\\u8BDD\\u6807\\u9898\\u751F\\u6210\\u5668\\u3002\\u6839\\u636E\\u7528\\u6237\\u7684\\u7B2C\\u4E00\\u53E5\\u63D0\\u95EE\\u548C\\u52A9\\u624B\\u56DE\\u590D\\uFF0C\\u603B\\u7ED3\\u4E00\\u4E2A\\u7B80\\u6D01\\u7684\\u4E2D\\u6587\\u6807\\u9898\\uFF08\\u4E0D\\u8D85\\u8FC7 18 \\u4E2A\\u5B57\\uFF09\\uFF0C\\u53EA\\u8FD4\\u56DE\\u6807\\u9898\\u672C\\u8EAB\\uFF0C\\u4E0D\\u52A0\\u5F15\\u53F7\\u6216\\u6807\\u70B9\\u3002\";function f(e){if(!e||typeof e!=\"object\"||Array.isArray(e))throw Error(\"Invalid object\");return e}function E(e,t){return e===\"newapi\"&&typeof t==\"string\"&&t.startsWith(\"newapi/\")?t.slice(7):t}function J(e){let t=/-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?/y,r=[],s=0;for(let n=0;n<e.length;){let a=e[n++];if(a==='\"')for(;n<e.length;){let o=e[n++];if(o===\"\\\\\")n++;else if(o==='\"')break}else if(a===\"-\"||a>=\"0\"&&a<=\"9\"){t.lastIndex=n-1;let o=t.exec(e);if(!o)continue;if(o[0].replace(/^-/,\"\").length>4300&&/^-?\\d+$/.test(o[0]))throw Error(\"Integer string limit\");r.push(e.slice(s,n-1),JSON.stringify(o[0])),s=n=t.lastIndex}}return d(r.join(\"\")+e.slice(s))}var A={request(e,t){let r=t.provider===\"openrouter\"?{\"HTTP-Referer\":\"https://fumiao.studio\",\"X-Title\":\"Fumiao Studio\"}:void 0;if(e===\"probe\")return r?{path:\"models\",headers:r}:{path:\"models\"};let s=E(t.provider,t.model),n=e===\"stream\"?{model:s,messages:t.messages,stream:!0,stream_options:{include_usage:!0},max_tokens:4096,...t.tools?.length?{tools:t.tools}:{}}:{model:s,messages:[{role:\"system\",content:O},{role:\"user\",content:`\\u63D0\\u95EE\\uFF1A${String(t.question||\"\").slice(0,600)}\n\\u56DE\\u590D\\uFF1A${String(t.answer||\"\").slice(0,600)}`}],stream:!1,max_tokens:60};return r?{path:\"chat/completions\",body:n,headers:r}:{path:\"chat/completions\",body:n}},event(e){if(!e.startsWith(\"data:\"))return{type:\"skip\"};let t=g(e.slice(5));if(t===\"[DONE]\")return{type:\"done\"};let r,s;try{r=d(t),s=J(t)}catch{return{type:\"error\",code:\"format\"}}if(f(r),h(r.error))return{type:\"error\",code:\"upstream\"};let n=h(r.choices)?r.choices:[];if(!Array.isArray(n))throw Error(\"Invalid choices\");let a=n.length?f(n[0]):{},o=f(h(a.delta)?a.delta:{}),u=f(h(r.usage)?r.usage:{}),c={};for(let l of[\"prompt_tokens\",\"completion_tokens\",\"total_tokens\",\"prompt_cache_hit_tokens\",\"prompt_cache_miss_tokens\"])typeof u[l]==\"number\"&&/^-?\\d+$/.test(s.usage[l])&&(c[l]=s.usage[l]);let i=o.content;return{type:\"chunk\",text:h(i)?typeof i==\"number\"&&!Number.isFinite(i)?!0:i:\"\",reason:a.finish_reason??null,usage:c,...o.tool_calls==null?{}:{toolCalls:o.tool_calls}}},title(e){let t=f(d(e)),r=Array.isArray(t.choices)?t.choices:[],s=r.length?f(r[0]):{},n=f(s.message||{});return g(String(n.content||\"\")).replace(/^[\"'“”「『]+|[\"'“”」』]+$/g,\"\").slice(0,60)},probe(e,t){let r=f(d(e)),s=Object.hasOwn(r,\"data\")?r.data:[];if((s===\"\"||s&&typeof s==\"object\"&&!Object.keys(s).length)&&(s=[]),!Array.isArray(s))throw Error(\"Invalid model list\");let n=s.map(o=>{if(f(o),!Object.hasOwn(o,\"id\")||o.id!==null&&typeof o.id==\"object\")throw Error(\"Invalid model ID\");return String(o.id)});return n.length?t.map(o=>o.startsWith(\"newapi/\")?o.slice(7):o).some(o=>n.includes(o))?\"ok\":\"unavailable\":\"empty\"}};return k(j);})();\n;return policy.default})()"
+      }
+    }
+  },
+  "studioProgram": "(()=>{\"use strict\";var mediaPolicy=(()=>{var f=Object.defineProperty;var h=Object.getOwnPropertyDescriptor;var _=Object.getOwnPropertyNames;var O=Object.prototype.hasOwnProperty;var w=(e,n)=>{for(var l in n)f(e,l,{get:n[l],enumerable:!0})},S=(e,n,l,t)=>{if(n&&typeof n==\"object\"||typeof n==\"function\")for(let i of _(n))!O.call(e,i)&&i!==l&&f(e,i,{get:()=>n[i],enumerable:!(t=h(n,i))||t.enumerable});return e};var b=e=>S(f({},\"__esModule\",{value:!0}),e);var N={};w(N,{default:()=>v});var c={\"openrouter/flux-1.1-pro\":{parameterObject:!0,canvas:!0,fields:{ratio:{type:\"string\",title:\"\\u753B\\u5E45\\u6BD4\\u4F8B\",enum:[\"16:9\",\"9:16\",\"1:1\",\"4:3\",\"3:4\"],default:\"16:9\"},resolution:{type:\"string\",title:\"\\u5206\\u8FA8\\u7387\",enum:[\"1K\",\"2K\"],default:\"1K\"},style_preset:{type:\"string\",title:\"\\u753B\\u9762\\u98CE\\u683C\\u9884\\u8BBE\",enum:[\"cinematic\",\"photorealistic\",\"anime\",\"watercolor\"],default:\"cinematic\",optionLabels:{cinematic:\"\\u7535\\u5F71\\u8D28\\u611F\",photorealistic:\"\\u5199\\u5B9E\\u6444\\u5F71\",anime:\"\\u65E5\\u7CFB\\u52A8\\u753B\",watercolor:\"\\u6C34\\u5F69\\u63D2\\u753B\"}},guidance_scale:{type:\"number\",title:\"\\u63D0\\u793A\\u8BCD\\u5F15\\u5BFC\\u5F3A\\u5EA6 (CFG)\",minimum:1,maximum:15,default:3.5,uiHint:\"slider\"},use_reference_blend:{type:\"boolean\",title:\"\\u542F\\u7528\\u53C2\\u8003\\u56FE\\u878D\\u5408\",default:!1}},tiers:[{tier:\"standard\",when:{}}],references:{min:0,max:4,conditionalLimits:[{when:{use_reference_blend:[!0]},min:1,max:4,reason:\"\\u5F00\\u542F\\u53C2\\u8003\\u56FE\\u878D\\u5408\\u65F6\\u9700\\u63D0\\u4F9B 1\\u20134 \\u5F20\\u53C2\\u8003\\u56FE\"}]}},\"newapi/gpt-image-1\":{parameterObject:!0,canvas:!0,fields:{ratio:{type:\"string\",title:\"\\u753B\\u5E45\\u6BD4\\u4F8B\",enum:[\"16:9\",\"9:16\",\"1:1\"],default:\"1:1\"},image_quality:{type:\"string\",title:\"\\u753B\\u8D28\\u6863\\u4F4D\",enum:[\"low\",\"medium\",\"high\"],default:\"medium\"},background:{type:\"string\",title:\"\\u80CC\\u666F\\u900F\\u660E\\u5EA6\",enum:[\"auto\",\"opaque\",\"transparent\"],default:\"auto\",optionLabels:{auto:\"\\u81EA\\u52A8\",opaque:\"\\u4E0D\\u900F\\u660E\",transparent:\"\\u900F\\u660E PNG\"}}},tiers:[{tier:\"standard\",when:{}}],references:{min:0,max:4}},\"newapi/sora-2\":{parameterObject:!0,canvas:!0,fields:{ratio:{type:\"string\",title:\"\\u753B\\u5E45\\u6BD4\\u4F8B\",enum:[\"16:9\",\"9:16\",\"1:1\"],default:\"16:9\"},seconds:{type:\"integer\",title:\"\\u89C6\\u9891\\u65F6\\u957F\\uFF08\\u79D2\\uFF09\",enum:[4,8,12],default:4},motion_strength:{type:\"number\",title:\"\\u8FD0\\u52A8\\u5E45\\u5EA6\",minimum:.1,maximum:1,default:.6,uiHint:\"slider\"}},tiers:[{tier:\"video\",when:{}}],references:{min:0,max:2}}};function m(e,n){try{return JSON.parse(e,n)}catch{}let l=[],t=[];for(let r=0;r<e.length;)if(e.charCodeAt(r)===34){let a=r++;for(;;){if(r>=e.length)throw new Error(\"Invalid JSON string\");let d=e.charCodeAt(r++);if(d===92)r++;else if(d===34)break}l.push(JSON.parse(e.slice(a,r)))}else{let a=e.startsWith(\"-Infinity\",r)?\"-Infinity\":e.startsWith(\"Infinity\",r)?\"Infinity\":e.startsWith(\"NaN\",r)?\"NaN\":null;a?(t.push({start:r,end:r+a.length,value:a===\"NaN\"?NaN:a===\"Infinity\"?1/0:-1/0}),r+=a.length):r++}let i=\"__muse_json_constant__\";for(;l.some(r=>r.startsWith(i));)i+=\"_\";let o={},u=[],s=0;for(let[r,a]of t.entries()){let d=i+r;o[d]=a.value,u.push(e.slice(s,a.start),\"[\"+JSON.stringify(d)+\"]\"),s=a.end}return u.push(e.slice(s)),JSON.parse(u.join(\"\"),function(r,a,d={}){return Array.isArray(a)&&a.length===1&&typeof a[0]==\"string\"&&Object.hasOwn(o,a[0])&&(a=o[a[0]],d={}),n?n.call(this,r,a,d):a})}var g=\"\\\\t-\\\\r\\\\x1c-\\\\x20\\\\x85\\\\xa0\\\\u1680\\\\u2000-\\\\u200a\\\\u2028\\\\u2029\\\\u202f\\\\u205f\\\\u3000\",x=new RegExp(\"^[\"+g+\"]+|[\"+g+\"]+$\",\"g\"),p=e=>e.replace(x,\"\");var y=()=>({source:\"none\",samples:0,confidence:\"none\",version:4});var q=Object.keys(c);function P(e){return typeof e==\"string\"&&e.startsWith(\"newapi/\")?e.slice(7):e}function M(e){let n=String(e||\"\").toLowerCase();return n.includes(\"content_policy_violation\")||n.includes(\"moderation_blocked\")||n.includes(\"safety_blocked\")||n.includes(\"content_filter\")||n.includes(\"\\u5B89\\u5168\\u5BA1\\u6838\")||n.includes(\"\\u8FDD\\u89C4\")}var v={modelForm(e){return c[e.id]||c[\"openrouter/flux-1.1-pro\"]},namespace(e){return\"-openrouter-gateway-\"+e.kind},validate(e){return p(e.prompt||\"\")?[...String(e.prompt||\"\")].length>12e3?\"\\u63D0\\u793A\\u8BCD\\u6700\\u591A 12000 \\u5B57\":\"\":\"\\u8BF7\\u8F93\\u5165\\u63D0\\u793A\\u8BCD\"},plan(e){let l=(c[e.model]||c[\"openrouter/flux-1.1-pro\"]).references?.max??4,t=Array.isArray(e.refs)?e.refs.slice(0,l):[];return{namespace:\"-openrouter-gateway-\"+e.kind,parentKind:\"any\",refs:t,roles:t.map(()=>\"ref\"),missing:{status:400,message:\"\\u53C2\\u8003\\u56FE\\u4E0D\\u53EF\\u7528\"},requireConfigured:\"OpenRouter / New API \\u5A92\\u4F53\\u670D\\u52A1\\u5C1A\\u672A\\u914D\\u7F6E\\uFF0C\\u8BF7\\u8054\\u7CFB\\u7BA1\\u7406\\u5458\",admission:{models:q,owner:12,global:60,message:\"\\u5F53\\u524D\\u805A\\u5408\\u7F51\\u5173\\u4EFB\\u52A1\\u8F83\\u591A\\uFF0C\\u8BF7\\u7A0D\\u540E\\u518D\\u8BD5\"}}},async prepare(e,n,l){await l.task.admit();let t=c[e.model]||c[\"openrouter/flux-1.1-pro\"],i={...e.params||{}};e.ratio!==void 0&&i.ratio===void 0&&(i.ratio=e.ratio),e.resolution!==void 0&&i.resolution===void 0&&(i.resolution=e.resolution),e.image_quality!==void 0&&i.image_quality===void 0&&(i.image_quality=e.image_quality),e.seconds!==void 0&&i.seconds===void 0&&(i.seconds=e.seconds);let o={};for(let[r,a]of Object.entries(t.fields||{}))i[r]!==void 0&&i[r]!==null?o[r]=i[r]:a.default!==void 0&&(o[r]=a.default);let s=(Array.isArray(n)?n:n&&Array.isArray(n.references)?n.references:[]).map(r=>typeof r==\"string\"?r:r.id);return{params:o,references:s,view:{ratio:String(o.ratio||\"16:9\"),quality:null,seconds:typeof o.seconds==\"number\"?o.seconds:null,sampling_steps:null,seed:null,width:null,height:null,image_quality:typeof o.image_quality==\"string\"?o.image_quality:null,audio_settings:null,h3_inputs:null,refs:s}}},async estimate(e){return{tier:e.kind===\"video\"?\"video\":\"standard\",params:e.params??{}}},configuration({connection:e}){return{configured:!!e?.configured,ready:!!e?.configured}},project(e){return{note:e.request_note||\"\"}},timingFeatures(e){return{kind:e.kind,model:e.model,length:e.kind===\"video\"?\"medium\":\"short\"}},requestCapacity(){return null},queuePlan(){return{wait:y(),queue:[]}},request({kind:e,model:n,prompt:l,params:t,references:i,remoteId:o}){if(o)return{path:`/videos/generations/${encodeURIComponent(o)}`,method:\"GET\",timeoutMs:3e4};let s={model:P(n),prompt:String(l||\"\"),...t||{}};return Array.isArray(i)&&i.length>0&&(s.references=i),{path:e===\"video\"?\"/videos/generations\":\"/images/generations\",body:s,timeoutMs:e===\"video\"?18e4:12e4}},result(e,n,l){let t=null;if(e.text)try{t=m(e.text)}catch{t=null}let o=(l?.kind||\"image\")===\"video\"?\"video/mp4\":\"image/png\";if(!n){if([429,502,503,504].includes(e.status))return{disposition:{action:\"retry\",note:\"\\u805A\\u5408\\u7F51\\u5173\\u9650\\u6D41\\u6216\\u7E41\\u5FD9\\uFF0C\\u7A0D\\u540E\\u81EA\\u52A8\\u91CD\\u8BD5\",delaySeconds:15}};if([400,422].includes(e.status)&&M(e.text))return{disposition:{action:\"fail\",reason:\"moderation_blocked\",certainty:\"rejected\",billable:!1,note:\"\\u63D0\\u793A\\u8BCD\\u89E6\\u53D1\\u5185\\u5BB9\\u5B89\\u5168\\u5BA1\\u6838\\u62E6\\u622A\\uFF08\\u672A\\u8BA1\\u8D39\\uFF09\"}};if([400,401,403,422].includes(e.status))return{disposition:{action:\"fail\",certainty:\"rejected\",billable:!1,note:\"\\u805A\\u5408\\u7F51\\u5173\\u62D2\\u7EDD\\u4E86\\u751F\\u6210\\u8BF7\\u6C42\\uFF0C\\u8BF7\\u68C0\\u67E5\\u6A21\\u578B\\u53C2\\u6570\\u6216 API Key\"}};let u=Array.isArray(t?.data)?t.data[0]:t;if(u?.b64_json&&typeof u.b64_json==\"string\")return{receipt:{state:\"completed\",artifacts:[{url:`data:${u.mime||o};base64,${u.b64_json}`,mime:u.mime||o}],...t?.usage?{usage:t.usage}:{}}};let s=u?.url||t?.video_url||t?.image_url||t?.url;if(typeof s==\"string\"&&s)return{receipt:{state:\"completed\",artifacts:[{url:s,mime:u?.mime||o}],...t?.usage?{usage:t.usage}:{}}};let r=t?.task_id||t?.id;return typeof r==\"string\"&&/^[A-Za-z0-9_-]{4,128}$/.test(r)?{receipt:{state:\"pending\",remoteId:r},note:\"\\u805A\\u5408\\u7F51\\u5173\\u6B63\\u5728\\u751F\\u6210\\u5A92\\u4F53\"}:{disposition:{action:\"fail\",note:\"\\u805A\\u5408\\u7F51\\u5173\\u54CD\\u5E94\\u672A\\u786E\\u8BA4\",interrupted:!0,uncertain:!0}}}if(e.status===404)return{disposition:{action:\"fail\",note:\"\\u4E0A\\u6E38\\u5A92\\u4F53\\u4EFB\\u52A1\\u4E0D\\u5B58\\u5728\"}};if(!t||typeof t!=\"object\")return{disposition:{action:\"poll\"}};if([\"completed\",\"done\",\"succeeded\",\"success\"].includes(t.status)){let u=Array.isArray(t.data)?t.data[0]:t,s=u?.url||t.video_url||t.image_url||t.url,r=u?.b64_json;return typeof r==\"string\"&&r?{receipt:{state:\"completed\",artifacts:[{url:`data:${o};base64,${r}`,mime:o}]}}:typeof s==\"string\"&&s?{receipt:{state:\"completed\",artifacts:[{url:s,mime:o}]}}:{disposition:{action:\"fail\",note:\"\\u4E0A\\u6E38\\u5DF2\\u5B8C\\u6210\\u4F46\\u7F3A\\u5C11\\u6210\\u54C1\\u5730\\u5740\"}}}return t.status===\"failed\"?{disposition:{action:\"fail\",note:String(t.error||\"\\u4E0A\\u6E38\\u5A92\\u4F53\\u751F\\u6210\\u5931\\u8D25\")}}:{receipt:{state:\"pending\",remoteId:n},note:\"\\u805A\\u5408\\u7F51\\u5173\\u751F\\u6210\\u4E2D\"}},async serviceProbe(e){let n=await e.service.read(\"/models\");return{ready:n.status>=200&&n.status<300}},async queueHealth(){return{ready:!0,checked:Math.floor(Date.now()/1e3)}},artifact(e){return{url:e}},downloadError(){return{note:\"\\u5A92\\u4F53\\u6210\\u54C1\\u4E0B\\u8F7D\\u5931\\u8D25\\uFF0C\\u8BF7\\u7A0D\\u540E\\u91CD\\u8BD5\",disposition:\"retry\"}}};return b(N);})();\n;return mediaPolicy.default})()",
+  "contributes": {
+    "version": 1,
+    "hostCapabilities": [
+      "http",
+      "secrets",
+      "media"
+    ],
+    "http": {
+      "origins": [
+        "https://openrouter.ai",
+        "https://api.openai.com"
+      ],
+      "connection": true,
+      "allowedHeaders": [
+        "HTTP-Referer",
+        "X-Title"
+      ]
+    }
+  }
+}

@@ -179,9 +179,37 @@ test("draftEquals matches JSON semantics while skipping unchanged node reference
     document: { schemaVersion: 1, nodes: [n1, n2], edges: [], shots: [] },
   };
 
+  const withBgm: Draft = {
+    title: "Test",
+    document: {
+      schemaVersion: 1,
+      nodes: [n1, n2],
+      edges: [],
+      bgm: { asset_id: "a".repeat(32), volume: 0.35, ducking: true, loop: true },
+      bgm_applied_job: 7,
+    },
+  };
+  const withClearedBgm: Draft = {
+    title: "Test",
+    document: {
+      schemaVersion: 1,
+      nodes: [n1, n2],
+      edges: [],
+      bgm: null,
+      bgm_applied_job: 7,
+    },
+  };
+  const withLoudnorm: Draft = {
+    title: "Test",
+    document: { schemaVersion: 1, nodes: [n1, n2], edges: [], loudnorm: true },
+  };
+
   assert.equal(draftEquals(base, identicalCopy), true);
   assert.equal(draftEquals(base, moved), false);
   assert.equal(draftEquals(base, withEmptyShots), false);
+  assert.equal(draftEquals(base, withBgm), false);
+  assert.equal(draftEquals(withBgm, withClearedBgm), false);
+  assert.equal(draftEquals(base, withLoudnorm), false);
 });
 
 test("computeGridGap and computeOverlayPositions compute stable geometry", () => {

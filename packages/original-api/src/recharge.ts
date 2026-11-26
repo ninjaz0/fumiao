@@ -246,7 +246,7 @@ export class OriginalRecharge {
       );
       const old = await one(
         sql,
-        "SELECT *,$2::bigint AS workspace FROM original_recharge_orders WHERE uid=$1",
+        `SELECT r.*,$2::bigint AS workspace, ${methodLabel} FROM original_recharge_orders r WHERE r.uid=$1`,
         [input.uid, workspace.public_id],
       );
       if (old) {
@@ -302,7 +302,10 @@ export class OriginalRecharge {
           channel.config,
         ],
       );
-      return { order: readOrder(row), fresh: true };
+      return {
+        order: { ...readOrder(row), method_label: method.title },
+        fresh: true,
+      };
     });
     const { order } = prepared;
     if (!prepared.fresh) return publicOrder(order);

@@ -11,8 +11,32 @@ export type ChatContextRow = {
   state: string;
   context: string;
 };
+export type WorkspaceSkillPrompt = {
+  slug: string;
+  name: string;
+  body_md: string;
+};
+function appendSkillInstructions(
+  baseSystem: string,
+  skills?: WorkspaceSkillPrompt[],
+): string {
+  if (!skills || !skills.length) return baseSystem;
+  let total = 0;
+  const blocks: string[] = [];
+  for (const s of skills) {
+    const snippet = `### ${s.name} (${s.slug})\n${s.body_md.trim()}`;
+    if (total + snippet.length > 12000) break;
+    blocks.push(snippet);
+    total += snippet.length;
+  }
+  if (!blocks.length) return baseSystem;
+  return `${baseSystem}\n\n<workspace_skills>\n${blocks.join("\n\n")}\n</workspace_skills>`;
+}
 /** Caller supplies non-superseded rows through the current user message in ID order. */
-export function chatContext(rows: ChatContextRow[]): ChatMessage[] {
+export function chatContext(
+  rows: ChatContextRow[],
+  skills?: WorkspaceSkillPrompt[],
+): ChatMessage[] {
   const groups: ChatMessage[][] = [];
   let latest: Record<string, any> = {};
   for (const row of rows) {
@@ -54,9 +78,10 @@ export function chatContext(rows: ChatContextRow[]): ChatMessage[] {
   return [
     {
       role: "system",
-      content: pythonTruthy(latest.writeback)
-        ? CANVAS_EDIT_SYSTEM
-        : CHAT_SYSTEM,
+      content: appendSkillInstructions(
+        pythonTruthy(latest.writeback) ? CANVAS_EDIT_SYSTEM : CHAT_SYSTEM,
+        skills,
+      ),
     },
     ...kept.flat(),
   ];

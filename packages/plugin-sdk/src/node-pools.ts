@@ -13,6 +13,10 @@ export const nodePoolSchema = z.object({ version: z.literal(1) }).strict();
 export const capabilitiesSchema = z
   .object({
     ready_models: z.array(z.string().min(1).max(180)).max(20),
+    loaded_model_key: z.string().max(180).optional(),
+    vram_total_mb: z.number().int().positive().max(1_048_576).optional(),
+    vram_free_mb: z.number().int().nonnegative().max(1_048_576).optional(),
+    comfy_object_info_hash: z.string().max(128).optional(),
     scheduling: z
       .object({
         hardware: z.string().max(180),
@@ -37,6 +41,7 @@ export const artifactRulesSchema = z
       "image/webp",
       "video/mp4",
       "audio/wav",
+      "audio/mpeg",
     ]),
     maxBytes: z
       .number()
@@ -46,7 +51,7 @@ export const artifactRulesSchema = z
     width: z.number().int().positive().max(16384).optional(),
     height: z.number().int().positive().max(16384).optional(),
     videoCodec: z.enum(["h264", "hevc", "av1"]).optional(),
-    audioCodec: z.enum(["aac", "pcm_s16le"]).optional(),
+    audioCodec: z.enum(["aac", "pcm_s16le", "mp3"]).optional(),
     fps: z.number().positive().max(240).optional(),
     frames: z.number().int().positive().optional(),
     channels: z.number().int().positive().max(8).optional(),

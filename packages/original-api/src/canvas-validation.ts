@@ -45,6 +45,14 @@ export async function validateCanvasDocument(
   );
   const refs: CanvasReference[] = [];
   for (const node of document.nodes) {
+    if (node.parent_id) {
+      const parent = nodes.get(node.parent_id);
+      requireValue(
+        parent && parent.id !== node.id && parent.type === "group",
+        400,
+        "工作流组父节点无效",
+      );
+    }
     const ext = node.extension;
     if (ext?.result) {
       const seenAssets = new Set<string>();

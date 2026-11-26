@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { one } from "@fumiao/platform/db.js";
 import { chatBytes, chatText } from "@fumiao/platform/chat-values.js";
 import type { OriginalChats } from "./chats.js";
+import {
+  loadActiveWorkspaceSkills,
+  snapshotTurnSkills,
+  type ActiveSkillSnapshot,
+} from "./skills.js";
 
 /** Durable ownership is separate from the original public turn state. A claimed
  * turn is never submitted again: an expired owner is interrupted/refunded. */
@@ -17,8 +22,9 @@ export class ChatExecution {
     return this.p.db.transaction(async (sql) => {
       let turn = await one(sql, "SELECT * FROM chat_turns WHERE id=$1", [id]);
       if (!turn) return null;
-      await sql.query(
-        "SELECT id FROM chat_conversations WHERE id=$1 FOR UPDATE",
+      const conv = await one(
+        sql,
+        "SELECT id, workspace_id FROM chat_conversations WHERE id=$1 FOR UPDATE",
         [turn.conversation_id],
       );
       turn = await one(sql, "SELECT * FROM chat_turns WHERE id=$1 FOR UPDATE", [
@@ -38,9 +44,31 @@ export class ChatExecution {
           [turn.conversation_id, turn.user_message],
         )
       ).rows;
+      let skills: ActiveSkillSnapshot[] = [];
+      const hasSnapshots = await one(
+        sql,
+        "SELECT to_regclass('chat_turn_skill_snapshots') IS NOT NULL AS ok",
+      );
+      if (hasSnapshots?.ok) {
+        const existingSnap = await one(
+          sql,
+          "SELECT snapshots FROM chat_turn_skill_snapshots WHERE turn_id=$1",
+          [id],
+        );
+        if (existingSnap?.snapshots) {
+          skills = existingSnap.snapshots as ActiveSkillSnapshot[];
+        } else if (conv?.workspace_id) {
+          skills = await loadActiveWorkspaceSkills(
+            sql,
+            String(conv.workspace_id),
+          );
+          await snapshotTurnSkills(sql, id, skills);
+        }
+      }
       return {
         turn,
         lease,
+        skills,
         rows: rows.map((r) => ({
           role: r.role as string,
           content: chatText(r.content),
