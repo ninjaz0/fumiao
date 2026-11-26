@@ -164,6 +164,7 @@ export type StudioState = {
   video_models: Record<string, string>;
   audio_models: Record<string, string>;
   model_access?: Record<string, boolean>;
+  model_plugin_access?: Record<string, boolean>;
   model_policy: ModelPolicy;
   team_model_policies?: Record<string, ModelPolicy>;
   model_groups: Record<string, ModelGroup>;

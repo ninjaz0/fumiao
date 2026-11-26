@@ -205,6 +205,16 @@ export class OriginalGeneration {
         adapter.validate(draft, "before-retry");
       }
       // The policy check precedes reference validation and billing in the original.
+      if (packages)
+        requireValue(
+          (
+            await one(sql, "SELECT studio_plugin_accepts($1) AS ok", [
+              catalog.plugin_id,
+            ])
+          ).ok,
+          409,
+          "插件已停用",
+        );
       requireValue(
         (
           await one(sql, "SELECT studio_model_allowed($1,$2) AS allowed", [
