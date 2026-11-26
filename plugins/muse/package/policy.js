@@ -24,12 +24,42 @@ const compareQueueJobs = (a, b) =>
         ? 1
         : 0;
 const laneRank = (lane) => lane.median ?? Infinity;
-function applyBusyLane(lane, eta) {
-  for (const key of ["low", "median", "high"])
-    lane[key] =
-      lane[key] !== null && eta[key] != null && !eta.overdue
-        ? Math.max(lane[key], eta[key])
-        : null;
+function validRemaining(eta) {
+  return (
+    eta &&
+    eta.low != null &&
+    eta.median != null &&
+    eta.high != null &&
+    !eta.overdue
+  );
+}
+function buildPoolLanes(limit, busyEtas) {
+  const k = Math.max(1, limit);
+  const b = busyEtas.length;
+  if (b === 0) {
+    return Array.from({ length: k }, () => ({ low: 0, median: 0, high: 0 }));
+  }
+  const known = busyEtas
+    .filter(validRemaining)
+    .map((eta) => ({ low: eta.low, median: eta.median, high: eta.high }));
+  const sortNums = (key) => known.map((x) => x[key]).sort((x, y) => x - y);
+  const lows = sortNums("low");
+  const medians = sortNums("median");
+  const highs = sortNums("high");
+  // Treat unknown/overdue remaining times conservatively as +Infinity (sorted last):
+  // when B > K, Kth-from-end order statistics reflect that B - K + 1 jobs must finish before active < K.
+  const orderedBusy = Array.from({ length: b }, (_, idx) =>
+    idx < known.length
+      ? { low: lows[idx], median: medians[idx], high: highs[idx] }
+      : { low: null, median: null, high: null },
+  );
+  if (b >= k) {
+    return orderedBusy.slice(b - k);
+  }
+  return [
+    ...Array.from({ length: k - b }, () => ({ low: 0, median: 0, high: 0 })),
+    ...orderedBusy,
+  ];
 }
 function externalImageCount(context) {
   const ownIds = new Set(
@@ -84,55 +114,30 @@ const muse21QueuePolicy = {
       available = health.ready && stamp - (health.checked ?? 0) < 90,
       capacity = museCapacity(context),
       imageCap = localImageLimit(context, capacity);
-    const sharedLanes = Array.from({ length: Math.max(1, capacity) }, () => ({
-      low: 0,
-      median: 0,
-      high: 0,
-    }));
-    const imageLanes = Array.from({ length: Math.max(1, imageCap) }, () => ({
-      low: 0,
-      median: 0,
-      high: 0,
-    }));
-    const connLanes = new Map();
-    const connBusyIndex = new Map();
-    if (connectionLimits && typeof connectionLimits === "object") {
-      for (const [cid, limit] of Object.entries(connectionLimits)) {
-        if (typeof limit === "number" && Number.isFinite(limit)) {
-          connLanes.set(
-            cid,
-            Array.from({ length: Math.max(1, limit) }, () => ({
-              low: 0,
-              median: 0,
-              high: 0,
-            })),
-          );
-          connBusyIndex.set(cid, 0);
-        }
-      }
-    }
     const busy = jobs.filter(
       (j) => j.status === "running" && runs[j.id]?.phase !== "queued",
     );
-    let imageBusyIndex = 0;
-    for (const [index, job] of busy.entries()) {
+    const sharedBusyEtas = [];
+    const imageBusyEtas = [];
+    const connBusyEtas = new Map();
+    for (const job of busy) {
       const eta = tools.remaining(job);
-      applyBusyLane(
-        sharedLanes[Math.min(index, sharedLanes.length - 1)],
-        eta,
-      );
-      if (!isKnownNonImageKind(job.kind)) {
-        applyBusyLane(
-          imageLanes[Math.min(imageBusyIndex, imageLanes.length - 1)],
-          eta,
-        );
-        imageBusyIndex++;
+      sharedBusyEtas.push(eta);
+      if (!isKnownNonImageKind(job.kind)) imageBusyEtas.push(eta);
+      if (job.connection) {
+        if (!connBusyEtas.has(job.connection))
+          connBusyEtas.set(job.connection, []);
+        connBusyEtas.get(job.connection).push(eta);
       }
-      if (job.connection && connLanes.has(job.connection)) {
-        const lanes = connLanes.get(job.connection);
-        const idx = connBusyIndex.get(job.connection);
-        applyBusyLane(lanes[Math.min(idx, lanes.length - 1)], eta);
-        connBusyIndex.set(job.connection, idx + 1);
+    }
+    const sharedLanes = buildPoolLanes(capacity, sharedBusyEtas);
+    const imageLanes = buildPoolLanes(imageCap, imageBusyEtas);
+    const connLanes = new Map();
+    if (connectionLimits && typeof connectionLimits === "object") {
+      for (const [cid, limit] of Object.entries(connectionLimits)) {
+        if (typeof limit === "number" && Number.isFinite(limit)) {
+          connLanes.set(cid, buildPoolLanes(limit, connBusyEtas.get(cid) || []));
+        }
       }
     }
     const plans = {};

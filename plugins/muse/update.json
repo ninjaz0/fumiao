@@ -3,5 +3,5 @@
   "version": "2.1.0",
   "notes": "支持按 Muse2API 启用账号数回退并发派发（图片最多 8 路并保守扣减外部图片/无类型占用；/readyz 仅含账号数，请结合上游 MUSE2API_CONCURRENCY 与共享占用评估）；存量连接保留原并行任务数量，如需扩容请手动调高",
   "package": "muse.fmplugin.json",
-  "sha256": "ffbe6ea0ce74551e5ca76ef6c9649a3b6d81e5eda105bc09586fc31f770643d7"
+  "sha256": "97cf7b930529a7a29cabcf585ac221246eb887b128c5f5518bd8d36b616f85ef"
 }

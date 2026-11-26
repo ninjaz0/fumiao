@@ -2690,6 +2690,104 @@ test("Muse 2.1.0 shares active occupancy and serializes concurrent claims across
       await new Executor(f.p).execute(j.id);
     }
 
+    // 2.5 Online concurrency scale-down (3 running -> concurrency lowered to 2 on 4-account upstream):
+    //     4th queued video must wait for 2nd completion (~10s, NOT 1st completion ~5s) in both QueueForecasts and Executor!
+    const connVidScaleUp = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connVideo,
+    )!;
+    await f.p.updateConnection(actor, connVideo, {
+      revision: connVidScaleUp.revision,
+      enabled: true,
+      concurrency: 3,
+    });
+    await f.db.query("UPDATE connections SET queue_refresh_until=NULL");
+    await new QueueHealthPoller(f.p).refreshEnabled();
+
+    const sd1 = await submitVid("缩容运行1_剩5s");
+    const sd2 = await submitVid("缩容运行2_剩10s");
+    const sd3 = await submitVid("缩容运行3_剩20s");
+    const sd4 = await submitVid("缩容排队4");
+    for (const j of [sd1, sd2, sd3]) {
+      await new Executor(f.p).execute(j.id);
+      await new Executor(f.p).execute(j.id); // generating
+    }
+    const dbNow = Number(
+      (
+        await one(
+          f.db,
+          "SELECT extract(epoch FROM now())::double precision AS t",
+        )
+      ).t,
+    );
+    // Calibrated video median is 60s -> set started so remaining medians are ~5s, ~10s, ~20s
+    await f.db.query(
+      "UPDATE job_runs SET started=$2,generating=$2 WHERE job=$1",
+      [sd1.id, dbNow - 55],
+    );
+    await f.db.query(
+      "UPDATE job_runs SET started=$2,generating=$2 WHERE job=$1",
+      [sd2.id, dbNow - 50],
+    );
+    await f.db.query(
+      "UPDATE job_runs SET started=$2,generating=$2 WHERE job=$1",
+      [sd3.id, dbNow - 40],
+    );
+
+    const connVidScaleDown = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === connVideo,
+    )!;
+    await f.p.updateConnection(actor, connVideo, {
+      revision: connVidScaleDown.revision,
+      enabled: true,
+      concurrency: 2,
+    });
+    await f.db.query("UPDATE connections SET queue_refresh_until=NULL");
+    await new QueueHealthPoller(f.p).refreshEnabled();
+
+    const scaleDownForecast = await new QueueForecasts(f.p).forWorkspace(
+      actor,
+      ws.id,
+    );
+    assert.ok(
+      scaleDownForecast.jobs[sd4.id].eta.median >= 8 &&
+        scaleDownForecast.jobs[sd4.id].eta.median <= 12,
+      `4th video after concurrency 3->2 scale-down must wait ~10s (2nd completion), got ${JSON.stringify(scaleDownForecast.jobs[sd4.id].eta)}`,
+    );
+
+    // Finishing only sd1 (5s) leaves 2 active >= concurrency 2 -> sd4 must STILL stay queued
+    const sd1Rem = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [sd1.id])
+    ).remote_id;
+    terminalOnA.add(sd1Rem);
+    activeOnA--;
+    await new Executor(f.p).execute(sd1.id);
+    await new Executor(f.p).execute(sd4.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [sd4.id])).state,
+      "queued",
+    );
+
+    // Finishing sd2 (10s) drops active to 1 < concurrency 2 -> sd4 NOW claims and dispatches!
+    const sd2Rem = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [sd2.id])
+    ).remote_id;
+    terminalOnA.add(sd2Rem);
+    activeOnA--;
+    await new Executor(f.p).execute(sd2.id);
+    await new Executor(f.p).execute(sd4.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [sd4.id])).state,
+      "running",
+    );
+    for (const j of [sd3, sd4]) {
+      const rem = (
+        await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [j.id])
+      ).remote_id;
+      terminalOnA.add(rem);
+      activeOnA--;
+      await new Executor(f.p).execute(j.id);
+    }
+
     // 3. Distinct upstreams (connImage -> serverA 1-account, connVideo -> serverB 1-account) remain independent
     accountsA = 1;
     const connVidCurrent = (await f.p.studioConnections(actor)).find(

@@ -493,6 +493,243 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
     }),
     11,
   );
+
+  // Online scale-down across connectionLimits, shared upstream capacity, and image capacity + conservative unknown remaining
+  const makeVidJob = (id: number, status: "running" | "queued") => ({
+    id,
+    node: null,
+    connection: "conn-1",
+    model: "muse-video",
+    kind: "video" as const,
+    status,
+    remoteId: status === "running" ? `task_${id}` : null,
+    input: { prompt: "", params: { ratio: "16:9", seconds: 5 }, references: [] },
+  });
+  const makeImgJob = (id: number, status: "running" | "queued") => ({
+    id,
+    node: null,
+    connection: "conn-1",
+    model: "muse-image",
+    kind: "image" as const,
+    status,
+    remoteId: status === "running" ? `task_${id}` : null,
+    input: { prompt: "", params: { ratio: "1:1" }, references: [] },
+  });
+  const mkQueueTools = (remMap: Record<number, any>, dur = 30) =>
+    ({
+      supports: () => true,
+      schedule: () => ({}),
+      features: (j: any) => ({
+        kind: j.kind,
+        model: j.model,
+        executor: "muse-api",
+        workflow: "muse2api-native-v1",
+        width: 0,
+        height: 0,
+        native_ratio: "16:9",
+        seconds: 5,
+        steps: 0,
+        video_mode: j.kind === "video" ? "t2v" : "image",
+        quality: "native",
+        refs: 0,
+        ref_pixels: 0,
+        hardware: "muse-api",
+        profile: {},
+        runtime_id: "",
+        cold: null,
+      }),
+      estimate: () => ({
+        low: dur,
+        median: dur,
+        high: dur,
+        source: "history",
+        samples: 10,
+        confidence: "high",
+        version: 4,
+      }),
+      planning: () => ({
+        low: dur,
+        median: dur,
+        high: dur,
+        source: "history",
+        samples: 10,
+        confidence: "high",
+        version: 4,
+      }),
+      remaining: (j: any) => remMap[j.id],
+    }) as any;
+
+  // 1) Connection concurrency scaled down 3 -> 2 on 4-account upstream with remaining 5s, 10s, 20s:
+  //    4th video must wait for 2nd completion (10s, NOT 5s!), 5th video waits for 3rd completion (20s)
+  const scaleDownConnPlans = healthAdapter.queuePlan!(
+    {
+      jobs: [
+        makeVidJob(1, "running"),
+        makeVidJob(2, "running"),
+        makeVidJob(3, "running"),
+        makeVidJob(4, "queued"),
+        makeVidJob(5, "queued"),
+      ],
+      nodes: [],
+      runs: {},
+      history: [],
+      stamp: 105,
+      health: { ready: true, capacity: 4, checked: 100 },
+      imageEnabled: true,
+      connectionLimits: { "conn-1": 2 },
+    },
+    mkQueueTools({
+      1: { low: 5, median: 5, high: 5, overdue: false },
+      2: { low: 10, median: 10, high: 10, overdue: false },
+      3: { low: 20, median: 20, high: 20, overdue: false },
+    }),
+  );
+  assert.equal(scaleDownConnPlans[4].low, 10);
+  assert.equal(scaleDownConnPlans[4].median, 10);
+  assert.equal(scaleDownConnPlans[4].high, 10);
+  assert.equal(scaleDownConnPlans[5].median, 20);
+
+  // 2) Upstream shared capacity reduced to 2 (maintenance: 2 on 4 accounts) with out-of-order remaining 20s, 5s, 10s:
+  const scaleDownSharedPlans = healthAdapter.queuePlan!(
+    {
+      jobs: [
+        makeVidJob(1, "running"),
+        makeVidJob(2, "running"),
+        makeVidJob(3, "running"),
+        makeVidJob(4, "queued"),
+        makeVidJob(5, "queued"),
+      ],
+      nodes: [],
+      runs: {},
+      history: [],
+      stamp: 105,
+      health: { ready: true, capacity: 4, maintenance: 2, checked: 100 },
+      imageEnabled: true,
+      connectionLimits: { "conn-1": 16 },
+    },
+    mkQueueTools({
+      1: { low: 20, median: 20, high: 20, overdue: false },
+      2: { low: 5, median: 5, high: 5, overdue: false },
+      3: { low: 10, median: 10, high: 10, overdue: false },
+    }),
+  );
+  assert.equal(scaleDownSharedPlans[4].median, 10);
+  assert.equal(scaleDownSharedPlans[5].median, 20);
+
+  // 3) Image capacity reduced to 2 (6 external images on 12-account pool) while 3 local images run (5s, 10s, 20s):
+  //    4th local image waits 10s, while local video sees open shared lanes (median 0)
+  const scaleDownImgPlans = healthAdapter.queuePlan!(
+    {
+      jobs: [
+        makeImgJob(1, "running"),
+        makeImgJob(2, "running"),
+        makeImgJob(3, "running"),
+        makeImgJob(4, "queued"),
+        makeVidJob(5, "queued"),
+      ],
+      nodes: [],
+      runs: {},
+      history: [],
+      stamp: 105,
+      health: {
+        ready: true,
+        capacity: 12,
+        checked: 100,
+        tasks: Array.from({ length: 6 }, (_, idx) => ({
+          id: `ext_img_${idx}`,
+          kind: "image" as const,
+        })),
+      },
+      imageEnabled: true,
+      connectionLimits: { "conn-1": 16 },
+    },
+    mkQueueTools({
+      1: { low: 5, median: 5, high: 5, overdue: false },
+      2: { low: 10, median: 10, high: 10, overdue: false },
+      3: { low: 20, median: 20, high: 20, overdue: false },
+    }),
+  );
+  assert.equal(scaleDownImgPlans[4].median, 10);
+  assert.equal(scaleDownImgPlans[5].median, 0);
+
+  // 4) Conservative handling of unknown remaining times during scale-down:
+  //    - K=2 with [5s, 10s, null]: 1 slot opens at 10s (even if null hangs forever), so 4th gets 10s and 5th chains on that working lane at 10+30=40s
+  //    - K=2 with [5s, null, null] (or K=1 with [5s, null]): all K lanes remain blocked by unknown jobs -> observing
+  const oneUnknownPlans = healthAdapter.queuePlan!(
+    {
+      jobs: [
+        makeVidJob(1, "running"),
+        makeVidJob(2, "running"),
+        makeVidJob(3, "running"),
+        makeVidJob(4, "queued"),
+        makeVidJob(5, "queued"),
+      ],
+      nodes: [],
+      runs: {},
+      history: [],
+      stamp: 105,
+      health: { ready: true, capacity: 4, checked: 100 },
+      imageEnabled: true,
+      connectionLimits: { "conn-1": 2 },
+    },
+    mkQueueTools({
+      1: { low: 5, median: 5, high: 5, overdue: false },
+      2: { low: 10, median: 10, high: 10, overdue: false },
+      3: { source: "none" },
+    }),
+  );
+  assert.equal(oneUnknownPlans[4].source, "queue");
+  assert.equal(oneUnknownPlans[4].median, 10);
+  assert.equal(oneUnknownPlans[5].source, "queue");
+  assert.equal(oneUnknownPlans[5].median, 40);
+
+  const singleSlotUnknownPlans = healthAdapter.queuePlan!(
+    {
+      jobs: [
+        makeVidJob(1, "running"),
+        makeVidJob(2, "running"),
+        makeVidJob(3, "queued"),
+      ],
+      nodes: [],
+      runs: {},
+      history: [],
+      stamp: 105,
+      health: { ready: true, capacity: 4, checked: 100 },
+      imageEnabled: true,
+      connectionLimits: { "conn-1": 1 },
+    },
+    mkQueueTools({
+      1: { low: 5, median: 5, high: 5, overdue: false },
+      2: { source: "none" },
+    }),
+  );
+  assert.equal(singleSlotUnknownPlans[3].source, "none");
+  assert.equal(singleSlotUnknownPlans[3].reason, "observing");
+
+  const twoUnknownPlans = healthAdapter.queuePlan!(
+    {
+      jobs: [
+        makeVidJob(1, "running"),
+        makeVidJob(2, "running"),
+        makeVidJob(3, "running"),
+        makeVidJob(4, "queued"),
+      ],
+      nodes: [],
+      runs: {},
+      history: [],
+      stamp: 105,
+      health: { ready: true, capacity: 4, checked: 100 },
+      imageEnabled: true,
+      connectionLimits: { "conn-1": 2 },
+    },
+    mkQueueTools({
+      1: { low: 5, median: 5, high: 5, overdue: false },
+      2: { source: "none" },
+      3: { low: 0, median: 0, high: 0, overdue: true },
+    }),
+  );
+  assert.equal(twoUnknownPlans[4].source, "none");
+  assert.equal(twoUnknownPlans[4].reason, "observing");
 });
 
 test("Flow's installed sandbox streams split and large results, scopes service credentials and preserves recovery decisions", async () => {
