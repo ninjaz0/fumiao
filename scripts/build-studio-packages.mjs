@@ -145,7 +145,7 @@ for (const { id, archive, archiveDigest, sandboxBuild } of releases) {
           : id === "gpu"
             ? "节点池协议升级，排空任务后重新接入实例"
             : id === "muse"
-              ? "支持按 Muse2API 启用账号数回退并发派发（图片最多 8 路，总容量请结合上游 MUSE2API_CONCURRENCY 与共享占用评估）；存量连接保留原并行任务数量，如需扩容请手动调高"
+              ? "支持按 Muse2API 启用账号数回退并发派发（图片最多 8 路并保守扣减外部图片/无类型占用；/readyz 仅含账号数，请结合上游 MUSE2API_CONCURRENCY 与共享占用评估）；存量连接保留原并行任务数量，如需扩容请手动调高"
               : id === "flow"
                 ? "图片和视频生成请求迁入沙箱，服务地址须使用公网 HTTPS"
                 : id === "bgm-generator"

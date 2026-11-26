@@ -23,7 +23,7 @@ import { inspectProviderOutput } from "./provider-output.js";
 import { inspectMedia } from "./media.js";
 import { artifactCapacity } from "./capacity.js";
 import { JobTiming } from "./timing.js";
-import { FrozenQueueHealth } from "./queue-health.js";
+import { FrozenQueueHealth, sealedConfigKey } from "./queue-health.js";
 import type { QueueHealth, QueueJob } from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
 import { hasTailChainTable, wakeTailFrameChildren } from "./tail-frame.js";
@@ -119,7 +119,7 @@ export class Executor {
         SELECT j.id,v.manifest->'requestLifecycle'->'notes'->>'unavailable' AS note
         FROM jobs j JOIN connections c ON c.id=j.connection_id
         JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
-        WHERE j.state='queued' AND c.plugin_version=j.plugin_version AND ${executableJob} AND v.manifest->'requestLifecycle' IS NOT NULL
+        WHERE j.state='queued' AND c.plugin_version=j.plugin_version AND c.config=j.config_snapshot AND ${executableJob} AND v.manifest->'requestLifecycle' IS NOT NULL
         AND v.manifest->'requestLifecycle'->'notes'->>'unavailable' IS NOT NULL
         AND j.request_note IS DISTINCT FROM v.manifest->'requestLifecycle'->'notes'->>'unavailable'
         AND (c.queue_health_revision IS DISTINCT FROM c.revision OR NOT COALESCE((c.queue_health->>'ready')::boolean,false)
@@ -334,9 +334,12 @@ export class Executor {
         );
         if (Number(count.total) >= connection.concurrency) return;
         if (plugin.requestCapacity) {
+          const currentConfigKey = sealedConfigKey(p, connection.config);
+          const jobConfigKey = sealedConfigKey(p, job.config_snapshot);
           const superseded =
-            plugin.queueHealth &&
-            connection.plugin_version !== job.plugin_version;
+            Boolean(plugin.queueHealth) &&
+            (connection.plugin_version !== job.plugin_version ||
+              currentConfigKey !== jobConfigKey);
           if (superseded && !frozenHealth)
             return () =>
               this.frozenHealth.read(
@@ -347,10 +350,13 @@ export class Executor {
               );
           const active = (
             await sql.query(
-              `SELECT id,provider_model,kind,remote_id,input FROM jobs j WHERE connection_id=$1 AND state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
+              `SELECT id,provider_model,kind,remote_id,input,config_snapshot FROM jobs j WHERE connection_id=$1 AND state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
               [connection.id],
             )
           ).rows;
+          const endpointActive = active.filter(
+            (j) => sealedConfigKey(p, j.config_snapshot) === jobConfigKey,
+          );
           const capacity = plugin.requestCapacity({
             stamp: Date.now() / 1000,
             job: { kind: job.kind, model: job.provider_model },
@@ -359,7 +365,7 @@ export class Executor {
               : connection.queue_health_revision === connection.revision
                 ? connection.queue_health
                 : {},
-            jobs: active.map(
+            jobs: endpointActive.map(
               (j) =>
                 ({
                   id: j.id,
@@ -377,7 +383,7 @@ export class Executor {
             500,
             "插件容量无效",
           );
-          if (capacity !== null && Number(count.total) >= capacity) {
+          if (capacity !== null && endpointActive.length >= capacity) {
             const waiting = policy?.notes.unavailable;
             if (
               superseded &&

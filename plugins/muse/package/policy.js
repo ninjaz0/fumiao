@@ -13,6 +13,8 @@ import { museCapacity } from "../src/queue-policy.ts";
 import { museClockReport } from "../src/clock-report.ts";
 
 const IMAGE_QUEUE_LIMIT = 8;
+const isKnownNonImageKind = (kind) =>
+  typeof kind === "string" && kind !== "image";
 const compareQueueJobs = (a, b) =>
   typeof a.id === "number" && typeof b.id === "number"
     ? a.id - b.id
@@ -29,6 +31,31 @@ function applyBusyLane(lane, eta) {
         ? Math.max(lane[key], eta[key])
         : null;
 }
+function externalImageCount(context) {
+  const ownIds = new Set(
+    context.jobs
+      .filter((j) => j.status === "running" && j.remoteId)
+      .map((j) => j.remoteId),
+  );
+  // Deduct known external image tasks and conservatively treat untyped external tasks as potential images.
+  return (context.health.tasks || []).filter(
+    (t) => !ownIds.has(t.id) && !isKnownNonImageKind(t.kind),
+  ).length;
+}
+function localImageLimit(context, shared) {
+  return Math.min(
+    shared,
+    Math.max(0, IMAGE_QUEUE_LIMIT - externalImageCount(context)),
+  );
+}
+function normalizeQueueTaskKind(task) {
+  if (["image", "video", "audio", "chat"].includes(task.kind)) return task.kind;
+  if (typeof task.object === "string") {
+    if (task.object.startsWith("image")) return "image";
+    if (task.object.startsWith("video")) return "video";
+  }
+  return undefined;
+}
 const muse21QueuePolicy = {
   requestCapacity(context) {
     if (
@@ -37,23 +64,23 @@ const muse21QueuePolicy = {
     )
       return 0;
     const shared = museCapacity(context);
-    if (context.job?.kind !== "image") return shared;
+    if (isKnownNonImageKind(context.job?.kind)) return shared;
     const activeNonImage = context.jobs.filter(
-      (j) => j.status === "running" && j.kind !== "image",
+      (j) => j.status === "running" && isKnownNonImageKind(j.kind),
     ).length;
-    return Math.min(shared, activeNonImage + IMAGE_QUEUE_LIMIT);
+    return Math.min(shared, activeNonImage + localImageLimit(context, shared));
   },
   queuePlan(context, tools) {
     const { health, jobs, runs, stamp } = context,
       available = health.ready && stamp - (health.checked ?? 0) < 90,
       capacity = museCapacity(context),
-      imageCapacity = Math.min(Math.max(1, capacity), IMAGE_QUEUE_LIMIT);
+      imageCap = localImageLimit(context, capacity);
     const sharedLanes = Array.from({ length: Math.max(1, capacity) }, () => ({
       low: 0,
       median: 0,
       high: 0,
     }));
-    const imageLanes = Array.from({ length: imageCapacity }, () => ({
+    const imageLanes = Array.from({ length: Math.max(1, imageCap) }, () => ({
       low: 0,
       median: 0,
       high: 0,
@@ -68,7 +95,7 @@ const muse21QueuePolicy = {
         sharedLanes[Math.min(index, sharedLanes.length - 1)],
         eta,
       );
-      if (job.kind === "image") {
+      if (!isKnownNonImageKind(job.kind)) {
         applyBusyLane(
           imageLanes[Math.min(imageBusyIndex, imageLanes.length - 1)],
           eta,
@@ -85,13 +112,15 @@ const muse21QueuePolicy = {
           (j.status === "running" && runs[j.id]?.phase === "queued"),
       )
       .sort(compareQueueJobs)) {
+      const isImageJob = !isKnownNonImageKind(job.kind);
       if (job.kind === "image" && !context.imageEnabled) {
         plans[job.id] = { source: "none", reason: "service_paused", ahead };
         continue;
       }
       const prediction = tools.predict(job);
+      const effectiveCapacity = isImageJob ? imageCap : capacity;
       let sLane, start;
-      if (job.kind === "image") {
+      if (isImageJob) {
         const iLane = imageLanes.reduce((a, b) =>
           laneRank(b) < laneRank(a) ? b : a,
         );
@@ -114,28 +143,32 @@ const muse21QueuePolicy = {
               ? Math.max(sLane.high, iLane.high)
               : null,
         };
-        for (const key of ["low", "median", "high"]) {
-          const end =
-            start[key] !== null && prediction[key] != null
-              ? start[key] + prediction[key]
-              : null;
-          sLane[key] = end;
-          iLane[key] = end;
+        if (effectiveCapacity > 0) {
+          for (const key of ["low", "median", "high"]) {
+            const end =
+              start[key] !== null && prediction[key] != null
+                ? start[key] + prediction[key]
+                : null;
+            sLane[key] = end;
+            iLane[key] = end;
+          }
         }
       } else {
         sLane = sharedLanes.reduce((a, b) =>
           laneRank(b) < laneRank(a) ? b : a,
         );
         start = { low: sLane.low, median: sLane.median, high: sLane.high };
-        for (const key of ["low", "median", "high"]) {
-          sLane[key] =
-            start[key] !== null && prediction[key] != null
-              ? start[key] + prediction[key]
-              : null;
+        if (effectiveCapacity > 0) {
+          for (const key of ["low", "median", "high"]) {
+            sLane[key] =
+              start[key] !== null && prediction[key] != null
+                ? start[key] + prediction[key]
+                : null;
+          }
         }
       }
       const plan =
-        !available || !capacity
+        !available || !effectiveCapacity
           ? {
               source: "none",
               reason: !available ? "waiting_muse" : "muse_busy",
@@ -329,7 +362,13 @@ export default {
         if (!q || typeof q !== "object" || Array.isArray(q)) throw Error();
         const tasks = (q.tasks === undefined ? [] : q.tasks)
           .slice(0, 10000)
-          .map((t) => (typeof t.id === "string" ? { id: t.id } : {}));
+          .map((t) => {
+            const kind = normalizeQueueTaskKind(t);
+            return {
+              ...(typeof t.id === "string" ? { id: t.id } : {}),
+              ...(kind ? { kind } : {}),
+            };
+          });
         if (tasks.some((t) => t.id?.length > 500)) throw Error();
         return {
           ready: true,

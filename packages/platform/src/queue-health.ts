@@ -2,12 +2,25 @@ import { randomUUID } from "node:crypto";
 import type { Platform } from "./platform.js";
 import { executableJob } from "./retired-jobs.js";
 import { one } from "./db.js";
+import { canonical } from "./plugins.js";
 import { hasStudioPackages } from "./studio-plugin-profile.js";
 import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 import {
   queueHealthSchema,
   type QueueHealth,
 } from "@fumiao/plugin-sdk/queue.js";
+
+export function sealedConfigKey(
+  p: Platform,
+  sealed: string | null | undefined,
+): string {
+  if (!sealed) return "";
+  try {
+    return canonical(p.vault.open(sealed));
+  } catch {
+    return sealed;
+  }
+}
 
 async function probeHealth(
   p: Platform,
@@ -45,7 +58,7 @@ export class FrozenQueueHealth {
       connection,
       plugin.manifest.id,
       plugin.manifest.version,
-      sealedConfig,
+      sealedConfigKey(p, sealedConfig),
     ]);
     const now = Date.now();
     const cached = this.recent.get(key);

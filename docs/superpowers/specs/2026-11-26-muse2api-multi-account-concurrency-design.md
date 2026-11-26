@@ -46,6 +46,7 @@
   - 仅在 `fumiao` 仓库内完成改造（方向 A），不要求改动上游 `muse2api`。
   - 采用方案 1：存量连接的 `concurrency` 不做静默自动改写。
 - **留给实现者的具体细节（Builder's Calls）**
-  - `/readyz` 中 `accounts` 的解析规则：正整数直接取数值，数组取 `length`，其余真值取 `1`，统一截断至 `1..16`。
-  - `StudioPackages.list` 向管理端暴露插件 `queueStrategy`（或 `defaultConcurrency`），驱动 `SettingsPlugins.tsx` 新建服务表单的默认值与字段说明文案。
-  - `muse` `2.1.0` 的 `update.json` 更新说明文案及对应自动化测试覆盖（`2.0.0 -> 2.1.0` 升级排空、标准 `muse2api` 响应下多路 `muse-video` 并行派发、连接并发低于账号数时的预测车道截断）。
+  - `/readyz` 中 `accounts` 的解析规则：正整数直接取数值，数组取 `length`，其余兼容真值（如 `"2"`、`true`、非空对象）取保守值 `1`，统一截断至 `1..16`。
+  - 队列协议版本升级为 `manifest.queue.version = 2`（防止未升级宿主独立启用依赖 `tasks[].kind` 与 `QueueAdmission.job` 的包），同时在 `policy.js` 中对缺失 `job.kind` 或 `jobs[].kind` 的调用保留 8 路保守上限。
+  - 外部任务图片槽位扣减与接口边界：当 `/v1/queue` 返回外部任务时，已知 `kind: "image"` 及缺少 `kind` 的外部任务均保守扣减 8 路图片上限，已知 `kind: "video"` 仅扣减共享总容量而不占用图片上限；当 `/v1/queue` 为 `404` 仅依赖 `/readyz` `accounts` 时，上游不暴露外部在途任务与 `MUSE2API_CONCURRENCY`，由连接并发说明引导管理员按共享负载配置。
+  - `QueueForecasts` 与 `Executor` 同时以 `(plugin_version, canonical(config_snapshot))` 识别已变更的服务连接快照，按可接单同批候排任务独立规划，缺少可靠快照时显示 `observing`。

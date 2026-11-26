@@ -2696,10 +2696,12 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
     };
 
     const running20 = await submitVideo("旧版运行中视频");
-    const queued20 = await submitVideo("旧版排队视频");
+    const queued20 = await submitVideo("旧版排队视频 1");
+    const queued20B = await submitVideo("旧版排队视频 2");
     await executor.execute(running20.id);
     await executor.execute(running20.id); // transitions run phase -> generating
     await executor.execute(queued20.id); // blocked by 2.0.0 single-lane capacity
+    await executor.execute(queued20B.id); // also blocked by 2.0.0 single-lane capacity
 
     assert.equal(
       (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [running20.id]))
@@ -2708,6 +2710,11 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
     );
     assert.equal(
       (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued20.id]))
+        .state,
+      "queued",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued20B.id]))
         .state,
       "queued",
     );
@@ -2736,22 +2743,31 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
     const queued21 = await submitVideo("新版排队视频");
     assert.equal(queued21.plugin_version, "2.1.0");
 
-    // QueueForecasts must forecast each job by its own plugin_version:
-    // - queued20 (2.0.0) has no trusted 2.0.0 health snapshot -> reason: "observing" (never 2.1.0's immediate start median=0)
-    // - queued21 (2.1.0) uses 2.1.0's capacity=3 + inherited 2.0.0 samples -> immediate start (source="queue", median=0)
+    // QueueForecasts must forecast each cohort independently while keeping real shared active occupancy:
+    // - queued20 & queued20B (2.0.0) lack a trusted 2.0.0 health snapshot -> reason: "observing"
+    // - queued21 (2.1.0) sees only 1 real running job (running20) out of 3 lanes -> immediate start (median=0),
+    //   NOT pushed to >0s by the 2 unclaimable 2.0.0 queued jobs!
     const snapshot = await new QueueForecasts(f.p).forWorkspace(
       f.actor,
       team.id,
     );
     assert.equal(snapshot.jobs[queued20.id].eta.source, "none");
     assert.equal(snapshot.jobs[queued20.id].eta.reason, "observing");
+    assert.equal(snapshot.jobs[queued20B.id].eta.source, "none");
+    assert.equal(snapshot.jobs[queued20B.id].eta.reason, "observing");
     assert.equal(snapshot.jobs[queued21.id].eta.source, "queue");
     assert.equal(snapshot.jobs[queued21.id].eta.median, 0);
 
-    // Executor respects 2.0.0's 1-lane limit on queued20 while dispatching 2.1.0's queued21 immediately
+    // Executor respects 2.0.0's 1-lane limit on queued20/queued20B while dispatching 2.1.0's queued21 immediately
     await executor.execute(queued20.id);
+    await executor.execute(queued20B.id);
     assert.equal(
       (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued20.id]))
+        .state,
+      "queued",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued20B.id]))
         .state,
       "queued",
     );
@@ -2762,7 +2778,7 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
       "running",
     );
 
-    // Drain all 3 jobs cleanly once upstream finishes
+    // Drain all 4 jobs cleanly once upstream finishes
     const run20Remote = (
       await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [running20.id])
     ).remote_id;
@@ -2781,13 +2797,20 @@ test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video wo
     completedTaskIds.add(q20Remote);
     await executor.execute(queued20.id);
 
-    for (const id of [running20.id, queued20.id, queued21.id]) {
+    await executor.execute(queued20B.id);
+    const q20BRemote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [queued20B.id])
+    ).remote_id;
+    completedTaskIds.add(q20BRemote);
+    await executor.execute(queued20B.id);
+
+    for (const id of [running20.id, queued20.id, queued20B.id, queued21.id]) {
       const done = await one(f.db, "SELECT * FROM jobs WHERE id=$1", [id]);
       assert.equal(done.state, "completed", done.error);
     }
     assert.equal(
       Number((await f.p.wallet(f.actor, team.id)).balance),
-      85,
+      80,
     );
   } finally {
     fixture.closeAllConnections();

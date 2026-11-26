@@ -353,6 +353,146 @@ test("Muse uses bounded JSON policies for signed submissions, large frozen refer
     maintenance: 0,
     tasks: [],
   });
+
+  // Item 1: release compatibility gate (queue.version = 2) + conservative 8-slot cap on old-host untyped requestCapacity arguments
+  assert.equal(legacyRelease.manifest.queue.version, 1);
+  assert.equal(release.manifest.queue.version, 2);
+  const eightUntypedJobs = Array.from({ length: 8 }, (_, idx) => ({
+    status: "running",
+    remoteId: `task_${idx}`,
+  })) as any;
+  assert.equal(
+    healthAdapter.requestCapacity!({
+      jobs: eightUntypedJobs,
+      health: { ready: true, capacity: 12, checked: 100 },
+      stamp: 105,
+    }),
+    8,
+    "old-host untyped requestCapacity arguments must conservatively cap at 8",
+  );
+  const eightTypedImages = Array.from({ length: 8 }, (_, idx) => ({
+    id: idx + 1,
+    node: null,
+    model: "muse-image",
+    kind: "image" as const,
+    status: "running",
+    remoteId: `task_${idx}`,
+    input: { prompt: "", params: {}, references: [] },
+  }));
+  assert.equal(
+    healthAdapter.requestCapacity!({
+      job: { kind: "image", model: "muse-image" },
+      jobs: eightTypedImages,
+      health: { ready: true, capacity: 12, checked: 100 },
+      stamp: 105,
+    }),
+    8,
+  );
+  assert.equal(
+    healthAdapter.requestCapacity!({
+      job: { kind: "video", model: "muse-video" },
+      jobs: eightTypedImages,
+      health: { ready: true, capacity: 12, checked: 100 },
+      stamp: 105,
+    }),
+    12,
+  );
+
+  // Item 2: queueHealth preserves public task kind and deducts external image occupancy
+  queueReply = {
+    status: 200,
+    body: {
+      capacity: 12,
+      tasks: [
+        { id: "ext-img", kind: "image", prompt: "secret" },
+        { id: "ext-vid", kind: "video", apiKey: "secret" },
+      ],
+    },
+  };
+  const typedHealth = await healthAdapter.queueHealth!(config, signal);
+  assert.deepEqual(typedHealth, {
+    ready: true,
+    capacity: 12,
+    maintenance: 0,
+    tasks: [
+      { id: "ext-img", kind: "image" },
+      { id: "ext-vid", kind: "video" },
+    ],
+  });
+  const sevenLocalImages = eightTypedImages.slice(0, 7);
+  // 7 local images + 1 external image -> 8th local image (9th total) must be blocked (capacity 7), video still sees 11
+  assert.equal(
+    healthAdapter.requestCapacity!({
+      job: { kind: "image", model: "muse-image" },
+      jobs: sevenLocalImages,
+      health: {
+        ready: true,
+        capacity: 12,
+        checked: 100,
+        tasks: [{ id: "ext-img", kind: "image" } as any],
+      },
+      stamp: 105,
+    }),
+    7,
+  );
+  assert.equal(
+    healthAdapter.requestCapacity!({
+      job: { kind: "video", model: "muse-video" },
+      jobs: sevenLocalImages,
+      health: {
+        ready: true,
+        capacity: 12,
+        checked: 100,
+        tasks: [{ id: "ext-img", kind: "image" } as any],
+      },
+      stamp: 105,
+    }),
+    11,
+  );
+  // 7 local images + 1 external video -> 8th local image is allowed (capacity 8)
+  assert.equal(
+    healthAdapter.requestCapacity!({
+      job: { kind: "image", model: "muse-image" },
+      jobs: sevenLocalImages,
+      health: {
+        ready: true,
+        capacity: 12,
+        checked: 100,
+        tasks: [{ id: "ext-vid", kind: "video" } as any],
+      },
+      stamp: 105,
+    }),
+    8,
+  );
+  // 7 local images + 1 untyped external task -> conservatively treated as potential image (capacity 7), video sees 11
+  assert.equal(
+    healthAdapter.requestCapacity!({
+      job: { kind: "image", model: "muse-image" },
+      jobs: sevenLocalImages,
+      health: {
+        ready: true,
+        capacity: 12,
+        checked: 100,
+        tasks: [{ id: "ext-untyped" }],
+      },
+      stamp: 105,
+    }),
+    7,
+  );
+  assert.equal(
+    healthAdapter.requestCapacity!({
+      job: { kind: "video", model: "muse-video" },
+      jobs: sevenLocalImages,
+      health: {
+        ready: true,
+        capacity: 12,
+        checked: 100,
+        tasks: [{ id: "ext-untyped" }],
+      },
+      stamp: 105,
+    }),
+    11,
+  );
 });
 
 test("Flow's installed sandbox streams split and large results, scopes service credentials and preserves recovery decisions", async () => {

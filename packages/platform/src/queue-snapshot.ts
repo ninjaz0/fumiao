@@ -2,6 +2,7 @@ import type { Platform, Actor } from "./platform.js";
 import type { Sql } from "./db.js";
 import { one } from "./db.js";
 import { forecastQueue } from "./queue.js";
+import { sealedConfigKey } from "./queue-health.js";
 import {
   Estimator,
   elapsedDetail,
@@ -23,6 +24,7 @@ export type ForecastCandidate = {
     connection_id: string;
     plugin_id: string;
     plugin_version: string;
+    config_snapshot?: string;
     provider_model: string;
     kind: string;
     state: "queued";
@@ -38,6 +40,7 @@ export type ForecastCandidate = {
     id: string;
     plugin_id: string;
     plugin_version: string;
+    config?: string;
     enabled: boolean;
     revision: number;
     concurrency?: number;
@@ -86,7 +89,7 @@ export class QueueForecasts {
     if (options.candidate) jobs.push(options.candidate.job);
     const connections = (
       await sql.query(
-        "SELECT id,plugin_id,plugin_version,enabled,revision,concurrency,queue_health,queue_health_revision FROM connections WHERE id=ANY($1::uuid[])",
+        "SELECT id,plugin_id,plugin_version,config,enabled,revision,concurrency,queue_health,queue_health_revision FROM connections WHERE id=ANY($1::uuid[])",
         [[...new Set(jobs.map((j) => j.connection_id))]],
       )
     ).rows;
@@ -148,7 +151,12 @@ export class QueueForecasts {
     let candidateEligible: boolean | undefined;
     for (const connection of connections) {
       const owned = jobs.filter((j) => j.connection_id === connection.id);
-      const queueJobs: QueueJob[] = owned.map((j) => ({
+      const currentConfigKey = sealedConfigKey(this.p, connection.config);
+      const jobConfigKey = (j: any) =>
+        j.config_snapshot !== undefined
+          ? sealedConfigKey(this.p, j.config_snapshot)
+          : currentConfigKey;
+      const toQueueJob = (j: any): QueueJob => ({
         id: Number(j.public_id),
         node: nodePublic.get(j.remote_id) ?? null,
         remoteId: j.remote_id,
@@ -165,7 +173,7 @@ export class QueueForecasts {
             height: Number(assets.get(id)?.height || assets.get(id)?.h || 0),
           })),
         },
-      }));
+      });
       const queueNodes: QueueNode[] = nodes
         .filter((n) => n.connection_id === connection.id)
         .map((n) => ({
@@ -177,31 +185,36 @@ export class QueueForecasts {
           stage: n.queue_state.stage ?? "preparing",
           ready_models: n.queue_state.ready_models ?? [],
         }));
-      const ownIds = new Set(
-        queueJobs
-          .filter((j) => j.status === "running" && j.remoteId)
-          .map((j) => j.remoteId),
-      );
-      const targetVersions = [
-        ...new Set(
-          owned
-            .filter(
-              (j) =>
-                j.state === "queued" ||
-                current[Number(j.public_id)]?.phase === "queued",
-            )
-            .map((j) => String(j.plugin_version)),
-        ),
-      ];
-      for (const targetVersion of targetVersions) {
+      const cohortMap = new Map<
+        string,
+        { version: string; configKey: string }
+      >();
+      for (const j of owned) {
+        if (
+          j.state !== "queued" &&
+          current[Number(j.public_id)]?.phase !== "queued"
+        )
+          continue;
+        const version = String(j.plugin_version);
+        const configKey = jobConfigKey(j);
+        const key = JSON.stringify([version, configKey]);
+        if (!cohortMap.has(key)) cohortMap.set(key, { version, configKey });
+      }
+      for (const {
+        version: targetVersion,
+        configKey: targetConfigKey,
+      } of cohortMap.values()) {
         const version = await one(
           sql,
           "SELECT manifest FROM plugin_versions WHERE id=$1 AND version=$2",
           [connection.plugin_id, targetVersion],
         );
+        const inCohort = (j: any) =>
+          String(j.plugin_version) === targetVersion &&
+          jobConfigKey(j) === targetConfigKey;
         if (!version?.manifest.queue) {
           for (const j of owned)
-            if (j.plugin_version === targetVersion && j.state === "queued")
+            if (inCohort(j) && j.state === "queued")
               plans[j.public_id] = { source: "none", reason: "unknown" };
           continue;
         }
@@ -212,7 +225,7 @@ export class QueueForecasts {
         );
         if (plugin.retired) {
           for (const j of owned)
-            if (j.plugin_version === targetVersion && j.state === "queued")
+            if (inCohort(j) && j.state === "queued")
               plans[j.public_id] = { source: "none", reason: "unknown" };
           continue;
         }
@@ -232,9 +245,59 @@ export class QueueForecasts {
             .map(normalizeRun),
           policy,
         );
+        const usesQueueHealth = Boolean(plugin.queueHealth);
         const superseded =
-          Boolean(plugin.queueHealth) &&
-          targetVersion !== connection.plugin_version;
+          usesQueueHealth &&
+          (targetVersion !== String(connection.plugin_version) ||
+            targetConfigKey !== currentConfigKey);
+        let cohortRawJobs: any[];
+        let otherEndpointActiveCount = 0;
+        if (usesQueueHealth) {
+          const sameEndpointActive = owned.filter(
+            (j) => j.state !== "queued" && jobConfigKey(j) === targetConfigKey,
+          );
+          otherEndpointActiveCount = owned.filter(
+            (j) => j.state !== "queued" && jobConfigKey(j) !== targetConfigKey,
+          ).length;
+          const cohortWaiting = owned.filter(
+            (j) => j.state === "queued" && inCohort(j),
+          );
+          cohortRawJobs = [...sameEndpointActive, ...cohortWaiting].sort(
+            (a, b) => Number(a.public_id) - Number(b.public_id),
+          );
+        } else {
+          const activeAll = owned.filter((j) => j.state !== "queued");
+          const eligibleWaiting: any[] = [];
+          for (const j of owned) {
+            if (j.state !== "queued") continue;
+            if (inCohort(j)) {
+              eligibleWaiting.push(j);
+              continue;
+            }
+            const otherPlugin = await this.p.registry.resolve(
+              sql,
+              connection.plugin_id,
+              String(j.plugin_version),
+            );
+            if (otherPlugin.retired) continue;
+            const qj = toQueueJob(j);
+            const canAccept = otherPlugin.originalEstimate?.eligible
+              ? queueNodes.some((n) =>
+                  otherPlugin.originalEstimate!.eligible!(n, qj, stamp),
+                )
+              : true;
+            if (canAccept) eligibleWaiting.push(j);
+          }
+          cohortRawJobs = [...activeAll, ...eligibleWaiting].sort(
+            (a, b) => Number(a.public_id) - Number(b.public_id),
+          );
+        }
+        const cohortQueueJobs = cohortRawJobs.map(toQueueJob);
+        const ownIds = new Set(
+          cohortQueueJobs
+            .filter((j) => j.status === "running" && j.remoteId)
+            .map((j) => j.remoteId),
+        );
         const rawHealth =
           !superseded &&
           connection.enabled &&
@@ -249,20 +312,24 @@ export class QueueForecasts {
           Number.isFinite(rawHealth.maintenance)
             ? rawHealth.maintenance
             : 0;
+        const availableConcurrency =
+          typeof connection.concurrency === "number"
+            ? Math.max(0, connection.concurrency - otherEndpointActiveCount)
+            : undefined;
         const health =
           typeof rawHealth.capacity === "number" &&
           Number.isFinite(rawHealth.capacity) &&
-          typeof connection.concurrency === "number"
+          typeof availableConcurrency === "number"
             ? {
                 ...rawHealth,
                 capacity: Math.min(
                   rawHealth.capacity,
-                  connection.concurrency + external + maintenance,
+                  availableConcurrency + external + maintenance,
                 ),
               }
             : rawHealth;
         const context: QueueContext = {
-          jobs: queueJobs,
+          jobs: cohortQueueJobs,
           nodes: queueNodes,
           runs: contextRuns,
           history: history
@@ -281,10 +348,10 @@ export class QueueForecasts {
         if (
           options.candidate &&
           options.candidate.connection.id === connection.id &&
-          options.candidate.job.plugin_version === targetVersion &&
+          inCohort(options.candidate.job) &&
           plugin.originalEstimate?.eligible
         ) {
-          const job = queueJobs.find(
+          const job = cohortQueueJobs.find(
             (j) => j.id === options.candidate!.job.public_id,
           )!;
           candidateEligible = queueNodes.some((node) =>
@@ -298,7 +365,7 @@ export class QueueForecasts {
           estimator,
         );
         for (const j of owned) {
-          if (j.plugin_version !== targetVersion) continue;
+          if (!inCohort(j)) continue;
           const plan = versionPlans[j.public_id];
           if (!plan) continue;
           plans[j.public_id] =

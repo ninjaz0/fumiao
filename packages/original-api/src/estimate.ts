@@ -174,7 +174,7 @@ export class OriginalEstimates {
         );
         const connections = (
           await sql.query(
-            `SELECT c.id,c.plugin_id,c.plugin_version,c.enabled,c.revision,c.concurrency,c.queue_health,c.queue_health_revision,COALESCE(p.enabled,true) AS allowed FROM connections c JOIN models m ON m.connection_id=c.id LEFT JOIN model_permissions p ON p.model_id=m.id AND p.workspace_id=$2 WHERE m.catalog_id=$1 ${hasPackages ? "AND studio_service_selected(m.catalog_id,c.id)" : ""} AND c.plugin_id=$3 AND c.plugin_version=$4 ORDER BY c.id`,
+            `SELECT c.id,c.plugin_id,c.plugin_version,c.config,c.enabled,c.revision,c.concurrency,c.queue_health,c.queue_health_revision,COALESCE(p.enabled,true) AS allowed FROM connections c JOIN models m ON m.connection_id=c.id LEFT JOIN model_permissions p ON p.model_id=m.id AND p.workspace_id=$2 WHERE m.catalog_id=$1 ${hasPackages ? "AND studio_service_selected(m.catalog_id,c.id)" : ""} AND c.plugin_id=$3 AND c.plugin_version=$4 ORDER BY c.id`,
             [
               prepared.model,
               workspace.id,
@@ -217,6 +217,7 @@ export class OriginalEstimates {
             connection_id: connection.id,
             plugin_id: catalog.plugin_id,
             plugin_version: catalog.plugin_version,
+            config_snapshot: connection.config,
             provider_model: prepared.model,
             kind: prepared.kind,
             state: "queued",

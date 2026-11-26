@@ -4,7 +4,7 @@ import type { TimingContext, TimingFeatures } from "./timing.js";
 
 export const queuePolicySchema = z
   .object({
-    version: z.literal(1),
+    version: z.union([z.literal(1), z.literal(2)]),
     strategy: z.enum(["slots", "capacity", "opaque"]),
     timingVersions: z
       .array(z.string().regex(/^\d+\.\d+\.\d+$/))
@@ -70,7 +70,14 @@ export const queueHealthSchema = z
     capacity: z.number().finite().int().nonnegative().max(1000).optional(),
     maintenance: z.number().finite().int().nonnegative().max(1000).optional(),
     tasks: z
-      .array(z.object({ id: z.string().max(500).optional() }).strict())
+      .array(
+        z
+          .object({
+            id: z.string().max(500).optional(),
+            kind: z.enum(["image", "video", "audio", "chat"]).optional(),
+          })
+          .strict(),
+      )
       .max(10000)
       .optional(),
     model_count: z.number().int().nonnegative().max(10000).optional(),

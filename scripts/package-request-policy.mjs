@@ -6,9 +6,11 @@ export async function packageRequestPolicy(
   errors,
   options = {},
 ) {
-  const { priorTimingVersions = [], ...submissionOptions } = options;
+  const { priorTimingVersions = [], queueVersion, ...submissionOptions } =
+    options;
   const manifest = structuredClone(adapter.manifest);
   manifest.version = version;
+  if (queueVersion !== undefined) manifest.queue.version = queueVersion;
   manifest.queue.timingVersions.push(...priorTimingVersions, version);
   manifest.configSchema.properties.baseUrl.pattern = "^https://";
   manifest.artifactValidation = { version: 3, errors };
