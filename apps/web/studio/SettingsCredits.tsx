@@ -57,6 +57,10 @@ const orderHints: Record<string, string> = {
 function date(stamp: number) {
   return new Date(stamp * 1000).toLocaleString();
 }
+function formatPlanPrice(priceFen: number) {
+  const yuan = priceFen / 100;
+  return priceFen % 100 === 0 ? `¥${yuan.toFixed(0)}` : `¥${yuan.toFixed(2)}`;
+}
 function mergeCreditRows(rows: CreditEntry[], incoming: CreditEntry[]) {
   return Array.from(
     new Map([...rows, ...incoming].map((row) => [row.id, row])).values(),
@@ -73,11 +77,15 @@ export function Credits({
   state,
   recharge,
   history,
+  refresh,
+  rechargePending,
   notify,
 }: {
   state: StudioState;
   recharge: (button: HTMLButtonElement) => void;
   history: (button: HTMLButtonElement) => void;
+  refresh?: () => Promise<void>;
+  rechargePending?: "recharge" | "history";
   notify: Notify;
 }) {
   const { credits, workspace_id: workspace } = state;
@@ -90,6 +98,201 @@ export function Credits({
   });
   const { rows, before, epoch } = ledger;
   const [busy, setBusy] = useState(false);
+  const [redeemInput, setRedeemInput] = useState("");
+  const [redeeming, setRedeeming] = useState(false);
+  const [plans, setPlans] = useState<
+    Array<{
+      id: string;
+      code: string;
+      name: string;
+      price_fen: number;
+      price_yuan: number;
+      cost_credits: number;
+      period_days: number;
+      period_credits: number;
+    }>
+  >([]);
+  const [subscriptions, setSubscriptions] = useState<
+    Array<{
+      id: string;
+      plan_code: string;
+      plan_name: string;
+      status: string;
+      period_credits: number;
+      current_period_start: string;
+      current_period_end: string;
+    }>
+  >([]);
+  const [subscribingCode, setSubscribingCode] = useState<string | null>(null);
+  const [orderIdInput, setOrderIdInput] = useState("");
+  const [showOrderActivate, setShowOrderActivate] = useState(false);
+  const subscribeUidRef = useRef<Record<string, string>>({});
+  const [statementFrom, setStatementFrom] = useState("");
+  const [statementTo, setStatementTo] = useState("");
+  const [inviteSummary, setInviteSummary] = useState<{
+    total_invited: number;
+    total_granted_credits: number;
+    pending_claim_count: number;
+    pending_claim_credits: number;
+  } | null>(null);
+
+  async function reloadPlans() {
+    const planRes = await api<{
+      plans: typeof plans;
+      subscriptions: typeof subscriptions;
+    }>(String(workspace), "/api/subscriptions/plans").catch(() => null);
+    if (planRes) {
+      setPlans(planRes.plans);
+      setSubscriptions(planRes.subscriptions);
+    }
+  }
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([
+      api<{
+        plans: typeof plans;
+        subscriptions: typeof subscriptions;
+      }>(String(workspace), "/api/subscriptions/plans").catch(() => null),
+      api<{
+        total_invited: number;
+        total_granted_credits: number;
+        pending_claim_count: number;
+        pending_claim_credits: number;
+      }>(String(workspace), "/api/invites/rewards").catch(() => null),
+    ]).then(([planRes, inviteRes]) => {
+      if (!active) return;
+      if (planRes) {
+        setPlans(planRes.plans);
+        setSubscriptions(planRes.subscriptions);
+      }
+      if (inviteRes) setInviteSummary(inviteRes);
+    });
+    return () => {
+      active = false;
+    };
+  }, [workspace]);
+
+  async function activatePlan(planCode: string, explicitOrderId?: string) {
+    setSubscribingCode(planCode);
+    const key = `${planCode}:${explicitOrderId || "wallet"}`;
+    if (!subscribeUidRef.current[key]) {
+      subscribeUidRef.current[key] = crypto.randomUUID();
+    }
+    try {
+      const res = await api<{
+        renewed?: boolean;
+        grant_timing?: string;
+        subscription: {
+          plan_name: string;
+          period_credits: number;
+          current_period_start: string;
+          current_period_end: string;
+        };
+      }>(
+        String(workspace),
+        "/api/subscriptions/subscribe",
+        {
+          plan_code: planCode,
+          uid: subscribeUidRef.current[key],
+          ...(explicitOrderId?.trim()
+            ? { order_id: explicitOrderId.trim(), payment_mode: "order" }
+            : { payment_mode: "wallet" }),
+        },
+        "POST",
+      );
+      delete subscribeUidRef.current[key];
+      setOrderIdInput("");
+      const sub = res.subscription;
+      notify(
+        res.renewed
+          ? `已续期「${sub.plan_name}」，有效期顺延至 ${new Date(sub.current_period_end).toLocaleDateString()}（新周期配额将于 ${new Date(sub.current_period_start).toLocaleDateString()} 自动发放）`
+          : `已开通「${sub.plan_name}」，+${sub.period_credits} 周期积分已发放（有效期至 ${new Date(sub.current_period_end).toLocaleDateString()}）`,
+      );
+      await Promise.all([reloadPlans(), refresh?.()]);
+    } catch (err) {
+      notify((err as Error).message || "套餐开通或续期失败");
+    } finally {
+      setSubscribingCode(null);
+    }
+  }
+
+  async function redeemCode(e: FormEvent) {
+    e.preventDefault();
+    if (!redeemInput.trim()) return;
+    setRedeeming(true);
+    try {
+      const res = await api<{ credits: number; name: string }>(
+        String(workspace),
+        "/api/redeem",
+        { code: redeemInput.trim() },
+        "POST",
+      );
+      setRedeemInput("");
+      notify(`兑换成功：+${res.credits} 积分（${res.name}）`);
+      await refresh?.();
+    } catch (err) {
+      notify((err as Error).message || "兑换失败");
+    } finally {
+      setRedeeming(false);
+    }
+  }
+
+  async function claimRewards() {
+    try {
+      const res = await api<{ claimed_count: number; claimed_credits: number }>(
+        String(workspace),
+        "/api/invites/rewards/claim",
+        {},
+        "POST",
+      );
+      notify(
+        res.claimed_credits > 0
+          ? `已领取邀请返佣 +${res.claimed_credits} 积分`
+          : "当前暂无可领取的邀请返佣",
+      );
+      await refresh?.();
+      const updated = await api<{
+        total_invited: number;
+        total_granted_credits: number;
+        pending_claim_count: number;
+        pending_claim_credits: number;
+      }>(String(workspace), "/api/invites/rewards");
+      setInviteSummary(updated);
+    } catch (err) {
+      notify((err as Error).message || "领取返佣失败");
+    }
+  }
+
+  async function downloadStatement(format: "csv" | "pdf") {
+    try {
+      const qs = new URLSearchParams({ format });
+      if (statementFrom) qs.set("from", statementFrom);
+      if (statementTo) qs.set("to", statementTo);
+      const resp = await fetch(`/api/credits/statement?${qs.toString()}`, {
+        credentials: "same-origin",
+        headers: { "X-Workspace-Id": String(workspace) },
+      });
+      if (!resp.ok) {
+        const errJson = await resp.json().catch(() => null);
+        throw new Error(errJson?.detail || "对账单导出失败");
+      }
+      const total = resp.headers.get("X-Total-Count");
+      const exported = resp.headers.get("X-Exported-Count");
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `fumiao-statement-ws${workspace}.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      if (total && exported) {
+        notify(`已导出 ${exported} / ${total} 条对账记录（${format.toUpperCase()}）`);
+      }
+    } catch (err) {
+      notify((err as Error).message || "对账单导出失败");
+    }
+  }
 
   if (previous !== latest) {
     setPrevious(latest);
@@ -139,9 +342,10 @@ export function Credits({
         <button
           className="primary"
           data-act="recharge"
+          disabled={!!rechargePending}
           onClick={(event) => recharge(event.currentTarget)}
         >
-          充值
+          {rechargePending === "recharge" ? "正在加载…" : "充值"}
         </button>
       </div>
       <div className="credit-summary">
@@ -154,16 +358,229 @@ export function Credits({
           <strong>{credits.reserved.toLocaleString()}</strong>
         </div>
       </div>
-      <div className="recharge-info">
+      <div className="recharge-info" style={{ flexWrap: "wrap", gap: 8 }}>
         <span>¥1 = 10 积分</span>
-        <button
-          className="quiet-button"
-          data-act="recharge-history"
-          onClick={(event) => history(event.currentTarget)}
-        >
-          充值记录
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            className="quiet-button"
+            data-act="recharge-history"
+            disabled={!!rechargePending}
+            onClick={(event) => history(event.currentTarget)}
+          >
+            {rechargePending === "history" ? "正在加载…" : "充值记录"}
+          </button>
+          <input
+            type="date"
+            aria-label="对账单开始日期"
+            value={statementFrom}
+            onChange={(e) => setStatementFrom(e.target.value)}
+            style={{ width: "auto" }}
+          />
+          <span>至</span>
+          <input
+            type="date"
+            aria-label="对账单结束日期"
+            value={statementTo}
+            onChange={(e) => setStatementTo(e.target.value)}
+            style={{ width: "auto" }}
+          />
+          <button
+            type="button"
+            className="quiet-button"
+            onClick={() => void downloadStatement("csv")}
+          >
+            导出 CSV 对账单
+          </button>
+          <button
+            type="button"
+            className="quiet-button"
+            onClick={() => void downloadStatement("pdf")}
+          >
+            导出 PDF 对账单
+          </button>
+        </div>
       </div>
+
+      <section className="ledger-card" style={{ marginBottom: 14 }}>
+        <h3 className="credit-heading">兑换码兑换积分</h3>
+        <form
+          onSubmit={redeemCode}
+          style={{ display: "flex", gap: 8, alignItems: "center" }}
+        >
+          <input
+            value={redeemInput}
+            onChange={(e) => setRedeemInput(e.target.value)}
+            placeholder="输入兑换码（如 FM-XXXX-XXXX-XXXX）"
+            style={{ flex: 1 }}
+          />
+          <button type="submit" className="primary" disabled={redeeming}>
+            {redeeming ? "兑换中…" : "立即兑换"}
+          </button>
+        </form>
+      </section>
+
+      {plans.length > 0 && (
+        <section className="ledger-card" style={{ marginBottom: 14 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+              marginBottom: 8,
+            }}
+          >
+            <h3 className="credit-heading" style={{ margin: 0 }}>
+              周期配额包（复用支付宝 / USDT 充值余额开通或续期）
+            </h3>
+            <button
+              type="button"
+              className="quiet-button"
+              onClick={() => setShowOrderActivate((v) => !v)}
+            >
+              {showOrderActivate ? "收起订单号激活" : "使用已支付充值单号激活"}
+            </button>
+          </div>
+          {showOrderActivate && (
+            <div style={{ marginBottom: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input
+                value={orderIdInput}
+                onChange={(e) => setOrderIdInput(e.target.value)}
+                placeholder="输入已支付的支付宝 / USDT 充值订单号（核销原充值积分，绝不重复计账）"
+                style={{ flex: 1, minWidth: 220 }}
+              />
+            </div>
+          )}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+              gap: 10,
+            }}
+          >
+            {plans.map((p) => {
+              const activeForPlan = subscriptions.find(
+                (s) =>
+                  s.plan_code === p.code &&
+                  s.status === "active" &&
+                  new Date(s.current_period_end).getTime() > Date.now(),
+              );
+              const costCredits =
+                p.cost_credits ?? Math.round((p.price_fen ?? p.price_yuan * 100) / 10);
+              const enough = credits.available >= costCredits;
+              const isBusy = subscribingCode === p.code;
+              return (
+                <div
+                  key={p.id}
+                  style={{
+                    padding: "12px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(128,128,128,0.22)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                  }}
+                >
+                  <strong>{p.name}</strong>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>
+                    {formatPlanPrice(p.price_fen ?? Math.round(p.price_yuan * 100))} /{" "}
+                    {p.period_days} 天
+                  </div>
+                  <small>
+                    周期发放 {p.period_credits} 积分（抵扣 {costCredits} 充值积分）
+                  </small>
+                  {activeForPlan && (
+                    <small style={{ color: "#10b981" }}>
+                      当前有效至 {new Date(activeForPlan.current_period_end).toLocaleDateString()}
+                    </small>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={isBusy || (!enough && !orderIdInput.trim())}
+                      onClick={() =>
+                        void activatePlan(
+                          p.code,
+                          showOrderActivate && orderIdInput.trim()
+                            ? orderIdInput.trim()
+                            : undefined,
+                        )
+                      }
+                    >
+                      {isBusy
+                        ? "处理中…"
+                        : activeForPlan
+                          ? `续期 +${p.period_days} 天`
+                          : showOrderActivate && orderIdInput.trim()
+                            ? "凭订单激活"
+                            : "立即开通"}
+                    </button>
+                    {!enough && (
+                      <button
+                        type="button"
+                        className="quiet-button"
+                        onClick={(event) => recharge(event.currentTarget)}
+                      >
+                        余额不足，去充值
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {subscriptions.length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
+              当前已激活：
+              {subscriptions
+                .filter((s) => s.status === "active")
+                .map(
+                  (s) =>
+                    `${s.plan_name}（${new Date(s.current_period_start).toLocaleDateString()} ~ ${new Date(s.current_period_end).toLocaleDateString()}）`,
+                )
+                .join("、") || "无有效套餐"}
+            </div>
+          )}
+        </section>
+      )}
+
+      {inviteSummary && (
+        <section className="ledger-card" style={{ marginBottom: 14 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <div>
+              <h3 className="credit-heading" style={{ margin: 0 }}>
+                邀请返佣
+              </h3>
+              <small>
+                已邀请 {inviteSummary.total_invited} 人 · 累计获得{" "}
+                {inviteSummary.total_granted_credits} 积分
+                {inviteSummary.pending_claim_credits > 0
+                  ? ` · 待领取 ${inviteSummary.pending_claim_credits} 积分`
+                  : ""}
+              </small>
+            </div>
+            {inviteSummary.pending_claim_credits > 0 && (
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void claimRewards()}
+              >
+                一键领取 +{inviteSummary.pending_claim_credits} 积分
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
       <section className="ledger-card">
         <h3 className="credit-heading">积分明细</h3>
         <CreditLedger rows={rows} />
@@ -176,7 +593,7 @@ export function Credits({
               disabled={busy}
               onClick={(event) => void more(event.currentTarget)}
             >
-              加载更多
+              {busy ? "正在加载…" : "加载更多"}
             </button>
           </div>
         )}
@@ -584,15 +1001,15 @@ export function RechargeOrder({
         >
           前往支付 ↗
         </a>
-        <button
+        {!paid && <button
           ref={check}
           className="profile-secondary"
           id="recharge-check"
           disabled={busy}
           onClick={() => void poll()}
         >
-          刷新支付结果
-        </button>
+          {busy ? "正在查询…" : "刷新支付结果"}
+        </button>}
       </div>
       <p className="recharge-hint">
         {orderHints[order.state] ||

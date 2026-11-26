@@ -28,7 +28,8 @@ export async function inspectProviderOutput(
     new ArtifactValidationError((recovering && errors.recovering) || message);
   if (bytes.byteLength > 64 * 1024 * 1024)
     throw new ArtifactValidationError("成品超过 64 MB，未保存", 413);
-  if (kind !== "image" && kind !== "video") throw failure(errors.failed);
+  if (kind !== "image" && kind !== "video" && kind !== "audio")
+    throw failure(errors.failed);
   const directory = await mkdtemp(join(tmpdir(), "fumiao-provider-output-"));
   try {
     const path = join(directory, "input");
@@ -46,6 +47,72 @@ export async function inspectProviderOutput(
             : errors.imageDecode,
         );
       }
+    }
+    if (kind === "audio") {
+      const audioError = errors.audio ?? errors.failed;
+      const info = JSON.parse(
+        await mediaCommand(
+          "ffprobe",
+          [
+            "-v",
+            "error",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-show_streams",
+            "-show_format",
+            "-of",
+            "json",
+            path,
+          ],
+          30000,
+          signal,
+        ),
+      );
+      const audio = (info.streams ?? []).find(
+        (s: { codec_type: string }) => s.codec_type === "audio",
+      );
+      const duration = Number(audio?.duration || info.format?.duration || 0);
+      if (!audio || !(duration > 0.05 && duration <= 600))
+        throw failure(audioError);
+      const format = String(info.format?.format_name || "");
+      const mime = format.includes("wav")
+        ? "audio/wav"
+        : format.includes("mp3")
+          ? "audio/mpeg"
+          : format.includes("flac")
+            ? "audio/flac"
+            : format.includes("ogg")
+              ? "audio/ogg"
+              : format.includes("mp4") || format.includes("m4a")
+                ? "audio/mp4"
+                : undefined;
+      if (!mime) throw failure(audioError);
+      await mediaCommand(
+        "ffmpeg",
+        [
+          "-v",
+          "error",
+          "-protocol_whitelist",
+          "file,pipe",
+          "-i",
+          path,
+          "-map",
+          "0:a:0",
+          "-t",
+          "0.2",
+          "-f",
+          "null",
+          "-",
+        ],
+        30000,
+        signal,
+      );
+      return {
+        mime,
+        duration: roundDecimal(duration, 3),
+        sampleRate: Number(audio.sample_rate || 0) || null,
+        channels: Number(audio.channels || 0) || null,
+      };
     }
     const header = Buffer.from(
       bytes.buffer,
@@ -132,7 +199,13 @@ export async function inspectProviderOutput(
   } catch (error) {
     signal.throwIfAborted();
     if (error instanceof ArtifactValidationError) throw error;
-    throw failure(kind === "video" ? errors.video : errors.failed);
+    throw failure(
+      kind === "video"
+        ? errors.video
+        : kind === "audio"
+          ? (errors.audio ?? errors.failed)
+          : errors.failed,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

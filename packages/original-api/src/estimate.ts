@@ -1,6 +1,7 @@
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one } from "@fumiao/platform/db.js";
 import { requireValue, DomainError } from "@fumiao/platform/security.js";
+import { hasStudioPackages } from "@fumiao/platform/studio-plugin-profile.js";
 import {
   QueueForecasts,
   type ForecastCandidate,
@@ -34,22 +35,34 @@ export class OriginalEstimates {
         await sql.query(
           "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
         );
-        if (
-          draft.model &&
-          (await one(
-            sql,
-            `SELECT c.id FROM studio_catalog c
+        const hasPackages = await hasStudioPackages(sql);
+        const pluginPaused = async (pluginId: string) =>
+          hasPackages &&
+          !(
+            await one(sql, "SELECT studio_plugin_accepts($1) AS ok", [pluginId])
+          ).ok;
+        const paused = {
+          duration: { ...unobservedDuration },
+          queue: { source: "none", reason: "model_paused", ahead: 0 } as const,
+        };
+        const unobserved = draft.model
+          ? await one(
+              sql,
+              `SELECT c.plugin_id FROM studio_catalog c
           JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
-          WHERE c.id=$1 AND c.descriptor->>'kind'=$2 AND v.manifest->'originalSubmission'->>'version' IN ('2','3')`,
-            [draft.model, draft.kind],
-          ))
-        ) {
+          WHERE c.id=$1 AND c.descriptor->>'kind'=$2 AND (v.manifest->'originalSubmission'->>'version' IN ('2','3') OR (v.manifest->'originalSubmission'->>'version'='5' AND v.manifest->'originalEstimate' IS NULL))`,
+              [draft.model, draft.kind],
+            )
+          : undefined;
+        if (unobserved) {
           await new OriginalIdentity(this.p).activeWorkspace(
             sql,
             user,
             selected,
           );
-          return { duration: { ...unobservedDuration }, queue: null };
+          return (await pluginPaused(unobserved.plugin_id))
+            ? paused
+            : { duration: { ...unobservedDuration }, queue: null };
         }
         const fallback =
           draft.kind === "image" && !draft.h3 ? defaults.image : defaults.video;
@@ -68,6 +81,14 @@ export class OriginalEstimates {
             "SELECT c.*,v.manifest FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE c.id=$1",
             [fallback],
           ));
+        if (catalog && (await pluginPaused(catalog.plugin_id))) {
+          await new OriginalIdentity(this.p).activeWorkspace(
+            sql,
+            user,
+            selected,
+          );
+          return paused;
+        }
         requireValue(
           catalog?.manifest.originalEstimate,
           503,
@@ -153,7 +174,7 @@ export class OriginalEstimates {
         );
         const connections = (
           await sql.query(
-            `SELECT c.id,c.plugin_id,c.plugin_version,c.enabled,c.revision,c.queue_health,c.queue_health_revision,COALESCE(p.enabled,true) AS allowed FROM connections c JOIN models m ON m.connection_id=c.id LEFT JOIN model_permissions p ON p.model_id=m.id AND p.workspace_id=$2 WHERE m.catalog_id=$1 AND studio_service_selected(m.catalog_id,c.id) AND c.plugin_id=$3 AND c.plugin_version=$4 ORDER BY c.id`,
+            `SELECT c.id,c.plugin_id,c.plugin_version,c.enabled,c.revision,c.queue_health,c.queue_health_revision,COALESCE(p.enabled,true) AS allowed FROM connections c JOIN models m ON m.connection_id=c.id LEFT JOIN model_permissions p ON p.model_id=m.id AND p.workspace_id=$2 WHERE m.catalog_id=$1 ${hasPackages ? "AND studio_service_selected(m.catalog_id,c.id)" : ""} AND c.plugin_id=$3 AND c.plugin_version=$4 ORDER BY c.id`,
             [
               prepared.model,
               workspace.id,

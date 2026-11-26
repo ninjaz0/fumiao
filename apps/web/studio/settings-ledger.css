@@ -814,6 +814,9 @@
   .ledger-navigation-panel[data-expanded="true"] {
     display: block;
   }
+  .ledger-navigation-panel[data-expanded="true"] > :is(.ledger-search, nav) {
+    animation: fm-reveal var(--motion-feedback) var(--motion-ease);
+  }
 }
 
 @container settings-content (max-width: 590px) {
@@ -888,20 +891,6 @@
   background: var(--pop);
   color: var(--text);
   overflow: hidden;
-}
-
-#modal.ledger-invite-sheet::backdrop {
-  backdrop-filter: blur(2px);
-}
-#modal.ledger-invite-sheet[open] {
-  animation: ledger-sheet-in 200ms ease-out;
-}
-
-@keyframes ledger-sheet-in {
-  from {
-    transform: translateX(24px);
-    opacity: 0;
-  }
 }
 
 .ledger-invite-sheet #dialog-body,
@@ -1137,27 +1126,11 @@
     margin: auto 0 0;
     border-radius: 18px 18px 0 0;
   }
-  #modal.ledger-invite-sheet[open] {
-    animation-name: ledger-sheet-up;
-  }
-}
-
-@keyframes ledger-sheet-up {
-  from {
-    transform: translateY(24px);
-    opacity: 0;
-  }
 }
 
 @media (max-width: 429px) {
   .ledger-expiry .ledger-segments {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #modal.ledger-invite-sheet[open] {
-    animation: none;
   }
 }
 

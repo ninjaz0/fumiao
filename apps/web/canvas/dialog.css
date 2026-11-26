@@ -5,3 +5,122 @@
   margin: 16px 0;
   border-radius: 8px;
 }
+[data-theme="dark"] .cv-dialog > p.error {
+  color: var(--cv-danger);
+  background: color-mix(in srgb, var(--cv-danger) 12%, var(--cv-surface));
+}
+
+/* Wave 3: Series Tree (F026) */
+.fm-series-panel {
+  margin-bottom: 24px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(128, 128, 128, 0.22);
+  background: rgba(128, 128, 128, 0.05);
+}
+.fm-series-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.fm-series-head h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
+}
+.fm-series-form,
+.fm-ep-form {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.22);
+  margin-bottom: 12px;
+}
+.fm-ep-form {
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+}
+.fm-ep-form label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.fm-ep-form input[type="number"] {
+  width: 56px;
+}
+.fm-series-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.fm-series-list {
+  display: grid;
+  gap: 8px;
+}
+.fm-series-card {
+  border: 1px solid rgba(128, 128, 128, 0.2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.fm-series-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  gap: 10px;
+}
+.fm-series-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+}
+.fm-series-toggle span {
+  font-size: 12px;
+  opacity: 0.7;
+}
+.fm-series-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fm-series-body {
+  padding: 0 12px 12px;
+}
+.fm-series-synopsis,
+.fm-series-muted {
+  margin: 0 0 8px;
+  font-size: 13px;
+  opacity: 0.75;
+}
+.fm-ep-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.fm-ep-list a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.18);
+  text-decoration: none;
+  color: inherit;
+  font-size: 13px;
+}
+.fm-ep-list a small {
+  margin-left: auto;
+  opacity: 0.7;
+}

@@ -39,12 +39,18 @@ import {
   type SettingsTab,
 } from "./settings-tabs";
 import { PluginSettingsPage } from "./PluginSettingsPage";
+import { SettingsApiTokens } from "./SettingsApiTokens";
+import { SettingsObservability } from "./SettingsObservability";
+import { SettingsBudgets } from "./SettingsBudgets";
+import { SettingsRedeem } from "./SettingsRedeem";
 
 const adminTabs = [
+  ["observability", "运营大盘", "sliders", "billing"],
   ["plugins", "插件", "link", "services"],
   ["models", "模型管理", "model", "services"],
   ["prices", "生成定价", "sliders", "billing"],
   ["creditAdmin", "积分管理", "drive", "billing"],
+  ["redeemAdmin", "兑换码", "drive", "billing"],
   ["openai", "OpenAI", "picture", "services"],
   ["chatService", "对话服务", "chat", "services"],
   ["workspaces", "团队空间", "library", "organization"],
@@ -137,6 +143,10 @@ export function Settings({
   const admin = state.me.role === "admin";
   const workspace = state.workspace_id;
   const request = useRef(0);
+  const [rechargePending, setRechargePending] = useState<{
+    version: number;
+    kind: "recharge" | "history";
+  } | null>(null);
   const [creditState, setCreditState] = useState(state);
   useLayoutEffect(() => {
     if (!dialogOpen) setCreditState(state);
@@ -167,8 +177,10 @@ export function Settings({
     const version = ++request.current;
     try {
       const order = await readOrder(workspace, id);
-      if (version === request.current && (!opener || openDialogFor(opener)))
+      if (version === request.current && (!opener || openDialogFor(opener))) {
         showOrder(order, opener);
+        return true;
+      }
     } catch (error) {
       if (version === request.current) notify((error as Error).message);
     }
@@ -178,6 +190,7 @@ export function Settings({
     opener: HTMLButtonElement | null,
   ) {
     const version = ++request.current;
+    if (opener) setRechargePending({ version, kind });
     try {
       const config = await api<RechargeConfig>(
         String(workspace),
@@ -202,19 +215,28 @@ export function Settings({
         ),
         opener,
       );
+      return true;
     } catch (error) {
       if (version === request.current) notify((error as Error).message);
+    } finally {
+      setRechargePending((current) => current?.version === version ? null : current);
     }
   }
 
   useEffect(() => {
-    const url = new URL(location.href);
-    const returnedOrder = url.searchParams.get("recharge");
+    const returnedOrder = new URLSearchParams(location.search).get("recharge");
     if (!returnedOrder) return;
-    url.searchParams.delete("recharge");
-    history.replaceState(null, "", url);
-    if (returnedOrder === "history") void openRecharge("history", null);
-    else void openOrder(returnedOrder, null);
+    void (async () => {
+      const opened = returnedOrder === "history"
+        ? await openRecharge("history", null)
+        : await openOrder(returnedOrder, null);
+      if (!opened) return;
+      const url = new URL(location.href);
+      if (url.searchParams.get("recharge") === returnedOrder) {
+        url.searchParams.delete("recharge");
+        history.replaceState(history.state, "", url);
+      }
+    })();
   }, []);
 
   const pages = state.plugin_pages?.filter(
@@ -230,6 +252,8 @@ export function Settings({
     ["profile", "个人资料", "account", "account"],
     ["general", "常规", "settings", "account"],
     ["credits", "积分", "drive", "account"],
+    ["budgets", "预算与风控", "sliders", "account"],
+    ["apiTokens", "API 与 MCP", "link", "account"],
     ...(!pages && legacyPanel && state.gpu_node_settings
       ? [["gpu", state.gpu_node_settings.title, "gpu", "account"] as const]
       : []),
@@ -299,7 +323,9 @@ export function Settings({
       sections={sections}
       legacyTab={legacy && pluginTab(legacy)}
       navigate={(key) => {
+        if (key === tab) return;
         ++request.current;
+        setRechargePending(null);
         navigate(key);
       }}
     >
@@ -353,6 +379,23 @@ export function Settings({
             state={creditState}
             recharge={(button) => void openRecharge("recharge", button)}
             history={(button) => void openRecharge("history", button)}
+            rechargePending={rechargePending?.kind}
+            refresh={refresh}
+            notify={notify}
+          />
+        )}
+        {tab === "budgets" && (
+          <SettingsBudgets key={workspace} workspace={workspace} notify={notify} />
+        )}
+        {tab === "apiTokens" && (
+          <SettingsApiTokens
+            key={workspace}
+            workspace={workspace}
+            canEditPolicy={
+              admin ||
+              state.workspaces.find((w) => w.id === workspace)?.kind ===
+                "personal"
+            }
             notify={notify}
           />
         )}
@@ -378,6 +421,10 @@ export function Settings({
             notify={notify}
           />
         )}
+        {admin && tab === "observability" && (
+          <SettingsObservability notify={notify} />
+        )}
+        {admin && tab === "redeemAdmin" && <SettingsRedeem notify={notify} />}
         {admin && tab === "plugins" && (
           <PluginSettings
             key={workspace}

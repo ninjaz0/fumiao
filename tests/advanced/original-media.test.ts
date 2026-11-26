@@ -5,17 +5,20 @@ import sharp from "sharp";
 import express from "express";
 import { Readable } from "node:stream";
 import { once } from "node:events";
-import { readdir } from "node:fs/promises";
+import { readdir, writeFile } from "node:fs/promises";
 import { databaseFixture } from "../helpers/database.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { OriginalMedia } from "@fumiao/original-api/media.js";
-import { OriginalLibrary } from "@fumiao/original-api/library.js";
+import { OriginalLibrary, archiveEntry } from "@fumiao/original-api/library.js";
+import { OriginalStateRecords } from "@fumiao/original-api/state-records.js";
 import { zipStream } from "@fumiao/original-api/zip.js";
 import { sendFile } from "@fumiao/original-api/files.js";
 import { S3Storage } from "@fumiao/platform/storage.js";
 import { S3Client } from "@aws-sdk/client-s3";
 import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { gpuReferences } from "@fumiao/plugin-gpu/references.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 import type { ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 const password = "media-fixture-password";
@@ -865,6 +868,237 @@ test("uploaded reference videos with dotted original names preserve dot stems an
       );
       await inline.arrayBuffer();
     }
+  } finally {
+    await app.close();
+    await f.cleanup();
+  }
+});
+
+test("official /api/h3/references upload path, parameterized/mixed-case legacy MIME, take..02.mov, and 304 revalidation preserve .mp4", async () => {
+  const f = await fixture(),
+    mp4Bytes = Buffer.from("000000186674797069736f6d", "hex");
+  const refPlugin: ProviderPlugin = {
+    ...gpuReferences,
+    importReference: async (_input, output) => {
+      await writeFile(output, mp4Bytes);
+      return {
+        seconds: 3,
+        fps: 24,
+        has_audio: true,
+        w: 320,
+        h: 180,
+        mime: "video/mp4",
+        size: mp4Bytes.length,
+      };
+    },
+  };
+  await f.p.registry.installBuiltins(f.db);
+  f.p.registry = new PluginRegistry([refPlugin]);
+  await f.db.transaction((sql) =>
+    new StudioCatalog(f.db).activate(sql, gpuReferences.manifest),
+  );
+  const app = await createOriginalApp(f.p);
+  try {
+    await app.listen(0, "127.0.0.1");
+    const base = await app.getUrl(),
+      cookie = { cookie: "fm_session=" + f.token };
+
+    // 1. Official /api/h3/references?kind=video upload path with multi-dot and consecutive-dot names
+    for (const item of [
+      {
+        raw: "2026.11.19.镜头1.mov",
+        utf8: "2026.11.19.镜头1.mp4",
+        ascii: "2026.11.19.1.mp4",
+      },
+      {
+        raw: "my.clip.2026.11.mov",
+        utf8: "my.clip.2026.11.mp4",
+        ascii: "my.clip.2026.11.mp4",
+      },
+      {
+        raw: "take..02.mov",
+        utf8: "take..02.mp4",
+        ascii: "take..02.mp4",
+      },
+      {
+        raw: "产品演示.1080p.mov",
+        utf8: "产品演示.1080p.mp4",
+        ascii: "1080p.mp4",
+      },
+    ]) {
+      const uploadRes = await fetch(`${base}/api/h3/references?kind=video`, {
+        method: "POST",
+        headers: {
+          Cookie: cookie.cookie,
+          "X-Workspace-Id": "1",
+          "X-File-Name": encodeURIComponent(item.raw),
+          "Content-Type": "video/quicktime",
+        },
+        body: mp4Bytes,
+      });
+      assert.equal(uploadRes.status, 200);
+      const uploaded = (await uploadRes.json()) as { id: string; name: string };
+      assert.equal(uploaded.name, item.raw);
+
+      const dl = await fetch(`${base}/media/${uploaded.id}?download=true`, {
+        headers: cookie,
+      });
+      assert.equal(dl.status, 200);
+      assert.equal(
+        dl.headers.get("content-disposition"),
+        `attachment; filename="${item.ascii}"; filename*=UTF-8''${encodeURIComponent(item.utf8)}`,
+      );
+      await dl.arrayBuffer();
+    }
+
+    // 2. Legacy parameterized or mixed-case MIME values (e.g. "video/mp4; codecs=avc1", "Video/MP4")
+    for (const rawMime of [
+      "video/mp4; codecs=avc1",
+      ' Video/MP4 ; codecs="avc1.42E01E, mp4a.40.2" ',
+      "VIDEO/MP4",
+    ]) {
+      const id = randomUUID(),
+        key = randomUUID().replaceAll("-", ""),
+        objectKey = "legacy-mime-" + randomUUID();
+      await f.p.storage.put(objectKey, mp4Bytes, "video/mp4");
+      await f.db.query(
+        "INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,original_kind,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,'ready','ref_video','{}')",
+        [id, key, f.team, f.admin.id, objectKey, rawMime, mp4Bytes.length],
+      );
+      await f.db.query(
+        "INSERT INTO asset_reference_media(asset_id,seconds,fps,has_audio,name) VALUES($1,4,24,true,'clip.v2.mp4')",
+        [id],
+      );
+
+      assert.equal(
+        archiveEntry({ public_id: key, size: mp4Bytes.length, mime: rawMime }, "001-素材").name,
+        "001-素材.mp4",
+      );
+
+      const res = await fetch(`${base}/media/${key}?download=true`, {
+        headers: cookie,
+      });
+      assert.equal(res.status, 200);
+      assert.equal(
+        res.headers.get("content-disposition"),
+        "attachment; filename=\"clip.v2.mp4\"; filename*=UTF-8''clip.v2.mp4",
+      );
+      await res.arrayBuffer();
+    }
+
+    // 3. Pre-upgrade cached ETag does NOT short-circuit to dispositionless 304, and 304 carries Content-Disposition
+    const cacheId = randomUUID(),
+      cacheKey = randomUUID().replaceAll("-", ""),
+      cacheObject = "cache-video-" + randomUUID(),
+      modified = 1700000000;
+    await f.p.storage.put(cacheObject, mp4Bytes, "video/mp4");
+    await f.db.query(
+      "INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,original_kind,object_modified,metadata) VALUES($1,$2,$3,$4,$5,'video/mp4',$6,'ready','video',$7,'{}')",
+      [cacheId, cacheKey, f.team, f.admin.id, cacheObject, mp4Bytes.length, modified],
+    );
+    const legacyEtag =
+      '"' +
+      createHash("md5")
+        .update(`${modified.toFixed(1)}-${mp4Bytes.length}`)
+        .digest("hex") +
+      '"';
+    const expectedInline = `inline; filename="fumiao-${cacheKey.slice(0, 8)}.mp4"; filename*=UTF-8''%E5%BC%97%E6%B7%BC-${cacheKey.slice(0, 8)}.mp4`;
+
+    // Revalidating with pre-upgrade ETag must miss 304 and return fresh 200 with Content-Disposition + new ETag
+    const upgradedFromLegacy = await fetch(`${base}/media/${cacheKey}`, {
+      headers: {
+        ...cookie,
+        "If-None-Match": legacyEtag,
+        "If-Modified-Since": new Date(modified * 1000).toUTCString(),
+      },
+    });
+    assert.equal(upgradedFromLegacy.status, 200);
+    assert.equal(
+      upgradedFromLegacy.headers.get("content-disposition"),
+      expectedInline,
+    );
+    const newEtag = upgradedFromLegacy.headers.get("etag")!;
+    assert.ok(newEtag && newEtag !== legacyEtag);
+    await upgradedFromLegacy.arrayBuffer();
+
+    // Subsequent revalidation with new ETag returns 304 AND preserves Content-Disposition
+    const revalidated304 = await fetch(`${base}/media/${cacheKey}`, {
+      headers: { ...cookie, "If-None-Match": newEtag },
+    });
+    assert.equal(revalidated304.status, 304);
+    assert.equal(
+      revalidated304.headers.get("content-disposition"),
+      expectedInline,
+    );
+
+    // If-Modified-Since-only 304 also carries Content-Disposition
+    const imsOnly304 = await fetch(`${base}/media/${cacheKey}`, {
+      headers: {
+        ...cookie,
+        "If-Modified-Since": new Date(modified * 1000).toUTCString(),
+      },
+    });
+    assert.equal(imsOnly304.status, 304);
+    assert.equal(imsOnly304.headers.get("content-disposition"), expectedInline);
+
+    // 4. Archived legacy jobs expose real result_mime (e.g. video/webm vs video/mp4)
+    const webmAssetId = randomUUID(),
+      webmKey = "a".repeat(32);
+    await f.p.storage.put("webm-" + webmAssetId, Buffer.from("1a45dfa3", "hex"), "video/webm");
+    await f.db.query(
+      "INSERT INTO assets(id,public_id,workspace_id,owner_id,object_key,mime,size,state,original_kind,metadata) VALUES($1,$2,$3,$4,$5,'video/webm',4,'ready','video','{}')",
+      [webmAssetId, webmKey, f.team, f.admin.id, "webm-" + webmAssetId],
+    );
+    const legacyConn = randomUUID(),
+      legacyModel = randomUUID(),
+      legacyJob = randomUUID();
+    await f.db.query(
+      `INSERT INTO plugin_versions(id,version,manifest) VALUES('legacy-archive','1.0.0','{"id":"legacy-archive","version":"1.0.0","contractVersion":1,"label":"Archive","mode":"pull","models":[],"configSchema":{"type":"object"}}') ON CONFLICT DO NOTHING`,
+    );
+    await f.db.query(
+      "INSERT INTO connections(id,name,plugin_id,plugin_version,config) VALUES($1,'Archive','legacy-archive','1.0.0',$2)",
+      [legacyConn, f.p.vault.seal({})],
+    );
+    await f.db.query(
+      "INSERT INTO models(id,connection_id,provider_model,label,kind,schema) VALUES($1,$2,'muse-video','Muse','video','{}')",
+      [legacyModel, legacyConn],
+    );
+    await f.db.query(
+      `INSERT INTO jobs(id,public_id,workspace_id,owner_id,model_id,connection_id,plugin_id,plugin_version,config_snapshot,provider_model,kind,input,idempotency_key,request_hash,price,state,result,attempts,original_view)
+       VALUES($1,901,$2,$3,$4,$5,'legacy-archive','1.0.0',$6,'muse-video','video','{"prompt":"legacy webm"}','legacy-901','legacy-901',1,'completed',$7,1,$8)`,
+      [
+        legacyJob,
+        f.team,
+        f.admin.id,
+        legacyModel,
+        legacyConn,
+        f.p.vault.seal({}),
+        JSON.stringify({ assets: [webmAssetId] }),
+        JSON.stringify({
+          ratio: "16:9",
+          quality: 480,
+          seconds: 5,
+          sampling_steps: 20,
+          seed: 1,
+          width: 864,
+          height: 480,
+          image_quality: null,
+          audio_settings: {},
+          h3_inputs: {},
+          actual: {},
+          refs: [],
+        }),
+      ],
+    );
+    const archived = await new OriginalStateRecords().archivedJobs(
+      f.db,
+      f.team,
+      1800000000,
+    );
+    const archivedWebm = archived.find((j) => j.id === 901);
+    assert.ok(archivedWebm);
+    assert.equal(archivedWebm.result, webmKey);
+    assert.equal(archivedWebm.result_mime, "video/webm");
   } finally {
     await app.close();
     await f.cleanup();

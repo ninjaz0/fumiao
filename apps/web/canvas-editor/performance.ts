@@ -185,7 +185,10 @@ export function draftEquals(a: Draft, b: Draft): boolean {
   if (
     da.schemaVersion !== db.schemaVersion ||
     da.nodes.length !== db.nodes.length ||
-    da.edges.length !== db.edges.length
+    da.edges.length !== db.edges.length ||
+    da.loudnorm !== db.loudnorm ||
+    da.bgm_applied_job !== db.bgm_applied_job ||
+    !shallowJobValueEqual(da.bgm ?? null, db.bgm ?? null)
   ) {
     return false;
   }
@@ -250,6 +253,15 @@ export function computeOverlayPositions(params: {
       }
     : null;
   const toolbarBelow = Boolean(nodeRect && nodeRect.y < 150);
+  const composerTop = nodeRect
+    ? Math.max(
+        100,
+        Math.min(
+          nodeRect.y + nodeRect.h + (toolbarBelow ? 70 : 20),
+          windowSize.h - panelHeight - (node?.type === "text" ? 80 : 20),
+        ),
+      )
+    : 100;
   return {
     toolbar: nodeRect
       ? {
@@ -258,8 +270,16 @@ export function computeOverlayPositions(params: {
             Math.min(nodeRect.x + nodeRect.w / 2 - 170, windowSize.w - 370),
           ),
           top: toolbarBelow
-            ? Math.max(68, nodeRect.y + nodeRect.h + 14)
-            : nodeRect.y - 82,
+            ? Math.max(
+                68,
+                panelHeight > 0
+                  ? Math.min(nodeRect.y + nodeRect.h + 14, composerTop - 54)
+                  : nodeRect.y + nodeRect.h + 14,
+              )
+            : Math.min(
+                nodeRect.y - 82,
+                panelHeight > 0 ? Math.max(68, composerTop - 54) : nodeRect.y - 82,
+              ),
         }
       : null,
     composer: nodeRect
@@ -268,13 +288,7 @@ export function computeOverlayPositions(params: {
             76,
             Math.min(nodeRect.x + nodeRect.w / 2 - 260, windowSize.w - 544),
           ),
-          top: Math.max(
-            100,
-            Math.min(
-              nodeRect.y + nodeRect.h + (toolbarBelow ? 70 : 20),
-              windowSize.h - panelHeight - (node?.type === "text" ? 80 : 20),
-            ),
-          ),
+          top: composerTop,
         }
       : null,
     downstream: {

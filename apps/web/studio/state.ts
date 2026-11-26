@@ -1,6 +1,9 @@
 import type { MenuEntry, PluginPageEntry } from "@fumiao/plugin-sdk/contributions";
 import type { InstalledSettingsPage } from "@fumiao/plugin-sdk/settings-pages";
-import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename";
+import {
+  mediaDownloadFilename,
+  normalizeMediaMime,
+} from "@fumiao/plugin-sdk/media-filename";
 import { resolve as resolveFlow } from "../canvas-editor/flowPicker";
 import {
   formError,
@@ -168,6 +171,7 @@ export type StudioState = {
   video_models: Record<string, string>;
   audio_models: Record<string, string>;
   model_access?: Record<string, boolean>;
+  model_plugin_access?: Record<string, boolean>;
   model_policy: ModelPolicy;
   team_model_policies?: Record<string, ModelPolicy>;
   model_groups: Record<string, ModelGroup>;
@@ -355,7 +359,7 @@ export function assetDownloadFilename(
   asset: Pick<Asset, "id" | "kind" | "mime" | "name">,
 ): string | undefined {
   const mime =
-    asset.mime ??
+    normalizeMediaMime(asset.mime) ||
     (asset.kind === "ref_video"
       ? "video/mp4"
       : asset.kind === "ref_audio"
@@ -369,7 +373,7 @@ export function jobDownloadFilename(
 ): string | undefined {
   if (!job.result) return undefined;
   const mime =
-    job.result_mime ??
+    normalizeMediaMime(job.result_mime) ||
     (job.kind === "video"
       ? "video/mp4"
       : job.kind === "audio"
@@ -412,7 +416,15 @@ export function readDraft(state: StudioState): DraftSession {
     sessionStorage.setItem(key, legacy);
     sessionStorage.removeItem(legacyKey);
   }
-  const saved = readStoredDraft(key);
+  return restoreStoredDraft(state, readStoredDraft(key));
+}
+
+export function readDraftBackup(state: StudioState): DraftSession | null {
+  const saved = readStoredDraft(keyFor(state) + "-before-history");
+  return saved ? restoreStoredDraft(state, saved) : null;
+}
+
+function restoreStoredDraft(state: StudioState, saved: StoredDraft | null): DraftSession {
   const storedTypes = saved?.referenceTypes;
   const draft = { ...initialDraft, ...saved?.draft };
   if (saved?.draft && !state.studio_plugins) {
@@ -452,7 +464,16 @@ export function readDraft(state: StudioState): DraftSession {
   return pruneDraftAssets(state, session, savedReferenceType(state, storedTypes));
 }
 export function writeDraft(state: StudioState, session: DraftSession) {
-  const key = keyFor(state);
+  writeStoredDraft(state, session, keyFor(state));
+}
+
+export function writeDraftBackup(state: StudioState, session: DraftSession | null) {
+  const key = keyFor(state) + "-before-history";
+  if (session) writeStoredDraft(state, session, key);
+  else sessionStorage.removeItem(key);
+}
+
+function writeStoredDraft(state: StudioState, session: DraftSession, key: string) {
   const refs = new Set(
     [session, session.suspendedImageDraft, session.suspendedMediaDraft].flatMap(
       (snapshot) => snapshot
@@ -1762,16 +1783,23 @@ export function composerFeedback(
       ? unpricedReason
       : "当前空间积分不足";
 
+  const limitReason = overLimit
+    ? `超出字数限制：${draft.prompt.length} / ${limit} 字`
+    : "";
+  const promptReason = hasPrompt
+    ? ""
+    : draft.kind === "audio"
+      ? "请输入要朗读的文字"
+      : "请输入提示词";
   const status = options.uploading
     ? "上传中"
     : options.submitting
-      ? ""
+      ? "正在提交…"
       : !available
         ? model || hasPrompt
           ? unavailableReason
           : ""
-        : issue ||
-          (overLimit ? `${draft.prompt.length} / ${limit} 字` : priceReason);
+        : issue || limitReason || priceReason;
 
   const submitReason = options.submitting
     ? "提交中"
@@ -1779,16 +1807,7 @@ export function composerFeedback(
       ? "上传中"
       : !available
         ? unavailableReason
-        : issue ||
-          (overLimit
-            ? `超出字数限制：${draft.prompt.length} / ${limit} 字`
-            : !price.allowed
-              ? priceReason
-              : !hasPrompt
-                ? draft.kind === "audio"
-                  ? "请输入要朗读的文字"
-                  : "请输入提示词"
-                : "");
+        : issue || limitReason || priceReason || promptReason;
 
   return { status, submitReason, priceReason };
 }

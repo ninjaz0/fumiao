@@ -343,6 +343,12 @@ export class OriginalIdentity {
     id: number | bigint,
     lock = false,
   ) {
+    requireValue(
+      user.tokenWorkspacePublicId === undefined ||
+        Number(id) === user.tokenWorkspacePublicId,
+      403,
+      "API Token 已绑定所属工作区，禁止跨工作区访问",
+    );
     const row = await one(
       sql,
       `SELECT * FROM workspaces w WHERE public_id=$1 AND
@@ -353,6 +359,25 @@ export class OriginalIdentity {
     return row;
   }
   async activeWorkspace(sql: Sql, user: Actor, explicit?: string | number) {
+    if (user.tokenWorkspaceId && user.tokenWorkspacePublicId !== undefined) {
+      if (explicit !== undefined && String(explicit).trim() !== "") {
+        const parsed =
+          typeof explicit === "string" && /^\s*[+-]?\d+\s*$/.test(explicit)
+            ? Number(explicit)
+            : explicit;
+        requireValue(
+          typeof parsed === "number" && Number.isSafeInteger(parsed),
+          400,
+          "工作区标识无效",
+        );
+        requireValue(
+          parsed === user.tokenWorkspacePublicId,
+          403,
+          "API Token 已绑定所属工作区，禁止跨工作区访问",
+        );
+      }
+      return this.requireWorkspace(sql, user, user.tokenWorkspacePublicId);
+    }
     if (explicit !== undefined) {
       const id =
         typeof explicit === "string" && /^\s*[+-]?\d+\s*$/.test(explicit)

@@ -73,7 +73,7 @@ test("each shipped scaffold builds, passes its hook contracts and receives an un
   );
   const packages = new StudioPackages(fixture.p);
   const templates = (await readdir(join(dist, "templates"))).sort();
-  assert.ok(templates.length);
+  assert.ok(templates.includes("nodePools.json"), "SDK authors can still scaffold a node pool");
   for (const template of templates) {
     const type = template.replace(/\.json$/, ""),
       project = join(dir, "author-" + type.toLowerCase());

@@ -9,9 +9,11 @@ import {
   requireValue,
   DomainError,
 } from "@fumiao/platform/security.js";
+import { collectDerivativeObjectKeys } from "@fumiao/platform/derivatives.js";
 import { OriginalIdentity } from "./identity.js";
 import { OriginalMedia } from "./media.js";
 import { disposition } from "./files.js";
+import { normalizeMediaMime } from "@fumiao/plugin-sdk/media-filename.js";
 import { parseBody } from "./validation.js";
 import { identityBodies } from "./contracts.js";
 import { zipStream, type ArchiveEntry } from "./zip.js";
@@ -19,6 +21,12 @@ type Selection = { kind: "job" | "asset"; row: any };
 const terminal = ["completed", "failed", "cancelled"];
 const extensions: Record<string, string> = {
   "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/wave": "wav",
+  "audio/mpeg": "mp3",
+  "audio/mp3": "mp3",
+  "audio/flac": "flac",
+  "audio/ogg": "ogg",
   "video/mp4": "mp4",
   "video/webm": "webm",
   "image/png": "png",
@@ -29,8 +37,9 @@ export function archiveEntry(
   asset: { public_id: string; size: number | string; mime: string },
   name: string,
 ): ArchiveEntry {
-  const extension = Object.hasOwn(extensions, asset.mime)
-    ? extensions[asset.mime]
+  const mime = normalizeMediaMime(asset.mime);
+  const extension = Object.hasOwn(extensions, mime)
+    ? extensions[mime]
     : undefined;
   requireValue(extension, 400, "不支持下载此文件类型");
   return {
@@ -75,6 +84,9 @@ export class OriginalLibrary {
     throw new DomainError(400, "资产标识无效");
   }
   async access(sql: Sql, user: Actor, item: Selection, workspace: string) {
+    if (user.tokenWorkspaceId && workspace !== user.tokenWorkspaceId) {
+      throw new DomainError(403, "API Token 无权跨工作区访问该对象");
+    }
     requireValue(
       item.row.workspace_id === workspace,
       404,
@@ -385,12 +397,19 @@ export class OriginalLibrary {
         "DELETE FROM document_assets WHERE asset_id=ANY($1::uuid[])",
         [assets.map((a) => a.id)],
       );
+      const derivObjects = await collectDerivativeObjectKeys(
+        sql,
+        assets.map((a) => a.id),
+      );
       await sql.query("DELETE FROM assets WHERE id=ANY($1::uuid[])", [
         assets.map((a) => a.id),
       ]);
       return {
         deleted: entries.size,
-        objects: assets.map((a) => a.object_key as string),
+        objects: [
+          ...assets.map((a) => a.object_key as string),
+          ...derivObjects,
+        ],
       };
     });
     for (const object of outcome.objects) await this.p.storage.remove(object);

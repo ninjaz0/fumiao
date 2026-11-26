@@ -56,7 +56,7 @@ try {
   page.on("filechooser", (chooser) => choosers.push(chooser));
   await page.goto(`/canvas/${id}?workspace=${workspace}`);
   await page.locator(".react-flow__node").filter({ has: page.getByLabel("节点名称 素材包节点") }).click({ position: { x: 160, y: 140 } });
-  await page.locator(".canvas-pack-entry").getByRole("button").click();
+  await page.locator(".canvas-pack-entry").getByRole("button", { name: /^素材包/ }).click();
   const packs = page.locator(".fm-packs");
   await packs.getByRole("button", { name: "新建素材包" }).click();
   await expect(packs.getByRole("button", { name: /^选择参考图/ }).first()).toBeVisible();

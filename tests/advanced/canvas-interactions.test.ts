@@ -492,7 +492,7 @@ test("#108 narration text/instruction inputs coalesce keystrokes via edit-sessio
   assert.match(workspaceSource, /onEditEnd=\{doc\.end\}/);
   assert.match(
     workspaceSource,
-    /onChange=\{\(patch,history\)=>edit\(shot\.id,patch,history\)\}/,
+    /onChange=\{\(\s*patch\s*,\s*history\s*\)\s*=>\s*edit\(\s*shot\.id\s*,\s*patch\s*,\s*history\s*\)\}/,
   );
 });
 

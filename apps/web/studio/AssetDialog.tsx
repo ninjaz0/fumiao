@@ -204,6 +204,13 @@ export function AssetDialog({
   return (
     <dialog
       id="modal"
+      data-motion-exit={
+        content?.kind === "settings" ||
+        content?.kind === "confirm" ||
+        content?.kind === "plugin-action"
+          ? ""
+          : undefined
+      }
       aria-label={previewLabel}
       aria-labelledby={
         content && content.kind !== "preview" ? "modal-heading" : undefined
@@ -223,11 +230,13 @@ export function AssetDialog({
         if (confirmationPending.current) event.preventDefault();
         else stopDialogMedia(ref.current);
       }}
-      onClose={() => {
+      onClose={(event) => {
+        if (event.currentTarget.open) return;
         stopDialogMedia(ref.current);
         const shouldRestoreFocus = restoreOpenerFocus.current;
         restoreOpenerFocus.current = true;
         closeFrame.current = requestAnimationFrame(() => {
+          if (ref.current?.open) return;
           if (shouldRestoreFocus) {
             const opener = dialog?.opener;
             const target =
@@ -398,8 +407,8 @@ export function AssetDialog({
               </label>
             ))}
             <div className="buttons">
-              <button className="primary" disabled={confirming}>
-                执行
+              <button className="primary" disabled={confirming} aria-label="执行" aria-busy={confirming}>
+                {confirming ? "处理中…" : "执行"}
               </button>
               <button
                 type="button"
@@ -426,9 +435,11 @@ export function AssetDialog({
                 id="confirm"
                 className="primary"
                 disabled={confirming}
+                aria-label="确定"
+                aria-busy={confirming}
                 onClick={() => void confirm()}
               >
-                确定
+                {confirming ? "处理中…" : "确定"}
               </button>
               <button
                 id="back"

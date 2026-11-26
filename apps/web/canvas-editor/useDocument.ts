@@ -43,6 +43,7 @@ export function useDocument(project: Project, userId: number) {
   const revision = useRef(initial.current.revision),
     serial = useRef(initial.current.dirty ? 1 : 0),
     ack = useRef(0);
+  const hasUnsavedChanges = useCallback(() => serial.current !== ack.current, []);
   const [status, setStatus] = useState(
     initial.current.conflict
       ? "conflict"
@@ -274,6 +275,7 @@ export function useDocument(project: Project, userId: number) {
     acceptRemote,
     canUndo: undo.current.length > 0,
     canRedo: redo.current.length > 0,
-    dirty: serial.current !== ack.current,
+    dirty: hasUnsavedChanges(),
+    hasUnsavedChanges,
   };
 }

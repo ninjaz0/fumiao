@@ -1,10 +1,22 @@
 import "./parameter-fields.css";
 import {
+  evaluateFormConstraints,
   normalizeForm,
   type ModelForm,
   type FormValues,
   type Value,
 } from "@fumiao/plugin-sdk/model-form";
+
+function optionLabel(
+  option: Value,
+  labels?: Record<string, string>,
+): string {
+  const custom = labels?.[String(option)];
+  if (custom) return custom;
+  if (option === true) return "开";
+  if (option === false) return "关";
+  return String(option);
+}
 
 export function ParameterFields({
   form,
@@ -15,28 +27,44 @@ export function ParameterFields({
   values: FormValues;
   change: (v: FormValues) => void;
 }) {
+  const evaluated = evaluateFormConstraints(form, values);
   function edit(name: string, value: Value | undefined) {
     const next = { ...values };
     if (value === undefined) delete next[name];
     else next[name] = value;
     // Text and number inputs can be temporarily incomplete while typing.
-    change(form.fields[name].enum ? normalizeForm(form, next, name) : next);
+    change(
+      form.fields[name].enum || form.fields[name].type === "boolean"
+        ? normalizeForm(form, next, name)
+        : next,
+    );
   }
   return (
     <>
       {Object.entries(form.fields).map(([name, field]) => {
+        const constraint = evaluated.fields[name];
+        if (constraint && !constraint.visible) return null;
         const label = field.title ?? name,
           value = values[name],
-          required = form.required?.includes(name);
+          required = form.required?.includes(name),
+          fieldDisabled = Boolean(constraint?.disabled);
         const options =
           field.enum ??
           (field.type === "boolean" && !required ? [true, false] : undefined);
         return (
-          <label className="parameter-button model-parameter" key={name}>
+          <label
+            className={
+              "parameter-button model-parameter" +
+              (fieldDisabled ? " model-parameter-disabled" : "")
+            }
+            key={name}
+            title={constraint?.disabledReason}
+          >
             {label}
             {options ? (
               <select
                 aria-label={label}
+                disabled={fieldDisabled}
                 value={JSON.stringify(value) ?? ""}
                 onChange={(e) =>
                   edit(
@@ -46,31 +74,33 @@ export function ParameterFields({
                 }
               >
                 {!required && <option value="">默认</option>}
-                {options
-                  .filter(
-                    (option) =>
-                      !form.combinations ||
-                      form.combinations.some(
-                        (c) => !c[name] || c[name].includes(option),
-                      ),
-                  )
-                  .map((option) => (
+                {options.map((option) => {
+                  const key = JSON.stringify(option);
+                  const disabledReason = constraint?.disabledOptions[key];
+                  const autoAdjustReason =
+                    !disabledReason && constraint?.incompatibleOptions[key];
+                  const text = optionLabel(option, field.optionLabels);
+                  return (
                     <option
-                      key={JSON.stringify(option)}
-                      value={JSON.stringify(option)}
+                      key={key}
+                      value={key}
+                      disabled={Boolean(disabledReason)}
+                      title={disabledReason || autoAdjustReason || undefined}
                     >
-                      {option === true
-                        ? "开"
-                        : option === false
-                          ? "关"
-                          : String(option)}
+                      {disabledReason
+                        ? `${text}（${disabledReason}）`
+                        : autoAdjustReason
+                          ? `${text}（联动调整）`
+                          : text}
                     </option>
-                  ))}
+                  );
+                })}
               </select>
             ) : field.type === "boolean" ? (
               <input
                 type="checkbox"
                 aria-label={label}
+                disabled={fieldDisabled}
                 checked={value === true}
                 onChange={(e) => edit(name, e.target.checked)}
               />
@@ -78,6 +108,7 @@ export function ParameterFields({
               <input
                 aria-label={label}
                 type={field.type === "string" ? "text" : "number"}
+                disabled={fieldDisabled}
                 required={required}
                 min={field.minimum}
                 max={field.maximum}
@@ -100,6 +131,11 @@ export function ParameterFields({
           </label>
         );
       })}
+      {evaluated.references.reason && (
+        <span className="parameter-constraint-hint" role="status">
+          {evaluated.references.reason}
+        </span>
+      )}
     </>
   );
 }

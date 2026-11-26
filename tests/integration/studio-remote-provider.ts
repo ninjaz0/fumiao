@@ -247,8 +247,18 @@ export async function verifyRemoteProvider(
       call("/api/state", { workspace });
     const before = await state();
     const workspace = before.workspace_id;
-    assert.deepEqual(before.model_catalog, {});
-    assert.deepEqual(before.model_groups, {});
+    // Built-in free Edge TTS is registered by default; no other models or groups exist before plugin import.
+    assert.deepEqual(
+      Object.keys(before.model_catalog).filter((id) => id !== "edge-tts"),
+      [],
+    );
+    assert.deepEqual(
+      Object.keys(before.model_groups).filter((id) => id !== "edge-tts"),
+      [],
+    );
+    if (before.model_groups["edge-tts"]) {
+      assert.equal(before.model_groups["edge-tts"].kind, "audio");
+    }
     assert.equal(
       (await context.request.get("/connect/install.sh")).status(),
       404,
@@ -259,10 +269,12 @@ export async function verifyRemoteProvider(
       {},
     );
     await expect(page.locator(".generate-button")).toBeDisabled();
+    await expect(page.locator('.composer [data-menu="format"]')).toBeHidden();
+    await expect(page.locator('.composer [data-menu="duration"]')).toBeHidden();
     await call("/api/canvases", { data: { title: "零插件画布" } });
     await verifyChatEmptyGuidance(page);
     await verifyAdminCanvasEmptyGuidance(page, web);
-    await page.getByRole("button", { name: "去导入插件" }).click();
+    await page.getByRole("button", { name: "前往配置生成模型" }).click();
     await expect(page.locator(".settings-section h2")).toHaveText("插件");
     const settingsSearch = page.getByRole("searchbox", { name: "搜索设置项" });
     await settingsSearch.fill("定价");

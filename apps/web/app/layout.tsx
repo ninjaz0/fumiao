@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { originalUI } from "@fumiao/web-compat/ui";
 import { initializeHomepage } from "../home/bootstrap";
 import { homepageMember } from "../home/session";
+import "./motion.css";
 export const metadata = {
   title: "弗淼 AIGC · 多模型创作工作台",
   description:

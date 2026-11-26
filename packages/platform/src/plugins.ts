@@ -58,6 +58,13 @@ const legacyProviders = new Map<string, () => Promise<LegacyReleases>>([
       return { releases: [storyboard, storyboardHistory] };
     },
   ],
+  [
+    "original-storyboard",
+    async () => {
+      const { storyboardHistory } = await import("./composition/history.js");
+      return { releases: [storyboardHistory] };
+    },
+  ],
 ]);
 
 export class PluginRegistry {
@@ -98,6 +105,31 @@ export class PluginRegistry {
   }
   requestAdapter(manifest: Manifest, source: string) {
     return sandboxRequest(manifest, source, this.providerTransport);
+  }
+  async unifiedAdapter(
+    manifest: Manifest,
+    source: string,
+  ): Promise<ProviderPlugin> {
+    const [chat, media] = await Promise.all([
+      this.chatAdapter(manifest),
+      this.requestAdapter(manifest, source),
+    ]);
+    return {
+      ...media,
+      modelForm: (m) =>
+        m.kind === "chat"
+          ? chat.modelForm!(m)
+          : media.modelForm!(m),
+      chatStream: chat.chatStream,
+      chatTitle: chat.chatTitle,
+      chatProbe: chat.chatProbe,
+      chatProvider: chat.chatProvider,
+      chatConfigured: chat.chatConfigured,
+      chatConfigure: chat.chatConfigure,
+    };
+  }
+  registerBuiltin(p: ProviderPlugin) {
+    this.remember(p);
   }
   private remember(p: ProviderPlugin) {
     this.builtins.set(p.manifest.id + "@" + p.manifest.version, p);
@@ -296,14 +328,20 @@ export class PluginRegistry {
         "适配器版本已存在",
       );
     }
+    const unified =
+      Boolean(manifest.chat?.sandbox) &&
+      Boolean(studioProgram) &&
+      manifest.originalSubmission?.version === 5;
     const sandbox =
-      manifest.chat?.sandbox && portable && !endpoint
-        ? await this.chatAdapter(manifest)
-        : studioProgram && portable && !endpoint && manifest.originalSubmission?.version === 5
-          ? await this.requestAdapter(manifest, studioProgram)
-          : studioProgram && portable && manifest.mode === "pull" && manifest.originalSubmission?.version === 4
-            ? await nodeStudioPlugin(manifest, studioProgram)
-            : undefined;
+      unified && portable && !endpoint
+        ? await this.unifiedAdapter(manifest, studioProgram!)
+        : manifest.chat?.sandbox && portable && !endpoint
+          ? await this.chatAdapter(manifest)
+          : studioProgram && portable && !endpoint && manifest.originalSubmission?.version === 5
+            ? await this.requestAdapter(manifest, studioProgram)
+            : studioProgram && portable && manifest.mode === "pull" && manifest.originalSubmission?.version === 4
+              ? await nodeStudioPlugin(manifest, studioProgram)
+              : undefined;
     requireValue(
       ![4, 5].includes(manifest.originalSubmission?.version ?? 0) || sandbox,
       400,
@@ -366,8 +404,10 @@ export class PluginRegistry {
           manifest.mode === "request" &&
           (!manifest.chat.sandbox ||
             (sandbox &&
-              !manifest.originalSubmission &&
-              manifest.models.every((m) => m.kind === "chat"))) &&
+              (unified
+                ? manifest.models.some((m) => m.kind === "chat")
+                : !manifest.originalSubmission &&
+                  manifest.models.every((m) => m.kind === "chat")))) &&
           local?.chatStream &&
           local.chatTitle &&
           local.chatProbe &&
@@ -480,11 +520,21 @@ export class PluginRegistry {
         portable &&
           !endpoint &&
           manifest.mode === "request" &&
-          manifest.models.every(
-            (m) => m.kind === "image" || m.kind === "video",
-          ),
+          (unified
+            ? manifest.models.some(
+                (m) =>
+                  m.kind === "image" ||
+                  m.kind === "video" ||
+                  m.kind === "audio",
+              )
+            : manifest.models.every(
+                (m) =>
+                  m.kind === "image" ||
+                  m.kind === "video" ||
+                  m.kind === "audio",
+              )),
         400,
-        "宿主成品验收需要沙箱图片或视频提供方",
+        "宿主成品验收需要沙箱图片、视频或音频提供方",
       );
     } else if (manifest.artifactValidation)
       requireValue(
@@ -637,6 +687,18 @@ export class PluginRegistry {
       !row.endpoint &&
       !Object.hasOwn(row.manifest, "fmworkerResources")
     ) {
+      if (row.manifest.chat?.sandbox && row.manifest.originalSubmission?.version === 5) {
+        const release = await one(
+          db,
+          "SELECT package->>'studioProgram' AS source FROM studio_package_releases WHERE id=$1 AND package->>'adapterVersion'=$2 AND package ? 'studioProgram' LIMIT 1",
+          [id, version],
+        );
+        requireValue(release, 503, "缺少冻结的工作台程序");
+        return this.unifiedAdapter(
+          manifestSchema.parse(row.manifest),
+          release.source,
+        );
+      }
       if (row.manifest.chat?.sandbox)
         return this.chatAdapter(manifestSchema.parse(row.manifest));
       if ([4, 5].includes(row.manifest.originalSubmission?.version)) {
@@ -652,6 +714,10 @@ export class PluginRegistry {
       }
       if ((row.manifest.originalSubmission?.version ?? 0) >= 2)
         return portablePlugin(row.manifest);
+      if (id === "edge-tts" && version === "1.0.0") {
+        const { edgeTtsPlugin } = await import("./tts/edge-plugin.js");
+        return edgeTtsPlugin;
+      }
       await this.historical(id);
       const prior = this.builtins.get(id + "@" + version);
       if (prior) return prior;

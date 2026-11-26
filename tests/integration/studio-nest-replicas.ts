@@ -423,11 +423,12 @@ export async function verifyStudioReplicas(
 
     const outputs = (
       await p.db.query<{
+        asset_id: string;
         public_id: number;
         media: string;
         object_key: string;
       }>(
-        `SELECT j.public_id::int, a.public_id AS media, a.object_key
+        `SELECT a.id AS asset_id, j.public_id::int, a.public_id AS media, a.object_key
       FROM jobs j JOIN job_assets ja ON j.id=ja.job_id JOIN assets a ON ja.asset_id=a.id
       WHERE ja.role='output' ORDER BY j.public_id`,
       )
@@ -436,10 +437,57 @@ export async function verifyStudioReplicas(
       outputs.map(({ public_id }) => public_id),
       completed.map(({ public_id }) => public_id),
     );
-    assert.deepEqual(
-      (await s3.objects()).map(({ Key }) => Key).sort(),
-      outputs.map(({ object_key }) => object_key).sort(),
+    const outputAssetIds = outputs.map(({ asset_id }) => asset_id);
+    const derivDeadline = Date.now() + 25_000;
+    let derivatives: { asset_id: string; object_key: string; state: string }[] = [];
+    while (Date.now() < derivDeadline) {
+      derivatives = (
+        await p.db.query<{
+          asset_id: string;
+          object_key: string;
+          state: string;
+        }>(
+          `SELECT asset_id, object_key, state FROM asset_derivatives ORDER BY object_key`,
+        )
+      ).rows;
+      if (
+        derivatives.length >= outputAssetIds.length &&
+        derivatives.every((d) => d.state !== "pending")
+      ) {
+        break;
+      }
+      await delay(150);
+    }
+    assert.equal(
+      derivatives.length,
+      outputAssetIds.length,
+      `Expected ${outputAssetIds.length} settled derivatives, got ${JSON.stringify(derivatives)}`,
     );
+    assert.ok(
+      derivatives.every(
+        (d) => d.state === "ready" && outputAssetIds.includes(d.asset_id),
+      ),
+      `Unexpected derivative states or asset references: ${JSON.stringify(derivatives)}`,
+    );
+    const actualKeys = (await s3.objects()).map(({ Key }) => Key).sort();
+    const expectedKeys = [
+      ...outputs.map(({ object_key }) => object_key),
+      ...derivatives.map(({ object_key }) => object_key),
+    ].sort();
+    assert.equal(
+      new Set(actualKeys).size,
+      actualKeys.length,
+      "S3 bucket must not contain duplicate keys",
+    );
+    assert.deepEqual(actualKeys, expectedKeys);
+    for (const derivative of derivatives) {
+      const unsignedDeriv = await fetch(
+        `${s3.endpoint}/${s3.bucket}/${derivative.object_key}`,
+        { redirect: "error", signal: AbortSignal.timeout(5000) },
+      );
+      assert.equal(unsignedDeriv.status, 403);
+      await unsignedDeriv.body?.cancel();
+    }
     for (const output of outputs) {
       assert.equal(
         settled.jobs.find((job) => job.id === output.public_id)?.result,

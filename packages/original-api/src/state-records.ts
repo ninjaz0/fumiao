@@ -140,6 +140,30 @@ export class OriginalStateRecords {
       )
     ).rows;
     await attachJobResults(sql, jobs);
+    const extraPublicIds = [
+      ...new Set(
+        jobs
+          .map((j) =>
+            Object.hasOwn(j.original_view, "result") &&
+            typeof j.original_view.result === "string" &&
+            /^[0-9a-f]{32}$/.test(j.original_view.result) &&
+            j.original_view.result !== j.result_public_id
+              ? (j.original_view.result as string)
+              : undefined,
+          )
+          .filter((id): id is string => id !== undefined),
+      ),
+    ];
+    const extraMimes = new Map<string, string>(
+      extraPublicIds.length
+        ? (
+            await sql.query(
+              "SELECT public_id, mime FROM assets WHERE public_id=ANY($1::text[])",
+              [extraPublicIds],
+            )
+          ).rows.map((r) => [r.public_id as string, r.mime as string])
+        : [],
+    );
     const runs = (
       await sql.query(
         "SELECT DISTINCT ON(job) * FROM job_runs WHERE job=ANY($1::uuid[]) ORDER BY job,id DESC",
@@ -168,6 +192,15 @@ export class OriginalStateRecords {
         503,
         "历史任务缺少原状态字段，请重新导出迁移",
       );
+      const result = Object.hasOwn(j.original_view, "result")
+        ? j.original_view.result
+        : (j.result_public_id ?? null);
+      const resultMime =
+        typeof result === "string" && result
+          ? result === j.result_public_id
+            ? (j.result_mime ?? null)
+            : (extraMimes.get(result) ?? null)
+          : null;
       return {
         id: number(j.public_id),
         workspace: number(j.workspace_public_id),
@@ -180,9 +213,8 @@ export class OriginalStateRecords {
         created: Object.hasOwn(j.original_view, "created")
           ? j.original_view.created
           : epoch(j.created_at),
-        result: Object.hasOwn(j.original_view, "result")
-          ? j.original_view.result
-          : (j.result_public_id ?? null),
+        result,
+        ...(resultMime ? { result_mime: resultMime } : {}),
         note: Object.hasOwn(j.original_view, "note")
           ? j.original_view.note
           : j.error || "",

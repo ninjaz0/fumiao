@@ -701,7 +701,7 @@
 .plugin-optional-fields > summary svg {
   flex: none;
   color: var(--secondary);
-  transition: rotate 120ms ease;
+  transition: rotate var(--motion-feedback) var(--motion-ease);
 }
 .plugin-optional-fields[open] > summary svg {
   rotate: 180deg;
@@ -871,7 +871,7 @@
   color: var(--secondary);
 }
 .plugin-details-meta svg {
-  transition: rotate 120ms ease;
+  transition: rotate var(--motion-feedback) var(--motion-ease);
 }
 .plugin-drawer-details[open] .plugin-details-meta svg {
   rotate: 180deg;

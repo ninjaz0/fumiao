@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
-import { requireValue } from "@fumiao/platform/security.js";
+import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
+import { hash, requireValue } from "@fumiao/platform/security.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { uuid5 } from "@fumiao/platform/uuid.js";
@@ -10,10 +12,24 @@ import type { OriginalActor } from "./identity.js";
 import { parseBody } from "./validation.js";
 import { parseDraft } from "./drafts.js";
 import {
+  canvasBatchRunFields,
+  canvasBgmRunFields,
   canvasCandidatesFields,
+  canvasDialogueRunFields,
   canvasRunFields,
   parseCanvasDocument,
+  type CinematographySpec,
 } from "./canvas-draft.js";
+import {
+  expandGroupNodeIds,
+  OriginalBatchPrecheck,
+  type PrecheckStage,
+} from "./batch-precheck.js";
+import {
+  createTailFrameAsset,
+  hasTailChainTable,
+} from "@fumiao/platform/tail-frame.js";
+import { resolveSpeakerVoice } from "./dialogue.js";
 import {
   canvasBytes,
   canvasDocumentJson,
@@ -26,6 +42,62 @@ import { OriginalState } from "./state.js";
 
 const namespaceUrl = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
 const active = ["queued", "dispatching", "running", "finalizing", "uncertain"];
+const BGM_MODEL_IDS = new Set([
+  "bgm-v1",
+  "suno-v4",
+  "udio-v1.5",
+  "musicgen-large",
+]);
+function isBgmMusicModel(
+  modelId: string,
+  spec?: { kind?: string; provider?: string },
+): boolean {
+  if (!spec || spec.kind !== "audio") return false;
+  if (spec.provider === "bgm-generator") return true;
+  if (BGM_MODEL_IDS.has(modelId)) return true;
+  if (
+    typeof spec.provider === "string" &&
+    /(?:^|[-_])(bgm|music)(?:$|[-_])/i.test(spec.provider)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** F030: Compiles structured 6-dimension director cinematography spec into clean prompt text. */
+export function compileCinematographyPrompt(
+  basePrompt: string,
+  spec?: CinematographySpec | null,
+  generationMode?: string,
+  gridLayout?: "2x2" | "3x3" | null,
+): string {
+  const parts: string[] = [];
+  if (generationMode === "grid_preview") {
+    const grid = gridLayout === "2x2" ? "2x2 四宫格" : "3x3 九宫格";
+    const count = gridLayout === "2x2" ? 4 : 9;
+    parts.push(
+      `【${grid}分镜构图预览】在一张画布上平均划分为 ${grid}（共 ${count} 个等大独立连续分镜画面），细黑线整齐分隔，无文字水印，主体与场景风格连贯：`,
+    );
+  }
+  parts.push(basePrompt.trim());
+  if (spec) {
+    const entries: [string, string | undefined][] = [
+      ["景别", spec.shot_size],
+      ["机位", spec.camera_angle],
+      ["运镜", spec.camera_movement],
+      ["光影", spec.lighting],
+      ["镜头", spec.lens],
+      ["氛围", spec.mood],
+    ];
+    const tags = entries
+      .filter(([, v]) => typeof v === "string" && v.trim().length > 0)
+      .map(([k, v]) => `${k}:${v!.trim()}`);
+    if (tags.length) {
+      parts.push(`【导演参数：${tags.join(" / ")}】`);
+    }
+  }
+  return parts.filter(Boolean).join("\n\n").slice(0, 12000);
+}
 type Run = {
   uid: string;
   expected_revision: number | bigint;
@@ -181,6 +253,16 @@ export class OriginalCanvasRuns {
         Math.floor(this.clock()),
       ],
     );
+    const hasJobProjects = await one(
+      sql,
+      "SELECT to_regclass('job_projects') IS NOT NULL AS ok",
+    );
+    if (hasJobProjects?.ok) {
+      await sql.query(
+        "INSERT INTO job_projects(job_id, project_id) VALUES($1, $2) ON CONFLICT DO NOTHING",
+        [row.id, p.id],
+      );
+    }
   }
   private async createOn(
     sql: Sql,
@@ -209,6 +291,14 @@ export class OriginalCanvasRuns {
       400,
       "请选择图片或视频节点",
     );
+    if (user.tokenId || user.agentAction) {
+      await enforceAgentPolicyInTx(sql, String(p.workspace_id), {
+        projectId: String(p.id),
+        nodeId: nid,
+        executionKey: `canvas-run:${p.id}:${nid}:${body.uid}`,
+        approvedProposalId: user.agentAction?.approvedProposalId ?? null,
+      });
+    }
     requireValue(
       allowBusy || !(await this.busy(sql, p.id, nid)),
       409,
@@ -246,20 +336,166 @@ export class OriginalCanvasRuns {
         sources.push({ node: source.id, media: key });
       }
     }
-    const prompt = [
+    const rawPrompt = [
       ...texts,
       ...(pythonStrip(node.prompt) ? [pythonStrip(node.prompt)] : []),
     ].join("\n\n");
     requireValue(
-      prompt && [...prompt].length <= 12000,
+      rawPrompt && [...rawPrompt].length <= 12000,
       400,
       "请输入提示词或连接文本，合计不超过 12000 字",
+    );
+    const prompt = compileCinematographyPrompt(
+      rawPrompt,
+      node.cinematography,
+      node.generation_mode,
+      node.grid_layout,
     );
     const bindings = await CanvasSubmissionModels.read(sql),
       params = node.params,
       model = params.model || bindings.default(node.type),
-      rule = bindings.rules.get(model),
-      native = node.type === "video" && rule?.nativeH3 ? params.h3 : null;
+      rule = bindings.rules.get(model);
+
+    // F011: Honor explicit node.generation_mode instead of letting stale params.h3.mode override it.
+    let native =
+      node.type === "video" && rule?.nativeH3
+        ? params.h3
+          ? node.generation_mode === "omni_ref"
+            ? {
+                ...params.h3,
+                mode: "reference" as const,
+                first_frame: null,
+                last_frame: null,
+              }
+            : node.generation_mode === "first_last_frame"
+              ? { ...params.h3, mode: "frames" as const }
+              : params.h3
+          : node.generation_mode === "first_last_frame"
+            ? {
+                mode: "frames" as const,
+                first_frame: null,
+                last_frame: null,
+                video_audio: [] as string[],
+              }
+            : node.generation_mode === "omni_ref"
+              ? {
+                  mode: "reference" as const,
+                  first_frame: null,
+                  last_frame: null,
+                  video_audio: [] as string[],
+                }
+              : null
+        : null;
+    if (
+      node.type === "video" &&
+      rule?.nativeH3 &&
+      node.generation_mode === "omni_ref" &&
+      params.h3
+    ) {
+      const carried = [params.h3.first_frame, params.h3.last_frame].filter(
+        (id): id is string => Boolean(id),
+      );
+      if (carried.length) refs = [...new Set([...refs, ...carried])];
+    }
+
+    // F028: Automatic tail-frame chain discovery for video shots marked `tail_inherited: true`.
+    // Never touches shots where `tail_inherited` is falsy (preserves explicit first frames).
+    let pendingTailParentJobId: string | null = null;
+    if (node.type === "video" && node.tail_inherited) {
+      const fallbackVideoOrder = doc.nodes
+        .filter((n) => n.type === "video")
+        .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
+        .map((n) => n.id);
+      const shotOrder = doc.shots?.length ? doc.shots : fallbackVideoOrder;
+      const shotIdx = shotOrder.indexOf(nid);
+      const prevNodeId =
+        shotIdx > 0
+          ? shotOrder[shotIdx - 1]
+          : (doc.edges.find(
+              (e) =>
+                e.target === nid &&
+                nodes.get(e.source)?.type === "video",
+            )?.source ?? null);
+      if (prevNodeId) {
+        const prevJob = await one(
+          sql,
+          `SELECT j.id, j.state,
+                  (SELECT a.id FROM job_assets ja JOIN assets a ON a.id=ja.asset_id
+                    WHERE ja.job_id=j.id AND ja.role='output' AND a.state='ready'
+                    ORDER BY a.created_at ASC LIMIT 1) AS output_asset_id
+             FROM canvas_job_links l
+             JOIN jobs j ON j.id = l.job_id
+            WHERE l.project_id = $1 AND l.node = $2 AND j.kind = 'video' AND j.deleted_at IS NULL
+            ORDER BY l.id DESC
+            LIMIT 1`,
+          [p.id, prevNodeId],
+        );
+        if (prevJob && active.includes(String(prevJob.state))) {
+          pendingTailParentJobId = String(prevJob.id);
+        } else if (
+          prevJob &&
+          prevJob.state === "completed" &&
+          prevJob.output_asset_id &&
+          !native?.first_frame
+        ) {
+          const srcAsset = await one(
+            sql,
+            "SELECT id, public_id, object_key FROM assets WHERE id=$1 AND state='ready'",
+            [prevJob.output_asset_id],
+          );
+          if (srcAsset) {
+            const existingTail = await one(
+              sql,
+              `SELECT public_id FROM assets
+                WHERE workspace_id=$1 AND state='ready'
+                  AND metadata->>'derivation'='tail_frame'
+                  AND metadata->>'derived_from'=$2
+                ORDER BY created_at DESC LIMIT 1`,
+              [p.workspace_id, String(srcAsset.public_id)],
+            );
+            let tailPublicId = existingTail
+              ? String(existingTail.public_id)
+              : "";
+            if (!tailPublicId) {
+              try {
+                const extracted = await createTailFrameAsset(
+                  this.p,
+                  sql,
+                  user.id,
+                  String(p.workspace_id),
+                  {
+                    id: String(srcAsset.id),
+                    public_id: String(srcAsset.public_id),
+                    object_key: String(srcAsset.object_key),
+                  },
+                  AbortSignal.timeout(30_000),
+                );
+                tailPublicId = extracted.public_id;
+              } catch {
+                // Keep submission resilient if source asset bytes are unavailable in a mock fixture.
+              }
+            }
+            if (tailPublicId) {
+              if (rule?.nativeH3) {
+                native = {
+                  ...(native ?? {
+                    mode: "frames" as const,
+                    first_frame: null,
+                    last_frame: null,
+                    video_audio: [],
+                  }),
+                  mode: "frames",
+                  first_frame: tailPublicId,
+                };
+              } else if (!refs.includes(tailPublicId)) {
+                refs = [tailPublicId, ...refs];
+              }
+            }
+          }
+        }
+      }
+    }
+
     if (native)
       refs =
         native.mode === "frames"
@@ -271,12 +507,26 @@ export class OriginalCanvasRuns {
               ),
             ]
           : [...new Set([...refs, ...params.h3_refs])];
-    else
+    else if (node.generation_mode === "first_last_frame" && params.h3) {
+      const frameRefs = [params.h3.first_frame, params.h3.last_frame].filter(
+        (id): id is string => !!id,
+      );
+      if (frameRefs.length) refs = [...new Set([...frameRefs, ...refs])];
+    } else if (node.generation_mode === "omni_ref" && params.h3_refs.length) {
+      refs = [...new Set([...refs, ...params.h3_refs])];
+    } else
       requireValue(
         !params.h3_refs.length || !params.model || rule?.nativeH3,
         400,
         "请先移除 H3 参考素材后切换模型生成",
       );
+    const extraParams =
+      node.extra_params &&
+      typeof node.extra_params === "object" &&
+      !Array.isArray(node.extra_params) &&
+      Object.keys(node.extra_params).length > 0
+        ? node.extra_params
+        : undefined;
     const common = {
       uid: uuid5(
         namespaceUrl,
@@ -289,6 +539,7 @@ export class OriginalCanvasRuns {
         typeof body.price_revision === "number" ? body.price_revision : null,
       asset_packs: node.asset_packs,
       model,
+      ...(extraParams ? { params: extraParams } : {}),
     };
     const draft = parseDraft(
       node.type,
@@ -320,6 +571,11 @@ export class OriginalCanvasRuns {
       draft,
       String(p.workspace_number),
       body.price_revision,
+      {
+        projectId: String(p.id),
+        nodeId: nid,
+        executionKey: `canvas-run:${p.id}:${nid}:${body.uid}`,
+      },
     );
     await this.link(sql, p, user, nid, body.uid, result.id, {
       revision: p.revision,
@@ -329,6 +585,23 @@ export class OriginalCanvasRuns {
       params,
       asset_packs: node.asset_packs,
     });
+    if (pendingTailParentJobId && (await hasTailChainTable(sql))) {
+      const childRow = await one(
+        sql,
+        "SELECT id FROM jobs WHERE public_id=$1 AND deleted_at IS NULL",
+        [result.id],
+      );
+      if (childRow && String(childRow.id) !== pendingTailParentJobId) {
+        await sql.query(
+          `INSERT INTO job_tail_chains(child_job_id, parent_job_id)
+           VALUES ($1, $2)
+           ON CONFLICT (child_job_id) DO NOTHING`,
+          [childRow.id, pendingTailParentJobId],
+        );
+        // Suppress immediate worker dispatch until parent video completes and wakes this child.
+        await sql.query("DELETE FROM outbox WHERE job_id=$1", [childRow.id]);
+      }
+    }
     return result;
   }
   async generate(
@@ -449,7 +722,7 @@ export class OriginalCanvasRuns {
         "audio",
         {
           uid: uuid5(body.uid, `voice:${p.public_id}:${nid}`),
-          model: bindings.default("audio"),
+          model: bindings.resolveAudio(node.narration_model),
           prompt: node.narration_text,
           instruction: node.narration_instruction,
           price_revision:
@@ -465,6 +738,11 @@ export class OriginalCanvasRuns {
         draft,
         String(p.workspace_number),
         body.price_revision,
+        {
+          projectId: String(p.id),
+          nodeId: nid,
+          executionKey: `canvas-narration:${p.id}:${nid}:${uid}`,
+        },
       );
       await this.link(sql, p, user, nodeName, uid, result.id, {
         text: node.narration_text,
@@ -473,5 +751,793 @@ export class OriginalCanvasRuns {
       });
       return result;
     });
+  }
+  async generateBgm(user: OriginalActor, project: string, value: unknown) {
+    const body = parseBody(value, canvasBgmRunFields, true) as {
+      uid: string;
+      model: string;
+      prompt: string;
+      instruction: string;
+      params?: Record<string, unknown>;
+      price_revision: number | bigint | null;
+    };
+    const prompt = pythonStrip(body.prompt);
+    requireValue(prompt, 400, "请描述背景音乐的场景与氛围");
+    const instruction = pythonStrip(body.instruction || "");
+    return this.p.db.transaction(async (sql) => {
+      const p = await this.canvases.project(sql, user, project, true);
+      await this.ownerLock(sql, user);
+      const uid = uuid5(body.uid, "bgm"),
+        nodeName = "bgm:project",
+        old = await this.previous(sql, user, uid);
+      if (old) {
+        requireValue(
+          old.project_id === p.id && old.node === nodeName && old.job !== null,
+          409,
+          "这次提交已处理，请刷新后重试",
+        );
+        return { id: Number(old.job) };
+      }
+      requireValue(
+        !(await this.busy(sql, p.id, nodeName)),
+        409,
+        "当前画布配乐仍在生成中",
+      );
+      const catalog = await new StudioCatalog(this.p.db).catalog(sql);
+      const modelSpec = catalog[body.model];
+      requireValue(
+        modelSpec && modelSpec.kind === "audio",
+        400,
+        "未知配乐模型",
+      );
+      requireValue(
+        isBgmMusicModel(body.model, modelSpec),
+        400,
+        "该模型仅支持语音合成，不支持作为画布 AI 配乐模型；请启用 BGM 配乐插件",
+      );
+      const draft = parseDraft(
+        "audio",
+        {
+          uid: uuid5(body.uid, `bgm:${p.public_id}`),
+          model: body.model,
+          prompt,
+          instruction,
+          ...(body.params ? { params: body.params } : {}),
+          price_revision:
+            typeof body.price_revision === "number"
+              ? body.price_revision
+              : null,
+        },
+        catalog,
+      );
+      const result = await this.generation.submitOn(
+        sql,
+        user,
+        draft,
+        String(p.workspace_number),
+        body.price_revision,
+        {
+          projectId: String(p.id),
+          nodeId: nodeName,
+          executionKey: `canvas-bgm:${p.id}:${uid}`,
+        },
+      );
+      await this.link(sql, p, user, nodeName, uid, result.id, {
+        model: body.model,
+        prompt,
+        instruction,
+        revision: p.revision,
+      });
+      return result;
+    });
+  }
+  async narrateDialogue(
+    user: OriginalActor,
+    project: string,
+    nid: string,
+    value: unknown,
+  ) {
+    const body = parseBody(value, canvasDialogueRunFields, true) as Run & {
+      line_id?: string;
+    };
+    return this.p.db.transaction(async (sql) => {
+      const p = await this.canvases.project(sql, user, project, true);
+      await this.ownerLock(sql, user);
+      requireValue(p.revision === body.expected_revision, 409, canvasConflict);
+      const doc = parseCanvasDocument(canvasDocumentJson(p.document)),
+        node = doc.nodes.find((n) => n.id === nid && n.type === "video");
+      requireValue(
+        node && node.dialogue_lines && node.dialogue_lines.length > 0,
+        400,
+        "请先添加至少一句角色对白",
+      );
+      const targets = body.line_id
+        ? node.dialogue_lines.filter((l) => l.id === body.line_id)
+        : node.dialogue_lines.filter((l) => pythonStrip(l.text));
+      requireValue(targets.length > 0, 400, "未找到可合成的对白台词");
+      const bindings = await CanvasSubmissionModels.read(sql);
+      const catalog = await new StudioCatalog(this.p.db).catalog(sql);
+      const items: {
+        line_id: string;
+        id: number;
+        speaker: string;
+        model: string;
+        voice_id: string | null;
+      }[] = [];
+
+      for (const line of targets) {
+        const cleanText = pythonStrip(line.text);
+        requireValue(cleanText, 400, "对白台词不能为空");
+        const nodeName = `dialogue:${nid}:${line.id}`;
+        const uid = uuid5(body.uid, `dialogue:${p.public_id}:${nid}:${line.id}`);
+        const old = await this.previous(sql, user, uid);
+        const resolved = await resolveSpeakerVoice(sql, p.workspace_id, line);
+        const model = bindings.resolveAudio(resolved.model);
+        if (old) {
+          requireValue(
+            old.project_id === p.id &&
+              old.node === nodeName &&
+              old.job !== null,
+            409,
+            "这次提交已处理，请刷新后重试",
+          );
+          items.push({
+            line_id: line.id,
+            id: Number(old.job),
+            speaker: line.speaker,
+            model,
+            voice_id: resolved.voiceId ?? null,
+          });
+          continue;
+        }
+        requireValue(
+          !(await this.busy(sql, p.id, nodeName)),
+          409,
+          `对白「${line.speaker || line.id}」仍在生成`,
+        );
+        const extraParams: Record<string, unknown> = {};
+        if (resolved.voiceId) extraParams.voice = resolved.voiceId;
+        if (resolved.rate) extraParams.rate = resolved.rate;
+        if (resolved.pitch) extraParams.pitch = resolved.pitch;
+        if (resolved.instruction) extraParams.instruction = resolved.instruction;
+
+        const draft = parseDraft(
+          "audio",
+          {
+            uid: uuid5(
+              body.uid,
+              `dialogue-job:${p.public_id}:${nid}:${line.id}`,
+            ),
+            model,
+            prompt: cleanText,
+            instruction: resolved.instruction,
+            ...(Object.keys(extraParams).length ? { params: extraParams } : {}),
+            price_revision:
+              typeof body.price_revision === "number"
+                ? body.price_revision
+                : null,
+          },
+          catalog,
+        );
+        const submitted = await this.generation.submitOn(
+          sql,
+          user,
+          draft,
+          String(p.workspace_number),
+          body.price_revision,
+          {
+            projectId: String(p.id),
+            nodeId: nid,
+            executionKey: `canvas-dialogue:${p.id}:${nid}:${line.id}:${uid}`,
+          },
+        );
+        await this.link(sql, p, user, nodeName, uid, submitted.id, {
+          line_id: line.id,
+          speaker: line.speaker,
+          pack_id: resolved.packId,
+          voice_id: resolved.voiceId ?? null,
+          text: cleanText,
+          instruction: resolved.instruction,
+          revision: p.revision,
+        });
+        items.push({
+          line_id: line.id,
+          id: submitted.id,
+          speaker: line.speaker,
+          model,
+          voice_id: resolved.voiceId ?? null,
+        });
+      }
+      return { items };
+    });
+  }
+  /**
+   * F007 + F010: Partial workflow group / multi-node batch rerun (`POST /api/canvases/:key/batch-runs`).
+   * Expands group nodes into children and submits only requested stages (`image`, `video`,
+   * `narration`, `dialogue`) with deterministic per-item idempotency keys and a concurrent-safe
+   * `in_progress` -> `completed` receipt state machine in `canvas_batch_runs`.
+   */
+  async batchRun(user: OriginalActor, projectKey: string, value: unknown) {
+    type BatchRunResponse = {
+      submitted: {
+        node: string;
+        stage: PrecheckStage;
+        job_id: number;
+        line_id?: string;
+      }[];
+      skipped: { node: string; stage: PrecheckStage; reason: string }[];
+      total_credits: number;
+    };
+
+    const body = parseBody(value, canvasBatchRunFields, true) as Run & {
+      node_ids: string[];
+      stages: PrecheckStage[];
+      precheck_token?: string;
+      expected_total_credits?: number;
+      executable_keys?: string[];
+    };
+    const requestHash = hash(
+      JSON.stringify({
+        node_ids: [...new Set(body.node_ids)].sort(),
+        stages: [...new Set(body.stages)].sort(),
+      }),
+    );
+    const claimId = randomUUID();
+    const itemUid = (node: string, stage: PrecheckStage) =>
+      uuid5(body.uid, `batch:${projectKey}:${node}:${stage}`);
+    const ensureClaim = (row: unknown) =>
+      requireValue(
+        row,
+        409,
+        "该批量提交已由其他请求恢复，请使用同一 UID 重试获取回执",
+      );
+    const complete = async (
+      sql: Sql,
+      projectUuid: string,
+      response: BatchRunResponse,
+    ) => {
+      ensureClaim(
+        await one(
+          sql,
+          `UPDATE canvas_batch_runs
+            SET status='completed', response=$5::jsonb, updated_at=now()
+          WHERE owner_id=$1 AND project_id=$2 AND uid=$3
+            AND claim_id=$4 AND status='in_progress'
+          RETURNING uid`,
+          [user.id, projectUuid, body.uid, claimId, JSON.stringify(response)],
+        ),
+      );
+      return response;
+    };
+
+    const waitOrReclaim = async (
+      projectUuid: string,
+    ): Promise<
+      | { mode: "completed"; response: BatchRunResponse }
+      | {
+          mode: "reclaimed";
+          expectedRevision: number | bigint;
+          allowedKeys: Set<string>;
+        }
+    > => {
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const row = await one(
+          this.p.db,
+          `SELECT request_hash, status, response, expected_revision, allowed_keys,
+                  (updated_at < now() - interval '60 seconds') AS stale
+             FROM canvas_batch_runs
+            WHERE owner_id=$1 AND project_id=$2 AND uid=$3`,
+          [user.id, projectUuid, body.uid],
+        );
+        requireValue(row, 409, "批量提交状态已变化，请重试");
+        requireValue(
+          String(row.request_hash) === requestHash,
+          409,
+          "该批量提交 UID 已被用于不同的节点或阶段集合",
+        );
+        if (String(row.status) === "completed") {
+          return {
+            mode: "completed",
+            response: row.response as BatchRunResponse,
+          };
+        }
+        if (row.stale) {
+          const reclaimed = await one(
+            this.p.db,
+            `UPDATE canvas_batch_runs
+                SET updated_at = now(), claim_id=$4
+              WHERE owner_id=$1 AND project_id=$2 AND uid=$3
+                AND status = 'in_progress'
+                AND updated_at < now() - interval '60 seconds'
+             RETURNING expected_revision, allowed_keys`,
+            [user.id, projectUuid, body.uid, claimId],
+          );
+          if (reclaimed) {
+            return {
+              mode: "reclaimed",
+              expectedRevision:
+                reclaimed.expected_revision != null
+                  ? Number(reclaimed.expected_revision)
+                  : body.expected_revision,
+              allowedKeys: new Set(
+                Array.isArray(reclaimed.allowed_keys)
+                  ? reclaimed.allowed_keys.map(String)
+                  : [],
+              ),
+            };
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      }
+      requireValue(
+        false,
+        409,
+        "该批量提交仍在处理中，请稍候使用同一 UID 重试获取完整回执",
+      );
+      throw new Error("unreachable");
+    };
+
+    const loadExecutionPlan = (
+      p: Record<string, any>,
+    ): {
+      plan: ReturnType<typeof expandGroupNodeIds>;
+      shotIndexMap: Map<string, number>;
+    } => {
+      const doc = parseCanvasDocument(canvasDocumentJson(p.document));
+      const targets = expandGroupNodeIds(doc.nodes, body.node_ids);
+      requireValue(targets.length > 0, 400, "未找到可执行的节点");
+      const fallbackVideoOrder = doc.nodes
+        .filter((n) => n.type === "video")
+        .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
+        .map((n) => n.id);
+      const effectiveShots = doc.shots?.length
+        ? doc.shots
+        : fallbackVideoOrder;
+      return {
+        plan: targets,
+        shotIndexMap: new Map<string, number>(
+          effectiveShots.map((id, idx) => [id, idx]),
+        ),
+      };
+    };
+
+    // The original executable keys and deterministic link UIDs survive document edits.
+    // Match dialogue by its persisted line identifier because all lines submit atomically.
+    const recoverEditedBatch = async (
+      sql: Sql,
+      projectUuid: string,
+      allowed: Set<string>,
+    ) => {
+      const submitted: BatchRunResponse["submitted"] = [];
+      const skipped: BatchRunResponse["skipped"] = [];
+      const targetsByUid = new Map<
+        string,
+        { node: string; stage: PrecheckStage }
+      >();
+      const dialogueNodes: string[] = [];
+      for (const key of allowed) {
+        const [node, stage] = key.split(":") as [string, PrecheckStage];
+        if (stage === "dialogue") {
+          dialogueNodes.push(node);
+        } else {
+          const uid = itemUid(node, stage);
+          targetsByUid.set(stage === "narration" ? uuid5(uid, "narration") : uid, {
+            node,
+            stage,
+          });
+        }
+      }
+      const { rows } = await sql.query<{
+        uid: string;
+        node: string;
+        job_id: string;
+        price: string;
+      }>(
+        `SELECT l.uid, l.node, j.public_id AS job_id, j.price
+           FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
+          WHERE l.project_id=$1 AND l.owner_id=$2 AND (
+            l.uid=ANY($3::uuid[]) OR (
+              l.node LIKE 'dialogue:%' AND split_part(l.node, ':', 2)=ANY($4::text[])
+            )
+          ) ORDER BY l.id`,
+        [projectUuid, user.id, [...targetsByUid.keys()], dialogueNodes],
+      );
+      const accepted = new Set<string>();
+      let totalCredits = 0;
+      for (const row of rows) {
+        const target = targetsByUid.get(row.uid);
+        if (target) {
+          submitted.push({ ...target, job_id: Number(row.job_id) });
+          accepted.add(`${target.node}:${target.stage}`);
+        } else {
+          const [, node, line_id] = row.node.split(":");
+          const uid = uuid5(
+            itemUid(node, "dialogue"),
+            `dialogue:${projectKey}:${node}:${line_id}`,
+          );
+          if (row.uid !== uid) continue;
+          submitted.push({
+            node,
+            stage: "dialogue",
+            job_id: Number(row.job_id),
+            line_id,
+          });
+          accepted.add(`${node}:dialogue`);
+        }
+        totalCredits += Number(row.price);
+      }
+      for (const key of allowed) {
+        if (accepted.has(key)) continue;
+        const [node, stage] = key.split(":") as [string, PrecheckStage];
+        skipped.push({
+          node,
+          stage,
+          reason: "画布版本已变更，未提交此项。请按当前画布重新预检。",
+        });
+      }
+      return complete(sql, projectUuid, {
+        submitted,
+        skipped,
+        total_credits: totalCredits,
+      });
+    };
+
+    // 1. Check persisted `canvas_batch_runs` row FIRST (BEFORE revision/precheck checks!)
+    // so retries of completed OR still-in-progress batches with the same business `uid`
+    // NEVER fail with 409 on a later canvas edit and NEVER seal a partial half-receipt.
+    const init = await this.p.db.transaction(async (sql) => {
+      const p = await this.canvases.project(sql, user, projectKey, true);
+      const hasTables = await one(
+        sql,
+        `SELECT to_regclass('canvas_batch_runs') IS NOT NULL AS has_runs,
+                to_regclass('canvas_precheck_tickets') IS NOT NULL AS has_tickets`,
+      );
+      if (hasTables?.has_runs) {
+        const persisted = await one(
+          sql,
+          `SELECT request_hash, status, response
+             FROM canvas_batch_runs
+            WHERE owner_id=$1 AND project_id=$2 AND uid=$3`,
+          [user.id, p.id, body.uid],
+        );
+        if (persisted) {
+          requireValue(
+            String(persisted.request_hash) === requestHash,
+            409,
+            "该批量提交 UID 已被用于不同的节点或阶段集合",
+          );
+          if (String(persisted.status) === "completed") {
+            return {
+              kind: "completed" as const,
+              replayResponse: persisted.response as BatchRunResponse,
+              projectUuid: String(p.id),
+              hasRunsTable: true,
+              plan: [] as ReturnType<typeof expandGroupNodeIds>,
+              shotIndexMap: new Map<string, number>(),
+              serverAllowedKeys: null as Set<string> | null,
+              serverTotalCredits: null as number | null,
+            };
+          }
+          return {
+            kind: "in_progress" as const,
+            replayResponse: null,
+            projectUuid: String(p.id),
+            hasRunsTable: true,
+            plan: [] as ReturnType<typeof expandGroupNodeIds>,
+            shotIndexMap: new Map<string, number>(),
+            serverAllowedKeys: null as Set<string> | null,
+            serverTotalCredits: null as number | null,
+          };
+        }
+      }
+
+      // 2. NEW submission: enforce expected_revision + mandatory server-bound precheck ticket!
+      const { plan, shotIndexMap } = loadExecutionPlan(p);
+      requireValue(p.revision === body.expected_revision, 409, canvasConflict);
+      requireValue(
+        typeof body.precheck_token === "string" &&
+          body.precheck_token.trim().length > 0,
+        400,
+        "请先执行批量预检并携带有效预检票据后再确认提交",
+      );
+
+      let serverAllowedKeys: Set<string> | null = null;
+      let serverTotalCredits: number | null = null;
+      if (hasTables?.has_tickets) {
+        const ticket = await one(
+          sql,
+          `SELECT token, revision, price_revision, request_hash, executable_keys, total_credits, budget_blocked
+             FROM canvas_precheck_tickets
+            WHERE token=$1 AND owner_id=$2 AND project_id=$3`,
+          [body.precheck_token, user.id, p.id],
+        );
+        requireValue(
+          ticket,
+          409,
+          "预检票据不存在或已失效，请重新预检后再确认提交",
+        );
+        requireValue(
+          String(ticket.request_hash) === requestHash &&
+            Number(ticket.revision) === Number(p.revision),
+          409,
+          "画布版本或选中节点/阶段与预检票据不一致，请重新预检",
+        );
+        requireValue(
+          !ticket.budget_blocked,
+          402,
+          "预检显示已超出预算硬上限，无法提交",
+        );
+        serverAllowedKeys = new Set(
+          Array.isArray(ticket.executable_keys)
+            ? ticket.executable_keys.map(String)
+            : [],
+        );
+        serverTotalCredits = Number(ticket.total_credits ?? 0);
+      }
+
+      return {
+        kind: "new" as const,
+        replayResponse: null,
+        projectUuid: String(p.id),
+        hasRunsTable: Boolean(hasTables?.has_runs),
+        plan,
+        shotIndexMap,
+        serverAllowedKeys,
+        serverTotalCredits,
+      };
+    });
+
+    if (init.kind === "completed") {
+      return init.replayResponse;
+    }
+
+    let plan = init.plan;
+    let shotIndexMap = init.shotIndexMap;
+    let allowedKeys = new Set<string>();
+    let effectiveExpectedRevision: number | bigint = body.expected_revision;
+    let resume = init.kind === "in_progress";
+    if (!resume) {
+      // 3. Re-verify fresh read-only precheck right before claiming `in_progress` so
+      // concurrent price changes, busy jobs, or budget exhaustion are caught cleanly.
+      // If a concurrent identical request already claimed the same `uid` while we were
+      // running precheck, defer cleanly to `waitOrReclaim` instead of returning a false 409.
+      const checkConcurrentTwin = async () => {
+        if (!init.hasRunsTable) return null;
+        return one(
+          this.p.db,
+          `SELECT 1 AS ok FROM canvas_batch_runs WHERE owner_id=$1 AND project_id=$2 AND uid=$3`,
+          [user.id, init.projectUuid, body.uid],
+        );
+      };
+
+      try {
+        const freshPrecheck = await new OriginalBatchPrecheck(this.p).precheckCanvas(
+          user,
+          projectKey,
+          {
+            expected_revision: body.expected_revision,
+            node_ids: body.node_ids,
+            stages: body.stages,
+          },
+        );
+        if (freshPrecheck.precheck_token !== body.precheck_token) {
+          requireValue(
+            false,
+            409,
+            "画布节点状态、模型报价或可执行集合已发生变化，请重新预检后再确认提交",
+          );
+        }
+        const expectedCredits =
+          body.expected_total_credits ?? init.serverTotalCredits;
+        if (
+          expectedCredits !== null &&
+          expectedCredits !== undefined &&
+          freshPrecheck.summary.total_credits !== expectedCredits
+        ) {
+          requireValue(
+            false,
+            409,
+            `批量报价已变动（预期 ${expectedCredits} 积分，当前 ${freshPrecheck.summary.total_credits} 积分），请重新预检`,
+          );
+        }
+        if (freshPrecheck.summary.budget_blocked) {
+          requireValue(
+            false,
+            402,
+            freshPrecheck.summary.budget_blocks[0] || "已超出预算硬上限",
+          );
+        }
+        allowedKeys =
+          init.serverAllowedKeys ?? new Set(freshPrecheck.executable_keys);
+      } catch (err) {
+        if (!(await checkConcurrentTwin())) throw err;
+        resume = true;
+      }
+
+      // Persist the original executable targets before dispatching any jobs.
+      if (!resume && init.hasRunsTable) {
+        const claimed = await one(
+          this.p.db,
+          `INSERT INTO canvas_batch_runs(
+               owner_id, project_id, uid, request_hash, status,
+               expected_revision, allowed_keys, response, updated_at, claim_id
+             )
+             VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], '{}'::jsonb, now(), $7)
+             ON CONFLICT (owner_id, project_id, uid) DO NOTHING
+             RETURNING uid`,
+          [
+            user.id,
+            init.projectUuid,
+            body.uid,
+            requestHash,
+            Number(body.expected_revision),
+            [...allowedKeys].sort(),
+            claimId,
+          ],
+        );
+        resume = !claimed;
+      }
+    }
+
+    if (resume) {
+      const outcome = await waitOrReclaim(init.projectUuid);
+      if (outcome.mode === "completed") return outcome.response;
+      effectiveExpectedRevision = outcome.expectedRevision;
+      allowedKeys = outcome.allowedKeys;
+      const reloaded = await this.p.db.transaction(async (sql) => {
+        const project = await this.canvases.project(sql, user, projectKey, true);
+        if (project.revision !== effectiveExpectedRevision) {
+          return {
+            kind: "edited" as const,
+            receipt: await recoverEditedBatch(sql, init.projectUuid, allowedKeys),
+          };
+        }
+        return { kind: "unchanged" as const, ...loadExecutionPlan(project) };
+      });
+      if (reloaded.kind === "edited") return reloaded.receipt;
+      ({ plan, shotIndexMap } = reloaded);
+    }
+
+    // 5. Dispatch all items with deterministic per-item idempotency keys while refreshing
+    // `updated_at` heartbeat. NEVER write `status='completed'` until the entire batch finishes!
+    const submitted: BatchRunResponse["submitted"] = [];
+    const skipped: BatchRunResponse["skipped"] = [];
+
+    const stageOrder: PrecheckStage[] = [
+      "image",
+      "video",
+      "narration",
+      "dialogue",
+    ];
+    const requestedStages = stageOrder.filter((s) => body.stages.includes(s));
+
+    for (const stage of requestedStages) {
+      // Order video shots by storyboard shot sequence so tail-frame parents ALWAYS submit before children!
+      const orderedNodes =
+        stage === "video"
+          ? [...plan].sort((a, b) => {
+              const ia = shotIndexMap.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+              const ib = shotIndexMap.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+              return ia - ib;
+            })
+          : plan;
+
+      for (const node of orderedNodes) {
+        if (stage === "image" && node.type !== "image") continue;
+        if (stage === "video" && node.type !== "video") continue;
+        if (
+          (stage === "narration" || stage === "dialogue") &&
+          node.type !== "video"
+        )
+          continue;
+
+        if (!allowedKeys.has(`${node.id}:${stage}`)) {
+          skipped.push({
+            node: node.id,
+            stage,
+            reason: "预检已标记阻塞，按预检集合跳过",
+          });
+          continue;
+        }
+
+        if (init.hasRunsTable) {
+          ensureClaim(
+            await one(
+              this.p.db,
+              `UPDATE canvas_batch_runs
+                SET updated_at = now()
+              WHERE owner_id=$1 AND project_id=$2 AND uid=$3
+                AND claim_id=$4 AND status='in_progress'
+              RETURNING uid`,
+              [user.id, init.projectUuid, body.uid, claimId],
+            ),
+          );
+        }
+
+        const uid = itemUid(node.id, stage);
+        try {
+          if (stage === "image" || stage === "video") {
+            const res = await this.generate(user, projectKey, node.id, {
+              expected_revision: effectiveExpectedRevision,
+              price_revision: body.price_revision,
+              uid,
+            });
+            submitted.push({ node: node.id, stage, job_id: res.id });
+          } else if (stage === "narration") {
+            if (!pythonStrip(node.narration_text)) {
+              skipped.push({
+                node: node.id,
+                stage,
+                reason: "未填写旁白文本",
+              });
+              continue;
+            }
+            const res = await this.narrate(user, projectKey, node.id, {
+              expected_revision: effectiveExpectedRevision,
+              price_revision: body.price_revision,
+              uid,
+            });
+            submitted.push({ node: node.id, stage, job_id: res.id });
+          } else if (stage === "dialogue") {
+            const lines = (node.dialogue_lines ?? []).filter((l) =>
+              Boolean(pythonStrip(l.text)),
+            );
+            if (!lines.length) {
+              skipped.push({
+                node: node.id,
+                stage,
+                reason: "未填写多角色对白",
+              });
+              continue;
+            }
+            const res = await this.narrateDialogue(user, projectKey, node.id, {
+              expected_revision: effectiveExpectedRevision,
+              price_revision: body.price_revision,
+              uid,
+            });
+            for (const item of res.items) {
+              submitted.push({
+                node: node.id,
+                stage,
+                job_id: item.id,
+                line_id: item.line_id,
+              });
+            }
+          }
+        } catch (err) {
+          skipped.push({
+            node: node.id,
+            stage,
+            reason: (err as Error).message || "提交跳过",
+          });
+        }
+      }
+    }
+
+    let totalCredits = 0;
+    if (submitted.length) {
+      const feeRow = await one(
+        this.p.db,
+        "SELECT COALESCE(SUM(price),0) AS total FROM jobs WHERE public_id=ANY($1::bigint[])",
+        [submitted.map((s) => s.job_id)],
+      );
+      totalCredits = Number(feeRow?.total ?? 0);
+    }
+
+    const response: BatchRunResponse = {
+      submitted,
+      skipped,
+      total_credits: totalCredits,
+    };
+    if (resume) {
+      return this.p.db.transaction(async (sql) => {
+        const project = await this.canvases.project(sql, user, projectKey, true);
+        return project.revision === effectiveExpectedRevision
+          ? complete(sql, init.projectUuid, response)
+          : recoverEditedBatch(sql, init.projectUuid, allowedKeys);
+      });
+    }
+    return init.hasRunsTable ? complete(this.p.db, init.projectUuid, response) : response;
   }
 }

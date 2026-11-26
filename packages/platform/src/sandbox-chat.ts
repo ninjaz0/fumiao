@@ -20,6 +20,12 @@ const requestPlan = z
       .max(1024)
       .regex(/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/),
     body: z.record(z.string(), z.unknown()).optional(),
+    headers: z
+      .record(
+        z.string().regex(/^[A-Za-z][A-Za-z0-9-]{0,63}$/),
+        z.string().max(512),
+      )
+      .optional(),
   })
   .strict();
 const integer = z
@@ -73,6 +79,27 @@ export async function sandboxChat(
     400,
     "沙箱对话程序缺少入口",
   );
+  const forbiddenHeaders = new Set([
+    "authorization",
+    "host",
+    "cookie",
+    "content-length",
+    "content-type",
+    "accept-encoding",
+    "connection",
+    "transfer-encoding",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-forwarded-for",
+    "idempotency-key",
+  ]);
+  for (const h of sandbox.allowedHeaders ?? []) {
+    requireValue(
+      !forbiddenHeaders.has(h.toLowerCase()),
+      400,
+      "沙箱对话程序禁止声明受保护请求头：" + h,
+    );
+  }
   const providers = new Map(policy.providers.map((p) => [p.id, p]));
   for (const p of providers.values()) {
     const base = URL.parse(String(p.defaultConfig.baseUrl));
@@ -135,10 +162,23 @@ export async function sandboxChat(
       );
     }
     // Only the host attaches the saved bearer token; guests cannot supply URLs,
-    // headers, redirects, timeouts or credentials.
+    // redirects, timeouts or credentials, and may only attach manifest-allowlisted headers.
+    const allow = new Set(
+      (sandbox.allowedHeaders ?? []).map((h) => h.toLowerCase()),
+    );
+    const extraHeaders: Record<string, string> = {};
+    for (const [hName, hValue] of Object.entries(plan.headers ?? {})) {
+      requireValue(
+        allow.has(hName.toLowerCase()),
+        400,
+        "对话请求包含未声明的请求头：" + hName,
+      );
+      extraHeaders[hName] = hValue;
+    }
     return send(destination, {
       method: kind === "probe" ? "GET" : "POST",
       key: credential(config),
+      ...(Object.keys(extraHeaders).length ? { extraHeaders } : {}),
       body: plan.body,
       signal,
       lookup: guardedLookup,

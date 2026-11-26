@@ -1,0 +1,7 @@
+{
+  "format": 1,
+  "id": "tts-commercial",
+  "label": "多引擎 TTS 配音路由（OpenAI / CosyVoice / Piper）",
+  "version": "1.1.0",
+  "adapterVersion": "1.1.0"
+}

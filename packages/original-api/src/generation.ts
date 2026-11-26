@@ -16,7 +16,7 @@ import {
   executableJob,
   ordinaryFlowSource,
 } from "@fumiao/platform/retired-jobs.js";
-import { acceptTask } from "@fumiao/platform/accept.js";
+import { acceptTask, type AcceptTaskMeta } from "@fumiao/platform/accept.js";
 import { saveSubmissionForecast } from "@fumiao/platform/submission-forecast.js";
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
 import { OriginalLibrary } from "./library.js";
@@ -84,6 +84,7 @@ export class OriginalGeneration {
     value: OriginalDraft,
     selected?: string,
     priceRevision: number | bigint | null = value.price_revision,
+    meta?: AcceptTaskMeta,
   ) {
     const draft = structuredClone(value);
     try {
@@ -204,6 +205,16 @@ export class OriginalGeneration {
         adapter.validate(draft, "before-retry");
       }
       // The policy check precedes reference validation and billing in the original.
+      if (packages)
+        requireValue(
+          (
+            await one(sql, "SELECT studio_plugin_accepts($1) AS ok", [
+              catalog.plugin_id,
+            ])
+          ).ok,
+          409,
+          "插件已停用",
+        );
       requireValue(
         (
           await one(sql, "SELECT studio_model_allowed($1,$2) AS allowed", [
@@ -401,6 +412,11 @@ export class OriginalGeneration {
         hash(canonical(draft)),
         quote,
         snapshots,
+        {
+          projectId: meta?.projectId ?? null,
+          nodeId: meta?.nodeId ?? null,
+          executionKey: meta?.executionKey ?? uid,
+        },
       );
       const row = await one(
         sql,

@@ -162,7 +162,10 @@ export async function auditRoutes(
     const label = method + " " + path;
     try {
       if (probe.retired) {
-        assert.ok(!registered.some((r) => shape(r.path) === shape(path)), label);
+        assert.ok(
+          !registered.some((r) => shape(r.path) === shape(path)),
+          label,
+        );
         const [direct, gateway] = await Promise.all([
           fetch(api + url, init()),
           fetch(web + url, init()),
@@ -227,7 +230,10 @@ export async function auditRoutes(
     }
   }
   assert.deepEqual(failures, []);
-  assert.deepEqual({ next, nest, retired }, { next: 11, nest: 95, retired: 14 });
+  assert.deepEqual(
+    { next, nest, retired },
+    { next: 11, nest: 95, retired: 14 },
+  );
   console.log(
     `Verified ${next} Next-owned, ${nest} Nest-owned and ${retired} retired method/path pairs`,
   );
@@ -246,6 +252,24 @@ export async function auditRoutes(
   const avatar = await fetch(web + "/avatars/unrecognized.svg");
   assert.equal(avatar.status, 404);
   assert.deepEqual(await avatar.json(), { detail: "头像不存在" });
+  for (const missingPage of [
+    "/login",
+    "/register",
+    "/__isolated_page_missing__",
+  ]) {
+    const page = await fetch(web + missingPage, { redirect: "manual" });
+    assert.equal(page.status, 404, missingPage);
+    assert.match(
+      page.headers.get("content-type") ?? "",
+      /^text\/html/,
+      missingPage,
+    );
+    const html = await page.text();
+    assert.match(html, /页面不存在/, missingPage);
+    assert.match(html, /href="\/studio"/, missingPage);
+    assert.match(html, /href="\/"/, missingPage);
+    assert.doesNotMatch(html, /This page could not be found\./, missingPage);
+  }
   assert.deepEqual(await (await fetch(web + "/health")).json(), {
     service: "fumiao",
     ok: true,

@@ -92,10 +92,18 @@ export async function sendFile(
   const seconds = Number.isInteger(file.modified)
     ? file.modified.toFixed(1)
     : String(file.modified);
+  const contentDispositionHeader = filename
+    ? disposition(filename, dispositionType)
+    : undefined;
   const etag =
     '"' +
     createHash("md5")
-      .update(seconds + "-" + file.size)
+      .update(
+        seconds +
+          "-" +
+          file.size +
+          (contentDispositionHeader ? "-" + contentDispositionHeader : ""),
+      )
       .digest("hex") +
     '"';
   const validators = { "Last-Modified": lastModified, ETag: etag };
@@ -109,11 +117,10 @@ export async function sendFile(
         : modifiedSince !== undefined &&
           Date.parse(lastModified) <= Date.parse(modifiedSince);
     if (unchanged) {
-      res
-        .set(validators)
-        .set("Cache-Control", "private, no-cache")
-        .status(304)
-        .end();
+      res.set(validators).set("Cache-Control", "private, no-cache");
+      if (contentDispositionHeader)
+        res.setHeader("Content-Disposition", contentDispositionHeader);
+      res.status(304).end();
       return;
     }
   }
@@ -143,8 +150,8 @@ export async function sendFile(
     ...validators,
     ...(file.revalidate ? { "Cache-Control": "private, no-cache" } : {}),
   });
-  if (filename)
-    res.setHeader("Content-Disposition", disposition(filename, dispositionType));
+  if (contentDispositionHeader)
+    res.setHeader("Content-Disposition", contentDispositionHeader);
   let active: Readable | undefined,
     closed = false;
   async function* bytes(start: number, end: number) {

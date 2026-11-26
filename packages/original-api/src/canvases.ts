@@ -6,11 +6,14 @@ import { requireValue } from "@fumiao/platform/security.js";
 import { CanvasModels } from "@fumiao/platform/canvas-models.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { ReferencePacks } from "@fumiao/platform/packs.js";
+import { createTailFrameAsset } from "@fumiao/platform/tail-frame.js";
+import { cropGridCell } from "@fumiao/platform/grid-crop.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { OriginalIdentity } from "./identity.js";
 import { archiveEntry, OriginalLibrary } from "./library.js";
 import { parseBody } from "./validation.js";
 import {
+  canvasGridCropFields,
   canvasNewFields,
   canvasExactRevisionFields,
   parseCanvasDocument,
@@ -32,7 +35,7 @@ import {
 import { canvasTemplates } from "./canvas-templates.js";
 export const canvasConflict =
   "画布已被其他成员修改。你的修改已保留，请重新载入或下载本地副本。";
-const selectProject = `SELECT d.*,c.title AS original_title,c.document,c.created,c.updated,c.last_editor,
+const selectProject = `SELECT d.*,c.title AS original_title,c.document,c.created,c.updated,c.last_editor,c.archived_at,c.archive_change_id,
   w.public_id AS workspace_number,u.public_id AS owner_number,e.public_id AS editor_number
   FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
   LEFT JOIN canvas_documents c ON c.project_id=d.id LEFT JOIN users e ON e.id=c.last_editor`;
@@ -47,6 +50,10 @@ type ShotVideo = {
   mime: string;
   size: string | number;
 };
+
+function canManageCanvas(ownerId: string, user: Actor) {
+  return ownerId === user.id || user.role === "admin";
+}
 
 /** Original canvas authority. All mutations share document locks and PostgreSQL relations. */
 export class OriginalCanvases {
@@ -125,11 +132,12 @@ export class OriginalCanvases {
       owner: Number(row.owner_number),
       created: Number(row.created),
       updated: Number(row.updated),
+      archived_at: row.archived_at === null ? null : Number(row.archived_at),
       revision: row.revision,
       last_editor: Number(row.editor_number),
       workspace: Number(row.workspace_number),
       document: canvasDocumentJson(row.document),
-      can_delete: row.owner_id === user.id || user.role === "admin",
+      can_delete: canManageCanvas(row.owner_id, user),
     };
   }
   async get(user: Actor, key: string) {
@@ -190,6 +198,18 @@ export class OriginalCanvases {
         "INSERT INTO canvas_nodes(project_id,node) SELECT $1,unnest($2::text[])",
         [id, document.nodes.map((node) => node.id)],
       );
+  }
+  async createBoundCanvas(
+    sql: Sql,
+    user: Actor,
+    wid: string,
+    title: string,
+    document: CanvasDocument,
+  ) {
+    await this.limit(sql, wid);
+    const row = await this.insert(sql, user, wid, title, document);
+    await this.nodes(sql, row.id, document);
+    return row;
   }
   async importProject(
     sql: Sql,
@@ -409,15 +429,17 @@ export class OriginalCanvases {
       return this.library.archiveTicket(sql, user, manifest);
     });
   }
-  async list(user: Actor, selected?: string) {
+  async list(user: Actor, selected?: string, archived = false) {
     return this.p.db.transaction(async (sql) => {
       await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
       const workspace = await this.workspace(sql, user, selected);
       const rows = (
         await sql.query(
           selectProject +
-            " WHERE d.workspace_id=$1 AND d.kind='canvas' AND NOT d.deleted AND c.project_id IS NOT NULL ORDER BY c.updated DESC,d.public_id DESC LIMIT 200",
-          [workspace.id],
+            ` WHERE d.workspace_id=$1 AND d.kind='canvas' AND NOT d.deleted AND c.project_id IS NOT NULL
+              AND (c.archived_at IS NOT NULL) = $2
+              ORDER BY ${archived ? "c.archived_at" : "c.updated"} DESC,d.public_id DESC LIMIT 200`,
+          [workspace.id, archived],
         )
       ).rows;
       const pending: { project: string; node: CanvasNode }[] = [];
@@ -708,11 +730,145 @@ export class OriginalCanvases {
       return this.publicProject(row, user);
     });
   }
+  async setArchived(
+    user: Actor,
+    key: string,
+    archived: boolean,
+    expectedChange?: string,
+  ) {
+    return this.p.db.transaction(async (sql) => {
+      const row = await this.project(sql, user, key, true);
+      requireValue(
+        canManageCanvas(row.owner_id, user),
+        403,
+        "只有创建者或管理员可以归档或恢复画布",
+      );
+      requireValue(
+        expectedChange === undefined || expectedChange === row.archive_change_id,
+        409,
+        "归档状态已发生变化，无法撤销此操作",
+      );
+      const previous = row.archived_at === null ? null : Number(row.archived_at);
+      if (archived === (previous !== null))
+        return { archived_at: previous, undo_token: null };
+      const next = archived ? Math.floor(this.clock()) : null;
+      // Both directions rotate the change ID, including restorations to NULL.
+      const changeId = randomUUID();
+      await sql.query(
+        "UPDATE canvas_documents SET archived_at=$2, archive_change_id=$3 WHERE project_id=$1",
+        [row.id, next, changeId],
+      );
+      return {
+        archived_at: next,
+        undo_token: expectedChange === undefined ? changeId : null,
+      };
+    });
+  }
+
+  async extractTailFrame(user: Actor, key: string, nodeId: string) {
+    return this.p.db.transaction(async (sql) => {
+      const row = await this.project(sql, user, key);
+      const doc = parseCanvasDocument(canvasDocumentJson(row.document));
+      const node = doc.nodes.find((n) => n.id === nodeId && n.type === "video");
+      requireValue(node, 404, "未找到对应的视频节点");
+      const video = await this.videoForShot(sql, row.id, node);
+      requireValue(video, 409, "该视频节点尚未生成完成");
+      await this.library.access(
+        sql,
+        user,
+        { kind: "asset", row: video },
+        row.workspace_id,
+      );
+      const stored = await one(
+        sql,
+        "SELECT id,public_id,object_key FROM assets WHERE id=$1 AND state='ready'",
+        [video.id],
+      );
+      requireValue(stored, 404, "视频文件不存在");
+      const tail = await createTailFrameAsset(
+        this.p,
+        sql,
+        user.id,
+        row.workspace_id,
+        {
+          id: String(stored.id),
+          public_id: String(stored.public_id),
+          object_key: String(stored.object_key),
+        },
+        AbortSignal.timeout(45_000),
+      );
+      return {
+        asset_id: tail.public_id,
+        width: tail.width,
+        height: tail.height,
+        source_video: video.public_id as string,
+      };
+    });
+  }
+  /** F019: Crop a single cell from a 2x2 or 3x3 grid preview image node into a ready ref asset. */
+  async gridCrop(user: Actor, key: string, nodeId: string, value: unknown) {
+    const body = parseBody(value, canvasGridCropFields, true) as {
+      rows: 2 | 3;
+      cols: 2 | 3;
+      row: number;
+      col: number;
+    };
+    const source = await this.p.db.transaction(async (sql) => {
+      const project = await this.project(sql, user, key);
+      const doc = parseCanvasDocument(canvasDocumentJson(project.document));
+      const node = doc.nodes.find((n) => n.id === nodeId);
+      requireValue(
+        node && (node.type === "image" || node.type === "video"),
+        404,
+        "未找到对应的画面节点",
+      );
+      const mediaKey = await this.mediaForNode(sql, project.id, node);
+      requireValue(mediaKey, 409, "该节点尚未生成图片");
+      const asset = await one(
+        sql,
+        "SELECT id, public_id, object_key, mime, workspace_id FROM assets WHERE public_id=$1 AND state='ready'",
+        [mediaKey],
+      );
+      requireValue(asset, 404, "源图片不存在");
+      await this.library.access(
+        sql,
+        user,
+        { kind: "asset", row: asset },
+        project.workspace_id,
+      );
+      return {
+        sourceAssetId: String(asset.id),
+        sourcePublicId: String(asset.public_id),
+        sourceObjectKey: String(asset.object_key),
+        sourceMime: String(asset.mime),
+        workspaceId: String(project.workspace_id),
+      };
+    });
+    const cropped = await cropGridCell(this.p, {
+      ...source,
+      ownerId: user.id,
+      rows: body.rows,
+      cols: body.cols,
+      row: body.row,
+      col: body.col,
+    });
+    return {
+      asset_id: cropped.public_id,
+      mime: cropped.mime,
+      width: cropped.width,
+      height: cropped.height,
+      size: cropped.size,
+      rows: cropped.rows,
+      cols: cropped.cols,
+      row: cropped.row,
+      col: cropped.col,
+    };
+  }
   async remove(user: Actor, key: string) {
     return this.p.db.transaction(async (sql) => {
       const row = await this.project(sql, user, key, true);
       requireValue(
-        user.role === "admin" || user.id === row.owner_id,
+        canManageCanvas(row.owner_id, user),
         403,
         "只有创建者或管理员可以删除画布",
       );

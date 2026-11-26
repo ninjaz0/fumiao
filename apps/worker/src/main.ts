@@ -12,7 +12,11 @@ import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
 import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
 import { ChatQueue } from "@fumiao/original-api/chat-queue.js";
 import { redisConnection } from "@fumiao/platform/redis.js";
+import { DerivativeQueue } from "@fumiao/platform/derivative-queue.js";
+import { grantDueSubscriptions } from "@fumiao/platform/subscriptions.js";
+import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
 const p = runtime();
+await ensureBuiltinEdgeTts(p);
 const executor = new Executor(p);
 const connection = redisConnection(
   process.env.REDIS_URL || "redis://127.0.0.1:6379",
@@ -32,6 +36,8 @@ const storyboardQueue = new StoryboardQueue(
   connection,
 );
 await storyboardQueue.start();
+const derivativeQueue = new DerivativeQueue(p, connection);
+await derivativeQueue.start();
 const worker = new Worker(
   "fumiao-jobs",
   async (job) => executor.execute(job.data.id),
@@ -96,6 +102,16 @@ const eventTimer = setInterval(() => {
 const healthTimer = setInterval(() => void pollHealth(), 15000);
 void pollHealth();
 const updateTimer=setInterval(()=>void new StudioUpdates(p).due().catch(()=>console.error("Plugin update check unavailable")),60000);
+const subscriptionTimer = setInterval(
+  () =>
+    void grantDueSubscriptions(p).catch(() =>
+      console.error("Subscription grant sweep unavailable"),
+    ),
+  300000,
+);
+void grantDueSubscriptions(p).catch(() =>
+  console.error("Initial subscription grant sweep unavailable"),
+);
 await dispatch();
 for (const event of ["SIGTERM", "SIGINT"])
   process.on(event, () => {
@@ -104,11 +120,13 @@ for (const event of ["SIGTERM", "SIGINT"])
     clearInterval(eventTimer);
     clearInterval(healthTimer);
     clearInterval(updateTimer);
+    clearInterval(subscriptionTimer);
     void Promise.all([
       eventBatch,
       worker.close(),
       chatQueue.close(),
       storyboardQueue.close(),
+      derivativeQueue.close(),
     ])
       .then(() => queue.close())
       .then(() => p.db.close())
