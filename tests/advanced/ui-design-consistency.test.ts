@@ -3,6 +3,14 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import type { Response } from "express";
+import type { OriginalRecharge } from "@fumiao/original-api/recharge.js";
+import { DomainError } from "@fumiao/platform/security.js";
+import {
+  OriginalRechargeController,
+  originalRechargeRequest,
+} from "../../apps/api/src/original-recharge.js";
+import type { OriginalAuthRequest } from "../../apps/api/src/original-request.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -294,4 +302,239 @@ test("Canvas editor floats CinematographyPanel, strips neon hexes and raw policy
   // Composition and H3Inputs keep accessible labels and styled buttons
   assert.match(compositionTsx, /AI 生成配乐并挂载/);
   assert.match(h3InputsTsx, /className="secondary"[\s\S]*?关闭预览/);
+});
+
+test("Not-found page and 503 gateway fallback use Fumiao ocean-blue adaptive theme, Chinese copy, and /studio recovery actions", () => {
+  const notFoundPath = join(repoRoot, "apps/web/app/not-found.tsx");
+  assert.equal(
+    existsSync(notFoundPath),
+    true,
+    "apps/web/app/not-found.tsx must exist",
+  );
+
+  const notFoundTsx = readRepoFile("apps/web/app/not-found.tsx");
+  assert.match(notFoundTsx, /\/static\/mark\.svg/);
+  assert.match(notFoundTsx, /页面不存在或已被移除/);
+  assert.match(notFoundTsx, /href="\/studio"[\s\S]*?返回工作台|返回工作台[\s\S]*?href="\/studio"/);
+  assert.match(notFoundTsx, /#f8f9fa/i);
+  assert.match(notFoundTsx, /#fff(?:fff)?\b/i);
+  assert.match(notFoundTsx, /#3686ad/i);
+  assert.match(notFoundTsx, /#111(?:111)?\b/i);
+  assert.match(notFoundTsx, /#1e1e1e/i);
+  assert.match(notFoundTsx, /#68a8db/i);
+  assert.match(notFoundTsx, /\[data-theme="dark"\]/);
+  assert.match(notFoundTsx, /prefers-color-scheme:\s*dark/);
+  assert.match(notFoundTsx, /PingFang SC[\s\S]*?sans-serif/);
+  assert.doesNotMatch(notFoundTsx, /Songti|STSong|SimSun/i);
+
+  const proxyTs = readRepoFile("apps/web/proxy.ts");
+  assert.match(proxyTs, /status:\s*503/);
+  assert.match(proxyTs, /"retry-after":\s*"5"/);
+  assert.match(proxyTs, /http-equiv="refresh"\s+content="5"/);
+  assert.match(proxyTs, /服务暂时不可用/);
+  assert.match(proxyTs, /刷新重试/);
+  assert.match(proxyTs, /prefers-color-scheme:\s*dark/);
+  assert.match(proxyTs, /#3686ad/i);
+  assert.match(proxyTs, /#68a8db/i);
+  assert.match(proxyTs, /style-src\s+'unsafe-inline'/);
+});
+
+test("OriginalRechargeController.pay returns status-accurate XSS-escaped HTML error card for Accept: text/html and rethrows for JSON callers", async () => {
+  function mockResponse() {
+    let statusCode = 200;
+    const headers = new Map<string, string>();
+    let body = "";
+    let ended = false;
+    const res = {
+      status(code: number) {
+        statusCode = code;
+        return res;
+      },
+      setHeader(name: string, value: string) {
+        headers.set(name.toLowerCase(), String(value));
+        return res;
+      },
+      type(value: string) {
+        headers.set("content-type", value);
+        return res;
+      },
+      end(chunk?: string) {
+        if (chunk) body += chunk;
+        ended = true;
+        return res;
+      },
+    };
+    return {
+      res: res as unknown as Response,
+      get statusCode() {
+        return statusCode;
+      },
+      get body() {
+        return body;
+      },
+      get ended() {
+        return ended;
+      },
+      header(name: string) {
+        return headers.get(name.toLowerCase());
+      },
+    };
+  }
+
+  const xssMessage = `订单已过期 <script>alert("xss")</script> & 'retry'`;
+  const domainErr = new DomainError(409, xssMessage);
+
+  const controller = new OriginalRechargeController({
+    async checkout() {
+      throw domainErr;
+    },
+  } as unknown as OriginalRecharge);
+
+  // 1. Browser navigation (Accept: text/html) receives status-accurate, XSS-escaped themed HTML card
+  const htmlRes = mockResponse();
+  await controller.pay(
+    {
+      actor: { id: "u1" },
+      headers: {
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    } as unknown as OriginalAuthRequest,
+    "FM00000000000000000000000001",
+    htmlRes.res,
+  );
+  assert.equal(htmlRes.ended, true);
+  assert.equal(htmlRes.statusCode, 409);
+  assert.match(htmlRes.header("content-type") ?? "", /^text\/html;\s*charset=utf-8$/i);
+  assert.doesNotMatch(htmlRes.body, /<script>/i);
+  assert.match(
+    htmlRes.body,
+    /订单已过期 &lt;script&gt;alert\(&quot;xss&quot;\)&lt;\/script&gt; &amp; &#39;retry&#39;/,
+  );
+  assert.match(htmlRes.body, /prefers-color-scheme:\s*dark/);
+  assert.match(htmlRes.body, /#3686ad/i);
+  assert.match(htmlRes.body, /#68a8db/i);
+  assert.match(htmlRes.body, /href="\/studio"[\s\S]*?返回工作台|返回工作台[\s\S]*?href="\/studio"/);
+
+  // 2. HttpException-compatible error preserves getStatus() status code and escapes message
+  const httpExceptionLike = Object.assign(new Error("Service Unavailable"), {
+    getStatus: () => 503,
+    getResponse: () => ({ message: "支付通道维护中 <b>请稍候</b>" }),
+  });
+  const httpErrController = new OriginalRechargeController({
+    async checkout() {
+      throw httpExceptionLike;
+    },
+  } as unknown as OriginalRecharge);
+  const httpErrRes = mockResponse();
+  await httpErrController.pay(
+    {
+      actor: { id: "u1" },
+      headers: { accept: "text/html" },
+    } as unknown as OriginalAuthRequest,
+    "FM00000000000000000000000002",
+    httpErrRes.res,
+  );
+  assert.equal(httpErrRes.ended, true);
+  assert.equal(httpErrRes.statusCode, 503);
+  assert.doesNotMatch(httpErrRes.body, /<b>/i);
+  assert.match(httpErrRes.body, /支付通道维护中 &lt;b&gt;请稍候&lt;\/b&gt;/);
+
+  // 3. API / JSON callers (Accept: application/json or */*) rethrow unchanged for OriginalExceptionFilter
+  for (const accept of ["application/json", "*/*", undefined]) {
+    const jsonRes = mockResponse();
+    await assert.rejects(
+      () =>
+        controller.pay(
+          {
+            actor: { id: "u1" },
+            headers: accept ? { accept } : {},
+          } as unknown as OriginalAuthRequest,
+          "FM00000000000000000000000001",
+          jsonRes.res,
+        ),
+      (thrown) => thrown === domainErr,
+    );
+    assert.equal(jsonRes.ended, false);
+  }
+
+  // 4. Unexpected internal non-DomainError does not leak internal details in HTML
+  const internalController = new OriginalRechargeController({
+    async checkout() {
+      throw new Error("connect ECONNREFUSED 10.0.0.5:5432");
+    },
+  } as unknown as OriginalRecharge);
+  const internalRes = mockResponse();
+  await internalController.pay(
+    {
+      actor: { id: "u1" },
+      headers: { accept: "text/html" },
+    } as unknown as OriginalAuthRequest,
+    "FM00000000000000000000000004",
+    internalRes.res,
+  );
+  assert.equal(internalRes.statusCode, 500);
+  assert.doesNotMatch(internalRes.body, /ECONNREFUSED|10\.0\.0\.5/);
+  assert.match(internalRes.body, /请求处理失败/);
+
+  // 5. Middleware auth failure on /pay returns 401 HTML card for browser tabs and calls failure() for API callers
+  let delegatedFailure = 0;
+  const middleware = originalRechargeRequest(
+    {
+      async actor() {
+        throw new DomainError(401, "未登录");
+      },
+    } as never,
+    () => {
+      delegatedFailure += 1;
+    },
+  );
+  const unauthHtmlRes = mockResponse();
+  await middleware(
+    {
+      method: "GET",
+      path: "/api/recharge/orders/FM00000000000000000000000005/pay",
+      url: "/api/recharge/orders/FM00000000000000000000000005/pay",
+      headers: { accept: "text/html" },
+    } as unknown as OriginalAuthRequest,
+    Object.assign(unauthHtmlRes.res, { locals: {}, headersSent: false }),
+    () => {},
+  );
+  assert.equal(unauthHtmlRes.statusCode, 401);
+  assert.match(unauthHtmlRes.body, /未登录/);
+  assert.equal(delegatedFailure, 0);
+
+  const unauthJsonRes = mockResponse();
+  await middleware(
+    {
+      method: "GET",
+      path: "/api/recharge/orders/FM00000000000000000000000005/pay",
+      url: "/api/recharge/orders/FM00000000000000000000000005/pay",
+      headers: { accept: "application/json" },
+    } as unknown as OriginalAuthRequest,
+    Object.assign(unauthJsonRes.res, { locals: {}, headersSent: false }),
+    () => {},
+  );
+  assert.equal(delegatedFailure, 1);
+
+  // 6. Successful checkout still sends 303 redirect even when Accept: text/html
+  const okController = new OriginalRechargeController({
+    async checkout() {
+      return "https://pay.example/checkout?order=FM00000000000000000000000003";
+    },
+  } as unknown as OriginalRecharge);
+  const okRes = mockResponse();
+  await okController.pay(
+    {
+      actor: { id: "u1" },
+      headers: { accept: "text/html" },
+    } as unknown as OriginalAuthRequest,
+    "FM00000000000000000000000003",
+    okRes.res,
+  );
+  assert.equal(okRes.ended, true);
+  assert.equal(okRes.statusCode, 303);
+  assert.equal(
+    okRes.header("location"),
+    "https://pay.example/checkout?order=FM00000000000000000000000003",
+  );
 });
