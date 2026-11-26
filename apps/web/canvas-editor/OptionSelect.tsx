@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { Check, ChevronDown, type LucideIcon } from "lucide-react";
 import type { SelectChoice } from "./composer-options";
 
@@ -28,9 +28,14 @@ export function OptionSelect<T extends string = string>({
   variant?: "chip" | "field";
 }) {
   const [open, setOpen] = useState(false);
+  const listboxId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   useEffect(() => {
     if (!open) return;
@@ -40,21 +45,27 @@ export function OptionSelect<T extends string = string>({
       }
     };
     document.addEventListener("pointerdown", handlePointerDown, true);
-    const frame = requestAnimationFrame(() => {
-      (
-        menuRef.current?.querySelector<HTMLButtonElement>(
-          '[aria-selected="true"]:not(:disabled)',
-        ) ||
-        menuRef.current?.querySelector<HTMLButtonElement>(
-          '[role="option"]:not(:disabled)',
-        )
-      )?.focus();
-    });
+    (
+      menuRef.current?.querySelector<HTMLButtonElement>(
+        '[aria-selected="true"]:not(:disabled)',
+      ) ||
+      menuRef.current?.querySelector<HTMLButtonElement>(
+        '[role="option"]:not(:disabled)',
+      ) ||
+      menuRef.current
+    )?.focus();
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown, true);
-      cancelAnimationFrame(frame);
     };
   }, [open]);
+
+  const handleBlur = (event: React.FocusEvent<HTMLDivElement>) => {
+    const nextFocused = event.relatedTarget as Node | null;
+    if (nextFocused && event.currentTarget.contains(nextFocused)) {
+      return;
+    }
+    setOpen(false);
+  };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!open) {
@@ -98,6 +109,7 @@ export function OptionSelect<T extends string = string>({
 
   const selected = options.find((opt) => opt.value === value);
   const displayLabel = selected?.label ?? (value || "不限定");
+  const triggerAriaLabel = `${ariaLabel}：${displayLabel}`;
 
   const menuClass = [
     "cv-menu",
@@ -114,6 +126,7 @@ export function OptionSelect<T extends string = string>({
       className={
         "fm-option-wrap" + (variant === "field" ? " fm-option-field-wrap" : "")
       }
+      onBlur={handleBlur}
       onKeyDown={handleKeyDown}
     >
       {variant === "field" ? (
@@ -122,9 +135,11 @@ export function OptionSelect<T extends string = string>({
           type="button"
           className={"fm-cine-trigger" + (open ? " open" : "")}
           data-filled={active ? "true" : "false"}
-          aria-label={ariaLabel}
+          aria-label={triggerAriaLabel}
           aria-haspopup="listbox"
           aria-expanded={open}
+          aria-controls={open ? listboxId : undefined}
+          tabIndex={open ? -1 : undefined}
           disabled={disabled}
           onClick={() => setOpen((prev) => !prev)}
         >
@@ -137,9 +152,11 @@ export function OptionSelect<T extends string = string>({
           ref={buttonRef}
           type="button"
           className={"fm-ui-chip" + (active || open ? " active" : "")}
-          aria-label={ariaLabel}
+          aria-label={triggerAriaLabel}
           aria-haspopup="listbox"
           aria-expanded={open}
+          aria-controls={open ? listboxId : undefined}
+          tabIndex={open ? -1 : undefined}
           disabled={disabled}
           onClick={() => setOpen((prev) => !prev)}
         >
@@ -150,10 +167,12 @@ export function OptionSelect<T extends string = string>({
       )}
       {open && (
         <div
+          id={listboxId}
           ref={menuRef}
           className={menuClass}
           role="listbox"
           aria-label={ariaLabel}
+          tabIndex={-1}
         >
           {options.map((opt) => {
             const isSelected = opt.value === value;
@@ -165,7 +184,7 @@ export function OptionSelect<T extends string = string>({
                 aria-selected={isSelected}
                 disabled={opt.disabled}
                 title={opt.title}
-                tabIndex={isSelected ? 0 : -1}
+                tabIndex={-1}
                 onClick={() => {
                   onChange(opt.value);
                   setOpen(false);

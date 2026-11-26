@@ -133,10 +133,16 @@ test("canvas composer, cinematography panel, shot list, and asset packs use unif
   assert.doesNotMatch(aiStoryboardSource, /全能 @图N 多参考/);
   assert.match(aiStoryboardSource, /<option value="omni_ref">全能参考<\/option>/);
 
-  // OptionSelect provides accessible listbox + segmented group primitives
+  // OptionSelect provides accessible listbox + segmented group primitives, includes current value in aria-label, and closes on blur leaving wrapper
   assert.match(optionSelectSource, /aria-haspopup="listbox"/);
   assert.match(optionSelectSource, /role="listbox"/);
   assert.match(optionSelectSource, /role="option"/);
+  assert.match(optionSelectSource, /onBlur=/);
+  assert.match(optionSelectSource, /relatedTarget/);
+  assert.match(
+    optionSelectSource,
+    /const triggerAriaLabel = `\$\{ariaLabel\}：\$\{displayLabel\}`/,
+  );
   assert.match(optionSelectSource, /export function SegmentedOptions/);
 
   // CinematographyPanel replaces all 6 raw <select> controls with OptionSelect field pills
