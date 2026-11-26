@@ -129,6 +129,7 @@ export type Project = Draft & {
   last_editor: number;
   created: number;
   updated: number;
+  archived_at: number | null;
   can_delete: boolean;
   count?: number;
   covers?: { id: string; type: string }[];

@@ -225,6 +225,8 @@ export const canvasContracts: Contract[] = [
   { method: "GET", path: /^\/api\/canvases$/ },
   { method: "POST", path: /^\/api\/canvases$/, body: "canvasNew" },
   { method: "GET", path: /^\/api\/canvases\/[^/]+$/ },
+  { method: "PUT", path: /^\/api\/canvases\/[^/]+\/archive$/ },
+  { method: "DELETE", path: /^\/api\/canvases\/[^/]+\/archive$/ },
   {
     method: "PUT",
     path: /^\/api\/canvases\/[^/]+\/document$/,

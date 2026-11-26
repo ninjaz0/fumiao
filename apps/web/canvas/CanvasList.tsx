@@ -5,6 +5,7 @@ import { canvasLoginPath } from "../auth/return-path";
 import { api, ApiError, type Studio } from "./api";
 import ProjectList from "./ProjectList";
 import "./dialog.css";
+import "./project-list.css";
 
 export default function CanvasList({ loadingLogo }: { loadingLogo: string }) {
   const [studio, setStudio] = useState<Studio | null>(null);

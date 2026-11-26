@@ -1,5 +1,29 @@
 /* Canvas editor style overrides (baseline/production/static/canvas.css is immutable). */
 
+.canvas-archived-pill {
+  flex: none;
+  padding: 0 8px;
+  border: 1px solid var(--cv-line);
+  border-radius: 999px;
+  background: var(--cv-hover);
+  color: var(--cv-muted);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.project-menu button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+@media (max-width: 760px) {
+  .canvas-archived-pill {
+    padding: 0 5px;
+    font-size: 11px;
+  }
+}
+
 .cv-dialog > p.error {
   color: var(--cv-danger);
 }

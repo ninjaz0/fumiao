@@ -798,6 +798,25 @@ test("F035: REST allowlist and OpenAPI spec stay 1-to-1 with real NestJS control
   };
   assert.ok(boundCanvas.document.nodes.some((n) => n.type === "sticky"));
 
+  const archivePath = `${http.url}/api/canvases/${scene.canvas_id}/archive`;
+  const withoutSession = await fetch(archivePath, { method: "PUT" });
+  assert.equal(withoutSession.status, 401);
+  const withToken = await fetch(archivePath, { method: "PUT", headers });
+  assert.equal(withToken.status, 403);
+  const archivedResponse = await fetch(archivePath, { method: "PUT", headers: cookieHeaders });
+  assert.equal(archivedResponse.status, 200);
+  const { undo_token: undoToken } = await archivedResponse.json();
+  assert.ok(undoToken);
+  const archivedList = await fetch(`${http.url}/api/canvases?view=current&view=archived`, { headers: cookieHeaders });
+  assert.equal(archivedList.status, 200);
+  assert.ok((await archivedList.json()).projects.some(({ id }: { id: string }) => id === scene.canvas_id));
+  const undo = await fetch(`${archivePath}?expected_archive_change=${encodeURIComponent(undoToken)}`, {
+    method: "DELETE",
+    headers: cookieHeaders,
+  });
+  assert.equal(undo.status, 200);
+  assert.deepEqual(await undo.json(), { archived_at: null, undo_token: null });
+
   const scDel = await fetch(
     `${http.url}/api/series/${created.id}/episodes/${ep.id}/scenes/${scene.id}`,
     { method: "DELETE", headers: cookieHeaders },
