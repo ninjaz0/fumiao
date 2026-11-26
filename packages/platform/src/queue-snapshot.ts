@@ -40,6 +40,7 @@ export type ForecastCandidate = {
     plugin_version: string;
     enabled: boolean;
     revision: number;
+    concurrency?: number;
     queue_health: Record<string, unknown>;
     queue_health_revision: number | null;
   };
@@ -85,7 +86,7 @@ export class QueueForecasts {
     if (options.candidate) jobs.push(options.candidate.job);
     const connections = (
       await sql.query(
-        "SELECT id,plugin_id,plugin_version,enabled,revision,queue_health,queue_health_revision FROM connections WHERE id=ANY($1::uuid[])",
+        "SELECT id,plugin_id,plugin_version,enabled,revision,concurrency,queue_health,queue_health_revision FROM connections WHERE id=ANY($1::uuid[])",
         [[...new Set(jobs.map((j) => j.connection_id))]],
       )
     ).rows;
@@ -208,6 +209,20 @@ export class QueueForecasts {
           stage: n.queue_state.stage ?? "preparing",
           ready_models: n.queue_state.ready_models ?? [],
         }));
+      const rawHealth =
+        connection.enabled &&
+        connection.queue_health_revision === connection.revision
+          ? connection.queue_health
+          : {};
+      const health =
+        typeof rawHealth.capacity === "number" &&
+        Number.isFinite(rawHealth.capacity) &&
+        typeof connection.concurrency === "number"
+          ? {
+              ...rawHealth,
+              capacity: Math.min(rawHealth.capacity, connection.concurrency),
+            }
+          : rawHealth;
       const context: QueueContext = {
         jobs: queueJobs,
         nodes: queueNodes,
@@ -220,11 +235,7 @@ export class QueueForecasts {
           )
           .map((r) => ({ ...r, node: publicNode(r.node) }) as QueueRun),
         stamp,
-        health:
-          connection.enabled &&
-          connection.queue_health_revision === connection.revision
-            ? connection.queue_health
-            : {},
+        health,
         imageEnabled: (options.imageEnabled ?? true) && connection.enabled,
       };
       if (

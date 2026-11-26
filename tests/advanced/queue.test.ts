@@ -20,6 +20,13 @@ import { museQueue } from "@fumiao/plugin-muse/queue.js";
 import { flowQueue } from "@fumiao/plugin-flow/queue.js";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
+import { StudioPackages } from "@fumiao/platform/studio-packages.js";
+import { StudioCatalog } from "@fumiao/platform/catalog.js";
+import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { OriginalGeneration } from "@fumiao/original-api/generation.js";
+import { OriginalEstimates } from "@fumiao/original-api/estimate.js";
+import { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
 import type { ProviderPlugin, QueueContext } from "@fumiao/plugin-sdk/index.js";
 
 const plugin: ProviderPlugin = {
@@ -748,3 +755,243 @@ for (const provider of ["flow", "muse"]) {
     },
   );
 }
+
+test("Muse 2.1 dispatches multi-account video jobs in parallel without /v1/queue and clamps forecasts to connection concurrency", async () => {
+  const f = await databaseFixture();
+  const videoPosts: { key: string; prompt: string }[] = [];
+  let createdTasks = 0;
+  const taskStatuses = new Map<string, Record<string, unknown>>();
+  const server = createServer(async (req, res) => {
+    if (req.headers.authorization !== "Bearer multi-account-key")
+      return void res.writeHead(401).end();
+    if (req.url === "/readyz")
+      return void res.end('{"status":"ready","accounts":3,"browser_running":true}');
+    if (req.url === "/v1/models")
+      return void res.end('{"data":[{"id":"muse-video"},{"id":"muse-image"}]}');
+    if (req.url === "/health")
+      return void res.end('{"backend_running":true,"has_active_tokens":true}');
+    if (req.method === "POST" && req.url === "/v1/videos") {
+      const parts: Buffer[] = [];
+      for await (const chunk of req) parts.push(chunk);
+      const body = JSON.parse(Buffer.concat(parts).toString());
+      const id = "task_" + String(++createdTasks).padStart(32, "0");
+      videoPosts.push({
+        key: String(req.headers["idempotency-key"]),
+        prompt: body.prompt,
+      });
+      const now = Math.floor(Date.now() / 1000);
+      taskStatuses.set(id, {
+        id,
+        status: "processing",
+        phase: "generating",
+        created_at: now,
+        started_at: now,
+        generating_at: now,
+      });
+      return void res.end(
+        JSON.stringify({ id, status: "queued", created_at: now }),
+      );
+    }
+    if (req.url?.startsWith("/v1/videos/task_")) {
+      const id = req.url.slice("/v1/videos/".length);
+      const state = taskStatuses.get(id);
+      if (!state) return void res.writeHead(404).end();
+      return void res.end(JSON.stringify(state));
+    }
+    // Standard muse2api has no /v1/queue endpoint -> 404
+    res.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const base =
+    "http://127.0.0.1:" + (server.address() as { port: number }).port;
+  const sandboxSend: typeof chatHttp = (url, options) => {
+    assert.equal(url.origin, "https://1.1.1.1");
+    assert.ok(options.lookup);
+    return chatHttp(new URL(url.pathname, base), {
+      ...options,
+      lookup: undefined,
+    });
+  };
+  f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+  try {
+    await f.p.registry.initializeStudio(f.db, false);
+    const identity = new OriginalIdentity(f.p);
+    const creds = { name: "admin", password: "multi-account-password" };
+    await identity.bootstrap({ ...creds, nickname: "管理员" });
+    const actor = await identity.actor(await identity.login(creds, "fixture"));
+    const packages = new StudioPackages(f.p);
+    const musePkg = JSON.parse(
+      await readFile("plugins/muse/muse.fmplugin.json", "utf8"),
+    );
+    const flowPkg = JSON.parse(
+      await readFile("plugins/flow/flow.fmplugin.json", "utf8"),
+    );
+    await packages.install(actor, musePkg);
+    await packages.install(actor, flowPkg);
+
+    const { id: museConnId } = await f.p.createConnection(
+      actor,
+      {
+        name: "Muse 多账号池",
+        pluginId: "muse",
+        version: musePkg.adapterVersion,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "multi-account-key" },
+      },
+      true,
+    );
+    const { id: flowConnId } = await f.p.createConnection(
+      actor,
+      {
+        name: "Flow 默认单并发",
+        pluginId: "flow",
+        version: flowPkg.adapterVersion,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "multi-account-key" },
+      },
+      true,
+    );
+    const savedConns = await f.p.studioConnections(actor);
+    assert.equal(
+      savedConns.find((c) => c.id === museConnId)?.concurrency,
+      16,
+    );
+    assert.equal(
+      savedConns.find((c) => c.id === flowConnId)?.concurrency,
+      1,
+    );
+
+    const catalog = new StudioCatalog(f.db);
+    const prices = await catalog.prices();
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        Object.fromEntries(prices.items.map((i) => [i.key, 2])),
+        prices.revision,
+      ),
+    );
+    const museListed = (await packages.list(actor)).find(
+      (p) => p.id === "muse",
+    )!;
+    await packages.change(actor, "muse", museListed.revision, "enable");
+    const ws = await one(
+      f.db,
+      "SELECT * FROM workspaces WHERE owner_id=$1 AND kind='personal'",
+      [actor.id],
+    );
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, ws.id, 100, randomUUID(), "adjust"),
+    );
+
+    await new QueueHealthPoller(f.p).refresh(museConnId);
+    const g = new OriginalGeneration(f.p);
+    const submitVideo = async (label: string) => {
+      const res = await g.submit(
+        actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "muse-video",
+          prompt: label,
+          ratio: "16:9",
+          seconds: 5,
+        }),
+        String(ws.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+
+    const j1 = await submitVideo("镜头 1");
+    const j2 = await submitVideo("镜头 2");
+    const j3 = await submitVideo("镜头 3");
+    const j4 = await submitVideo("镜头 4");
+
+    await Promise.all([
+      new Executor(f.p).execute(j1.id),
+      new Executor(f.p).execute(j2.id),
+      new Executor(f.p).execute(j3.id),
+      new Executor(f.p).execute(j4.id),
+    ]);
+
+    assert.equal(videoPosts.length, 3, "all 3 accounts dispatch in parallel");
+    const statesAfterSubmit = (
+      await f.db.query(
+        "SELECT id,state,remote_id FROM jobs WHERE id=ANY($1::uuid[])",
+        [[j1.id, j2.id, j3.id, j4.id]],
+      )
+    ).rows;
+    assert.equal(
+      statesAfterSubmit.filter((r) => r.state === "running" && r.remote_id)
+        .length,
+      3,
+    );
+    assert.equal(
+      statesAfterSubmit.filter((r) => r.state === "queued").length,
+      1,
+    );
+
+    // Poll the 3 running jobs so their provider clocks advance phase -> generating
+    for (const row of statesAfterSubmit.filter((r) => r.state === "running")) {
+      await new Executor(f.p).execute(row.id);
+    }
+
+    // Settle one of the 3 running jobs via real poll failure to test connection.concurrency = 2 < accounts = 3
+    const runningRows = statesAfterSubmit.filter((r) => r.state === "running");
+    taskStatuses.set(runningRows[2].remote_id, {
+      id: runningRows[2].remote_id,
+      status: "failed",
+    });
+    await new Executor(f.p).execute(runningRows[2].id);
+
+    const currentConn = (await f.p.studioConnections(actor)).find(
+      (c) => c.id === museConnId,
+    )!;
+    await f.p.updateConnection(actor, museConnId, {
+      revision: currentConn.revision,
+      enabled: true,
+      concurrency: 2,
+    });
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [museConnId],
+    );
+    await new QueueHealthPoller(f.p).refresh(museConnId);
+
+    // With 2 generating jobs and concurrency=2 (even though readyz.accounts=3):
+    // 1) Executor must NOT dispatch the 4th queued job
+    const queuedRow = statesAfterSubmit.find((r) => r.state === "queued")!;
+    await new Executor(f.p).execute(queuedRow.id);
+    assert.equal(videoPosts.length, 3);
+
+    // 2) QueueForecasts and OriginalEstimates must clamp lanes to 2 (not 3),
+    //    so neither reports an immediately free 3rd lane (median === 0).
+    const forecast = await new QueueForecasts(f.p).forWorkspace(actor, ws.id);
+    assert.notEqual(
+      forecast.jobs[queuedRow.id].eta.median,
+      0,
+      "queued job must not see a phantom 3rd lane when connection.concurrency is 2",
+    );
+    assert.equal(forecast.jobs[queuedRow.id].eta.reason, "observing");
+
+    const est = await new OriginalEstimates(f.p).read(
+      actor,
+      {
+        kind: "video",
+        model: "muse-video",
+        ratio: "16:9",
+        seconds: 5,
+        sampling_steps: 20,
+        refs: [],
+      },
+      String(ws.public_id),
+    );
+    assert.notEqual(
+      est.queue?.median,
+      0,
+      "estimate must also clamp lanes to connection.concurrency=2",
+    );
+    assert.equal(est.queue?.reason, "observing");
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+    await f.cleanup();
+  }
+});
