@@ -701,7 +701,10 @@ test("update source pins package identity and checksum before activation and pre
   const f = await setup(),
     file = await load("muse"),
     updates = new StudioUpdates(f.p),
-    next = { ...file, version: "2.1.0" },
+    next = {
+      ...file,
+      version: file.version.replace(/\.(\d+)$/, (_, n) => "." + (Number(n) + 1)),
+    },
     raw = JSON.stringify(next);
   let digest = createHash("sha256").update(raw).digest("hex");
   const server = createServer((req, res) => {
@@ -1392,7 +1395,10 @@ test("installed settings pages isolate values by package, reject stale saves and
     await assert.rejects(save(1, "SRT"), { status: 409 });
     const upgraded = {
       ...first,
-      version: "2.1.0",
+      version: first.version.replace(
+        /\.(\d+)$/,
+        (_, n) => "." + (Number(n) + 1),
+      ),
       settingsPages: [
         { ...pages[0], title: "字幕选项" },
         { ...pages[0], id: "other" },
