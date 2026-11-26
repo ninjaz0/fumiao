@@ -102,7 +102,7 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
    <label>分镜生成链路
     <select value={generationMode} disabled={running||busy} onChange={e=>setGenerationMode(e.target.value as CanvasGenerationMode)}>
      <option value="first_last_frame">经典首尾帧连贯</option>
-     <option value="omni_ref">全能 @图N 多参考</option>
+     <option value="omni_ref">全能参考</option>
      <option value="grid_preview">九宫格/四宫格低成本构图预览</option>
     </select>
    </label>

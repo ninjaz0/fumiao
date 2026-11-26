@@ -1,6 +1,8 @@
 import {useEffect,useRef,useState} from 'react';
 import {Check,Plus,Pencil,Trash2,ArrowLeft,Upload,ChevronRight,Lock,Unlock,Globe,Sparkles} from 'lucide-react';
 import {mergeAssetPackAssets} from '../studio/state';
+import {OptionSelect} from './OptionSelect';
+import {TURNAROUND_VIEW_OPTIONS} from './composer-options';
 export type PackVoiceProfile = {
   model?: string;
   voice_id?: string;
@@ -226,12 +228,13 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
     {(admin||pack.owner===userId)&&<button type="button" className="fm-pack-button" disabled={busy} onClick={()=>void toggleLock(pack)}>{pack.locked?<><Unlock size={14}/>解锁素材包</>:<><Lock size={14}/>锁定防误改</>}</button>}
     {admin&&!pack.locked&&<button type="button" className="fm-pack-button" disabled={busy} onClick={()=>void toggleScope(pack)}><Globe size={14}/>{pack.scope==='global'?'收回工作区':'发布到全局'}</button>}
     {pack.purpose==='subject'&&canEditOpenedPack&&<>
-     <select aria-label="三视图生成视角" className="fm-mode-select" value={turnaroundView} onChange={e=>setTurnaroundView(e.target.value as 'sheet'|'front'|'side'|'back')}>
-      <option value="sheet">三视图总表</option>
-      <option value="front">正面定妆</option>
-      <option value="side">侧面定妆</option>
-      <option value="back">背面定妆</option>
-     </select>
+     <OptionSelect
+      ariaLabel="三视图生成视角"
+      value={turnaroundView}
+      disabled={busy}
+      options={TURNAROUND_VIEW_OPTIONS}
+      onChange={val=>setTurnaroundView(val)}
+     />
      <button type="button" className="fm-pack-button" disabled={busy} onClick={()=>void generateTurnaround(pack)}><Sparkles size={14}/>一键生成三视图</button>
      <button type="button" className="fm-pack-button" disabled={busy} onClick={()=>setShowTurnaroundBind(v=>!v)}>{showTurnaroundBind?'收起三视图绑定':'绑定三视图定妆照'}</button>
     </>}

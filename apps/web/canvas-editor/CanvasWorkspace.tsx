@@ -129,6 +129,13 @@ import { Narration } from "./Narration";
 import { Composition } from "./Composition";
 import { AssetPacks, type Pack } from "./AssetPacks";
 import { CinematographyPanel } from "./CinematographyPanel";
+import { OptionSelect, SegmentedOptions } from "./OptionSelect";
+import {
+  GENERATION_MODE_OPTIONS,
+  GRID_LAYOUT_OPTIONS,
+  countActiveCinematography,
+  resolveEffectiveGenerationMode,
+} from "./composer-options";
 import { GridCropModal } from "./GridCropModal";
 import { PrecheckCostModal } from "./PrecheckCostModal";
 import { ReferencePromptInput } from "./ReferencePromptInput";
@@ -742,7 +749,6 @@ export function CanvasWorkspace({
       node?: string;
     } | null>(null);
   const [menu, setMenu] = useState<
-      | "h3-mode"
       | "project"
       | "zoom"
       | "format"
@@ -3490,81 +3496,114 @@ export function CanvasWorkspace({
             </div>
           )}
           {h3Native&&<H3Inputs key={single.id} options={h3Options} ids={h3Ids} assets={studio.assets} onChange={updateH3} onAsset={a=>setStudio(s=>({...s,assets:[{...a,owner:s.me.id},...s.assets]}))} onMention={token=>edit(single.id,{prompt:single.prompt+token+' '})} onBusy={setH3Busy}/>}
-          <div className="fm-composer-wave3-bar">
-            {!h3Frames&&<div className="canvas-pack-entry">
-              <button className="secondary" onClick={() => setPackPicker(single.id)}><FolderOpen size={15}/>素材包{single.asset_packs?.length ? ` · ${single.asset_packs.length}` : ''}</button>
-            </div>}
-            <select
-              className="fm-mode-select"
-              aria-label="分镜生成链路"
-              value={
-                single.generation_mode ??
-                (h3Native
-                  ? h3Frames
-                    ? "first_last_frame"
-                    : "omni_ref"
-                  : single.type === "video"
-                    ? "first_last_frame"
-                    : "first_frame")
-              }
-              onChange={(e) => {
-                const mode = e.target.value as CanvasGenerationMode;
-                if (h3Native && mode === "omni_ref") {
-                  chooseH3Mode("reference");
-                  return;
-                }
-                if (h3Native && mode === "first_last_frame") {
-                  chooseH3Mode("frames");
-                  return;
-                }
-                edit(single.id, {
-                  generation_mode: mode,
-                  ...(mode === "grid_preview" ? { grid_layout: single.grid_layout ?? "3x3" } : {}),
-                });
-              }}
-            >
-              <option value="first_frame">标准首帧</option>
-              <option value="first_last_frame">经典首尾帧</option>
-              <option value="omni_ref">全能 @图N 多参考</option>
-              <option value="grid_preview">宫格构图预览</option>
-            </select>
-            {single.generation_mode === "grid_preview" && (
-              <select
-                className="fm-mode-select"
-                aria-label="宫格规格"
-                value={single.grid_layout ?? "3x3"}
-                onChange={(e) => edit(single.id, { grid_layout: e.target.value as "2x2" | "3x3" })}
-              >
-                <option value="2x2">2×2</option>
-                <option value="3x3">3×3</option>
-              </select>
-            )}
-            <button
-              type="button"
-              className={"secondary" + (showCinePanel ? " active" : "")}
-              onClick={() => setShowCinePanel((v) => !v)}
-            >
-              <Clapperboard size={14} />
-              导演参数
-              {single.cinematography && Object.values(single.cinematography).some(Boolean) ? " ●" : ""}
-            </button>
-            {single.type === "image" && current?.media && (
-              <button
-                type="button"
-                className="secondary"
-                onClick={() =>
-                  setGridCropTarget({
-                    nodeId: single.id,
-                    mediaId: current.media!,
-                    layout: single.grid_layout ?? "3x3",
-                  })
-                }
-              >
-                <Crop size={14} />
-                宫格裁切
-              </button>
-            )}
-          </div>
+          {(() => {
+            const effectiveGenMode = resolveEffectiveGenerationMode(
+              single,
+              h3Native,
+              h3Frames,
+            );
+            const activeCineCount = countActiveCinematography(
+              single.cinematography,
+            );
+            const genModeIcon =
+              effectiveGenMode === "grid_preview"
+                ? LayoutGrid
+                : effectiveGenMode === "omni_ref"
+                  ? Link2
+                  : effectiveGenMode === "first_last_frame"
+                    ? Film
+                    : ImageIcon;
+            return (
+              <div className="fm-composer-wave3-bar">
+                {!h3Frames && (
+                  <div className="canvas-pack-entry">
+                    <button
+                      type="button"
+                      className={
+                        "fm-ui-chip" +
+                        (single.asset_packs?.length ? " active" : "")
+                      }
+                      onClick={() => setPackPicker(single.id)}
+                    >
+                      <FolderOpen size={14} />
+                      <span>素材包</span>
+                      {single.asset_packs?.length ? (
+                        <span className="fm-chip-badge">
+                          {single.asset_packs.length}
+                        </span>
+                      ) : null}
+                    </button>
+                  </div>
+                )}
+                <OptionSelect
+                  ariaLabel="分镜生成链路"
+                  icon={genModeIcon}
+                  value={effectiveGenMode}
+                  active={effectiveGenMode === "grid_preview"}
+                  disabled={h3Busy}
+                  options={GENERATION_MODE_OPTIONS}
+                  onChange={(mode) => {
+                    if (h3Native && mode === "omni_ref") {
+                      chooseH3Mode("reference");
+                      return;
+                    }
+                    if (h3Native && mode === "first_last_frame") {
+                      chooseH3Mode("frames");
+                      return;
+                    }
+                    edit(single.id, {
+                      generation_mode: mode,
+                      ...(mode === "grid_preview"
+                        ? { grid_layout: single.grid_layout ?? "3x3" }
+                        : {}),
+                    });
+                  }}
+                />
+                {effectiveGenMode === "grid_preview" && (
+                  <SegmentedOptions
+                    ariaLabel="宫格规格"
+                    value={single.grid_layout ?? "3x3"}
+                    options={GRID_LAYOUT_OPTIONS}
+                    onChange={(layout) =>
+                      edit(single.id, { grid_layout: layout })
+                    }
+                  />
+                )}
+                <button
+                  type="button"
+                  className={
+                    "fm-ui-chip" +
+                    (showCinePanel || activeCineCount > 0 ? " active" : "")
+                  }
+                  aria-expanded={showCinePanel}
+                  onClick={() => setShowCinePanel((v) => !v)}
+                >
+                  <Clapperboard size={14} />
+                  <span>导演参数</span>
+                  {activeCineCount > 0 && (
+                    <span className="fm-chip-badge">{activeCineCount}</span>
+                  )}
+                  <ChevronDown size={13} className="fm-ui-chevron" />
+                </button>
+                {single.type === "image" && current?.media && (
+                  <button
+                    type="button"
+                    className="fm-ui-chip"
+                    onClick={() =>
+                      setGridCropTarget({
+                        nodeId: single.id,
+                        mediaId: current.media!,
+                        layout: single.grid_layout ?? "3x3",
+                      })
+                    }
+                  >
+                    <Crop size={14} />
+                    <span>宫格裁切</span>
+                  </button>
+                )}
+              </div>
+            );
+          })()}
           {showCinePanel && (
             <CinematographyPanel
               compact
@@ -3741,7 +3780,6 @@ export function CanvasWorkspace({
                 patchParams(spec?.provider==='flow'?{model:value,ratio:spec.ratio!,seconds:spec.seconds!,resolution:(spec.resolution==='原生'?'1K':spec.resolution) as Params['resolution'],flow_source_job:null}:{model:value,ratio:String(values.ratio ?? single.params.ratio),seconds:Number(values.seconds ?? single.params.seconds),flow_source_job:null});setModelSearch('');closeModelMenu();
               }}>{label}{FlowPicker.sameFamily(studio.model_catalog,selectedModel,value) && <Check size={14}/>}</button>)}</div>}
             </div>
-            {h3Native&&<div className="parameter-wrap menu-trigger"><button className="parameter" disabled={h3Busy} aria-haspopup="listbox" aria-expanded={menu==='h3-mode'} onClick={()=>setMenu(menu==='h3-mode'?null:'h3-mode')}>{h3Frames?<Film size={15}/>:<Link2 size={15}/>} {h3Frames?'首尾帧':'全能参考'}<ChevronDown size={13}/></button>{menu==='h3-mode'&&<div className="cv-menu duration-menu" role="listbox" aria-label="参考模式">{(form?.referenceModes ?? []).map(mode=><button key={mode} role="option" aria-selected={h3Options.mode===mode} onClick={()=>chooseH3Mode(mode)}>{mode==='frames'?'首尾帧':'全能参考'}{h3Options.mode===mode&&<Check size={14}/>}</button>)}</div>}</div>}
             <div className="parameter-wrap menu-trigger">
               <button
                 className={"parameter " + (flowModel&&!flowParameters ? "fixed-parameter " : "") + (menu === "format" ? "active" : "")}
