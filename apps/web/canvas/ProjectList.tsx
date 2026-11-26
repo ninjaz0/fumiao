@@ -13,7 +13,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { api, workspaceURL, type Studio } from "./api";
+import { api, ApiError, workspaceURL, type Studio } from "./api";
 
 import { PluginImport } from "../studio/PluginImport";
 import { VideoThumb } from "../canvas-editor/VideoThumb";
@@ -36,7 +36,11 @@ type Project = {
   can_delete: boolean;
 };
 
-type ArchiveNotice = { project: Project; archived: boolean };
+type ArchiveNotice = {
+  project: Project;
+  archived: boolean;
+  undoToken: string | null;
+};
 
 // The markup and interactions are from the pinned canvas bundle's ProjectList.
 function IconButton({
@@ -113,8 +117,15 @@ function ProjectActions({
               : Copy
         }
         label={(restore ? "恢复画布 " : "复制画布 ") + project.title}
-        onClick={restore ? onArchive : onCopy}
-        disabled={opening || (restore && busy)}
+        onClick={
+          restore
+            ? () => {
+                if (!busy) onArchive();
+              }
+            : onCopy
+        }
+        disabled={opening}
+        aria-disabled={restore && busy}
         aria-busy={restore ? pending : copying}
       />
       {project.can_delete && (
@@ -127,8 +138,11 @@ function ProjectActions({
           aria-haspopup="menu"
           aria-expanded={open}
           aria-busy={!archived && pending}
-          disabled={opening || busy}
-          onClick={() => setOpen(!open)}
+          disabled={opening}
+          aria-disabled={busy}
+          onClick={() => {
+            if (!busy) setOpen(!open);
+          }}
         >
           {!archived && pending ? (
             <LoaderCircle size={18} />
@@ -262,11 +276,14 @@ export default function ProjectList({
     ({ id }) => id === studio.workspace_id,
   )?.name;
   const [archivedView, setArchivedView] = useState(
-    () => new URLSearchParams(location.search).get("view") === "archived",
+    () =>
+      new URLSearchParams(location.search).getAll("view").at(-1) === "archived",
   );
   const view = useRef(archivedView);
+  const loadedView = useRef<boolean | null>(null);
   const loadSequence = useRef(0);
   const archiveLock = useRef(false);
+  const tabs = useRef<HTMLDivElement>(null);
   const undoButton = useRef<HTMLButtonElement>(null);
   const [archivePending, setArchivePending] = useState<string | null>(null);
   const [notice, setNotice] = useState<ArchiveNotice | null>(null);
@@ -283,6 +300,11 @@ export default function ProjectList({
   const copying = opening?.kind === "copy" ? opening.id : null;
   const query = search.trim().toLowerCase();
   const [loadError, setLoadError] = useState("");
+  const [refreshError, setRefreshError] = useState("");
+  const noticeUndo = notice?.undoToken;
+  const noticeText = notice
+    ? `${notice.archived ? "已归档" : "已恢复"}「${notice.project.title}」`
+    : "";
   const visibleProjects = query
     ? projects.filter((p) => p.title.trim().toLowerCase().includes(query))
     : projects;
@@ -294,17 +316,26 @@ export default function ProjectList({
   const load = useCallback(
     async (showLoading = true) => {
       const sequence = ++loadSequence.current;
-      if (showLoading) setLoading(true);
+      const requestedView = view.current;
+      const background = !showLoading && loadedView.current === requestedView;
+      if (!background) setLoading(true);
       setLoadError("");
+      setRefreshError("");
       try {
         const result = await api<{ projects: Project[] }>(
           workspace,
-          view.current ? "/api/canvases?view=archived" : "/api/canvases",
+          requestedView ? "/api/canvases?view=archived" : "/api/canvases",
         );
-        if (sequence === loadSequence.current) setProjects(result.projects);
+        if (sequence === loadSequence.current) {
+          loadedView.current = requestedView;
+          setProjects(result.projects);
+        }
       } catch (error) {
-        if (sequence === loadSequence.current)
-          setLoadError((error as Error).message);
+        if (sequence === loadSequence.current) {
+          const message = (error as Error).message;
+          if (background) setRefreshError(message);
+          else setLoadError(message);
+        }
       } finally {
         if (sequence === loadSequence.current) setLoading(false);
       }
@@ -331,37 +362,72 @@ export default function ProjectList({
     void load();
     const onPopState = () =>
       selectView(
-        new URLSearchParams(location.search).get("view") === "archived",
+        new URLSearchParams(location.search).getAll("view").at(-1) ===
+          "archived",
         false,
       );
     window.addEventListener("popstate", onPopState);
     return () => {
       loadSequence.current++;
+      loadedView.current = null;
       window.removeEventListener("popstate", onPopState);
     };
   }, [load, selectView]);
+  const focusSelectedTab = useCallback(() => {
+    tabs.current
+      ?.querySelector<HTMLButtonElement>('[aria-selected="true"]')
+      ?.focus({ preventScroll: true });
+  }, []);
+  const dismissNotice = () => {
+    setNotice(null);
+    focusSelectedTab();
+  };
   useEffect(() => {
-    if (notice && !archivePending && document.activeElement === document.body)
-      undoButton.current?.focus({ preventScroll: true });
-  }, [notice, archivePending]);
-  const changeArchive = async (p: Project, archived: boolean) => {
-    if (archiveLock.current) return;
+    if (notice && document.activeElement === document.body) {
+      if (undoButton.current) undoButton.current.focus({ preventScroll: true });
+      else focusSelectedTab();
+    }
+  }, [notice, focusSelectedTab]);
+  const changeArchive = async (
+    p: Project,
+    archived: boolean,
+    undoToken?: string,
+  ) => {
+    if (archiveLock.current || opening) return;
     archiveLock.current = true;
     setArchivePending(p.id);
     setError("");
     try {
-      await api(
+      const query = undoToken
+        ? `?expected_archive_change=${encodeURIComponent(undoToken)}`
+        : "";
+      const result = await api<{
+        archived_at: number | null;
+        undo_token: string | null;
+      }>(
         workspace,
-        `/api/canvases/${p.id}/archive`,
+        `/api/canvases/${p.id}/archive${query}`,
         undefined,
         archived ? "PUT" : "DELETE",
       );
-      if (view.current !== archived)
+      const next = result.archived_at !== null;
+      if (view.current !== next)
         setProjects((rows) => rows.filter((row) => row.id !== p.id));
-      setNotice({ project: p, archived });
+      setNotice({ project: p, archived: next, undoToken: result.undo_token });
       void load(false);
     } catch (error) {
       setError((error as Error).message);
+      if (
+        undoToken &&
+        error instanceof ApiError &&
+        [404, 409].includes(error.status)
+      ) {
+        setNotice((current) =>
+          current?.undoToken === undoToken ? null : current,
+        );
+        if (document.activeElement === undoButton.current) focusSelectedTab();
+        void load(false);
+      }
     } finally {
       archiveLock.current = false;
       setArchivePending(null);
@@ -467,6 +533,7 @@ export default function ProjectList({
           </div>
           <div
             className="canvas-list-tabs"
+            ref={tabs}
             role="tablist"
             aria-label="画布列表视图"
           >
@@ -507,6 +574,16 @@ export default function ProjectList({
             <p className="error" role="alert">
               {error}
             </p>
+          )}
+          {refreshError && (
+            <div className="canvas-list-refresh-error">
+              <p className="error" role="alert">
+                刷新画布列表失败。{refreshError}
+              </p>
+              <button className="secondary" onClick={() => void load(false)}>
+                重试刷新
+              </button>
+            </div>
           )}
           {loading ? (
             <div className="empty" role="status">
@@ -608,25 +685,35 @@ export default function ProjectList({
           )}
         </div>
       </div>
+      <span className="canvas-list-announcement" role="status">
+        {noticeText}
+      </span>
       {notice && (
-        <div className="canvas-toast canvas-list-toast">
-          <span role="status">
-            {notice.archived ? "已归档" : "已恢复"}「{notice.project.title}」
-          </span>
-          <button
-            type="button"
-            className="canvas-list-undo"
-            ref={undoButton}
-            disabled={archivePending !== null}
-            onClick={() => void changeArchive(notice.project, !notice.archived)}
-          >
-            撤销
-          </button>
-          <IconButton
-            icon={X}
-            label="关闭归档提示"
-            onClick={() => setNotice(null)}
-          />
+        <div
+          className="canvas-toast canvas-list-toast"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") dismissNotice();
+          }}
+        >
+          <span aria-hidden="true">{noticeText}</span>
+          {noticeUndo && (
+            <button
+              type="button"
+              className="canvas-list-undo"
+              ref={undoButton}
+              aria-disabled={archivePending !== null || !!opening}
+              onClick={() =>
+                void changeArchive(
+                  notice.project,
+                  !notice.archived,
+                  noticeUndo,
+                )
+              }
+            >
+              撤销
+            </button>
+          )}
+          <IconButton icon={X} label="关闭归档提示" onClick={dismissNotice} />
         </div>
       )}
       {deleting && (

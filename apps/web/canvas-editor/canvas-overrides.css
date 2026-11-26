@@ -12,6 +12,11 @@
   white-space: nowrap;
 }
 
+.project-menu button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 @media (max-width: 760px) {
   .canvas-archived-pill {
     padding: 0 5px;

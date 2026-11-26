@@ -58,6 +58,33 @@
   color: var(--cv-danger);
 }
 
+.canvas-card-actions button[aria-disabled="true"],
+.canvas-list-toast button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.canvas-list-refresh-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.canvas-list-refresh-error > p {
+  margin: 0;
+}
+
+.canvas-list-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .project-card[data-archived] .project-cover:not(:hover, :focus-visible) {
   opacity: 0.86;
 }
@@ -121,17 +148,8 @@
     min-height: 38px;
   }
 
-  .project-list .project-card-info {
-    align-items: flex-start;
-    flex-wrap: nowrap;
-  }
-
-  .project-list .project-card-info > a {
-    flex-basis: 0;
-  }
-
-  .project-card:nth-child(odd) .canvas-card-menu {
-    left: auto;
-    right: -20px;
+  .canvas-card-actions .canvas-card-menu {
+    left: 0;
+    right: auto;
   }
 }

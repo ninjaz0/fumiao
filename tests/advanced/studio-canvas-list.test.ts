@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Sql } from "../../packages/platform/src/db.js";
 import { canvasesFixture } from "../helpers/canvases.js";
+import { canvasRunsFixture } from "../helpers/canvas-runs.js";
 
 test("canvas archive is shared, reversible, and independent of document edits", async () => {
-  const f = await canvasesFixture();
+  const f = await canvasRunsFixture();
   try {
     const team = String(f.team.public_id);
     const project = await f.canvases.create(
@@ -14,6 +15,11 @@ test("canvas archive is shared, reversible, and independent of document edits", 
     );
     const other = await f.canvases.create(f.admin, { title: "Other" }, team);
     const personal = await f.canvases.create(f.admin, {});
+    const memberPersonal = await f.canvases.create(
+      f.member,
+      {},
+      String(f.memberSpace.public_id),
+    );
     const active = () => f.canvases.list(f.admin, team);
     const archived = () => f.canvases.list(f.member, team, true);
 
@@ -25,11 +31,17 @@ test("canvas archive is shared, reversible, and independent of document edits", 
     await assert.rejects(f.canvases.setArchived(f.member, personal.id, true), {
       status: 404,
     });
+    await assert.rejects(
+      f.canvases.setArchived(f.admin, memberPersonal.id, true),
+      {
+        status: 404,
+      },
+    );
 
     f.setTime(1800000010);
-    assert.deepEqual(await f.canvases.setArchived(f.member, project.id, true), {
-      archived_at: 1800000010,
-    });
+    const first = await f.canvases.setArchived(f.member, project.id, true);
+    assert.equal(first.archived_at, 1800000010);
+    assert.ok(first.undo_token);
     assert.deepEqual(
       (await active()).projects.map(({ id }) => id),
       [other.id],
@@ -44,14 +56,33 @@ test("canvas archive is shared, reversible, and independent of document edits", 
     assert.equal(opened.archived_at, 1800000010);
 
     f.setTime(1800000020);
-    assert.equal(
-      (await f.canvases.setArchived(f.admin, project.id, true)).archived_at,
-      1800000010,
-    );
+    assert.deepEqual(await f.canvases.setArchived(f.admin, project.id, true), {
+      archived_at: 1800000010,
+      undo_token: null,
+    });
+    const image = await f.asset("e".repeat(32), "ref", f.team, f.member);
     await f.canvases.save(f.member, project.id, {
       expected_revision: project.revision,
       title: "Revised storyboard",
-      document: { nodes: [{ id: "scene", type: "text", x: 0, y: 0 }] },
+      document: {
+        nodes: [
+          {
+            id: "scene",
+            type: "image",
+            x: 0,
+            y: 0,
+            media_id: image.public_id,
+            use_media: true,
+          },
+          {
+            id: "video",
+            type: "video",
+            x: 240,
+            y: 0,
+            prompt: "Storyboard shot",
+          },
+        ],
+      },
     });
     assert.equal(
       (await f.canvases.setArchived(f.admin, other.id, true)).archived_at,
@@ -61,20 +92,59 @@ test("canvas archive is shared, reversible, and independent of document edits", 
       (await archived()).projects.map(({ id }) => id),
       [other.id, project.id],
     );
+    const archivedProject = (await archived()).projects.find(
+      ({ id }) => id === project.id,
+    );
+    assert.deepEqual(archivedProject?.covers, [
+      { id: image.public_id, type: "image" },
+    ]);
+    const submitted = await f.runs.generate(
+      f.member,
+      project.id,
+      "video",
+      f.body(),
+    );
+    const [run] = (await f.runs.list(f.member, project.id)).runs;
+    assert.ok(run && "id" in run);
+    assert.equal(run.id, submitted.id);
     await assert.rejects(f.canvases.setArchived(f.member, other.id, false), {
       status: 403,
     });
-    assert.deepEqual(await f.canvases.setArchived(f.admin, project.id, false), {
-      archived_at: null,
-    });
+    const restore = await f.canvases.setArchived(f.admin, project.id, false);
+    assert.equal(restore.archived_at, null);
+    assert.ok(restore.undo_token);
+    f.setTime(1800000010);
+    const second = await f.canvases.setArchived(f.member, project.id, true);
+    assert.equal(second.archived_at, first.archived_at);
+    assert.ok(second.undo_token);
+    await assert.rejects(
+      f.canvases.setArchived(f.member, project.id, false, first.undo_token),
+      { status: 409 },
+    );
+    await assert.rejects(
+      f.canvases.setArchived(f.admin, project.id, true, restore.undo_token),
+      { status: 409 },
+    );
+    assert.deepEqual(
+      await f.canvases.setArchived(
+        f.member,
+        project.id,
+        false,
+        second.undo_token,
+      ),
+      {
+        archived_at: null,
+        undo_token: null,
+      },
+    );
     assert.deepEqual(
       await f.canvases.setArchived(f.member, project.id, false),
-      { archived_at: null },
+      { archived_at: null, undo_token: null },
     );
     const [restored] = (await active()).projects;
     assert.equal(restored.id, project.id);
     assert.equal(restored.title, "Revised storyboard");
-    assert.equal(restored.count, 1);
+    assert.equal(restored.count, 2);
     assert.equal(restored.revision, project.revision + 1);
     assert.deepEqual(
       (await archived()).projects.map(({ id }) => id),

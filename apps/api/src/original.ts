@@ -171,10 +171,12 @@ function failure(error: any, res: Response) {
 @Controller()
 class OriginalApi {
   @Get("api/canvases") listCanvases(@Req() req: AuthRequest) {
+    const view = new URL(req.originalUrl, "http://localhost")
+      .searchParams.getAll("view").at(-1);
     return this.canvases.list(
       req.actor,
       this.selected(req, req.headersDistinct["x-workspace-id"]?.[0]),
-      new URL(req.originalUrl, "http://localhost").searchParams.get("view") === "archived",
+      view === "archived",
     );
   }
   @Post("api/canvases")
@@ -192,11 +194,16 @@ class OriginalApi {
   }
   @Put("api/canvases/:key/archive")
   archiveCanvas(@Req() req: AuthRequest, @Param("key") key: string) {
-    return this.canvases.setArchived(req.actor, key, true);
+    return this.setCanvasArchived(req, key, true);
   }
   @Delete("api/canvases/:key/archive")
   restoreCanvas(@Req() req: AuthRequest, @Param("key") key: string) {
-    return this.canvases.setArchived(req.actor, key, false);
+    return this.setCanvasArchived(req, key, false);
+  }
+  private setCanvasArchived(req: AuthRequest, key: string, archived: boolean) {
+    const expectedChange = new URL(req.originalUrl, "http://localhost")
+      .searchParams.getAll("expected_archive_change").at(-1);
+    return this.canvases.setArchived(req.actor, key, archived, expectedChange);
   }
   @Put("api/canvases/:key/document")
   saveCanvas(

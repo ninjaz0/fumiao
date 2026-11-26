@@ -19,7 +19,7 @@ const spaceParams = ["workspace", "studio_ui"] as const;
 
 function canvasParams(path: string, search: URLSearchParams) {
   const params = copyParams(search, spaceParams);
-  if (path === "/canvas" && search.get("view") === "archived")
+  if (path === "/canvas" && search.getAll("view").at(-1) === "archived")
     params.set("view", "archived");
   return params;
 }

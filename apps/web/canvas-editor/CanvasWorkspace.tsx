@@ -1052,10 +1052,11 @@ export function CanvasWorkspace({
   };
 
   const notify = useCallback((text: string) => setToast(text), []);
-  const closeProjectMenu = () => {
-    projectMenuTrigger.current?.querySelector("button")?.focus();
-    setMenu(null);
-  };
+  const closeProjectMenu = useCallback(() => {
+    if (projectMenu.current?.contains(document.activeElement))
+      projectMenuTrigger.current?.querySelector("button")?.focus();
+    setMenu((current) => current === "project" ? null : current);
+  }, []);
   useEffect(() => {
     if (menu === "project") projectMenu.current?.querySelector("button")?.focus();
   }, [menu]);
@@ -1981,6 +1982,13 @@ export function CanvasWorkspace({
   };
   useEffect(() => {
     const keydown = (e: KeyboardEvent) => {
+      if (menu === "project") {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeProjectMenu();
+        }
+        return;
+      }
       if (
         (e.target as HTMLElement | null)?.closest?.(
           'input,textarea,[contenteditable="true"],dialog',
@@ -2035,7 +2043,7 @@ export function CanvasWorkspace({
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [selected, selectedEdges, runs, studio.jobs, windowSize.w]);
+  }, [selected, selectedEdges, runs, studio.jobs, windowSize.w, menu, closeProjectMenu]);
   useEffect(() => {
     const click = (e: PointerEvent) => {
       if (!(e.target as HTMLElement).closest(".cv-menu,.menu-trigger")) {
@@ -3172,7 +3180,7 @@ export function CanvasWorkspace({
             <button
               type="button"
               aria-busy={archivePending}
-              disabled={archivePending}
+              aria-disabled={archivePending}
               onClick={() => void changeArchive()}
             >
               {archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}

@@ -35,7 +35,7 @@ import {
 import { canvasTemplates } from "./canvas-templates.js";
 export const canvasConflict =
   "画布已被其他成员修改。你的修改已保留，请重新载入或下载本地副本。";
-const selectProject = `SELECT d.*,c.title AS original_title,c.document,c.created,c.updated,c.last_editor,c.archived_at,
+const selectProject = `SELECT d.*,c.title AS original_title,c.document,c.created,c.updated,c.last_editor,c.archived_at,c.archive_change_id,
   w.public_id AS workspace_number,u.public_id AS owner_number,e.public_id AS editor_number
   FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
   LEFT JOIN canvas_documents c ON c.project_id=d.id LEFT JOIN users e ON e.id=c.last_editor`;
@@ -730,7 +730,12 @@ export class OriginalCanvases {
       return this.publicProject(row, user);
     });
   }
-  async setArchived(user: Actor, key: string, archived: boolean) {
+  async setArchived(
+    user: Actor,
+    key: string,
+    archived: boolean,
+    expectedChange?: string,
+  ) {
     return this.p.db.transaction(async (sql) => {
       const row = await this.project(sql, user, key, true);
       requireValue(
@@ -738,14 +743,25 @@ export class OriginalCanvases {
         403,
         "只有创建者或管理员可以归档或恢复画布",
       );
+      requireValue(
+        expectedChange === undefined || expectedChange === row.archive_change_id,
+        409,
+        "归档状态已发生变化，无法撤销此操作",
+      );
       const previous = row.archived_at === null ? null : Number(row.archived_at);
-      const next = archived ? (previous ?? Math.floor(this.clock())) : null;
-      if (next !== previous)
-        await sql.query(
-          "UPDATE canvas_documents SET archived_at=$2 WHERE project_id=$1",
-          [row.id, next],
-        );
-      return { archived_at: next };
+      if (archived === (previous !== null))
+        return { archived_at: previous, undo_token: null };
+      const next = archived ? Math.floor(this.clock()) : null;
+      // Both directions rotate the change ID, including restorations to NULL.
+      const changeId = randomUUID();
+      await sql.query(
+        "UPDATE canvas_documents SET archived_at=$2, archive_change_id=$3 WHERE project_id=$1",
+        [row.id, next, changeId],
+      );
+      return {
+        archived_at: next,
+        undo_token: expectedChange === undefined ? changeId : null,
+      };
     });
   }
 
