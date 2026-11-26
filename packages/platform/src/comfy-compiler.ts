@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import {
   applyMicroAppInputs,
@@ -18,48 +19,22 @@ import type { Actor, Platform } from "./platform.js";
 import { requireValue } from "./security.js";
 import { StudioPackages } from "./studio-packages.js";
 
-const FALLBACK_WORKER_PY = `"""Fumiao ComfyUI Pull Worker (F013 VRAM unload protection)."""
-import hashlib, json, os, secrets, sys, time
-from pathlib import Path
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
-
-class ComfyWorkerController:
-    def __init__(self, site, comfy, token):
-        self.site, self.comfy, self.token = site.rstrip("/"), comfy.rstrip("/"), token
-        self.loaded_model_key = None
-    def call(self, url, payload=None, *, ticket="", result=None, prompt_id=""):
-        headers = {"Authorization": "Bearer " + self.token} if url.startswith(self.site + "/") else {}
-        if ticket: headers["X-Job-Ticket"] = ticket
-        if result is None:
-            body = None if payload is None else json.dumps(payload).encode()
-            headers["Content-Type"] = "application/json"
-            method = "GET" if body is None else "POST"
-        else:
-            body, method = result, "PUT"
-            headers.update({"X-Sha256": hashlib.sha256(body).hexdigest(), "X-Job-Timing": json.dumps({"prompt_id": prompt_id})})
-        with urlopen(Request(url, data=body, headers=headers, method=method), timeout=45) as resp:
-            raw = resp.read()
-            return json.loads(raw.decode("utf-8")) if raw else {}
-    def maybe_unload_vram(self, target_key):
-        if target_key and self.loaded_model_key is not None and self.loaded_model_key != target_key:
-            self.call(self.comfy + "/free", {"unload_models": True, "free_memory": True})
-`;
-
 function loadWorkerSource(): Buffer {
+  const baseDir =
+    import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    resolve(process.cwd(), "plugins/example-node-pool/client/worker.py"),
-    resolve(
-      import.meta.dirname ?? process.cwd(),
-      "../../../plugins/example-node-pool/client/worker.py",
-    ),
+    resolve(baseDir, "comfy-worker/worker.py"),
+    resolve(baseDir, "../src/comfy-worker/worker.py"),
+    resolve(baseDir, "../../src/comfy-worker/worker.py"),
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
       return readFileSync(candidate);
     }
   }
-  return Buffer.from(FALLBACK_WORKER_PY, "utf8");
+  throw new Error(
+    "未找到平台内置 ComfyUI Worker 源码 (comfy-worker/worker.py)",
+  );
 }
 
 function buildSingleFileUstarTgz(filename: string, data: Buffer): Buffer {

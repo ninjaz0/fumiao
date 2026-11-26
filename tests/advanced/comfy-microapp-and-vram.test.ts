@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { gunzipSync } from "node:zlib";
 import { inferComfyWorkflowSlots } from "@fumiao/plugin-sdk/comfy-microapp.js";
-import { ComfyMicroAppCompiler } from "@fumiao/platform/comfy-compiler.js";
+import {
+  buildComfyNodeClient,
+  ComfyMicroAppCompiler,
+} from "@fumiao/platform/comfy-compiler.js";
 import { nodePoolProgram } from "@fumiao/platform/node-pool-policy.js";
 import { canvasRunsFixture } from "../helpers/canvas-runs.js";
 
@@ -393,7 +400,10 @@ test("F013: ComfyWorkerController invokes POST /free ONLY on cross-workflow mode
   t.after(() => server.close());
   const addr = server.address() as { port: number };
   const baseUrl = `http://127.0.0.1:${addr.port}`;
-  const workerDir = resolve(process.cwd(), "plugins/example-node-pool/client");
+  const workerDir = resolve(
+    process.cwd(),
+    "packages/platform/src/comfy-worker",
+  );
 
   const pyCode = `
 import json, sys, tempfile
@@ -446,4 +456,74 @@ with tempfile.TemporaryDirectory() as td:
     .map((e) => (e.body as { capabilities?: { loaded_model_key?: string } })?.capabilities?.loaded_model_key);
   assert.ok(heartbeats.includes("flux-dev-fp8"));
   assert.ok(heartbeats.includes("wan21-i2v-14b"));
+});
+
+test("Platform embeds complete ComfyUI worker.py without example-node-pool dependency and strips example-* plugins in production Dockerfile", () => {
+  const repoRoot = process.cwd();
+  const builtinWorkerPath = resolve(
+    repoRoot,
+    "packages/platform/src/comfy-worker/worker.py",
+  );
+  assert.equal(
+    existsSync(builtinWorkerPath),
+    true,
+    "packages/platform/src/comfy-worker/worker.py must exist",
+  );
+  const workerSource = readFileSync(builtinWorkerPath, "utf8");
+  assert.match(workerSource, /class ComfyWorkerController:/);
+  assert.match(workerSource, /def poll_once\(self\)/);
+  assert.match(workerSource, /def maybe_unload_vram\(/);
+  assert.match(workerSource, /if __name__ == "__main__":/);
+
+  const compilerSource = readFileSync(
+    resolve(repoRoot, "packages/platform/src/comfy-compiler.ts"),
+    "utf8",
+  );
+  assert.equal(
+    compilerSource.includes("example-node-pool"),
+    false,
+    "comfy-compiler.ts must not reference plugins/example-node-pool",
+  );
+  assert.equal(
+    compilerSource.includes("FALLBACK_WORKER_PY"),
+    false,
+    "comfy-compiler.ts must not contain broken FALLBACK_WORKER_PY stub",
+  );
+
+  // Build client from a cwd without plugins/example-node-pool to verify standalone resolution
+  let client: ReturnType<typeof buildComfyNodeClient>;
+  try {
+    process.chdir(tmpdir());
+    client = buildComfyNodeClient("comfy-wan-cinema-v1");
+  } finally {
+    process.chdir(repoRoot);
+  }
+
+  const tgzBytes = Buffer.from(client["agent.tgz"], "base64");
+  const digestText = Buffer.from(client["agent.tgz.sha256"], "base64").toString(
+    "utf8",
+  );
+  const expectedSha = createHash("sha256").update(tgzBytes).digest("hex");
+  assert.equal(digestText, `${expectedSha}  agent.tgz\n`);
+
+  const tarBytes = gunzipSync(tgzBytes);
+  const headerName = tarBytes.subarray(0, 100).toString("utf8").replace(/\0+$/, "");
+  assert.equal(headerName, "worker.py");
+  const sizeOctal = tarBytes
+    .subarray(124, 136)
+    .toString("ascii")
+    .replace(/\0+$/, "")
+    .trim();
+  const payloadLen = Number.parseInt(sizeOctal, 8);
+  const extractedWorker = tarBytes.subarray(512, 512 + payloadLen).toString("utf8");
+  assert.equal(extractedWorker, workerSource);
+  assert.match(extractedWorker, /def poll_once\(self\)/);
+  assert.match(extractedWorker, /if __name__ == "__main__":/);
+
+  const dockerfile = readFileSync(resolve(repoRoot, "Dockerfile"), "utf8");
+  const runtimeSection = dockerfile.split("FROM dependencies AS runtime")[1] ?? "";
+  assert.match(
+    runtimeSection,
+    /COPY --from=build \/app\/plugins plugins\s*\nRUN rm -rf \/app\/plugins\/example-\*/,
+  );
 });

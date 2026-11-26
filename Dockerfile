@@ -46,6 +46,7 @@ COPY tsconfig.json ./
 COPY --from=build /app/apps apps
 COPY --from=build /app/packages packages
 COPY --from=build /app/plugins plugins
+RUN rm -rf /app/plugins/example-*
 COPY --from=build /app/migrations migrations
 COPY --from=build /app/baseline baseline
 COPY scripts/migrate.ts scripts/bootstrap.ts scripts/import-legacy.ts scripts/dev-studio.ts scripts/reconcile-job.ts scripts/

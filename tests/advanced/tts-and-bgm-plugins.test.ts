@@ -8,9 +8,9 @@ import test from "node:test";
 import { promisify } from "node:util";
 import type { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
 import { evaluateFormConstraints } from "@fumiao/plugin-sdk/model-form.js";
-import { manifestSchema } from "@fumiao/plugin-sdk/index.js";
+import { manifestSchema, ProviderError } from "@fumiao/plugin-sdk/index.js";
 import { Executor } from "@fumiao/platform/executor.js";
-import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { PluginRegistry, validator } from "@fumiao/platform/plugins.js";
 import { inspectProviderOutput } from "@fumiao/platform/provider-output.js";
 import { sandboxRequest } from "@fumiao/platform/sandbox-request.js";
 import { StudioPackages, parsePackageFile } from "@fumiao/platform/studio-packages.js";
@@ -19,7 +19,11 @@ import {
   computeSecMsGec,
   type EdgeWebSocketFactory,
 } from "@fumiao/platform/tts/edge-tts.js";
-import { createEdgeTtsPlugin } from "@fumiao/platform/tts/edge-plugin.js";
+import {
+  createEdgeTtsPlugin,
+  edgeTtsForm,
+  edgeTtsPlugin,
+} from "@fumiao/platform/tts/edge-plugin.js";
 import { OriginalBudgets } from "@fumiao/original-api/budgets-api.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 import { canvasRunsFixture } from "../helpers/canvas-runs.js";
@@ -128,6 +132,92 @@ test("F029 built-in Edge TTS generates Sec-MS-GEC token, safe SSML and valid MP3
   );
   assert.equal(inspected.mime, "audio/mpeg");
   assert.ok(Number(inspected.duration) > 0.2);
+});
+
+test("Edge TTS plugin removes dead instruction field from form & inputSchema, tolerates historic drafts in prepare(), and reports actionable failure message", async () => {
+  assert.equal("instruction" in edgeTtsForm.fields, false);
+  assert.deepEqual(Object.keys(edgeTtsForm.fields), ["voice", "rate", "pitch"]);
+
+  const inputSchema = edgeTtsPlugin.manifest.models[0].inputSchema as {
+    properties: Record<string, unknown>;
+  };
+  assert.equal("instruction" in inputSchema.properties, false);
+  assert.deepEqual(Object.keys(inputSchema.properties), [
+    "voice",
+    "rate",
+    "pitch",
+  ]);
+
+  const prepared = await edgeTtsPlugin.originalSubmission!.prepare!(
+    {
+      uid: "historic-draft-1",
+      kind: "audio",
+      model: "edge-tts",
+      prompt: "历史草稿兼容测试",
+      instruction: "旧版遗留备注",
+      params: {
+        voice: "zh-CN-YunxiNeural",
+        rate: "+15%",
+        pitch: "-5Hz",
+        instruction: "旧版参数备注",
+      },
+      refs: [],
+      asset_packs: [],
+      price_revision: 1,
+    } as any,
+    {
+      references: [],
+      owner: { id: 1, site: "http://localhost:3000" },
+      admit: async () => {},
+      capacity: async () => {},
+    },
+  );
+  assert.deepEqual(prepared.params, {
+    voice: "zh-CN-YunxiNeural",
+    rate: "+15%",
+    pitch: "-5Hz",
+  });
+  assert.equal(
+    validator.validate(
+      edgeTtsPlugin.manifest.models[0].inputSchema,
+      prepared.params,
+    ),
+    true,
+  );
+
+  const failingPlugin = createEdgeTtsPlugin(() => {
+    throw new Error("握手被拒绝");
+  });
+  await assert.rejects(
+    () =>
+      failingPlugin.submit({
+        jobId: "edge-fail-1",
+        idempotencyKey: "edge-fail-idem-1",
+        model: "edge-tts",
+        kind: "audio",
+        config: {},
+        signal: AbortSignal.timeout(5_000),
+        input: {
+          prompt: "失败提示校验",
+          params: {
+            voice: "zh-CN-XiaoxiaoNeural",
+            rate: "+0%",
+            pitch: "+0Hz",
+          },
+          references: [],
+        },
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof ProviderError);
+      assert.equal(err.certainty, "rejected");
+      assert.equal(
+        err.message,
+        "Edge TTS 连接失败（握手被拒绝）。请稍后重试，或切换其他可用语音模型（管理员可在「设置 → 插件」导入商业语音插件）",
+      );
+      assert.equal(err.message.includes("配置自定义 Edge 语音端点"), false);
+      return true;
+    },
+  );
 });
 
 test("F029 tts-commercial package installs cleanly and handles binary /v1/audio/speech responses", async () => {
