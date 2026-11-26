@@ -1451,9 +1451,10 @@ test("Muse 2.1.0 deducts external image occupancy from 8-image cap while externa
             id,
             status: "completed",
             url: "/v1/media/a.png",
-            created_at: now,
-            started_at: now,
-            generating_at: now,
+            created_at: now - 25,
+            started_at: now - 20,
+            generating_at: now - 20,
+            finished_at: now,
           }),
         );
       return void res.end(
@@ -1640,7 +1641,7 @@ test("Muse 2.1.0 deducts external image occupancy from 8-image cap while externa
       runtime_id: "",
       cold: null,
     });
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 20; i++) {
       await f.db.query(
         "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse',$2,$3,'image','muse-image',$4,$5,$5,$6,'done','done')",
         [
@@ -2077,10 +2078,25 @@ test("Muse 2.1.0 deducts external image occupancy from 8-image cap while externa
       actor,
       ws.id,
     );
-    assert.ok(
-      extImgForecast.jobs[bImages[7].id].eta.median > 0,
-      "8th local image must wait when 1 external image already occupies the 8th image slot",
-    );
+    if (!(extImgForecast.jobs[bImages[7].id].eta.median > 0)) {
+      const bConnSnapshot = await one(
+        f.db,
+        "SELECT revision,queue_health_revision,queue_health FROM connections WHERE id=$1",
+        [connId],
+      );
+      const runningDiag = bImages.slice(0, 7).map((img) => ({
+        id: img.id,
+        forecast: extImgForecast.jobs[img.id],
+      }));
+      assert.fail(
+        `8th local image must wait when 1 external image already occupies the 8th image slot: ` +
+          JSON.stringify({
+            connection: bConnSnapshot,
+            running7: runningDiag,
+            eighthEta: extImgForecast.jobs[bImages[7].id]?.eta,
+          }),
+      );
+    }
     assert.equal(extImgForecast.jobs[bVideo.id].eta.median, 0);
 
     await executor.execute(bImages[7].id);
@@ -2442,7 +2458,7 @@ test("Muse 2.1.0 shares active occupancy and serializes concurrent claims across
       runtime_id: "",
       cold: null,
     });
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 20; i++) {
       await f.db.query(
         "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse',$2,$3,'image','muse-image',$4,$5,$5,$6,'done','done')",
         [
