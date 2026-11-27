@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, BookOpen, Crosshair, ListVideo, Plus, X } from "lucide-react";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
-import { canvasTailSourceId, directorAdoptionBasis, directorAudioEvidenceMismatch, directorAudioTargets, directorBasis, directorShotIds, directorTargetKey, directorVideoSelection, episodeMaxSeconds, episodeMaxShots, type DirectorAudioInputs, type DirectorShotInputs, type DirectorTarget, type DirectorVideoSelection } from "@fumiao/web-compat/director.js";
+import { canvasTailSourceId, directorAdoptionBasis, directorAudioEvidenceMismatch, directorAudioTargets, directorBasis, directorMissingApproval, directorShotIds, directorTargetKey, directorVideoSelection, episodeMaxSeconds, episodeMaxShots, type DirectorAudioInputs, type DirectorShotInputs, type DirectorTarget, type DirectorVideoSelection } from "@fumiao/web-compat/director.js";
 import { Composition } from "./Composition";
 import { VideoVersions } from "./VideoVersions";
 import { directorGenerationTargets } from "./director-batch";
@@ -38,7 +38,7 @@ function episodeShotAudio(node: CanvasNode, runs: Job[], inputs: DirectorShotInp
     if (!readyRun(voice) || voice.kind !== "audio") return { seconds, issue: `${label}尚未就绪` };
     const text = line ? line.text : node.narration_text;
     if (line?.audio_stale?.includes(voice.id) || pythonStrip(voice.prompt) !== pythonStrip(text ?? "") ||
-      directorAudioEvidenceMismatch(voice.inputs ?? {}, inputs.audio_inputs[directorTargetKey(target)])) {
+      directorAudioEvidenceMismatch(voice.inputs ?? {}, inputs.audio_inputs[directorTargetKey(target)], voice)) {
       return { seconds, issue: `${label}已变更，请重新生成语音` };
     }
     seconds += voice.actual?.duration || 0;
@@ -274,7 +274,8 @@ export function DirectorDesk({
   const storyConfirmed = Boolean(inputs?.story_basis && inputs.story_basis === savedState?.story_basis);
   const materialConfirmed = Boolean(inputs?.material_basis && inputs.material_basis === savedState?.material_basis);
   const adopted = node && adoptedVideo(node, runs);
-  const adoptionConfirmed = Boolean(inspected?.adoption && inspected.adoption === savedState?.adoption_basis);
+  const missingApproval = inputs && directorMissingApproval(inputs, savedState);
+  const adoptionConfirmed = Boolean(!missingApproval && inspected?.adoption && inspected.adoption === savedState?.adoption_basis);
   const candidates = node ? runs.filter((run) => run.canvas_node === node.id && run.kind === "video" && readyRun(run)) : [];
   const adopt = (selection: DirectorVideoSelection, continuing = false) => {
     if (node && inputs?.adoption_input_basis)
@@ -294,7 +295,11 @@ export function DirectorDesk({
       if (!video.media || !saved?.adoption_basis) issue = "请明确采用视频";
       else if (input?.error) issue = input.error;
       else if (!input?.value) issue = "正在检查镜头依据";
-      else if (!input.adoption || input.adoption !== saved.adoption_basis) issue = "请重新采用视频或确认沿用已采用视频";
+      else {
+        const missing = directorMissingApproval(input.value, saved);
+        if (missing) issue = `请先确认${missing}`;
+        else if (!input.adoption || input.adoption !== saved.adoption_basis) issue = "请重新采用视频或确认沿用已采用视频";
+      }
       const audio = input?.value && episodeShotAudio(shot, runs, input.value);
       if (!episodeIssue && (issue || audio?.issue)) episodeIssue = `镜头 ${index + 1} · ${issue || audio?.issue}`;
       const duration = videoSeconds(video.job) || assets.find((asset) => asset.id === video.media)?.seconds || shot.params.seconds;
@@ -543,8 +548,9 @@ export function DirectorDesk({
                       {adopted.job && ` · #${adopted.job.id}`}</p>
                     <video src={`/media/${adopted.media}`} controls playsInline preload="metadata" />
                     {!adoptionConfirmed && adopted.pin && <button type="button" className="secondary"
-                      disabled={pending || !inputs?.adoption_input_basis}
+                      disabled={pending || !inputs?.adoption_input_basis || Boolean(missingApproval)}
                       onClick={() => adopt(adopted.pin!, true)}>确认沿用已采用视频</button>}
+                    {missingApproval && <p className="fm-director-note">先确认{missingApproval}，再选择是否沿用。</p>}
                   </div>}
                   {!adopted?.media && !candidates.length && <p>完成的视频候选会显示在这里。</p>}
                   {candidates.length === 1 && candidates[0].id !== adopted?.job?.id && <div className="fm-director-approved-video">

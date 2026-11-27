@@ -43,6 +43,7 @@ import { resolveDialogueInput } from "./dialogue.js";
 import {
   canvasNarrationInput,
   canvasVisualPayload,
+  directorRenderedVoice,
   resolveCanvasVisualBase,
   resolveDirectorInput,
 } from "./director-inputs.js";
@@ -90,7 +91,9 @@ export class OriginalCanvasRuns {
           const p = await this.canvases.project(sql, user, project);
           const links = (
             await sql.query(
-              `SELECT l.id::text,l.node,l.inputs,j.public_id AS job FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
+              `SELECT l.id::text,l.node,l.inputs,j.public_id AS job,
+                j.original_view->'audio_settings' AS audio_settings, j.input->'params' AS prepared_audio
+                FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
           WHERE l.project_id=$1 AND j.deleted_at IS NULL ORDER BY l.id DESC`,
               [p.id],
             )
@@ -152,9 +155,11 @@ export class OriginalCanvasRuns {
             runs: links.map((l) => {
               const j = byId.get(Number(l.job));
               requireValue(j, 503, "画布任务尚未完成原状态迁移");
+              const voice = j.kind === "audio" ? directorRenderedVoice(l.audio_settings, l.prepared_audio) : {};
               return {
                 ...Object.fromEntries(fields.map((key) => [key, j[key]])),
                 ...(j.result_mime ? { result_mime: j.result_mime } : {}),
+                ...(Object.keys(voice).length ? { audio_settings: voice } : {}),
                 link_id: parseCanvasRunJson(l.id),
                 canvas_node: l.node,
                 inputs: parseCanvasRunJson(canvasText(l.inputs)),

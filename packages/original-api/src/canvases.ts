@@ -58,7 +58,7 @@ export async function canvasNodeMedia(
     sql,
     `${selectNodeJob}
     WHERE l.project_id=$1 AND l.node=$2 ${node.active_job ? "AND j.public_id=$3" : "ORDER BY l.id DESC LIMIT 1"}
-    ${adoptedOnly ? "AND j.kind='video' FOR SHARE OF j" : ""}
+    ${adoptedOnly ? "AND j.kind='video' AND j.workspace_id=(SELECT workspace_id FROM documents WHERE id=$1) FOR SHARE OF j" : ""}
     ${fixedInput && node.active_job ? `AND j.state='completed'
       AND j.workspace_id=(SELECT workspace_id FROM documents WHERE id=$1)
       ${lock ? "FOR SHARE OF j" : ""}` : ""}`,

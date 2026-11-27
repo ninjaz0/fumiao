@@ -149,6 +149,7 @@ export type Project = Draft & {
   covers?: { id: string; type: string }[];
 };
 export type Job = {
+  audio_settings?: import("@fumiao/web-compat/director.js").DirectorVoiceSettings;
   model_label?: string;
   batch?:{uid:string;index:number;count:number}|null;
   inputs?: {director_basis?:string;instruction?:string;model?:string;voice_id?:string|null;pack_id?:string|null;prompt?:string;refs?:string[];params?:Params;asset_packs?:{id:string;revision:number}[]};

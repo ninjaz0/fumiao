@@ -82,21 +82,58 @@ export function directorAdoptionBasis(inputs: string, selection: DirectorVideoSe
   return directorBasis({ inputs, selection });
 }
 
+export function directorMissingApproval(
+  inputs: Pick<DirectorShotInputs, "story_basis" | "material_basis">,
+  saved?: DirectorShotState,
+) {
+  if (inputs.story_basis && inputs.story_basis !== saved?.story_basis) return "分镜";
+  if (inputs.material_basis && inputs.material_basis !== saved?.material_basis) return "素材";
+  return null;
+}
+
+export type DirectorVoiceSettings = Partial<Record<"voice" | "rate" | "pitch" | "instruction", string>>;
+
 export function directorAudioEvidenceMismatch(
   recorded: Record<string, unknown>,
   current?: DirectorAudioInputs[string],
+  rendered?: { model?: string; audio_settings?: DirectorVoiceSettings },
 ) {
   if (typeof recorded.director_basis === "string")
     return recorded.director_basis !== current?.basis;
-  const fields = ["model", "pack_id", "voice_id", "instruction"] as const;
-  if (!current) return fields.some((key) => typeof recorded[key] === "string" && recorded[key].trim());
   const normalize = (value: unknown) => typeof value === "string" ? value.trim() || null : value;
+  const edge = rendered?.model === "edge-tts" || recorded.model === "edge-tts";
+  const settings = rendered?.audio_settings;
+  const evidence = {
+    model: rendered?.model === "edge-tts" ? rendered.model : recorded.model,
+    pack_id: recorded.pack_id,
+    instruction: settings?.instruction ?? recorded.instruction,
+    voice_id: recorded.voice_id,
+  };
+  const fields = ["model", "pack_id", "instruction", "voice_id"] as const;
+  if (!current) return fields.some((key) => Boolean(normalize(evidence[key]))) ||
+    Boolean(settings?.voice || settings?.rate || settings?.pitch);
   for (const key of fields) {
-    if (recorded[key] === undefined) continue;
-    if (normalize(recorded[key]) !== normalize(current[key])) return true;
+    if (evidence[key] === undefined || (key === "voice_id" && edge)) continue;
+    if (normalize(evidence[key]) !== normalize(current[key])) return true;
   }
-  if (recorded.params && typeof recorded.params === "object") {
-    const params = recorded.params as Record<string, unknown>;
+  const params = recorded.params && typeof recorded.params === "object"
+    ? recorded.params as Record<string, unknown> : undefined;
+  if (edge && current.model === "edge-tts") {
+    const old = {
+      voice: settings?.voice ?? params?.voice ?? evidence.voice_id,
+      rate: settings?.rate ?? params?.rate,
+      pitch: settings?.pitch ?? params?.pitch,
+    };
+    // The current Edge parameters have been resolved with the same defaults
+    // that its adapter uses on admission. An omitted historical field is unknown.
+    const canonical = (value: unknown) => typeof value === "string"
+      ? value.trim().replace(/^([+-]?\d+)(%|Hz)$/, (_, number, unit) => String(Number(number)) + unit)
+      : value;
+    return (["voice", "rate", "pitch"] as const).some((key) =>
+      typeof old[key] === "string" && old[key] &&
+      canonical(old[key]) !== canonical(current.params?.[key]));
+  }
+  if (params) {
     for (const key of ["voice", "rate", "pitch"])
       if (params[key] !== undefined && current.params?.[key] !== undefined && params[key] !== current.params[key]) return true;
   }

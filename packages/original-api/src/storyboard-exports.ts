@@ -20,10 +20,12 @@ import { requireValue } from "@fumiao/platform/security.js";
 import { capacity, EXPORT_RESERVE } from "@fumiao/platform/capacity.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import {
+  canvasTailSourceId,
   directorAdoptionBasis,
   directorAudioEvidenceMismatch,
   directorAudioTargets,
   directorBasis,
+  directorMissingApproval,
   directorShotIds,
   directorTargetKey,
   directorVideoSelection,
@@ -40,9 +42,9 @@ import {
 import { webVtt } from "@fumiao/platform/composition/subtitles.js";
 import { OriginalCanvases, canvasConflict } from "./canvases.js";
 import { directorLinkNode, validateDirectorScriptRevision } from "./batch-precheck.js";
-import { inspectDirectorShotInputs } from "./director-inputs.js";
+import { directorRenderedVoice, inspectDirectorShotInputs } from "./director-inputs.js";
 import { parseBody } from "./validation.js";
-import { parseCanvasDocument, storyboardExportFields } from "./canvas-draft.js";
+import { parseCanvasDocument, storyboardExportFields, type CanvasDocument } from "./canvas-draft.js";
 import {
   canvasBytes,
   canvasText,
@@ -61,6 +63,46 @@ const mimeExt: Record<string, string> = {
 
 const cleanupBatchSize = 16;
 type ExportScope = "canvas" | "episode";
+
+async function lockEpisodeJobs(sql: Sql, workspace: string, document: CanvasDocument, shotIds: string[]) {
+  const shots = new Set(shotIds);
+  const mediaNodes = new Set(shotIds);
+  for (const { source, target } of document.edges) {
+    if (shots.has(target)) mediaNodes.add(source);
+  }
+  const jobs = new Set<number>();
+  const add = (id?: number | null) => {
+    if (id != null) jobs.add(id);
+  };
+  for (const node of document.nodes) {
+    if (!shots.has(node.id)) continue;
+    add(node.params.flow_source_job);
+    if (node.tail_inherited) {
+      const predecessor = canvasTailSourceId(document, node.id);
+      if (predecessor) mediaNodes.add(predecessor);
+    }
+    for (const target of directorAudioTargets(node)) {
+      if (target.stage === "dialogue") {
+        const line = node.dialogue_lines?.find(({ id }) => id === target.line_id);
+        add(line?.audio_job);
+        add(line?.audio_pending);
+      } else {
+        add(node.narration_job);
+        add(node.narration_pending);
+      }
+    }
+  }
+  for (const node of document.nodes) {
+    if (mediaNodes.has(node.id) && !node.use_media) add(node.active_job);
+  }
+  // Job deletion and settlement take the job before its assets. Lock jobs
+  // across all shots before any adopted clip or reference can lock an asset.
+  if (jobs.size) await sql.query(
+    "SELECT id FROM jobs WHERE workspace_id=$1 AND public_id=ANY($2::bigint[]) ORDER BY id FOR SHARE",
+    [workspace, [...jobs]],
+  );
+}
+
 type ExportObject = {
   export_id: string;
   object_key: string;
@@ -273,6 +315,7 @@ export class OriginalStoryboardExports {
       );
       const shots: Shot[] = [],
         assets = new Map<string, any>();
+      if (isEpisode) await lockEpisodeJobs(sql, project.workspace_id, doc, shotIds);
       const models = isEpisode ? await CanvasSubmissionModels.read(sql, {
         strict: false,
         workspaceId: project.workspace_id,
@@ -362,6 +405,8 @@ export class OriginalStoryboardExports {
             await directorAdoptionBasis(inputs.adoption_input_basis, selection);
           requireValue(current && saved?.adoption_basis === current, 409,
             `镜头 ${i + 1} 的视频待确认，请采用视频或确认沿用已采用视频`);
+          const missing = inputs && directorMissingApproval(inputs, saved);
+          requireValue(!missing, 409, `镜头 ${i + 1} 请先确认${missing}`);
         };
         const requireCurrentVoice = async (job: any, target: DirectorTarget, label: string) => {
           if (!inputs) return;
@@ -371,11 +416,13 @@ export class OriginalStoryboardExports {
             [project.id, job.id, directorLinkNode(target)],
           );
           const recorded = link ? canvasDocumentJson(link.inputs) : {};
+          const rendered = {
+            model: job.provider_model,
+            audio_settings: directorRenderedVoice(job.original_view?.audio_settings, job.input?.params),
+          };
           requireValue(!directorAudioEvidenceMismatch({
-            model: job.original_view?.model,
-            instruction: job.original_view?.audio_settings?.instruction,
-            ...recorded,
-          }, inputs.audio_inputs[directorTargetKey(target)]), 409,
+            model: job.original_view?.model, ...recorded,
+          }, inputs.audio_inputs[directorTargetKey(target)], rendered), 409,
           `镜头 ${i + 1} 的${label}声线已变更，请重新生成语音`);
         };
         if (isEpisode && n.audio_strategy === "keep_original") {
@@ -410,8 +457,9 @@ export class OriginalStoryboardExports {
             );
             const job = await one(
               sql,
-              "SELECT * FROM jobs WHERE public_id=$1 AND kind='audio' AND deleted_at IS NULL FOR SHARE",
-              [line.audio_job],
+              `SELECT * FROM jobs WHERE public_id=$1 AND kind='audio' AND deleted_at IS NULL
+               AND ($2::uuid IS NULL OR workspace_id=$2) FOR SHARE`,
+              [line.audio_job, isEpisode ? project.workspace_id : null],
             );
             const voice = job && (await this.canvases.library.result(sql, job));
             requireValue(
@@ -448,8 +496,9 @@ export class OriginalStoryboardExports {
           if (n.narration_job) {
             const job = await one(
               sql,
-              "SELECT * FROM jobs WHERE public_id=$1 AND kind='audio' AND deleted_at IS NULL FOR SHARE",
-              [n.narration_job],
+              `SELECT * FROM jobs WHERE public_id=$1 AND kind='audio' AND deleted_at IS NULL
+               AND ($2::uuid IS NULL OR workspace_id=$2) FOR SHARE`,
+              [n.narration_job, isEpisode ? project.workspace_id : null],
             );
             const voice = job && (await this.canvases.library.result(sql, job));
             requireValue(

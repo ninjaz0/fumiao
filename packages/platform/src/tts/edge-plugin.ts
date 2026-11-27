@@ -17,6 +17,15 @@ import {
   type EdgeWebSocketFactory,
 } from "./edge-tts.js";
 
+export function edgeSpeechSettings(raw: Record<string, unknown> = {}) {
+  return {
+    voice: typeof raw.voice === "string" && EDGE_TTS_VOICE_IDS.includes(raw.voice)
+      ? raw.voice : "zh-CN-XiaoxiaoNeural",
+    rate: typeof raw.rate === "string" && raw.rate.trim() ? raw.rate.trim() : "+0%",
+    pitch: typeof raw.pitch === "string" && raw.pitch.trim() ? raw.pitch.trim() : "+0Hz",
+  };
+}
+
 export const edgeTtsForm: ModelForm = {
   parameterObject: true,
   canvas: true,
@@ -152,27 +161,10 @@ export function createEdgeTtsPlugin(
         };
       },
       async prepare(draft) {
-        const rawParams = (draft.params ?? {}) as Record<string, unknown>;
-        const voice =
-          typeof rawParams.voice === "string" &&
-          EDGE_TTS_VOICE_IDS.includes(rawParams.voice)
-            ? rawParams.voice
-            : "zh-CN-XiaoxiaoNeural";
-        const rate =
-          typeof rawParams.rate === "string" && rawParams.rate.trim()
-            ? rawParams.rate.trim()
-            : "+0%";
-        const pitch =
-          typeof rawParams.pitch === "string" && rawParams.pitch.trim()
-            ? rawParams.pitch.trim()
-            : "+0Hz";
-        // Tolerantly ignore historic `draft.instruction` / `rawParams.instruction` payloads.
+        const params = edgeSpeechSettings(draft.params);
+        // Tolerantly ignore historic instruction payloads.
         return {
-          params: {
-            voice,
-            rate,
-            pitch,
-          },
+          params,
           references: [],
           view: {
             ratio: "",
@@ -183,7 +175,7 @@ export function createEdgeTtsPlugin(
             width: null,
             height: null,
             image_quality: null,
-            audio_settings: { voice, rate, pitch },
+            audio_settings: params,
             h3_inputs: null,
             refs: [],
           },

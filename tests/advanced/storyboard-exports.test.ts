@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { canvasesFixture } from "../helpers/canvases.js";
+import { activateCanvasRunPlugins } from "../helpers/canvas-runs.js";
 import { databaseFixture } from "../helpers/database.js";
 import { migrate, one } from "@fumiao/platform/db.js";
 import { S3Storage } from "@fumiao/platform/storage.js";
@@ -14,6 +15,7 @@ import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-expor
 import { originalStoryboard } from "@fumiao/platform/composition/renderer.js";
 import { OriginalMedia } from "@fumiao/original-api/media.js";
 import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
 import { OriginalPacks } from "@fumiao/original-api/packs.js";
 import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
@@ -1664,7 +1666,12 @@ async function confirmEpisodeAdoptions<T extends { director: DirectorProduction;
     const inputs = await director.directorInputs(f.admin, f.project.id, nodeId);
     assert.ok(inputs.adoption_input_basis);
     const selection = node.use_media ? { media_id: node.media_id! } : { job_id: node.active_job! };
-    shots.push({ node_id: nodeId, adoption_basis: await directorAdoptionBasis(inputs.adoption_input_basis, selection) });
+    shots.push({
+      node_id: nodeId,
+      ...(inputs.story_basis ? { story_basis: inputs.story_basis } : {}),
+      ...(inputs.material_basis ? { material_basis: inputs.material_basis } : {}),
+      adoption_basis: await directorAdoptionBasis(inputs.adoption_input_basis, selection),
+    });
   }
   const approved = { ...document, director: { ...document.director, shots } };
   await setCanvas(f, approved);
@@ -1723,6 +1730,204 @@ test("episode admission rechecks selected tracked audio against the current effe
     assert.equal(receipt.id, accepted.id);
     assert.equal(receipt.state, "done");
   } finally {
+    await f.cleanup();
+  }
+});
+
+test("episode reused media must confirm every available basis even when its adoption digest matches", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    const node = { ...f.doc.nodes[0], prompt: "镜头继续", params: { model: "muse-video" }, audio_strategy: "keep_original" };
+    const graph = { ...f.doc, nodes: [node], director: episode(f.doc.shots) };
+    const approved = await confirmEpisodeAdoptions(f, graph);
+    const [basis] = approved.director.shots;
+    assert.ok(basis.story_basis && basis.material_basis);
+    const request = { uid: randomUUID(), expected_revision: 1, scope: "episode" };
+    await setCanvas(f, { ...approved, director: { ...approved.director, shots: [{ ...basis, story_basis: undefined }] } });
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /确认分镜/ });
+    await setCanvas(f, { ...approved, director: { ...approved.director, shots: [{ ...basis, material_basis: undefined }] } });
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /确认素材/ });
+    const unavailable = await confirmEpisodeAdoptions(f, { ...graph, nodes: [{ ...node, prompt: "" }] });
+    assert.ok(!unavailable.director.shots[0].story_basis && !unavailable.director.shots[0].material_basis);
+    assert.equal((await f.service.create(f.admin, f.project.id, request)).scope, "episode");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("episode compares the accepted ordinary Edge rendering with pack rate, pitch and default drift", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    await activateCanvasRunPlugins(f);
+    await ensureBuiltinEdgeTts(f.p);
+    await f.db.query("UPDATE jobs SET deleted_at=now() WHERE public_id=900");
+    const packs = new OriginalPacks(f.p);
+    const workspace = String(f.workspace.public_id);
+    const reference = await f.asset(randomUUID().replaceAll("-", ""), "ref");
+    const packDraft = (settings: { voice_id?: string; rate?: string; pitch?: string }) => ({
+      name: "林默",
+      purpose: "subject",
+      media: [reference.public_id],
+      voice_profile: { model: "edge-tts", ...settings },
+    });
+    const pack = await packs.save(f.admin, packDraft({}), workspace);
+    let packRevision = pack.revision;
+    const editPack = async (settings: Parameters<typeof packDraft>[0]) => {
+      const updated = await packs.save(
+        f.admin,
+        { ...packDraft(settings), expected_revision: packRevision },
+        workspace,
+        pack.id,
+      );
+      packRevision = updated.revision;
+    };
+    const line = { id: "line", speaker: "林默", text: "你好。😀!", pack_id: pack.id };
+    const node = { ...f.doc.nodes[0], prompt: "对白镜头", narration_job: null, narration_text: "", dialogue_lines: [line] };
+    const graph = { ...f.doc, nodes: [node], director: episode(f.doc.shots) };
+    await setCanvas(f, graph);
+    const ordinary = new OriginalCanvasRuns(f.p);
+    const prepareTake = async () => {
+      const accepted = await ordinary.narrateDialogue(f.admin, f.project.id, node.id, {
+        uid: randomUUID(), expected_revision: 1, line_id: line.id,
+      });
+      const id = accepted.items[0].id;
+      const job = await one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [id]);
+      await f.db.transaction(async (sql) => {
+        await f.p.settle(sql, job, "completed", { assets: [f.voice.id] });
+        await sql.query("INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')", [job.id, f.voice.id]);
+      });
+      return { job, graph: { ...graph, nodes: [{ ...node, dialogue_lines: [{ ...line, audio_job: id }] }] } };
+    };
+    const attempt = () => f.service.create(f.admin, f.project.id, { uid: randomUUID(), expected_revision: 1, scope: "episode" });
+    const acceptAndRelease = async () => {
+      const receipt = await attempt();
+      await f.db.query("UPDATE storyboard_exports SET state='failed' WHERE public_id=$1", [receipt.id]);
+    };
+    const defaults = await prepareTake();
+    assert.deepEqual(defaults.job.original_view.audio_settings, { voice: "zh-CN-XiaoxiaoNeural", rate: "+0%", pitch: "+0Hz" });
+    await confirmEpisodeAdoptions(f, defaults.graph);
+    await acceptAndRelease();
+    await editPack({ voice_id: "zh-CN-XiaoxiaoNeural", rate: "0%", pitch: "-0Hz" });
+    await confirmEpisodeAdoptions(f, defaults.graph);
+    await acceptAndRelease();
+    await editPack({ rate: "+15%" });
+    await confirmEpisodeAdoptions(f, defaults.graph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+    await editPack({ pitch: "+20Hz" });
+    await confirmEpisodeAdoptions(f, defaults.graph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+    const pitched = await prepareTake();
+    assert.equal(pitched.job.input.params.pitch, "+20Hz");
+    // An older job can retain the prepared provider input even if its view lacks pitches.
+    await f.db.query("UPDATE jobs SET original_view=jsonb_set(original_view::jsonb,'{audio_settings}','{}') WHERE id=$1", [pitched.job.id]);
+    await confirmEpisodeAdoptions(f, pitched.graph);
+    await acceptAndRelease();
+    await editPack({});
+    await confirmEpisodeAdoptions(f, pitched.graph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+    // Validate the same effective snapshot reaches browser readiness.
+    const runs = await ordinary.list(f.admin, f.project.id);
+    const view = (runs.runs as Record<string, unknown>[]).find((run) => run.id === Number(pitched.job.public_id));
+    assert.deepEqual(view?.audio_settings, pitched.job.original_view.audio_settings);
+    await f.db.query("UPDATE jobs SET input=$2 WHERE id=$1", [pitched.job.id, JSON.stringify({ prompt: line.text })]);
+    await acceptAndRelease();
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("episode takes later Flow job locks before earlier adopted assets", async () => {
+  const f = await fixture();
+  const release = deferred();
+  const waiting = deferred<number>();
+  let exportRequest: Promise<unknown> | undefined;
+  let deleting: Promise<unknown> | undefined;
+  try {
+    await seedEpisodeScript(f);
+    const job = await f.job(901, "video", "completed", f.video.id);
+    await f.db.query(`UPDATE jobs SET provider_model='flow:veo-3.1-fast-extend-8s-landscape',plugin_id='flow',
+      original_view='{"ratio":"16:9","actual":{"flow_media_id":"private-output"}}' WHERE id=$1`, [job.id]);
+    const prior = { ...f.doc.nodes[0], prompt: "前镜", audio_strategy: "keep_original" };
+    const next = { ...prior, id: "next", prompt: "沿用尾段", params: {
+      model: "flow:veo-3.1-fast-extend-8s-landscape", flow_source_job: 901,
+    } };
+    const shots = [prior.id, next.id];
+    await confirmEpisodeAdoptions(f, { nodes: [prior, next], shots, director: episode(shots) });
+    deleting = f.db.transaction(async (sql) => {
+      await sql.query("SELECT id FROM jobs WHERE id=$1 FOR UPDATE", [job.id]);
+      const { pid } = await one(sql, "SELECT pg_backend_pid() AS pid");
+      waiting.resolve(pid);
+      await release.promise;
+      // This is the same job-before-asset lock sequence used when deleting a job.
+      await sql.query("SELECT id FROM assets WHERE id=$1 FOR UPDATE NOWAIT", [f.video.id]);
+    });
+    const blocker = await waiting.promise;
+    exportRequest = f.service.create(f.admin, f.project.id, {
+      uid: randomUUID(), expected_revision: 1, scope: "episode",
+    });
+    void exportRequest.catch(() => {});
+    const deadline = Date.now() + 8000;
+    for (;;) {
+      const { blocked } = await one(f.db, `SELECT EXISTS(
+        SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))
+      ) AS blocked`, [blocker]);
+      if (blocked) break;
+      assert.ok(Date.now() < deadline, "episode request did not reach the held job");
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+    release.resolve();
+    await deleting;
+    assert.equal((await exportRequest as { scope: string }).scope, "episode");
+  } finally {
+    release.resolve();
+    await Promise.allSettled([exportRequest, deleting]);
+    await f.cleanup();
+  }
+});
+
+test("episode holds legacy fallback reference state until it freezes the export", async () => {
+  const f = await fixture();
+  const observed = deferred();
+  const release = deferred();
+  let exportRequest: Promise<unknown> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await seedEpisodeScript(f);
+    const reference = await f.asset(randomUUID().replaceAll("-", ""), "ref");
+    const node = { ...f.doc.nodes[0], audio_strategy: "keep_original" };
+    const refNode = { id: "ref", type: "image", x: 0, y: 0, media_id: reference.public_id, use_media: true };
+    await confirmEpisodeAdoptions(f, {
+      ...f.doc,
+      nodes: [node, refNode],
+      edges: [{ id: "link", source: refNode.id, target: node.id }],
+      director: episode(f.doc.shots),
+    });
+
+    const stage = f.service.availableStageBytes.bind(f.service);
+    f.service.availableStageBytes = async () => {
+      observed.resolve();
+      await release.promise;
+      return stage();
+    };
+    exportRequest = f.service.create(f.admin, f.project.id, {
+      uid: randomUUID(), expected_revision: 1, scope: "episode",
+    });
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("episode export did not reach staging")), 8000);
+    });
+    await Promise.race([observed.promise, exportRequest, timedOut]);
+    await assert.rejects(
+      f.db.query("SELECT id FROM assets WHERE id=$1 FOR UPDATE NOWAIT", [reference.id]),
+      { code: "55P03" },
+    );
+    release.resolve();
+    assert.equal((await exportRequest as { scope: string }).scope, "episode");
+  } finally {
+    clearTimeout(timer);
+    release.resolve();
+    await Promise.allSettled([exportRequest]);
     await f.cleanup();
   }
 });

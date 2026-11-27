@@ -1,5 +1,5 @@
 import type { CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
-import { canvasTailSourceId, directorAdoptionBasis, directorBasis, directorShotIds, directorVideoSelection, type DirectorAudioInputs, type DirectorBatchSelection, type DirectorShotInputs, type DirectorTarget, type DirectorVideoSelection } from "@fumiao/web-compat/director.js";
+import { canvasTailSourceId, directorAdoptionBasis, directorBasis, directorMissingApproval, directorShotIds, directorVideoSelection, type DirectorAudioInputs, type DirectorBatchSelection, type DirectorShotInputs, type DirectorTarget, type DirectorVideoSelection } from "@fumiao/web-compat/director.js";
 import { PluginNodeForm, PluginNodePorts, PluginNodeOutputs } from "./PluginNode";
 import {
   evaluateFormConstraints,
@@ -1053,14 +1053,15 @@ export function CanvasWorkspace({
       throw new Error("镜头的采用依据已更新，请检查后重新确认。");
     }
     const previous = director.shots?.find((shot) => shot.node_id === nodeId);
+    const missingApproval = directorMissingApproval(inputs, previous);
+    if (missingApproval) throw new Error(`请先确认当前${missingApproval}。`);
     if (continuing) {
       const pin = directorVideoSelection(node);
       const same = "job_id" in selection
         ? pin && "job_id" in pin && pin.job_id === selection.job_id
         : pin && "media_id" in pin && pin.media_id === selection.media_id;
       if (!same) throw new Error("已采用的视频已变更，请检查后重新确认。");
-    } else if (!inputs.story_basis || inputs.story_basis !== previous?.story_basis ||
-      !inputs.material_basis || inputs.material_basis !== previous?.material_basis) {
+    } else if (!inputs.story_basis || !inputs.material_basis) {
       throw new Error("请先确认当前分镜和素材。");
     }
     if ("job_id" in selection && !runsRef.current.some((run) =>
@@ -2807,7 +2808,8 @@ export function CanvasWorkspace({
     const { document } = doc.ref.current;
     const directorReference = single.type === "image" && single.use_media && single.media_id &&
       document.edges.some((edge) => edge.source === nid && document.director?.shot_ids.includes(edge.target));
-    if (single.type === "image" && !single.active_job && !directorReference) edit(nid, { use_media: false });
+    const directorVideo = single.type === "video" && document.director?.shot_ids.includes(nid) && document.shots?.includes(nid);
+    if (!single.active_job && !directorReference && !directorVideo) edit(nid, { use_media: false });
     setSubmitting(nid);
     try {
       const rev = await doc.flush();

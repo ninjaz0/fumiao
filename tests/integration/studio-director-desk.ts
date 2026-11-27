@@ -402,14 +402,18 @@ export async function verifyDirectorDesk(
     await waitForRun(audioBatch[0].job_id, "failed");
     await waitForRun(audioBatch[1].job_id, "done");
     await waitForRun(audioBatch[2].job_id, "done");
-    const audioRetryId = await retryOnly(/^仅补跑.*对白首次失败/, [{ node_id: second.id, stage: "dialogue", line_id: "line-first" }]);
-    await closeReceipt();
-    await waitForRun(audioRetryId, "done");
-    await expect.poll(async () => {
+    const selectedAudio = async () => {
       const document = (await request<Project>(path)).document;
       const dialogue = document.nodes.find(({ id }) => id === second.id)?.dialogue_lines;
       return [dialogue?.[0]?.audio_job, dialogue?.[1]?.audio_job, document.nodes.find(({ id }) => id === third.id)?.narration_job];
-    }).toEqual([audioRetryId, audioBatch[1].job_id, audioBatch[2].job_id]);
+    };
+    await expect.poll(async () => (await selectedAudio()).slice(1), { timeout: 20_000 })
+      .toEqual([audioBatch[1].job_id, audioBatch[2].job_id]);
+    const audioRetryId = await retryOnly(/^仅补跑.*对白首次失败/, [{ node_id: second.id, stage: "dialogue", line_id: "line-first" }]);
+    await closeReceipt();
+    await waitForRun(audioRetryId, "done");
+    await expect.poll(selectedAudio, { timeout: 20_000 })
+      .toEqual([audioRetryId, audioBatch[1].job_id, audioBatch[2].job_id]);
     for (const title of ["S01-02", "S01-03"]) {
       await selectShot(title).click();
       await desk.getByRole("button", { name: "采用此视频" }).click();
@@ -458,6 +462,8 @@ export async function verifyDirectorDesk(
     await selectShot("S01-02").click();
     await expect(desk.getByText(/本镜视频已采用/)).toBeVisible();
     await selectShot("S01-03").click();
+    await expect(desk.getByRole("button", { name: "确认沿用已采用视频" })).toBeDisabled();
+    await desk.getByRole("button", { name: "素材已变更，重新确认" }).click();
     await desk.getByRole("button", { name: "确认沿用已采用视频" }).click();
     await expect(desk.getByText(/本镜视频已采用/)).toBeVisible();
     await page.reload();
@@ -476,6 +482,10 @@ export async function verifyDirectorDesk(
       title: withAdoption.title,
       document: {
         ...withAdoption.document,
+        director: {
+          ...withAdoption.document.director!,
+          shots: withAdoption.document.director?.shots?.filter(({ node_id }) => node_id !== second.id),
+        },
         nodes: withAdoption.document.nodes.map((node) => node.id === second.id
           ? { ...node, use_media: true, active_job: null, media_id: secondRun.result }
           : node),
@@ -485,6 +495,8 @@ export async function verifyDirectorDesk(
     await page.reload();
     await directorTab.click();
     await selectShot("S01-02").click();
+    await expect(desk.getByRole("button", { name: "确认沿用已采用视频" })).toBeDisabled();
+    await confirmShot();
     await desk.getByRole("button", { name: "确认沿用已采用视频" }).click();
     await expect(desk.getByText(/本镜视频已采用/)).toBeVisible();
     await desk.getByRole("button", { name: "定位画布" }).click();
@@ -510,6 +522,53 @@ export async function verifyDirectorDesk(
     await checkDirectPin();
     await expect(desk.getByText(/本镜视频已采用/)).toBeVisible();
     console.log("PASS director pinned direct asset: ordinary and Director supplemental jobs preserved explicit reuse");
+
+    const makeCanvas = async (title: string, node: typeof shot, director?: Project["document"]["director"]) => {
+      const other = await request<Project>("/api/canvases", { title });
+      await request(`/api/canvases/${other.id}/document`, {
+        title,
+        expected_revision: other.revision,
+        document: { schemaVersion: 1, nodes: [node], shots: [node.id], edges: [], director },
+      }, "PUT");
+      await page.goto(`/canvas/${other.id}?workspace=${team.id}`);
+      return other;
+    };
+    const legacy = { ...shot, id: "legacy-clip", title: "历史镜头", prompt: "", use_media: true, media_id: secondRun.result };
+    await makeCanvas("历史片单", legacy, {
+      script_id: script.id, script_revision: newerScript.revision, shot_ids: [legacy.id],
+    });
+    await directorTab.click();
+    await confirmOrder();
+    await expect(desk.getByRole("button", { name: "确认分镜", exact: true })).toBeDisabled();
+    await expect(desk.getByRole("button", { name: "确认素材", exact: true })).toBeDisabled();
+    await desk.getByRole("button", { name: "确认沿用已采用视频" }).click();
+    await episode.getByRole("button", { name: "合成本集" }).click();
+    await expect(episode.getByRole("link", { name: "MP4", exact: true })).toBeVisible({ timeout: 30_000 });
+    console.log("PASS director legacy pin: genuinely unavailable confirmations allow explicit reuse and export");
+
+    const plain = { ...legacy, id: "plain-clip", title: "普通镜头", prompt: "普通画布补抽" };
+    const plainCanvas = await makeCanvas("普通画布不固定媒体", plain);
+    await page.getByRole("group", { name: /视频节点 普通镜头/ }).click();
+    const plainPreview = page.getByRole("dialog", { name: plain.title });
+    await plainPreview.getByRole("button", { name: "关闭" }).click();
+    await expect(plainPreview).toBeHidden();
+    await expect(generate).toHaveAttribute("title", "生成");
+    await expect(generate).toBeEnabled();
+    const [plainResponse] = await Promise.all([
+      page.waitForResponse((res) => res.request().method() === "POST" &&
+        res.url().endsWith(`/nodes/${plain.id}/candidates`)),
+      generate.click(),
+    ]);
+    assert.equal(plainResponse.status(), 200, await plainResponse.text());
+    const plainPath = `/api/canvases/${plainCanvas.id}`;
+    const [plainJob] = (await plainResponse.json()).ids;
+    await expect.poll(async () => {
+      const { runs } = await request<{ runs: Job[] }>(plainPath + "/runs");
+      return runs.find(({ id }) => id === plainJob)?.status;
+    }, { timeout: 25_000 }).toBe("done");
+    const ordinarySaved = await request<Project>(plainPath);
+    assert.equal(ordinarySaved.document.nodes[0].use_media, false);
+    console.log("PASS ordinary non-Director canvas resumes following generated output");
   } finally {
     await browser?.close();
     await new Promise<void>((resolve, reject) => provider.close((error) => error ? reject(error) : resolve()));

@@ -1,6 +1,7 @@
 import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
+import { edgeSpeechSettings } from "@fumiao/platform/tts/edge-plugin.js";
 import type { Sql } from "@fumiao/platform/db.js";
 import { DomainError, requireValue } from "@fumiao/platform/security.js";
 import {
@@ -10,11 +11,26 @@ import {
   directorTargetKey,
   type DirectorShotInputs,
   type DirectorTarget,
+  type DirectorVoiceSettings,
 } from "@fumiao/web-compat/director.js";
 import type { CanvasDocument, CanvasNode, CinematographySpec } from "./canvas-draft.js";
 import { canvasNodeMedia } from "./canvases.js";
 import { resolveDialogueInput } from "./dialogue.js";
 import { expandOriginalPacks, originalFlowSource } from "./generation-inputs.js";
+
+export function directorRenderedVoice(view: unknown, prepared: unknown): DirectorVoiceSettings {
+  const settings: DirectorVoiceSettings = {};
+  for (const source of [prepared, view]) {
+    if (!source || typeof source !== "object") continue;
+    const recorded = source as Record<string, unknown>;
+    for (const key of ["voice", "rate", "pitch", "instruction"] as const) {
+      const value = recorded[key];
+      if (typeof value === "string" && (key === "instruction" || value.trim()))
+        settings[key] = value;
+    }
+  }
+  return settings;
+}
 
 /** F030: Compiles structured 6-dimension director cinematography spec into clean prompt text. */
 export function compileCinematographyPrompt(
@@ -363,13 +379,14 @@ export async function inspectDirectorShotInputs(
       if (input.stage !== "dialogue" && input.stage !== "narration") continue;
       const key = directorTargetKey(target);
       result.audio_input_bases[key] = input.basis;
+      const params = "params" in input.payload ? input.payload.params : undefined;
       result.audio_inputs[key] = {
         basis: input.basis,
         model: input.payload.model,
         pack_id: input.stage === "dialogue" ? input.voice.packId : null,
         voice_id: input.stage === "dialogue" ? input.voice.voiceId ?? null : null,
         instruction: input.payload.instruction ?? "",
-        ...(options?.adoption && "params" in input.payload ? { params: input.payload.params } : {}),
+        ...(options?.adoption ? { params: input.payload.model === "edge-tts" ? edgeSpeechSettings(params) : params } : {}),
       };
       if (input.stage === "dialogue") {
         result.voices.push({
@@ -437,14 +454,17 @@ async function legacyAdoptionVisual(
   const tail = node.tail_inherited
     ? document.nodes.find(({ id }) => id === canvasTailSourceId(document, node.id))
     : undefined;
+  const tailMedia = tail ? await canvasNodeMedia(sql, project.id, tail, false, true, lock) : null;
   const native = node.params.h3;
   const mediaIds = [...new Set([
     ...sources.flatMap(({ kind, value }) => kind === "image" && value ? [value] : []),
     ...node.params.h3_refs,
     ...(native ? [native.first_frame, native.last_frame, ...native.video_audio] : []),
+    tailMedia,
   ].filter((value): value is string => Boolean(value)))];
   const media = mediaIds.length ? (await sql.query(
-    `SELECT public_id, state FROM assets WHERE workspace_id=$1 AND public_id=ANY($2::text[]) ORDER BY id`,
+    `SELECT public_id, state FROM assets WHERE workspace_id=$1 AND public_id=ANY($2::text[])
+     ORDER BY id ${lock ? "FOR SHARE" : ""}`,
     [project.workspace_id, mediaIds],
   )).rows : [];
   return {
@@ -464,6 +484,6 @@ async function legacyAdoptionVisual(
     media,
     packBindings: node.asset_packs,
     packs,
-    ...(tail ? { tail: { id: tail.id, media: await canvasNodeMedia(sql, project.id, tail, false, true, lock) } } : {}),
+    ...(tail ? { tail: { id: tail.id, media: tailMedia } } : {}),
   };
 }
