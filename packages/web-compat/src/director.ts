@@ -63,6 +63,7 @@ export type DirectorShotInputs = {
 };
 
 export const directorBatchUnclaimed = "本次提交未创建回执。";
+export const directorLocalScriptDraft = "主剧本有未保存的修改。请先保存并同步，或使用已确认的版本继续。";
 export const directorScriptConflict = "主剧本已更新，请重新预览后同步。";
 export const directorExportAssetBusy = "本集素材正在被更新，请稍后重试合成。";
 export const episodeMaxShots = 30;
@@ -96,14 +97,26 @@ export type DirectorVoiceSettings = Partial<Record<"voice" | "rate" | "pitch" | 
 
 export function directorAudioEvidenceMismatch(
   recorded: Record<string, unknown>,
-  current?: DirectorAudioInputs[string],
+  current?: Partial<DirectorAudioInputs[string]>,
   rendered?: { model?: string; audio_settings?: DirectorVoiceSettings },
 ) {
-  if (typeof recorded.director_basis === "string")
-    return recorded.director_basis !== current?.basis;
   const normalize = (value: unknown) => typeof value === "string" ? value.trim() || null : value;
   const edge = rendered?.model === "edge-tts" || recorded.model === "edge-tts";
   const settings = rendered?.audio_settings;
+  const prosody = ["voice", "rate", "pitch"] as const;
+  // Edge consumes only these three settings. A full historical rendering can
+  // establish equivalence even if pack metadata or the raw receipt basis changed.
+  if (edge && current?.model === "edge-tts" &&
+    prosody.every((key) => settings?.[key] !== undefined && current.params?.[key] !== undefined)) {
+    return prosody.some((key) => settings![key] !== current.params![key]);
+  }
+  if (typeof recorded.director_basis === "string") {
+    if (recorded.director_basis !== current?.basis) return true;
+    // A digest-only receipt is still usable. Check any known renderer fields
+    // in case an unchanged request would now receive a different default.
+    return edge && current.model === "edge-tts" && prosody.some((key) =>
+      settings?.[key] !== undefined && current.params?.[key] !== undefined && settings[key] !== current.params[key]);
+  }
   const evidence = {
     model: rendered?.model === "edge-tts" ? rendered.model : recorded.model,
     pack_id: recorded.pack_id,
@@ -114,7 +127,8 @@ export function directorAudioEvidenceMismatch(
   if (!current) return fields.some((key) => Boolean(normalize(evidence[key]))) ||
     Boolean(settings?.voice || settings?.rate || settings?.pitch);
   for (const key of fields) {
-    if (evidence[key] === undefined || (key === "voice_id" && edge)) continue;
+    if (evidence[key] === undefined || current[key] === undefined ||
+      (key === "voice_id" && edge && settings?.voice !== undefined && current.params?.voice !== undefined)) continue;
     if (normalize(evidence[key]) !== normalize(current[key])) return true;
   }
   const params = recorded.params && typeof recorded.params === "object"
@@ -122,8 +136,8 @@ export function directorAudioEvidenceMismatch(
   if (edge && current.model === "edge-tts") {
     // Both values come from the Edge renderer's normalization. A missing
     // historical field is unknown rather than a recorded default.
-    return (["voice", "rate", "pitch"] as const).some((key) =>
-      settings?.[key] !== undefined && settings[key] !== current.params?.[key]);
+    return prosody.some((key) => settings?.[key] !== undefined && current.params?.[key] !== undefined &&
+      settings[key] !== current.params[key]);
   }
   if (params) {
     for (const key of ["voice", "rate", "pitch"])

@@ -100,6 +100,7 @@ export type ScriptWorkspaceHandle = {
   flushScripts: (docIds: string[]) => Promise<void>;
   rememberAll: () => boolean;
   hasUnsavedChanges: () => boolean;
+  hasUnsavedScript: (docId: string) => boolean;
   hasConflictChanges: () => boolean;
   exportUnsavedScripts: () => ExportedUnsavedScript[];
   prepareLeave: () => void;
@@ -178,6 +179,11 @@ function readPersistedScriptDraft(
     // Ignore storage errors
   }
   return null;
+}
+
+export function hasCachedScriptEdits(userId: number, workspace: number, docId: string) {
+  const draft = readPersistedScriptDraft(userId, workspace, docId);
+  return Boolean(draft && draft.draftBody !== draft.savedBody);
 }
 
 function writePersistedScriptDraft(
@@ -1197,6 +1203,10 @@ export const ScriptWorkspace = forwardRef<
       },
       rememberAll: rememberAllScripts,
       hasUnsavedChanges: hasUnsavedScripts,
+      hasUnsavedScript: (docId) => {
+        const session = sessionsRef.current[docId];
+        return session ? session.draftBody !== session.savedBody : hasCachedScriptEdits(userId, workspace, docId);
+      },
       hasConflictChanges: () =>
         Object.values(sessionsRef.current).some((s) => s.status === "conflict"),
       exportUnsavedScripts: () =>
@@ -1222,7 +1232,7 @@ export const ScriptWorkspace = forwardRef<
         allowUnloadRef.current = true;
       },
     }),
-    [flushScript, hasUnsavedScripts, rememberAllScripts],
+    [flushScript, hasUnsavedScripts, rememberAllScripts, userId, workspace],
   );
 
   // Persist pending script drafts on tab hide / beforeunload

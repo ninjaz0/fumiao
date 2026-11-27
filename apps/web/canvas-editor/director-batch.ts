@@ -1,5 +1,6 @@
 import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import {
+  directorAudioEvidenceMismatch,
   directorAudioTargets,
   directorShotIds,
   directorTargetKey,
@@ -51,23 +52,16 @@ function audioMatch(node: CanvasNode, target: DirectorTarget, job: Job, styles: 
   if (job.prompt.trim() !== text?.trim() || line?.audio_stale?.includes(job.id)) return "stale";
   const saved = job.inputs;
   const style = styles[directorTargetKey(target)];
-  if (saved?.director_basis) {
-    return !style ? "unchecked" : saved.director_basis === style.basis ? "matches" : "stale";
-  }
-  // A legacy snapshot can prove a mismatch using any field it recorded. An
-  // absent field cannot disqualify a historical take with matching text.
-  const actual = style ?? {
-    model: line?.model ?? node.narration_model,
+  if (saved?.director_basis && !style) return "unchecked";
+  const current = style ?? {
+    model: line?.model ?? node.narration_model ?? undefined,
     pack_id: line?.pack_id ?? undefined,
     voice_id: line?.voice_id,
-    instruction: line?.instruction ?? node.narration_instruction,
+    instruction: line?.instruction ?? node.narration_instruction ?? undefined,
   };
   const savedModel = saved?.model || job.model;
-  if (actual.model && savedModel && actual.model !== savedModel) return "stale";
-  for (const field of ["pack_id", "voice_id", "instruction"] as const) {
-    if (actual[field] !== undefined && saved?.[field] !== undefined &&
-      (actual[field]?.trim() || null) !== (saved[field]?.trim() || null)) return "stale";
-  }
+  if (directorAudioEvidenceMismatch({ model: savedModel, ...saved }, current, job)) return "stale";
+  if (saved?.director_basis) return "matches";
   return style && savedModel && saved?.instruction !== undefined &&
     (target.stage === "narration" || (saved.voice_id !== undefined && saved.pack_id !== undefined))
     ? "matches" : "unknown";

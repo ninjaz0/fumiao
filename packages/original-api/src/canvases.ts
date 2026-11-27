@@ -28,6 +28,7 @@ import {
   canvasDocumentBytes,
   canvasDocumentJson,
   canvasVoiceIds,
+  canvasDialogueTakes,
 } from "./canvas-values.js";
 import {
   validateCanvasDocument,
@@ -508,7 +509,7 @@ export class OriginalCanvases {
       };
     });
   }
-  private async lockResources(sql: Sql, document: CanvasDocument) {
+  private async lockResources(sql: Sql, row: { id: string; workspace_id: string }, document: CanvasDocument) {
     const jobs = [
       ...new Set(
         document.nodes
@@ -518,11 +519,16 @@ export class OriginalCanvases {
     ];
     // Lock job rows before assets, as settlement and deletion do. Canonical order
     // avoids deadlocks between canvases referencing the same resource set.
-    if (jobs.length)
-      await sql.query(
-        "SELECT id FROM jobs WHERE public_id=ANY($1::bigint[]) ORDER BY id FOR SHARE",
-        [jobs],
-      );
+    const takes = document.nodes.flatMap(canvasDialogueTakes);
+    const locked = jobs.length || takes.length ? (await sql.query<{ id: string }>(
+      `SELECT j.id FROM jobs j WHERE j.public_id=ANY($1::bigint[]) OR
+       (j.public_id=ANY($4::bigint[]) AND j.workspace_id=$2 AND j.kind='audio' AND j.deleted_at IS NULL AND EXISTS (
+         SELECT 1 FROM unnest($3::text[], $4::bigint[]) AS t(node,job)
+         JOIN canvas_job_links l ON l.node=t.node AND l.project_id=$5
+         WHERE t.job=j.public_id AND l.job_id=j.id))
+       ORDER BY j.id FOR SHARE OF j`,
+      [jobs, row.workspace_id, takes.map((take) => take.node), takes.map((take) => take.id), row.id],
+    )).rows.map(({ id }) => id) : [];
     const keys = [
       ...new Set(
         document.nodes
@@ -541,8 +547,8 @@ export class OriginalCanvases {
       ),
     ];
     await sql.query(
-      `SELECT id FROM assets WHERE public_id=ANY($1::text[]) OR id IN (SELECT r.asset_id FROM job_assets r JOIN jobs j ON j.id=r.job_id WHERE j.public_id=ANY($2::bigint[]) AND r.role='output') ORDER BY id FOR SHARE`,
-      [keys, jobs],
+      `SELECT id FROM assets WHERE public_id=ANY($1::text[]) OR id IN (SELECT r.asset_id FROM job_assets r WHERE r.job_id=ANY($2::uuid[]) AND r.role='output') ORDER BY id FOR SHARE`,
+      [keys, locked],
     );
     const packs = [
       ...new Set(document.nodes.flatMap((n) => n.asset_packs.map((p) => p.id))),
@@ -586,14 +592,17 @@ export class OriginalCanvases {
         const voice = await one(
           sql,
           `SELECT j.* FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
-        WHERE l.project_id=$1 AND l.node=$2 AND j.public_id=$3 AND j.kind='audio' AND j.deleted_at IS NULL`,
-          [row.id, node, key],
+        WHERE l.project_id=$1 AND l.node=$2 AND j.public_id=$3 AND j.kind='audio' AND j.deleted_at IS NULL AND j.workspace_id=$4`,
+          [row.id, node, key, row.workspace_id],
         );
         if (!voice) return undefined;
         const result = await this.library.result(sql, voice);
         return {
           result: result?.public_id ?? null,
-          authorize: () => authorize(voice),
+          authorize: async () => {
+            await authorize(voice);
+            if (result) await authorize(result);
+          },
         };
       },
       active: async (node, key, kind) =>
@@ -628,7 +637,7 @@ export class OriginalCanvases {
         n.extension ? [n.extension.definition] : [],
       ),
     );
-    await this.lockResources(sql, document);
+    await this.lockResources(sql, row, document);
     const refs = await validateCanvasDocument(
       document,
       await CanvasModels.read(sql, { allowIncomplete: true }),
@@ -785,22 +794,23 @@ export class OriginalCanvases {
         document,
       );
       for (const node of document.nodes)
-        for (const id of canvasVoiceIds(
-          node.narration_job,
-          node.narration_pending,
-        )) {
+        for (const take of [
+          ...canvasVoiceIds(node.narration_job, node.narration_pending).map((id) => ({ node: "voice:" + node.id, id })),
+          ...canvasDialogueTakes(node),
+        ]) {
           const link = await one(
             sql,
             `SELECT l.* FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
-          WHERE l.project_id=$1 AND l.node=$2 AND j.public_id=$3 AND j.deleted_at IS NULL ORDER BY l.id LIMIT 1`,
-            [original.id, "voice:" + node.id, id],
+             WHERE l.project_id=$1 AND l.node=$2 AND j.public_id=$3 AND j.deleted_at IS NULL
+               AND j.workspace_id=$4 AND j.kind='audio' ORDER BY l.id LIMIT 1`,
+            [original.id, take.node, take.id, original.workspace_id],
           );
           if (link)
             await sql.query(
               "INSERT INTO canvas_job_links(project_id,node,job_id,owner_id,uid,inputs,created) VALUES($1,$2,$3,$4,$5,$6,$7)",
               [
                 row.id,
-                "voice:" + node.id,
+                take.node,
                 link.job_id,
                 user.id,
                 randomUUID(),

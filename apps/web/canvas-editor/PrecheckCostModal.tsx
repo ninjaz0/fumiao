@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Play, ShieldAlert } from "lucide-react";
-import { directorBatchUnclaimed, directorScriptConflict, type DirectorBatchSelection, type DirectorTarget } from "@fumiao/web-compat/director.js";
+import { directorBatchUnclaimed, directorLocalScriptDraft, directorScriptConflict, type DirectorBatchSelection, type DirectorTarget } from "@fumiao/web-compat/director.js";
 import { receiptTarget, type BatchReceipt, type DirectorSubmission, type PendingDirectorBatch } from "./director-batch";
 import type { PrecheckResponse, PrecheckStage } from "./types";
 
@@ -33,6 +33,7 @@ export function PrecheckCostModal({
   director?: {
     selection?: DirectorBatchSelection;
     pending?: PendingDirectorBatch;
+    hasLocalScriptEdits: () => boolean;
     batches: PendingDirectorBatch[];
     onPick: (uid: string) => void;
     onPending: (pending: PendingDirectorBatch) => void;
@@ -102,6 +103,7 @@ export function PrecheckCostModal({
       setError("");
       if (director) setData(null);
       try {
+        if (director && !useConfirmedScript && director.hasLocalScriptEdits()) throw new Error(directorLocalScriptDraft);
         const res = await fetch(`/api/canvases/${projectId}/batch-precheck`, {
           method: "POST",
           signal: controller.signal,
@@ -378,7 +380,7 @@ export function PrecheckCostModal({
         </p>
       )}
 
-      {directorSelection && error === directorScriptConflict && !useConfirmedScript && (
+      {directorSelection && (error === directorScriptConflict || error === directorLocalScriptDraft) && !useConfirmedScript && (
         <button type="button" className="secondary" onClick={() => setUseConfirmedScript(true)}>
           使用已确认的剧本版本 {directorSelection.script_revision} 预检
         </button>

@@ -162,6 +162,7 @@ import { FloatingCanvasAgent } from "./FloatingCanvasAgent";
 import { DirectorDesk } from "./DirectorDesk";
 import {
   ScriptWorkspace,
+  hasCachedScriptEdits,
   type ScriptWorkspaceHandle,
 } from "./ScriptWorkspace";
 import { scriptApi, type WorkspaceCanvasSummary } from "./script-api";
@@ -2604,6 +2605,8 @@ export function CanvasWorkspace({
       edit(source.id, { use_media: true, media_id: media, active_job: null });
     }
   };
+  const hasLocalScriptEdits = (id: string) => scriptWorkspaceRef.current?.hasUnsavedScript(id)
+    ?? hasCachedScriptEdits(initial.me.id, project.workspace, id);
   const precheckDirector = async (targets: DirectorTarget[], title = "导演台生成预检") => {
     if (directorRecovery.batches.some((batch) => batch.request.uid === directorRecovery.preferredUid)) {
       openDirectorReceipt();
@@ -5755,6 +5758,10 @@ export function CanvasWorkspace({
             lockedStages={precheckTarget.lockedStages}
             director={precheckTarget.director ? {
               selection: precheckTarget.director === "recover" ? undefined : precheckTarget.director,
+              hasLocalScriptEdits: () => {
+                const id = doc.ref.current.document.director?.script_id;
+                return Boolean(id && hasLocalScriptEdits(id));
+              },
               pending: directorPending,
               batches: directorRecovery.batches,
               onPick: chooseDirectorReceipt,
@@ -5919,6 +5926,7 @@ export function CanvasWorkspace({
           activeShotId={directorShotId}
           onSelectShot={setDirectorShotId}
           onChooseScript={() => openScript(activeScript ? { docId: activeScript.id, directorPreview: true } : undefined)}
+          hasLocalScriptEdits={hasLocalScriptEdits}
           onEditSource={openScript}
           onUpdateScript={(docId) => openScript({ docId, directorPreview: true })}
           onFocusCanvas={(nodeId) => {

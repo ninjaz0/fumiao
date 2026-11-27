@@ -1735,6 +1735,58 @@ test("episode admission rechecks selected tracked audio against the current effe
   }
 });
 
+test("selected and pending dialogue takes survive library cleanup and canvas duplication", async (t) => {
+  const f = await fixture();
+  t.after(() => f.cleanup());
+  await seedEpisodeScript(f);
+  await activateCanvasRunPlugins(f);
+  await ensureBuiltinEdgeTts(f.p);
+  await f.db.query("UPDATE jobs SET deleted_at=now() WHERE public_id=900");
+  const node = { ...f.doc.nodes[0], prompt: "对白镜头", narration_job: null, narration_text: "",
+    dialogue_lines: [{ id: "line", speaker: "甲", text: "你好", model: "edge-tts" }] };
+  const graph = { ...f.doc, nodes: [node], director: episode(f.doc.shots) };
+  await setCanvas(f, graph);
+  const runs = new OriginalCanvasRuns(f.p);
+  const take = async () => {
+    const accepted = await runs.narrateDialogue(f.admin, f.project.id, node.id, { uid: randomUUID(), expected_revision: 1, line_id: "line" });
+    return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [accepted.items[0].id]);
+  };
+  const finish = async (job: any) => {
+    const output = await f.asset(randomUUID().replaceAll("-", ""), "audio");
+    await f.db.query("UPDATE assets SET object_key=id::text WHERE id=$1", [output.id]);
+    await f.db.transaction(async (sql) => {
+      await f.p.settle(sql, job, "completed", { assets: [output.id] });
+      await sql.query("INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')", [job.id, output.id]);
+    });
+  };
+  const current = await take();
+  await finish(current);
+  const pending = await take();
+  const line = { ...node.dialogue_lines[0], audio_job: Number(current.public_id), audio_pending: Number(pending.public_id) };
+  const save = (id: string, expected_revision: number, lines: typeof node.dialogue_lines) =>
+    f.canvases.save(f.admin, id, { expected_revision, title: "对白", document: { ...graph, nodes: [{ ...node, dialogue_lines: lines }] } });
+  const saved = await save(f.project.id, 1, [line]);
+  const remove = (id: number) => f.canvases.library.remove(f.admin, { keys: ["job:" + id] });
+  await assert.rejects(remove(line.audio_job), /素材正在画布中使用/);
+  const copy = await f.canvases.duplicate(f.admin, f.project.id);
+  const expected = (await runs.list(f.admin, f.project.id)).runs as Record<string, unknown>[];
+  const listed = (await runs.list(f.admin, copy.id)).runs as Record<string, unknown>[];
+  assert.equal(listed.length, 2);
+  for (const take of expected) {
+    const copied = listed.find(({ id }) => id === take.id);
+    assert.ok(copied);
+    assert.deepEqual([copied.canvas_node, copied.inputs, copied.audio_settings], [take.canvas_node, take.inputs, take.audio_settings]);
+  }
+  await save(f.project.id, saved.revision, []);
+  await finish(pending);
+  await assert.rejects(remove(line.audio_pending), /素材正在画布中使用/);
+  await assert.rejects(remove(line.audio_job), /素材正在画布中使用/);
+  const selected = { ...line, audio_pending: null, audio_stale: [line.audio_job] };
+  await save(copy.id, copy.revision, [selected]);
+  assert.equal((await remove(line.audio_pending)).deleted, 1);
+  assert.equal((await remove(line.audio_job)).deleted, 1);
+});
+
 test("episode reused media must confirm every available basis even when its adoption digest matches", async () => {
   const f = await fixture();
   try {
@@ -1852,6 +1904,32 @@ test("episode compares the accepted ordinary Edge rendering with pack rate, pitc
     await editPack({ rate: "+100%", pitch: "+49Hz" });
     await confirmEpisodeAdoptions(f, clamped.graph);
     await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+
+    // A paid Director receipt freezes the raw +120% request. The completed take
+    // remains usable after the pack changes to its equivalent renderer limit.
+    await editPack({ rate: "+120%", pitch: "+75Hz" });
+    await confirmEpisodeAdoptions(f, clamped.graph);
+    const director = { script_revision: 1, targets: [{ node_id: node.id, stage: "dialogue", line_id: line.id }] };
+    const quote = await new OriginalBatchPrecheck(f.p).precheckCanvas(f.admin, f.project.id, { expected_revision: 1, director });
+    const paid = { uid: randomUUID(), expected_revision: 1, director, precheck_token: quote.precheck_token,
+      price_revision: quote.price_revision, expected_total_credits: quote.summary.total_credits };
+    const receipt = await ordinary.batchRun(f.admin, f.project.id, paid);
+    assert.equal(receipt.submitted.length, 1, JSON.stringify(quote.items));
+    const voiceId = receipt.submitted[0].job_id;
+    const signedJob = await one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [voiceId]);
+    assert.equal(signedJob.input.params.rate, "+120%");
+    await f.db.transaction(async (sql) => {
+      await f.p.settle(sql, signedJob, "completed", { assets: [f.voice.id] });
+      await sql.query("INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')", [signedJob.id, f.voice.id]);
+    });
+    const signedGraph = { ...graph, nodes: [{ ...node, dialogue_lines: [{ ...line, audio_job: voiceId }] }] };
+    await editPack({ rate: "+100%", pitch: "+50Hz" });
+    await confirmEpisodeAdoptions(f, signedGraph);
+    await acceptAndRelease();
+    await editPack({ rate: "+99%", pitch: "+50Hz" });
+    await confirmEpisodeAdoptions(f, signedGraph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+    assert.deepEqual(await ordinary.batchRun(f.admin, f.project.id, paid), receipt);
 
     const invalid = { rate: "invalid-rate", pitch: "invalid-pitch" };
     await f.db.query("UPDATE jobs SET original_view=$2,input=$3 WHERE id=$1", [

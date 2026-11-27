@@ -95,6 +95,29 @@ test("director retains unknown legacy audio and re-quotes a known outdated chara
   }], "audio", actual), []);
 });
 
+test("director quotes ordinary Edge dialogue only when the rendered voice changes", () => {
+  const node = { ...newNode("video", 0, 0, 1), id: "shot", dialogue_lines: [
+    { id: "line", speaker: "甲", text: "台词", audio_job: 11 },
+  ] };
+  const target = { node_id: "shot", stage: "dialogue", line_id: "line" } as const;
+  const params = { voice: "zh-CN-XiaoxiaoNeural", rate: "+0%", pitch: "+0Hz" };
+  const current = (rate: string) => ({
+    "shot:dialogue:line": { ...audioInput("updated"), params: { ...params, rate } },
+  });
+  const ordinary = makeJob({ id: 11, kind: "audio", model: "edge-tts", prompt: "台词", canvas_node: "dialogue:shot:line",
+    inputs: { model: "edge-tts", pack_id: "pack", voice_id: null, instruction: "" }, audio_settings: params });
+  assert.deepEqual(directorGenerationTargets([node], [ordinary], "audio", current("+15%")), [target]);
+  const signed = { ...ordinary, inputs: { ...ordinary.inputs, director_basis: "before-clamp" },
+    audio_settings: { ...params, rate: "+100%" } };
+  assert.deepEqual(directorGenerationTargets([node], [signed], "audio", current("+100%")), []);
+  assert.deepEqual(directorGenerationTargets([node], [signed], "audio", current("+99%")), [target]);
+  const changedDefault = { ...ordinary, inputs: { ...ordinary.inputs, director_basis: "updated" } };
+  assert.deepEqual(directorGenerationTargets([node], [changedDefault], "audio", current("+15%")), [target]);
+  const equivalentPack = { "shot:dialogue:line": { ...current("+100%")["shot:dialogue:line"],
+    pack_id: "new-pack", instruction: "Edge 忽略此提示" } };
+  assert.deepEqual(directorGenerationTargets([node], [signed], "audio", equivalentPack), []);
+});
+
 test("director revalidates attached audio before promotion and keeps the existing take", () => {
   const node = { ...newNode("video", 0, 0, 1), id: "shot", dialogue_lines: [
     { id: "line", speaker: "甲", text: "台词", audio_job: 11, audio_pending: 12 },

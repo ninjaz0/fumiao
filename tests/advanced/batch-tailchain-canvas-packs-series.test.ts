@@ -152,6 +152,56 @@ test("director input basis covers resolved reference and voice", async (t) => {
   }] })), { status: 409, message: /角色素材包不可用/ });
 });
 
+test("paid director video locks adopted jobs in library order while preserving the user's reference order", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  const ref = (id: string) => ({ id, type: "image", x: 0, y: 0 });
+  const shot = { id: "shot", type: "video", x: 0, y: 0, prompt: "采用两张参考图" };
+  const refs = await Promise.all([seedImageAsset(f), seedImageAsset(f, "#332244")]);
+  const jobs = await Promise.all(refs.map((asset, i) => f.job(950 + i, "image", "completed", asset.id)));
+  const order = jobs[0].id < jobs[1].id ? [1, 0] : [0, 1];
+  const nodes = [ref("a"), ref("b"), shot];
+  const edges = order.map((i) => ({ id: "ref-" + i, source: nodes[i].id, target: shot.id }));
+  const { canvasId } = await saveDirectorCanvas(f, nodes, [shot.id], edges);
+  for (const [i, job] of jobs.entries()) await f.link(canvasId, nodes[i].id, Number(job.public_id));
+  const canvas = await f.canvases.get(f.admin, canvasId);
+  const document = parseCanvasDocument({ ...canvas.document, nodes: [
+    ...nodes.slice(0, 2).map((n, i) => ({ ...n, active_job: Number(jobs[i].public_id) })), shot,
+  ] });
+  const row = await f.canvases.project(f.db, f.admin, canvasId);
+  const inputs = await inspectDirectorShotInputs(f.db, { id: row.id, workspace_id: row.workspace_id }, document, document.nodes[2]);
+  assert.ok(inputs.material_basis && inputs.story_basis);
+  document.director!.shots = [{ node_id: shot.id, material_basis: inputs.material_basis, story_basis: inputs.story_basis }];
+  const saved = await f.canvases.save(f.admin, canvasId, { title: canvas.title, expected_revision: canvas.revision, document });
+  const director = { script_revision: 1, targets: [{ node_id: shot.id, stage: "video" }] };
+  const quote = await new OriginalBatchPrecheck(f.p).precheckCanvas(f.admin, canvasId, { expected_revision: saved.revision, director });
+  assert.equal(quote.summary.total_credits, 2, JSON.stringify(quote.items));
+  const locked: string[] = [];
+  const transaction = f.db.transaction.bind(f.db);
+  f.db.transaction = (fn) => transaction((sql) => fn({
+    async query<T extends Record<string, unknown>>(statement: string, values?: unknown[]) {
+      const result = await sql.query<T>(statement, values);
+      if (statement.includes("FOR SHARE") && locked.length < 2) {
+        const held = await sql.query<{ id: string }>(
+          "SELECT id FROM jobs WHERE id=ANY($1::uuid[]) AND xmax::text=pg_current_xact_id()::text ORDER BY id",
+          [jobs.map(({ id }) => id)],
+        );
+        for (const { id } of held.rows) if (!locked.includes(id)) locked.push(id);
+      }
+      return result;
+    },
+  }));
+  const request = { expected_revision: saved.revision, director, expected_total_credits: 2,
+    precheck_token: quote.precheck_token, price_revision: quote.price_revision, uid: randomUUID() };
+  const receipt = await f.runs.batchRun(f.admin, canvasId, request);
+  assert.equal(receipt.total_credits, 2);
+  assert.equal(receipt.submitted.length, 1, JSON.stringify(receipt.skipped));
+  assert.deepEqual(await f.runs.batchRun(f.admin, canvasId, request), receipt);
+  const accepted = (await f.db.query("SELECT input FROM jobs WHERE public_id=$1", [receipt.submitted[0].job_id])).rows[0];
+  assert.deepEqual(accepted.input.references, order.map((i) => refs[i].id));
+  assert.deepEqual(locked, jobs.map(({ id }) => id).sort());
+});
+
 test("director Flow continuation binds the private provider output and the actual workspace video", async (t) => {
   const f = await canvasRunsFixture();
   t.after(() => f.cleanup());

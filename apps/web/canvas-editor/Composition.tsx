@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Film, Music, Package, Sparkles } from "lucide-react";
 import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename";
-import { directorExportAssetBusy, directorScriptConflict } from "@fumiao/web-compat/director.js";
+import { directorExportAssetBusy, directorLocalScriptDraft, directorScriptConflict } from "@fumiao/web-compat/director.js";
 import { api, ApiError } from "./api";
 import type { CanvasBgm } from "./types";
 
@@ -115,7 +115,7 @@ export function Composition({
 }: {
   project: string;
   scope?: "canvas" | "episode";
-  episode?: { account: string; scriptRevision: number; readScriptRevision: () => Promise<number> };
+  episode?: { account: string; scriptRevision: number; hasLocalScriptEdits: () => boolean; readScriptRevision: () => Promise<number> };
   active?: boolean;
   getRevision: () => Promise<number>;
   ready: boolean;
@@ -210,9 +210,10 @@ export function Composition({
         const expected_revision = await getRevision();
         const script_revision = episode.scriptRevision;
         const current = await episode.readScriptRevision();
-        if (current > script_revision && !useConfirmedScript) {
+        const localEdits = episode.hasLocalScriptEdits();
+        if ((current > script_revision || localEdits) && !useConfirmedScript) {
           setStaleScript(script_revision);
-          throw new Error(directorScriptConflict);
+          throw new Error(localEdits ? directorLocalScriptDraft : directorScriptConflict);
         }
         body = { uid: crypto.randomUUID(), scope: "episode", expected_revision, script_revision, use_confirmed_script: useConfirmedScript };
         localStorage.setItem(episodeKey, JSON.stringify(body));

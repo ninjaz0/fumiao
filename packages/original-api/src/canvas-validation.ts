@@ -6,7 +6,7 @@ import { requireValue } from "@fumiao/platform/security.js";
 import type { CanvasModels } from "@fumiao/platform/canvas-models.js";
 import type { DirectorProduction } from "@fumiao/web-compat/director.js";
 import type { CanvasDocument } from "./canvas-draft.js";
-import { canvasVoiceIds } from "./canvas-values.js";
+import { canvasDialogueTakes, canvasVoiceIds } from "./canvas-values.js";
 
 /** The caller must bind all lookups and authorization to the same save transaction. */
 export interface CanvasValidationResources {
@@ -138,6 +138,17 @@ export async function validateCanvasDocument(
       requireValue(node.type === "video" && voice, 400, "镜头旁白任务不存在");
       await voice.authorize();
       if (voice.result) refs.push({ node: node.id, media: voice.result });
+    }
+    const dialogueOutputs = new Set<string>();
+    for (const take of canvasDialogueTakes(node)) {
+      const voice = await resources.voice(take.node, take.id);
+      // Older drafts can retain IDs without the original per-line link.
+      if (!voice) continue;
+      await voice.authorize();
+      if (voice.result) dialogueOutputs.add(voice.result);
+    }
+    for (const media of dialogueOutputs) {
+      if (!refs.some((ref) => ref.node === node.id && ref.media === media)) refs.push({ node: node.id, media });
     }
     if (node.media_id) {
       const media = await resources.media(node.media_id);

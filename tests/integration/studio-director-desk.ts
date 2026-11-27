@@ -167,6 +167,7 @@ export async function verifyDirectorDesk(
     const image = await upload(await sharp({ create: { width: 96, height: 54, channels: 3, background: "#5289b3" } }).png().toBuffer(), "ref.png", "image/png");
     const script = await request("/api/workspace/scripts", { path: "第一集.md",
       body_md: "# 第一集\n\n## S01 室内·日\n\n△第一镜正片。\n\n△第二镜对白。\n\n林默：对白首次失败\n\n初夏：对白成功保留\n\n△第三镜旁白。" });
+    const referenceScript = await request("/api/workspace/scripts", { path: "人物小传.md", body_md: "角色资料" });
     const canvas = await request<Project>("/api/canvases", { title: "导演台单集出片" });
     const shot = { ...newNode("video", 400, 100, 1), id: "real-first", title: "S01-01 正片", prompt: prompts.first, audio_strategy: "keep_original" as const, params: { ...newNode("video", 400, 100, 1).params, model: "local-demo-video" } };
     const reference = { ...newNode("image", 20, 100, 1), id: "real-reference", title: "固定参考图", use_media: true, media_id: image };
@@ -243,6 +244,60 @@ export async function verifyDirectorDesk(
     await desk.getByRole("button", { name: "采用此视频" }).click();
     await expect(desk.getByText(/本镜视频已采用/)).toBeVisible();
     assert.equal((await request<Project>(path)).document.nodes.find(({ id }) => id === shot.id)?.active_job, acceptedJob);
+
+    const scriptPath = "/api/workspace/scripts/" + script.id;
+    const failLocalSave = async (route: Route) => {
+      if (route.request().method() === "PUT") await route.fulfill({ status: 503, json: { detail: "本地测试暂存失败" } });
+      else await route.continue();
+    };
+    const editor = page.getByRole("textbox", { name: "剧本文档原文编辑器" });
+    const editScript = async (scriptName: string) => {
+      await page.getByRole("tab", { name: "文档", exact: true }).click();
+      await page.getByRole("treeitem").filter({ hasText: scriptName }).dblclick();
+      if (!await editor.isVisible()) await page.getByRole("button", { name: "原文", exact: true }).click();
+    };
+    const otherPath = "/api/workspace/scripts/" + referenceScript.id;
+    await page.route("**" + otherPath, failLocalSave);
+    await editScript(referenceScript.path);
+    const otherSave = page.waitForResponse((res) => res.request().method() === "PUT" && res.url().endsWith(otherPath));
+    await editor.fill(referenceScript.body_md + "（本地修改）");
+    assert.equal((await otherSave).status(), 503);
+    await directorTab.click();
+    const freshQuote = page.waitForRequest((req) => req.method() === "POST" && req.url().endsWith(path + "/batch-precheck"));
+    await desk.getByRole("button", { name: /^预检视频/ }).click();
+    assert.equal((await freshQuote).postDataJSON().director.use_confirmed_script, false);
+    await dialog().getByRole("button", { name: "取消" }).click();
+
+    await editScript(referenceScript.path);
+    await editor.fill(referenceScript.body_md);
+    await page.unroute("**" + otherPath, failLocalSave);
+    await page.route("**" + scriptPath, failLocalSave);
+    await editScript(script.path);
+    const unsaved = script.body_md + "\n\n本地尚未同步的一句。";
+    const failedSave = page.waitForResponse((res) => res.request().method() === "PUT" && res.url().endsWith(scriptPath));
+    await editor.fill(unsaved);
+    assert.equal((await failedSave).status(), 503);
+    assert.equal((await request(scriptPath)).revision, script.revision);
+    await directorTab.click();
+    await desk.getByRole("button", { name: /^预检视频/ }).click();
+    const previousQuote = page.getByRole("button", { name: `使用已确认的剧本版本 ${script.revision} 预检` });
+    await expect(previousQuote).toBeVisible();
+    const confirmedQuote = page.waitForRequest((req) => req.method() === "POST" && req.url().endsWith(path + "/batch-precheck"));
+    await previousQuote.click();
+    const choice = (await confirmedQuote).postDataJSON().director;
+    assert.deepEqual([choice.script_revision, choice.use_confirmed_script], [script.revision, true]);
+    await dialog().getByRole("button", { name: "取消" }).click();
+    await page.reload();
+    await directorTab.click();
+    await episode.getByRole("button", { name: "合成本集" }).click();
+    await expect(episode.getByRole("button", { name: `合成已确认剧本版本 ${script.revision}` })).toBeEnabled();
+    await editScript(script.path);
+    await expect(editor).toHaveValue(unsaved);
+    await editor.fill(script.body_md);
+    await page.unroute("**" + scriptPath, failLocalSave);
+    await page.reload();
+    await directorTab.click();
+    console.log("PASS director local master-script draft: failed autosave gates fresh quote and restored episode export at the approved remote revision");
 
     const newerScript = await request("/api/workspace/scripts/" + script.id, {
       expected_revision: script.revision, body_md: script.body_md + "\n\n> 保存后更新的剧本说明",

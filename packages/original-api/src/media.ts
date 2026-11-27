@@ -14,6 +14,8 @@ import {
   type DerivativeVariant,
 } from "@fumiao/platform/derivatives.js";
 import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename.js";
+import { canvasDialogueTakes, canvasDocumentJson } from "./canvas-values.js";
+import type { CanvasNode } from "./canvas-draft.js";
 import { sendFile } from "./files.js";
 function safeDownloadFilename(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
@@ -235,6 +237,22 @@ export class OriginalMedia {
       409,
       "素材正在画布中使用，请先从相关画布移除",
     );
+    // A pending dialogue take can complete after the last canvas save. Older
+    // documents also predate per-line media refs. Inspect only its linked canvases.
+    const dialogue = await sql.query<{ document: Buffer; node: string; job: string }>(
+      `SELECT c.document,l.node,j.public_id AS job FROM job_assets r
+       JOIN jobs j ON j.id=r.job_id AND j.kind='audio' AND j.deleted_at IS NULL
+       JOIN canvas_job_links l ON l.job_id=j.id AND l.node LIKE 'dialogue:%'
+       JOIN documents d ON d.id=l.project_id AND d.workspace_id=j.workspace_id AND NOT d.deleted
+       JOIN canvas_documents c ON c.project_id=d.id
+       WHERE r.asset_id=$1 AND r.role='output'`, [id],
+    );
+    for (const link of dialogue.rows) {
+      const nodes: CanvasNode[] = canvasDocumentJson(link.document).nodes ?? [];
+      requireValue(!nodes.some((node) => canvasDialogueTakes(node)
+        .some((take) => take.node === link.node && take.id === Number(link.job))),
+        409, "素材正在画布中使用，请先从相关画布移除");
+    }
     requireValue(!kinds.length, 409, "素材仍被文档引用");
   }
   async remove(user: Actor, key: string, selected?: string) {

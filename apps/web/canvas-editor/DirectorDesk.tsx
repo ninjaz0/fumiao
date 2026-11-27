@@ -56,6 +56,7 @@ type DirectorDeskProps = {
   activeShotId: string | null;
   onSelectShot: (nodeId: string) => void;
   onChooseScript: () => void;
+  hasLocalScriptEdits: (id: string) => boolean;
   onEditSource: (request: NonNullable<ReturnType<typeof scriptSourceJump>>) => void;
   onUpdateScript: (docId: string) => void;
   onFocusCanvas: (nodeId: string) => void;
@@ -89,6 +90,7 @@ export function DirectorDesk({
   activeShotId,
   onSelectShot,
   onChooseScript,
+  hasLocalScriptEdits,
   onEditSource,
   onUpdateScript,
   onFocusCanvas,
@@ -592,6 +594,7 @@ export function DirectorDesk({
                 episode={{
                   account,
                   scriptRevision: production.script_revision,
+                  hasLocalScriptEdits: () => hasLocalScriptEdits(production.script_id),
                   readScriptRevision: async () => (await scriptApi.get(production.script_id)).revision,
                 }}
                 getRevision={onSave}

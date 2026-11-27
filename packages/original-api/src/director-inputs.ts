@@ -2,6 +2,7 @@ import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { edgeSpeechSettings } from "@fumiao/platform/tts/edge-plugin.js";
+import { ordinaryFlowSource } from "@fumiao/platform/retired-jobs.js";
 import { edgeRenderingSettings } from "@fumiao/platform/tts/edge-tts.js";
 import type { Sql } from "@fumiao/platform/db.js";
 import { DomainError, requireValue } from "@fumiao/platform/security.js";
@@ -79,6 +80,31 @@ export function compileCinematographyPrompt(
 type InputProject = { id: string; workspace_id: string };
 type DirectorInputLocks = { lock?: boolean; nowaitAssets?: boolean };
 
+async function lockDirectorSourceJobs(sql: Sql, project: InputProject, document: CanvasDocument, target: CanvasNode) {
+  const nodes = new Map(document.nodes.map((node) => [node.id, node]));
+  const pinned = document.edges.flatMap((edge) => {
+    const source = nodes.get(edge.source);
+    return edge.target === target.id && source?.active_job && !source.extension && !source.use_media &&
+      canvasSourceKind(source, edge.sourcePort) !== "text" ? [source] : [];
+  });
+  const flow = target.type === "video" ? target.params.flow_source_job : null;
+  if (!pinned.length && !flow) return new Set<number>();
+  const result = await sql.query<{ public_id: string }>(
+    `SELECT j.public_id FROM jobs j
+     WHERE j.workspace_id=$1 AND j.deleted_at IS NULL AND j.state='completed' AND (
+       (j.public_id=ANY($3::bigint[]) AND EXISTS (
+         SELECT 1 FROM canvas_job_links l JOIN unnest($2::text[],$3::bigint[]) AS p(node,job)
+           ON p.node=l.node AND p.job=j.public_id
+         WHERE l.project_id=$4 AND l.job_id=j.id))
+       OR (j.public_id=$5 AND j.kind='video' AND j.plugin_id='flow' AND (${ordinaryFlowSource})))
+     ORDER BY j.id FOR SHARE OF j`,
+    [project.workspace_id, pinned.map(({ id }) => id), pinned.map(({ active_job }) => active_job), project.id, flow],
+  );
+  const locked = new Set(result.rows.map(({ public_id }) => Number(public_id)));
+  requireValue(!flow || locked.has(flow), 409, "续写来源必须是当前工作区内已完成并保留来源信息的 Flow 视频");
+  return locked;
+}
+
 export async function resolveCanvasSources(
   sql: Sql,
   projectId: string,
@@ -86,6 +112,7 @@ export async function resolveCanvasSources(
   nodeId: string,
   lock = false,
   fixedInputs = lock,
+  lockedJobs?: ReadonlySet<number>,
 ) {
   const nodes = new Map(document.nodes.map((node) => [node.id, node]));
   const sources: {
@@ -101,7 +128,9 @@ export async function resolveCanvasSources(
     const output = edge.sourcePort && node.extension?.result?.[edge.sourcePort];
     const value = kind === "text"
       ? pythonStrip(node.extension ? output || "" : node.text)
-      : node.extension ? output || null : await canvasNodeMedia(sql, projectId, node, false, fixedInputs, lock);
+      : node.extension ? output || null
+      : !node.use_media && node.active_job && lockedJobs && !lockedJobs.has(node.active_job) ? null
+      : await canvasNodeMedia(sql, projectId, node, false, fixedInputs, lock);
     sources.push({ node, kind, value });
   }
   return sources;
@@ -255,10 +284,17 @@ export async function resolveDirectorInput(
     const label = source ? `“${source.title || source.id}”的` : "";
     requireValue(false, 409, `本镜已启用${label}自动尾帧继承，请先关闭自动继承，可在画布固定所需尾帧`);
   }
+  // Library deletion locks jobs by UUID before assets. Acquire the full paid
+  // input set in that order, then read media in the director's edge order.
+  let sources = options?.sources;
+  if (!sources && options?.lock) {
+    const locked = await lockDirectorSourceJobs(sql, project, document, node);
+    sources = await resolveCanvasSources(sql, project.id, document, node.id, false, true, locked);
+  }
   const base = await resolveCanvasVisualBase(
     sql, project.id, document, node,
     bindings ?? await CanvasSubmissionModels.read(sql),
-    options?.sources ?? (options?.lock ? await resolveCanvasSources(sql, project.id, document, node.id, true) : undefined),
+    sources,
   );
   const payload = canvasVisualPayload(node, base);
   const native = "h3" in payload ? payload.h3 : undefined;
