@@ -335,11 +335,13 @@ export function SeriesTree({ workspace }: { workspace: string }) {
       <div className="fm-series-head">
         <h2>
           <Clapperboard size={isCollapsedEmpty ? 16 : 18} />
-          {loading && isCollapsedEmpty
-            ? "剧集分集管理 · 加载中…"
-            : seriesList.length === 0
-              ? "剧集分集管理 · 0 部剧集"
-              : `剧集分集管理 · ${seriesList.length} 部剧集`}
+          <span>
+            {loading && isCollapsedEmpty
+              ? "剧集分集管理 · 加载中…"
+              : seriesList.length === 0
+                ? "剧集分集管理 · 0 部剧集"
+                : `剧集分集管理 · ${seriesList.length} 部剧集`}
+          </span>
         </h2>
         <button
           type="button"
@@ -378,13 +380,14 @@ export function SeriesTree({ workspace }: { workspace: string }) {
           <div
             style={{
               display: "flex",
+              flexWrap: "wrap",
               alignItems: "center",
               justifyContent: "space-between",
               gap: 8,
             }}
           >
             <span style={{ fontSize: 12, opacity: 0.8 }}>世界观输入模式</span>
-            <div style={{ display: "inline-flex", gap: 6 }}>
+            <div style={{ display: "inline-flex", flexWrap: "wrap", gap: 6 }}>
               <button
                 type="button"
                 className={newBibleMode === "notes" ? "primary" : "secondary"}
@@ -575,6 +578,7 @@ export function SeriesTree({ workspace }: { workspace: string }) {
                           <div
                             style={{
                               display: "flex",
+                              flexWrap: "wrap",
                               alignItems: "center",
                               justifyContent: "space-between",
                               gap: 8,
@@ -583,7 +587,7 @@ export function SeriesTree({ workspace }: { workspace: string }) {
                             <span style={{ fontSize: 12, opacity: 0.8 }}>
                               编辑模式（基准版本 v{bibleSession.expectedRevision}）
                             </span>
-                            <div style={{ display: "inline-flex", gap: 6 }}>
+                            <div style={{ display: "inline-flex", flexWrap: "wrap", gap: 6 }}>
                               <button
                                 type="button"
                                 className={

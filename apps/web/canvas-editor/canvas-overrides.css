@@ -109,40 +109,79 @@
 }
 
 @media (max-width: 760px) {
-  /* Prevent header global-tools / view-switch from ever overlapping the top-left Studio logo on narrow viewports (e.g. 320x568). */
-  .canvas-workspace .canvas-header {
-    height: auto;
-    min-height: 52px;
-    flex-wrap: wrap;
-    row-gap: 6px;
+  /* Unified phone top bar (52px + safe-area), 44px back target and single-line title ellipsis. */
+  #canvas-root .canvas-header {
+    height: calc(52px + env(safe-area-inset-top));
+    min-height: 0;
+    padding: env(safe-area-inset-top) 8px 0 6px;
+    flex-wrap: nowrap;
+    gap: 6px;
     align-items: center;
+    background: var(--pop, var(--cv-surface));
+    border-bottom: 1px solid var(--line, var(--cv-line));
+    pointer-events: auto;
   }
-  .canvas-header .project-heading {
+  #canvas-root .canvas-header .project-heading {
     position: relative;
     z-index: 2;
     flex: 1 1 auto;
+    min-width: min-content;
+    gap: 2px;
+  }
+  #canvas-root .canvas-header .cv-brand {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 10px;
+  }
+  #canvas-root .canvas-header .cv-brand img {
+    width: 24px;
+    height: 24px;
+  }
+  #canvas-root .canvas-header .project-heading input {
+    width: 0;
+    flex: 1 1 88px;
+    min-width: min(76px, 22vw);
+    max-width: 180px;
+    padding: 4px;
+    font-size: 16px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #canvas-root .canvas-header .save-state {
+    flex: none;
+  }
+  #canvas-root .canvas-header .global-tools {
+    flex: 0 1 auto;
     min-width: 0;
-  }
-  .canvas-header .project-heading input {
-    width: auto;
-    flex: 1 1 84px;
-    min-width: 60px;
-    max-width: 150px;
-  }
-  .canvas-header .global-tools {
     max-width: 100%;
     overflow-x: auto;
     scrollbar-width: none;
     margin-left: auto;
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
   }
-  .canvas-header .fm-view-switch button {
+  #canvas-root .canvas-header .global-tools::-webkit-scrollbar {
+    display: none;
+  }
+  #canvas-root .canvas-header .fm-view-switch {
+    flex: none;
+  }
+  #canvas-root .canvas-header .fm-view-switch button {
     padding: 4px 6px;
     font-size: 11px;
+    white-space: nowrap;
   }
-  .canvas-header .global-tools .icon-button:last-child {
+  #canvas-root .canvas-header .global-tools .icon-button:last-child {
     display: inline-flex;
   }
-  .canvas-header .project-heading .icon-button {
+  #canvas-root .canvas-header .project-heading .icon-button {
+    flex: none;
     width: 30px;
     height: 30px;
   }
@@ -1312,16 +1351,6 @@ button[aria-expanded="true"] > .fm-ui-chevron {
   white-space: nowrap;
 }
 @media (max-width: 520px) {
-  .canvas-header .project-heading {
-    flex: 1 0 100%;
-  }
-  .canvas-header .cv-brand,
-  .canvas-header .save-state {
-    flex: none;
-  }
-  .canvas-header .global-tools {
-    margin-left: 0;
-  }
   .save-banner {
     top: 96px;
   }

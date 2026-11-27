@@ -1,5 +1,6 @@
 import { Header, ThemeButton } from "./controls";
 import { Scene, Ribbon } from "./scenes";
+import "./home-mobile.css";
 
 /** Original homepage structure and copy, rendered by React. CSS remains pinned. */
 export default function Home({ logo }: { logo: string }) {

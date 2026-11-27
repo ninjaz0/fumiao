@@ -25,6 +25,7 @@ const paths = {
   picture: "M3 4h18v16H3z M4 17l5-5 4 4 3-3 4 4",
   queue: "M4 6h16M4 12h12M4 18h8",
   sidebar: "M4 5h16v14H4zM14 5v14",
+  menu: "M4 6h16M4 12h16M4 18h16",
   model: "m12 3 8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9",
   clock: "M12 8v4l3 2M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
   download: "M12 3v12m-5-5 5 5 5-5M4 20h16",
