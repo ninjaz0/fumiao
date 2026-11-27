@@ -1,5 +1,4 @@
-import { pipeline } from "node:stream/promises";
-import parser, { type Token } from "stream-json/parser.js";
+import { jsonParser } from "stream-json/parser.js";
 import { httpChunks, requirePublicHttps } from "../plugin-host.js";
 import { DomainError } from "../security.js";
 
@@ -71,6 +70,7 @@ class ReceiptField {
 export async function readImageReceipt(
   body: Buffer | ReadableStream<Uint8Array>,
   count: number,
+  accepted: boolean,
   signal: AbortSignal,
   containsCredential: (value: string) => boolean,
   save: (index: number, bytes: Buffer) => Promise<void>,
@@ -94,113 +94,121 @@ export async function readImageReceipt(
       throw new InterruptedReceipt();
     }
   }
-  const tokenizer = parser.asStream({
+  const tokenize = jsonParser({
     packValues: false,
     packKeys: true,
     streamKeys: false,
     maxPackedLength: 1024,
     maxDepth: 64,
   });
+  // Parse actual bytes incrementally. A parser error while consuming bytes is
+  // different from reaching HTTP EOF before the receipt's root object closes.
+  async function* batches() {
+    const decoder = new TextDecoder();
+    for await (const bytes of chunks()) {
+      const batch = tokenize(decoder.decode(bytes, { stream: true }));
+      if (typeof batch !== "symbol") yield batch.values;
+    }
+    const tail = tokenize(decoder.decode());
+    if (typeof tail !== "symbol") yield tail.values;
+  }
+  let closed = false;
   try {
-    await pipeline(
-      chunks(),
-      tokenizer,
-      async (tokens: AsyncIterable<Token>) => {
-        let depth = 0,
-          key = "",
-          inData = false,
-          item = false,
-          index = -1;
-        let capture: "url" | "b64_json" | null = null,
-          value: ReceiptField | null = null,
-          url = "",
-          b64 = "";
-        for await (const token of tokens) {
-          switch (token.name) {
-            case "keyValue":
-              key = token.value;
-              break;
-            case "startArray":
-            case "startObject": {
-              if (depth === 0 && token.name !== "startObject")
-                throw new DefiniteImageFailure();
-              if (depth === 2 && inData) {
-                index++;
-                item = index < count && token.name === "startObject";
-                url = b64 = "";
-                if (index < count) outputs.push(null);
-              }
-              if (
-                depth === 1 &&
-                key === "data" &&
-                token.name === "startArray"
-              ) {
-                if (found) throw new DefiniteImageFailure();
-                inData = found = true;
-              }
-              depth++;
-              key = "";
-              break;
+    let depth = 0,
+      key = "",
+      inData = false,
+      item = false,
+      index = -1;
+    let capture: "url" | "b64_json" | null = null,
+      value: ReceiptField | null = null,
+      url = "",
+      b64 = "";
+    for await (const batch of batches())
+      for (const token of batch) {
+        if (depth === 0 && token.name !== "startObject")
+          throw new DefiniteImageFailure();
+        switch (token.name) {
+          case "keyValue":
+            key = token.value;
+            break;
+          case "startArray":
+          case "startObject": {
+            if (depth === 2 && inData) {
+              index++;
+              item = index < count && token.name === "startObject";
+              url = b64 = "";
+              if (index < count) outputs.push(null);
             }
-            case "endObject":
-            case "endArray":
-              if (depth === 3 && item) {
-                const bytes =
-                  b64 && !containsCredential(b64) ? decodeInline(b64) : null;
-                b64 = "";
-                if (bytes) {
-                  try {
-                    await save(index, bytes);
-                  } catch (error) {
-                    throw new InterruptedReceipt("spool", { cause: error });
-                  }
-                  outputs[index] = { inline: true };
-                } else if (url)
-                  outputs[index] = publicOutput(url, containsCredential);
-                item = false;
-              }
-              if (depth === 2) inData = false;
-              depth--;
-              key = "";
-              break;
-            case "startString":
-            case "startNumber":
-            case "trueValue":
-            case "falseValue":
-            case "nullValue":
-              if (depth === 2 && inData) {
-                index++;
-                if (index < count) outputs.push(null);
-              }
-              capture =
-                token.name === "startString" &&
-                depth === 3 &&
-                item &&
-                (key === "url" || key === "b64_json")
-                  ? key
-                  : null;
-              value = capture
-                ? new ReceiptField(capture === "url" ? 8192 : maxEncoded)
-                : null;
-              key = "";
-              break;
-            case "stringChunk":
-              if (value && !value.append(token.value)) value = null;
-              break;
-            case "endString":
-              if (capture === "url") url = value?.finish() ?? "";
-              if (capture === "b64_json") b64 = value?.finish() ?? "";
-              capture = null;
-              value = null;
-              break;
+            if (depth === 1 && key === "data" && token.name === "startArray") {
+              if (found) throw new DefiniteImageFailure();
+              inData = found = true;
+            }
+            depth++;
+            key = "";
+            break;
           }
+          case "endObject":
+          case "endArray":
+            if (depth === 3 && item) {
+              const bytes =
+                b64 && !containsCredential(b64) ? decodeInline(b64) : null;
+              b64 = "";
+              if (bytes) {
+                try {
+                  await save(index, bytes);
+                } catch (error) {
+                  throw new InterruptedReceipt("spool", { cause: error });
+                }
+                outputs[index] = { inline: true };
+              } else if (url)
+                outputs[index] = publicOutput(url, containsCredential);
+              item = false;
+            }
+            if (depth === 2) inData = false;
+            depth--;
+            if (depth === 0) closed = true;
+            key = "";
+            break;
+          case "startString":
+          case "startNumber":
+          case "trueValue":
+          case "falseValue":
+          case "nullValue":
+            if (depth === 2 && inData) {
+              index++;
+              if (index < count) outputs.push(null);
+            }
+            capture =
+              token.name === "startString" &&
+              depth === 3 &&
+              item &&
+              (key === "url" || key === "b64_json")
+                ? key
+                : null;
+            value = capture
+              ? new ReceiptField(capture === "url" ? 8192 : maxEncoded)
+              : null;
+            key = "";
+            break;
+          case "stringChunk":
+            if (value && !value.append(token.value)) value = null;
+            break;
+          case "endString":
+            if (capture === "url") url = value?.finish() ?? "";
+            if (capture === "b64_json") b64 = value?.finish() ?? "";
+            capture = null;
+            value = null;
+            break;
         }
-      },
-    );
+      }
   } catch (error) {
-    if (error instanceof InterruptedReceipt) throw error;
+    if (accepted || error instanceof InterruptedReceipt)
+      throw new InterruptedReceipt();
+
     throw new DefiniteImageFailure();
   }
+  if (!closed || (accepted && (!found || !outputs.length)))
+    throw new InterruptedReceipt();
   if (!found) throw new DefiniteImageFailure();
   return { outputs };
 }

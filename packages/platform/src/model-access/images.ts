@@ -178,6 +178,7 @@ async function submitImages(
   return readImageReceipt(
     response.body,
     Number(job.input.params.n ?? 1),
+    response.status === 202,
     signal,
     client.containsCredential,
     async (index, bytes) => {

@@ -1202,3 +1202,104 @@ test(
     );
   },
 );
+
+for (const scenario of [
+  "202 empty",
+  "202 pending",
+  "200 premature FIN",
+  "202 terminal image",
+  "200 corrupt image",
+  "200 malformed JSON",
+]) {
+  test(`同步图片接单回执 ${scenario}`, async (t) => {
+    const f = await fixture(t),
+      job = await imageJob(f);
+    const png = await samplePng();
+    const valid = { b64_json: png.toString("base64") };
+    const bodies: Record<string, string> = {
+      "202 empty": "",
+      "202 pending": JSON.stringify({
+        status: "pending",
+        id: "pending-opaque-id",
+      }),
+      "200 premature FIN":
+        '{"data":[' + JSON.stringify(valid) + ',{"b64_json":"YQ',
+      "202 terminal image": JSON.stringify({ data: [valid] }),
+      "200 corrupt image": JSON.stringify({ data: [{ b64_json: "YQ==" }] }),
+      "200 malformed JSON": '{"data":oops}',
+    };
+    let posts = 0;
+    const { createServer } = await import("node:net");
+    // HTTP/1.0 without Content-Length or Transfer-Encoding: FIN delimits the
+    // body successfully at the HTTP layer, even for a truncated JSON string.
+    const server = createServer((socket) =>
+      socket.once("data", () => {
+        posts++;
+        socket.end(
+          "HTTP/1.0 " +
+            scenario.slice(0, 3) +
+            " result\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n" +
+            bodies[scenario],
+        );
+      }),
+    );
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    t.after(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        ),
+    );
+    const { port } = server.address() as import("node:net").AddressInfo;
+    const runner = new Executor(f.p, async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/synthetic`, {
+        method: "POST",
+      });
+      return {
+        status: res.status,
+        body: res.body!,
+        contentType: "application/json",
+      };
+    });
+    await runner.execute(job.id);
+    await runner.recover();
+    await runner.execute(job.id);
+    const expected = ["202 empty", "202 pending", "200 premature FIN"].includes(
+      scenario,
+    )
+      ? "uncertain"
+      : scenario === "202 terminal image"
+        ? "completed"
+        : "failed";
+    const row = await one(
+      f.db,
+      "SELECT state,request_uncertain FROM jobs WHERE id=$1",
+      [job.id],
+    );
+    assert.deepEqual(row, {
+      state: expected,
+      request_uncertain: expected === "uncertain",
+    });
+    assert.equal(posts, 1);
+    assert.equal(
+      Number((await f.p.wallet(f.member, job.workspace_id)).held),
+      expected === "uncertain" ? 0.25 : 0,
+    );
+    const actions = (
+      await f.db.query(
+        "SELECT action FROM ledger WHERE job_id=$1 ORDER BY action",
+        [job.id],
+      )
+    ).rows.map((r) => r.action);
+    assert.deepEqual(
+      actions,
+      expected === "uncertain"
+        ? ["hold"]
+        : expected === "completed"
+          ? ["hold", "spend"]
+          : ["hold", "refund"],
+    );
+  });
+}
