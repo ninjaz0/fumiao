@@ -1,3 +1,23 @@
+import {
+  creditUnits,
+  formatCredits,
+} from "@fumiao/plugin-sdk/credit-amount.js";
+
+const legacyDecimal = new Intl.NumberFormat("en-US", {
+  useGrouping: false,
+  maximumFractionDigits: 12,
+});
+
+export function creditDecimal(value: string | number): string {
+  return typeof value === "string" ? value : legacyDecimal.format(value);
+}
+
+export function displayCredits(value: string | number): string {
+  const [whole, fraction] = creditDecimal(value).split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return fraction ? grouped + "." + fraction : grouped;
+}
+
 export const MAX_CREDIT_ADJUSTMENT = 1_000_000_000;
 export const MAX_WALLET_BALANCE = 1_000_000_000_000;
 
@@ -5,6 +25,7 @@ export type CreditAdjustmentAccount = {
   available: number;
   reserved?: number;
   balance?: number;
+  exact?: { available: string; reserved: string; balance: string };
 };
 
 export type CreditAdjustmentDirection = 1 | -1;
@@ -12,7 +33,7 @@ export type CreditAdjustmentDirection = 1 | -1;
 export type CreditAdjustmentEvaluation = {
   valid: boolean;
   amount: number | null;
-  projected: number | null;
+  projected: number | string | null;
   overdrawn: boolean;
   error: string;
 };
@@ -80,6 +101,13 @@ export function evaluateCreditAdjustment(
   badInput = false,
 ): CreditAdjustmentEvaluation {
   const trimmed = rawAmount.trim();
+  const current = account.exact?.available ?? account.available;
+  const available = creditUnits(creditDecimal(current));
+  const availableLabel = displayCredits(current);
+  function project(delta: number) {
+    const result = formatCredits(available + creditUnits(String(delta)));
+    return account.exact ? result : Number(result);
+  }
   if (badInput) {
     return {
       valid: false,
@@ -90,22 +118,19 @@ export function evaluateCreditAdjustment(
     };
   }
   if (trimmed === "") {
-    if (direction === -1 && account.available <= 0) {
+    if (direction === -1 && available <= 0n) {
       return {
         valid: false,
         amount: null,
-        projected: account.available,
+        projected: current,
         overdrawn: false,
-        error:
-          account.available === 0
-            ? "当前账户可用 0 积分，余额不足无法扣减"
-            : `当前账户可用 ${account.available.toLocaleString("en-US")} 积分，余额不足无法扣减`,
+        error: `当前账户可用 ${availableLabel} 积分，余额不足无法扣减`,
       };
     }
     return {
       valid: false,
       amount: null,
-      projected: account.available,
+      projected: current,
       overdrawn: false,
       error: "",
     };
@@ -130,16 +155,19 @@ export function evaluateCreditAdjustment(
         error: "积分数量需为至少 1 的正整数",
       };
     }
-    if (direction === -1 && account.available <= MAX_CREDIT_ADJUSTMENT) {
+    if (
+      direction === -1 &&
+      available <= creditUnits(String(MAX_CREDIT_ADJUSTMENT))
+    ) {
       return {
         valid: false,
         amount: null,
         projected: null,
         overdrawn: true,
         error:
-          account.available <= 0
+          available <= 0n
             ? "当前账户可用 0 积分，余额不足无法扣减"
-            : `可用积分不足，当前最多可扣减 ${account.available.toLocaleString("en-US")} 积分`,
+            : `可用积分不足，当前最多可扣减 ${availableLabel} 积分`,
       };
     }
     return {
@@ -159,27 +187,22 @@ export function evaluateCreditAdjustment(
       error: "积分数量需为至少 1 的正整数",
     };
   }
-  if (direction === -1 && account.available <= 0) {
+  if (direction === -1 && available <= 0n) {
     return {
       valid: false,
       amount: null,
-      projected:
-        parsed <= MAX_CREDIT_ADJUSTMENT ? account.available - parsed : null,
+      projected: parsed <= MAX_CREDIT_ADJUSTMENT ? project(-parsed) : null,
       overdrawn: true,
-      error:
-        account.available === 0
-          ? "当前账户可用 0 积分，余额不足无法扣减"
-          : `当前账户可用 ${account.available.toLocaleString("en-US")} 积分，余额不足无法扣减`,
+      error: `当前账户可用 ${availableLabel} 积分，余额不足无法扣减`,
     };
   }
-  if (direction === -1 && parsed > account.available) {
+  if (direction === -1 && creditUnits(String(parsed)) > available) {
     return {
       valid: false,
       amount: null,
-      projected:
-        parsed <= MAX_CREDIT_ADJUSTMENT ? account.available - parsed : null,
+      projected: parsed <= MAX_CREDIT_ADJUSTMENT ? project(-parsed) : null,
       overdrawn: true,
-      error: `可用积分不足，当前最多可扣减 ${account.available.toLocaleString("en-US")} 积分`,
+      error: `可用积分不足，当前最多可扣减 ${availableLabel} 积分`,
     };
   }
   if (parsed > MAX_CREDIT_ADJUSTMENT) {
@@ -191,13 +214,20 @@ export function evaluateCreditAdjustment(
       error: "单次调整不能超过 1,000,000,000 积分",
     };
   }
+  const balance = account.exact?.balance ?? account.balance;
   const totalBalance =
-    account.balance ?? account.available + (account.reserved ?? 0);
-  if (direction === 1 && totalBalance + parsed > MAX_WALLET_BALANCE) {
+    balance !== undefined
+      ? creditUnits(creditDecimal(balance))
+      : available + creditUnits(creditDecimal(account.reserved ?? 0));
+  if (
+    direction === 1 &&
+    totalBalance + creditUnits(String(parsed)) >
+      creditUnits(String(MAX_WALLET_BALANCE))
+  ) {
     return {
       valid: false,
       amount: null,
-      projected: account.available + parsed,
+      projected: project(parsed),
       overdrawn: false,
       error: "调整后账户总余额超出上限",
     };
@@ -205,7 +235,7 @@ export function evaluateCreditAdjustment(
   return {
     valid: true,
     amount: parsed,
-    projected: account.available + direction * parsed,
+    projected: project(direction * parsed),
     overdrawn: false,
     error: "",
   };

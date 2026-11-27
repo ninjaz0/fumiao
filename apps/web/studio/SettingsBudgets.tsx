@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { creditUnits } from "@fumiao/plugin-sdk/credit-amount.js";
+import { creditDecimal, displayCredits } from "./settings-credits-helpers";
 import { api } from "./api";
 
 type BudgetPolicy = {
@@ -15,6 +17,7 @@ type BudgetPolicy = {
   spent: number;
   held: number;
   total_committed: number;
+  exact?: { spent: string; held: string; committed: string; warn_limit: string; cap_limit: string };
 };
 
 type BudgetProjectOption = {
@@ -29,6 +32,7 @@ type BudgetAlert = {
   projected_spend: number;
   warn_limit: number;
   cap_limit: number;
+  exact?: { projected_spend: string; warn_limit: string; cap_limit: string };
   action: string;
   created_at: string;
 };
@@ -53,6 +57,80 @@ const modeNames: Record<string, string> = {
   cap: "超上限硬拦截",
 };
 
+export function BudgetPolicyUsage({ policy: p }: { policy: BudgetPolicy }) {
+  const committed = creditUnits(
+    creditDecimal(p.exact?.committed ?? p.total_committed),
+  );
+  const cap = creditUnits(creditDecimal(p.exact?.cap_limit ?? p.cap_limit));
+  const warn = creditUnits(creditDecimal(p.exact?.warn_limit ?? p.warn_limit));
+  const pct =
+    cap <= 0n
+      ? 0
+      : committed >= cap
+        ? 100
+        : Number((100n * committed + cap / 2n) / cap);
+  const scopeTitle =
+    p.scope_type === "project"
+      ? `项目「${p.project_title || p.project_public_id || p.scope_id.slice(0, 8)}」· `
+      : "工作区 · ";
+  return (
+    <div
+      style={{
+        padding: "10px 12px",
+        borderRadius: 8,
+        border: "1px solid rgba(128,128,128,0.22)",
+        opacity: p.enabled ? 1 : 0.6,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 6,
+          fontSize: 13,
+        }}
+      >
+        <strong>
+          {scopeTitle}
+          {periodNames[p.period] || p.period}（{modeNames[p.mode]}
+          {p.enabled ? "" : " · 已停用"}）
+        </strong>
+        <span>
+          已消耗 {displayCredits(p.exact?.spent ?? p.spent)} + 在途冻结{" "}
+          {displayCredits(p.exact?.held ?? p.held)} / 上限{" "}
+          {displayCredits(p.exact?.cap_limit ?? p.cap_limit)} 积分（告警{" "}
+          {displayCredits(p.exact?.warn_limit ?? p.warn_limit)}）
+        </span>
+      </div>
+      {cap > 0n && (
+        <div
+          style={{
+            height: 6,
+            marginTop: 6,
+            borderRadius: 99,
+            background: "rgba(128,128,128,0.2)",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              width: `${pct}%`,
+              height: "100%",
+              background:
+                committed >= cap
+                  ? "#ef4444"
+                  : warn > 0n && committed >= warn
+                    ? "#f59e0b"
+                    : "#10b981",
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SettingsBudgets({
   workspace,
   notify,
@@ -64,8 +142,8 @@ export function SettingsBudgets({
   const [scopeType, setScopeType] = useState<"workspace" | "project">("workspace");
   const [scopeProjectId, setScopeProjectId] = useState("");
   const [period, setPeriod] = useState<"daily" | "monthly" | "total">("monthly");
-  const [warnLimit, setWarnLimit] = useState(500);
-  const [capLimit, setCapLimit] = useState(1000);
+  const [warnLimit, setWarnLimit] = useState("500");
+  const [capLimit, setCapLimit] = useState("1000");
   const [mode, setMode] = useState<"observe" | "warn" | "cap">("cap");
   const [enabled, setEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -104,8 +182,8 @@ export function SettingsBudgets({
           scope_type: scopeType,
           ...(scopeType === "project" ? { scope_id: scopeProjectId } : {}),
           period,
-          warn_limit: Math.max(0, Math.round(warnLimit)),
-          cap_limit: Math.max(0, Math.round(capLimit)),
+          warn_limit: warnLimit || "0",
+          cap_limit: capLimit || "0",
           mode,
           enabled,
         },
@@ -124,7 +202,8 @@ export function SettingsBudgets({
     <section className="settings-section">
       <h2>预算控制</h2>
       <p className="console-description">
-        为当前工作区或指定画布项目配置「预估 → 锁定 → 核销」三段式预算阈值与超限保护。
+        为当前工作区或指定画布项目配置「预估 → 锁定 →
+        核销」三段式预算阈值与超限保护。
       </p>
 
       {data && !canManage && (
@@ -197,8 +276,10 @@ export function SettingsBudgets({
               <input
                 type="number"
                 min={0}
+                max={100_000_000}
+                step="0.000000000001"
                 value={warnLimit}
-                onChange={(e) => setWarnLimit(Number(e.target.value))}
+                onChange={(e) => setWarnLimit(e.target.value)}
               />
             </label>
             <label>
@@ -206,8 +287,10 @@ export function SettingsBudgets({
               <input
                 type="number"
                 min={0}
+                max={100_000_000}
+                step="0.000000000001"
                 value={capLimit}
-                onChange={(e) => setCapLimit(Number(e.target.value))}
+                onChange={(e) => setCapLimit(e.target.value)}
               />
             </label>
             <label>
@@ -254,75 +337,12 @@ export function SettingsBudgets({
         )}
 
         {data && data.policies.length > 0 && (
-          <div style={{ display: "grid", gap: 8, marginTop: canManage ? 14 : 0 }}>
-            {data.policies.map((p) => {
-              const pct =
-                p.cap_limit > 0
-                  ? Math.min(
-                      100,
-                      Math.round((p.total_committed / p.cap_limit) * 100),
-                    )
-                  : 0;
-              const scopeTitle =
-                p.scope_type === "project"
-                  ? `项目「${p.project_title || p.project_public_id || p.scope_id.slice(0, 8)}」· `
-                  : "工作区 · ";
-              return (
-                <div
-                  key={p.id}
-                  style={{
-                    padding: "10px 12px",
-                    borderRadius: 8,
-                    border: "1px solid rgba(128,128,128,0.22)",
-                    opacity: p.enabled ? 1 : 0.6,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      flexWrap: "wrap",
-                      gap: 6,
-                      fontSize: 13,
-                    }}
-                  >
-                    <strong>
-                      {scopeTitle}
-                      {periodNames[p.period] || p.period}（{modeNames[p.mode]}
-                      {p.enabled ? "" : " · 已停用"}）
-                    </strong>
-                    <span>
-                      已消耗 {p.spent} + 在途冻结 {p.held} / 上限 {p.cap_limit}{" "}
-                      积分（告警 {p.warn_limit}）
-                    </span>
-                  </div>
-                  {p.cap_limit > 0 && (
-                    <div
-                      style={{
-                        height: 6,
-                        marginTop: 6,
-                        borderRadius: 99,
-                        background: "rgba(128,128,128,0.2)",
-                        overflow: "hidden",
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${pct}%`,
-                          height: "100%",
-                          background:
-                            p.total_committed >= p.cap_limit
-                              ? "#ef4444"
-                              : p.total_committed >= p.warn_limit
-                                ? "#f59e0b"
-                                : "#10b981",
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+          <div
+            style={{ display: "grid", gap: 8, marginTop: canManage ? 14 : 0 }}
+          >
+            {data.policies.map((policy) => (
+              <BudgetPolicyUsage key={policy.id} policy={policy} />
+            ))}
           </div>
         )}
       </section>
@@ -333,9 +353,16 @@ export function SettingsBudgets({
           <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
             {data.alerts.map((a) => (
               <div key={a.id}>
-                <code>{new Date(a.created_at).toLocaleString()}</code> · 预计消耗{" "}
-                <strong>{a.projected_spend}</strong> 积分（告警阈值{" "}
-                {a.warn_limit} / 上限 {a.cap_limit}）
+                <code>{new Date(a.created_at).toLocaleString()}</code> ·
+                预计消耗{" "}
+                <strong>
+                  {displayCredits(
+                    a.exact?.projected_spend ?? a.projected_spend,
+                  )}
+                </strong>{" "}
+                积分（告警阈值{" "}
+                {displayCredits(a.exact?.warn_limit ?? a.warn_limit)} / 上限{" "}
+                {displayCredits(a.exact?.cap_limit ?? a.cap_limit)}）
               </div>
             ))}
           </div>
