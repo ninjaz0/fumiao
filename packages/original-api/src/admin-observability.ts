@@ -94,6 +94,7 @@ export class OriginalObservability {
                    SUM(ABS(amount)) AS credits
               FROM ledger
              WHERE action='spend' AND created_at >= now() - ($1::int * interval '1 day')
+               AND key NOT LIKE 'sub-buy:%'
              GROUP BY job_id, turn_id, CASE WHEN job_id IS NULL AND chat_turn_id IS NULL THEN id END
           ), attributed AS (
             SELECT COALESCE(j.catalog_id, j.provider_model, j.model_id::text, t.model, '未关联模型') AS model_key,
