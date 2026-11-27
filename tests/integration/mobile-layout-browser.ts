@@ -57,7 +57,182 @@ async function checkLongWorkspaceName(page: Page) {
   assert.deepEqual(fits, { noOverflow: true, avatarVisible: true, ellipsis: "ellipsis" });
 }
 
-const checks = [checkTabBar, checkDrawerClosesAfterNavigation, checkLongWorkspaceName];
+// Thumbnails and the "参考内容" caption are gone in the collapsed bar; the
+// reference deck itself stays as the compact "+" (count badge when filled).
+async function collapsedDeckIsCompact(page: Page) {
+  return page.evaluate(() => {
+    const dock = document.querySelector("#home-composer .composer-dock")!;
+    const deck = dock.querySelector<HTMLElement>(".reference-deck");
+    const box = deck?.getBoundingClientRect();
+    const extras = [...dock.querySelectorAll(".reference-layer, .reference-deck-empty small, .composer-utilities, .composer-credit, .composer-status")];
+    return {
+      compactDeck: !box || (box.width <= 44 && box.height <= 44),
+      extrasHidden: extras.every((element) => !element.getClientRects().length),
+    };
+  });
+}
+
+async function clearPrompt(page: Page) {
+  const prompt = page.locator("#home-composer #prompt");
+  await prompt.tap();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.press("Backspace");
+  await expect(prompt).toHaveText("");
+  await page.keyboard.press("Escape");
+}
+
+async function checkDockCollapseExpand(page: Page) {      // 创作页
+  const dock = page.locator("#home-composer .composer-dock");
+  await expect(dock).toHaveAttribute("data-expanded", "false");
+  assert.deepEqual(await collapsedDeckIsCompact(page), { compactDeck: true, extrasHidden: true });
+  const box = await dock.locator(".composer-dock-sheet").boundingBox();
+  assert.ok(box!.y + box!.height <= 667 - 56 + 1, "收起态贴在标签栏上方");
+  await dock.locator("#prompt").tap();
+  await expect(dock).toHaveAttribute("data-expanded", "true");
+  await expect(page.locator(".mobile-tabbar")).toBeHidden();
+  await expect(dock.locator("#prompt")).toHaveCSS("font-size", "16px");
+  await page.keyboard.press("Escape");
+  await expect(dock).toHaveAttribute("data-expanded", "false");
+  await expect(page.locator(".mobile-tabbar")).toBeVisible();
+  await dock.locator("#prompt").tap();
+  await expect(dock).toHaveAttribute("data-expanded", "true");
+  await page.locator(".composer-dock-backdrop").tap({ position: { x: 10, y: 10 } });
+  await expect(dock).toHaveAttribute("data-expanded", "false");
+  await dock.locator("#prompt").tap();
+  await page.locator(".composer-dock-handle").tap();
+  await expect(dock).toHaveAttribute("data-expanded", "false");
+}
+
+async function hasImageReferenceModel(page: Page) {
+  const references = page.locator("#home-composer .composer-references");
+  const noModel = (await page.locator("#home-composer .model-name").innerText()).includes("暂无可用模型");
+  return !noModel && (await references.getAttribute("hidden")) === null;
+}
+
+async function clearReferences(page: Page) {
+  if (!(await page.locator("#home-composer .reference-layer").count())) return;
+  await page.locator('#home-composer [data-act="reference"]').tap();
+  while (await page.locator('#popover [data-act="unref"]').count())
+    await page.locator('#popover [data-act="unref"]').first().tap();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#home-composer .reference-layer")).toHaveCount(0);
+}
+
+async function checkLongDraft(page: Page) {               // Review Focus 1
+  const dock = page.locator("#home-composer .composer-dock");
+  const prompt = page.locator("#home-composer #prompt");
+  const withRefs = await hasImageReferenceModel(page);
+  await clearPrompt(page);
+  if (withRefs) {
+    await page.setInputFiles("#home-composer #files", { name: "draft-ref.png", mimeType: "image/png", buffer: png });
+    await expect(page.locator("#home-composer .reference-layer")).toHaveCount(1);
+  }
+  await prompt.tap();
+  // A remount would drop this marker together with the old element.
+  await prompt.evaluate((element) => { element.dataset.mountProbe = "kept"; });
+  await page.keyboard.insertText(longDraft);              // 与 mobile-asset-composer 测试相同的 24 行文本
+  const caretAtEnd = () => prompt.evaluate((element) => {
+    const selection = getSelection()!;
+    if (!selection.rangeCount || !element.contains(selection.focusNode)) return false;
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    range.setEnd(selection.focusNode!, selection.focusOffset);
+    return range.toString().length === element.textContent!.length;
+  });
+  await expect.poll(caretAtEnd).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dock).toHaveAttribute("data-expanded", "false");
+  const collapsed = await page.locator("#home-composer .composer-dock-sheet").boundingBox();
+  assert.ok(collapsed!.height <= 160, `收起态高度 ${collapsed!.height}`);
+  const promptBox = await prompt.boundingBox();
+  assert.ok(promptBox!.height <= 40, `收起态提示词高度 ${promptBox!.height}`);
+  if (withRefs) {
+    await expect(dock.locator(".reference-deck-count")).toHaveText("1");
+    await expect(dock.locator(".reference-layer")).toBeHidden();
+  }
+  await prompt.tap();
+  await expect(dock).toHaveAttribute("data-expanded", "true");
+  assert.equal((await prompt.innerText()).trimEnd(), longDraft.trimEnd());
+  await expect(prompt).toHaveAttribute("data-mount-probe", "kept");
+  await expect.poll(caretAtEnd, { message: "caret returns after Escape fold" }).toBe(true);
+  if (withRefs) {
+    await expect(dock.locator(".reference-layer").first()).toBeVisible();
+  }
+  // Folding via the handle button (which blurs #prompt before click) also preserves caret.
+  await page.locator(".composer-dock-handle").tap();
+  await expect(dock).toHaveAttribute("data-expanded", "false");
+  await prompt.tap();
+  await expect(dock).toHaveAttribute("data-expanded", "true");
+  await expect.poll(caretAtEnd, { message: "caret returns after handle fold" }).toBe(true);
+  if (withRefs) await clearReferences(page);
+  await page.keyboard.press("Escape");
+  await clearPrompt(page);
+}
+
+async function checkWidenClearsDock(page: Page) {         // Review Focus 2
+  await page.locator("#home-composer #prompt").tap();
+  await expect(page.locator(".composer-dock-backdrop")).toHaveCount(1);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.locator(".composer-dock-backdrop")).toHaveCount(0);
+  await expect(page.locator(".composer-dock-handle")).toHaveCount(0);
+  await expect(page.locator(".mobile-tabbar")).toHaveCount(0);
+  await expect(page.locator(".composer-dock-sheet")).toHaveCSS("position", "static");
+  assert.equal(await page.evaluate(() => document.querySelector<HTMLElement>(".shell")!.style.getPropertyValue("--mobile-dock-height")), "");
+  await page.setViewportSize({ width: 375, height: 667 });
+  await expect(page.locator("#home-composer .composer-dock")).toHaveAttribute("data-expanded", "false");
+}
+
+async function checkPickingReturnsExpanded(page: Page) {  // Review Focus 5
+  if (!(await hasImageReferenceModel(page))) {
+    await page.locator("#home-composer #prompt").tap();
+    await page.getByRole("button", { name: "添加参考内容" }).tap();
+    await page.getByRole("button", { name: "从资产选择", exact: true }).tap();
+    await page.getByRole("button", { name: "完成选择", exact: true }).tap();
+    await expect(page.locator("#home-composer .composer-dock")).toHaveAttribute("data-expanded", "true");
+    await expect(page.locator(".mobile-tabbar")).toBeHidden();
+    await page.keyboard.press("Escape");
+    console.log("checkPickingReturnsExpanded: verified expanded return (asset attach skipped without configured video/image model)");
+    return;
+  }
+  // 先上传一张图片作为资产：ffmpeg 生成 64×64 PNG，写入 #files
+  await page.setInputFiles("#home-composer #files", { name: "pick.png", mimeType: "image/png", buffer: png });
+  await expect(page.locator("#home-composer .reference-layer")).not.toHaveCount(0);
+  // 清空引用后再从资产里选回来
+  await page.locator("#home-composer #prompt").tap();
+  await clearReferences(page);
+  await expect(page.locator("#home-composer .composer-dock")).toHaveAttribute("data-expanded", "true");
+  await page.getByRole("button", { name: "添加参考内容" }).tap();
+  await page.getByRole("button", { name: "从资产选择", exact: true }).tap();
+  // Picking keeps the full floating composer over the grid (unchanged by the
+  // dock), so tap the part of the first image that stays uncovered.
+  const target = page.locator(".asset-preview").first();
+  await target.scrollIntoViewIfNeeded();
+  await page.evaluate(() => {
+    const top = document.querySelector(".asset-top")!.getBoundingClientRect().bottom;
+    scrollBy(0, document.querySelector(".asset-preview")!.getBoundingClientRect().top - top - 8);
+  });
+  const point = await target.evaluate((button) => {
+    const box = button.getBoundingClientRect();
+    for (let y = box.top + 4; y < box.bottom; y += 8)
+      for (let x = box.left + 4; x < box.right; x += 8)
+        if (button.contains(document.elementFromPoint(x, y))) return { x, y };
+    return null;
+  });
+  assert.ok(point, "the first asset is reachable while picking");
+  await page.touchscreen.tap(point.x, point.y);
+  await expect(target).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "完成选择", exact: true }).tap();
+  await expect(page.locator("#home-composer .composer-dock")).toHaveAttribute("data-expanded", "true");
+  await expect(page.locator("#home-composer .reference-layer")).not.toHaveCount(0);
+  await expect(page.locator(".mobile-tabbar")).toBeHidden();
+  await clearReferences(page);
+  await page.keyboard.press("Escape");
+}
+
+const checks = [
+  checkTabBar, checkDrawerClosesAfterNavigation, checkLongWorkspaceName,
+  checkDockCollapseExpand, checkLongDraft, checkWidenClearsDock, checkPickingReturnsExpanded,
+];
 
 async function fixture(harness: ChildProcess) {
   return new Promise<RegExpMatchArray>((resolve, reject) => {

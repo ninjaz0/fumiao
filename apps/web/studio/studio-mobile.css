@@ -217,10 +217,6 @@
   #app .detail-view {
     z-index: 12;
   }
-  /* The asset page's floating composer sits above the tab bar. */
-  .shell:has(> .mobile-tabbar:not([hidden])) .floating-composer {
-    bottom: calc(var(--mobile-tabbar-height) + env(safe-area-inset-bottom) + 12px);
-  }
   /* Chat fills the space between the bars instead of the whole viewport. */
   .workspace:has(#chat-root) .fm-chat {
     height: calc(
@@ -234,12 +230,246 @@
         env(safe-area-inset-top)
     );
   }
+
+  /* Composer dock: the one Composer becomes a compact bar above the tab bar
+     and opens into a bottom sheet. Selectors start at .composer-dock with its
+     data attributes, which outranks the baseline .composer rules without #app.
+     ComposerDock writes the bar's height to --mobile-dock-height for #view. */
+  #app #prompt {
+    font-size: var(--mobile-input-size);
+  }
+  #app .home-composer {
+    margin: 0;
+  }
+  /* The asset page's floating holder steps aside so the dock is the only
+     fixed layer; reference picking keeps the plain floating composer. */
+  #app .mobile-asset-composer {
+    position: static;
+    z-index: auto;
+    margin: 0;
+  }
+  #app .assets-view:has(+ .mobile-asset-composer:not([hidden])) {
+    padding-bottom: 0;
+  }
+
+  /* Collapsed: parameter pills, then "+", one prompt line and send. */
+  .composer-dock[data-narrow]:not([data-expanded="true"]) {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: calc(var(--mobile-tabbar-height) + env(safe-area-inset-bottom));
+    z-index: 14;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .composer-dock-sheet {
+    padding-bottom: 8px;
+  }
+  .shell:has(> .mobile-tabbar[hidden])
+    .composer-dock[data-narrow]:not([data-expanded="true"]) {
+    bottom: env(safe-area-inset-bottom);
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .composer {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0 8px;
+    padding: 8px;
+    border-radius: var(--mobile-card-radius);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 10%);
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"])
+    :is(.editor-row, .composer-toolbar, .composer-actions, .submit-controls) {
+    display: contents;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"])
+    .composer-dock-notice:not([hidden]) {
+    display: block;
+    grid-row: 1;
+    grid-column: 1 / -1;
+    min-width: 0;
+    min-height: 28px;
+    margin-bottom: 2px;
+    padding: 0 4px;
+    overflow: hidden;
+    color: var(--secondary);
+    font-size: 12px;
+    line-height: 28px;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .composer-parameters {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    align-items: center;
+    flex-wrap: nowrap;
+    min-height: 36px;
+    margin-bottom: 4px;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"])
+    .composer-parameters::-webkit-scrollbar {
+    display: none;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"])
+    .composer-parameters
+    > * {
+    flex: none;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .parameter-button {
+    height: 36px;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .composer-references {
+    grid-row: 3;
+    grid-column: 1;
+    flex: none;
+    width: auto;
+    min-width: 36px;
+    height: 36px;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .reference-deck {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"])
+    .reference-deck:has(.reference-deck-count) {
+    background: var(--hover);
+  }
+  /* 44px touch targets around the smaller "+" and send buttons. */
+  .composer-dock[data-narrow]:not([data-expanded="true"])
+    :is(.reference-deck, .generate-button)::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .reference-deck-empty {
+    position: static;
+    width: 36px;
+    height: 36px;
+    gap: 0;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"])
+    :is(.reference-layer, .reference-deck-empty small) {
+    display: none;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .reference-deck-count {
+    position: static;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .h3-frame-pair {
+    gap: 4px;
+    padding: 0;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .h3-frame {
+    width: 36px;
+    height: 36px;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"])
+    :is(.h3-swap, .h3-remove, .h3-frame-preview > span) {
+    display: none;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .h3-frame-preview > .icon {
+    margin: 0;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) #prompt {
+    grid-row: 3;
+    grid-column: 2;
+    min-height: 36px;
+    max-height: 36px;
+    padding: 0;
+    overflow: hidden;
+    line-height: 36px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"]) .generate-button {
+    position: relative;
+    grid-row: 3;
+    grid-column: 3;
+    width: 36px;
+    height: 36px;
+  }
+  .composer-dock[data-narrow]:not([data-expanded="true"])
+    :is(
+      .composer-utilities,
+      .composer-credit,
+      .composer-estimate,
+      .composer-status,
+      .flow-source,
+      .composer-draft-recovery,
+      .model-parameter,
+      .parameter-constraint-hint,
+      .composer > .quiet-button
+    ) {
+    display: none;
+  }
+
+  /* Expanded: the full composer in a bottom sheet over a dimmed page. */
+  .composer-dock-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: rgb(0 0 0 / 32%);
+  }
+  .composer-dock[data-narrow][data-expanded="true"] .composer-dock-sheet {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 31;
+    max-height: min(85dvh, calc(var(--visual-viewport-height, 100dvh) - 24px));
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding-bottom: env(safe-area-inset-bottom);
+    border-radius: var(--mobile-panel-radius) var(--mobile-panel-radius) 0 0;
+    background: var(--composer);
+    box-shadow: 0 -8px 30px rgb(0 0 0 / 12%);
+  }
+  .composer-dock[data-narrow][data-expanded="true"] .composer {
+    padding: 0 var(--mobile-gutter) var(--mobile-gutter);
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .composer-dock[data-narrow][data-expanded="true"] #prompt {
+    min-height: 120px;
+    max-height: min(320px, 45dvh);
+  }
+  .composer-dock-handle {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: var(--mobile-touch-size);
+    background: var(--composer);
+  }
+  .composer-dock-handle::before {
+    content: "";
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--muted);
+  }
+  .composer-dock-handle:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: -4px;
+  }
+}
+
+/* The collapsed bar's one-line notice exists only on phones. */
+.composer-dock-notice {
+  display: none;
 }
 
 /* Safety net: the phone chrome never shows on wider screens. */
 @media (min-width: 761px) {
   .mobile-topbar,
-  .mobile-tabbar {
+  .mobile-tabbar,
+  .composer-dock-backdrop,
+  .composer-dock-handle {
     display: none;
   }
 }

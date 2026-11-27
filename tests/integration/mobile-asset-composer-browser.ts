@@ -27,7 +27,7 @@ async function checkTaps(page: Page, preview: Locator, description: string) {
       // The card's separate quick actions occupy the top 36px.
       const y = Math.round(corner.startsWith("top") ? top + 40 : corner.startsWith("bottom") ? bottom - 16 : (top + bottom) / 2);
       const hit = document.elementFromPoint(x, y);
-      return { x, y, preview: button.contains(hit), hit: hit?.closest("#asset-composer") ? "composer" : hit?.tagName ?? "outside viewport" };
+      return { x, y, preview: button.contains(hit), hit: hit?.closest(".composer-dock") ? "composer" : hit?.tagName ?? "outside viewport" };
     }, corner);
     await page.touchscreen.tap(point.x, point.y);
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
@@ -86,6 +86,9 @@ try {
   await expect(page.getByRole("button", { name: "选择模型，当前MiniMax H3" })).toBeVisible();
   await expect(page.getByRole("button", { name: "选择参考模式" })).toHaveText("全能参考");
   const reference = page.locator(".composer-references video");
+  // The collapsed dock opens into the full composer before adding a reference.
+  await page.locator("#home-composer #prompt").tap();
+  await expect(page.locator("#home-composer .composer-dock")).toHaveAttribute("data-expanded", "true");
   await page.getByRole("button", { name: "添加参考内容" }).tap();
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "上传素材" }).tap();
@@ -113,7 +116,9 @@ try {
     for (const [label, draft] of [["default", ""], ["long-draft", longDraft]]) {
       if (!(await homePrompt.isVisible())) await home.tap();
       await homePrompt.fill(draft);
-      await homePrompt.blur();
+      // Esc folds the dock back so the tab bar returns.
+      await page.keyboard.press("Escape");
+      await expect(page.locator("#home-composer .composer-dock")).toHaveAttribute("data-expanded", "false");
       await showAssets();
       await screenshot(`${name}-${label}`);
       failures.push(...await checkTaps(page, preview, `${name} ${label}`));
@@ -124,33 +129,41 @@ try {
   for (const viewport of sizes) {
     const name = `${viewport.width}x${viewport.height}`;
     await page.setViewportSize(viewport);
-    const expand = page.getByRole("button", { name: "展开创作框", exact: true });
-    const collapse = page.getByRole("button", { name: "收起创作框", exact: true });
+    const dock = page.locator("#asset-composer .composer-dock");
     const prompt = page.locator("#asset-composer .prompt");
+    const expand = async () => {
+      await prompt.tap();
+      await expect(dock).toHaveAttribute("data-expanded", "true");
+    };
+    const collapse = async () => {
+      await page.keyboard.press("Escape");
+      await expect(dock).toHaveAttribute("data-expanded", "false");
+    };
     const checkDraft = async () => {
       await expect(prompt).toBeVisible();
       await expect.poll(() => prompt.innerText()).toBe(longDraft);
       await expect(reference).toHaveAttribute("src", source);
     };
-    await expand.tap();
+    await expand();
     await checkDraft();
-    assert.deepEqual(await checkTaps(page, preview, `${name} expanded`), []);
-    await collapse.tap();
-    await expect(prompt).toBeHidden();
-    await expand.tap();
+    await collapse();
+    // Collapsed: a single prompt line above the tab bar, cards stay tappable.
+    assert.ok((await prompt.boundingBox())!.height <= 40, `${name}: collapsed prompt stays one line`);
+    assert.deepEqual(await checkTaps(page, preview, `${name} collapsed`), []);
+    await expand();
     await checkDraft();
     if (viewport.width === 375) {
-      await prompt.tap();
       await expect(prompt).toBeFocused();
       await screenshot("375x667-expanded-draft");
     }
-    await collapse.tap();
+    await collapse();
     await page.evaluate(() => scrollTo(0, 0));
     await page.getByRole("button", { name: "多选", exact: true }).tap();
-    await expect(expand).toBeHidden();
+    await expect(dock).toBeHidden();
     await preview.tap();
     await expect(preview.locator("..")).toHaveClass(/is-selected/);
     await page.getByRole("button", { name: "取消选择", exact: true }).tap();
+    await expect(dock).toBeVisible();
     console.log(`${name}: collapse/reopen preserves prompt and video reference; 多选 still selects the asset`);
   }
   await context.close();
