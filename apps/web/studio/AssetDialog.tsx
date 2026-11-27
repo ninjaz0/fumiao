@@ -14,6 +14,7 @@ import type { SettingsDialogPresentation } from "./settings-admin";
 import "./asset-packs.css";
 import { AssetPacks } from "../canvas-editor/AssetPacks";
 import {
+  assetDownloadFilename,
   packReferences,
   type Asset,
   type DraftSession,
@@ -346,7 +347,11 @@ export function AssetDialog({
                           detail
                         />
                       )}
-                      <Download id={id} detail />
+                      <Download
+                        id={id}
+                        filename={assetDownloadFilename(asset)}
+                        detail
+                      />
                       {canDelete && onDelete && (
                         <button
                           type="button"

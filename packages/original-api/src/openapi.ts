@@ -13,6 +13,18 @@ export type SessionOnlyRouteDoc = {
  */
 export const SESSION_ONLY_OPENAPI_ROUTES: readonly SessionOnlyRouteDoc[] = [
   {
+    method: "PUT",
+    template: "/api/canvases/:key/archive",
+    tag: "Canvas",
+    summary: "归档画布（仅画布创建者或有工作区访问权限的系统管理员）",
+  },
+  {
+    method: "DELETE",
+    template: "/api/canvases/:key/archive",
+    tag: "Canvas",
+    summary: "恢复画布（仅画布创建者或有工作区访问权限的系统管理员）",
+  },
+  {
     method: "GET",
     template: "/api/tokens",
     tag: "Developer",
@@ -46,7 +58,8 @@ export const SESSION_ONLY_OPENAPI_ROUTES: readonly SessionOnlyRouteDoc[] = [
     method: "POST",
     template: "/api/canvases/:key/proposals/:pid/apply",
     tag: "Agent",
-    summary: "人工批准提案并按预期版本号原子落图（仅浏览器会话，防止 Agent 自行审批）",
+    summary:
+      "人工批准提案并按预期版本号原子落图（仅浏览器会话，防止 Agent 自行审批）",
   },
   {
     method: "POST",
@@ -76,19 +89,22 @@ export const SESSION_ONLY_OPENAPI_ROUTES: readonly SessionOnlyRouteDoc[] = [
     method: "GET",
     template: "/api/admin/observability/summary",
     tag: "Admin",
-    summary: "读取全站模型渠道健康度、延迟、成本与毛利汇总（仅管理员浏览器会话）",
+    summary:
+      "读取全站模型渠道健康度、延迟、成本与毛利汇总（仅管理员浏览器会话）",
   },
   {
     method: "GET",
     template: "/api/admin/observability/uncertain",
     tag: "Admin",
-    summary: "列出待人工核对的 uncertain 任务列表，返回任务 UUID（id）与公开任务号（public_id）（仅管理员浏览器会话）",
+    summary:
+      "列出待人工核对的 uncertain 任务列表，返回任务 UUID（id）与公开任务号（public_id）（仅管理员浏览器会话）",
   },
   {
     method: "POST",
     template: "/api/admin/observability/jobs/:id/reconcile",
     tag: "Admin",
-    summary: "核对 uncertain 任务（退款或恢复）；路径参数 id 支持运营大盘返回的任务 UUID 或正整数公开任务号，格式非法返回 400、不存在返回 404（仅管理员浏览器会话）",
+    summary:
+      "核对 uncertain 任务（退款或恢复）；路径参数 id 支持运营大盘返回的任务 UUID 或正整数公开任务号，格式非法返回 400、不存在返回 404（仅管理员浏览器会话）",
   },
 ];
 
@@ -149,7 +165,22 @@ export function buildOpenApiSpec(serverUrl = "/") {
           },
         ]
       : [];
-    const allParams = [...params, ...extraParams];
+    const viewParams =
+      rule.method === "GET" && rule.template === "/api/canvases"
+        ? [
+            {
+              name: "view",
+              in: "query",
+              schema: {
+                type: "string",
+                enum: ["current", "archived"],
+                default: "current",
+              },
+              description: "选择当前画布或已归档画布",
+            },
+          ]
+        : [];
+    const allParams = [...params, ...extraParams, ...viewParams];
     paths[openApiPath] ??= {};
     paths[openApiPath][methodKey] = {
       summary: rule.summary,
@@ -170,16 +201,37 @@ export function buildOpenApiSpec(serverUrl = "/") {
   for (const doc of SESSION_ONLY_OPENAPI_ROUTES) {
     const { openApiPath, params } = templateToOpenApiPath(doc.template);
     const methodKey = doc.method.toLowerCase();
+    const archive = doc.template === "/api/canvases/:key/archive";
+    const allParams = archive
+      ? [
+          ...params,
+          {
+            name: "expected_archive_change",
+            in: "query",
+            schema: { type: "string", format: "uuid" },
+            description: "撤销时传入上一次操作返回的 undo_token",
+          },
+        ]
+      : params;
     paths[openApiPath] ??= {};
     paths[openApiPath][methodKey] = {
       summary: doc.summary,
       tags: [doc.tag],
       security: [{ sessionCookie: [] }],
       "x-session-only": true,
-      ...(params.length ? { parameters: params } : {}),
+      ...(allParams.length ? { parameters: allParams } : {}),
       responses: {
-        "200": { description: "成功" },
-        "403": { description: "该接口仅支持浏览器会话访问，禁止使用 API Token" },
+        "200": {
+          description: archive
+            ? "返回 archived_at。直接操作实际改变状态时同时返回 undo_token"
+            : "成功",
+        },
+        "403": {
+          description: "该接口仅支持浏览器会话访问，禁止使用 API Token",
+        },
+        ...(archive
+          ? { "409": { description: "归档状态已经变化，撤销凭据过期" } }
+          : {}),
       },
     };
   }
@@ -205,7 +257,8 @@ export function buildOpenApiSpec(serverUrl = "/") {
           type: "apiKey",
           in: "cookie",
           name: "fm_session",
-          description: "浏览器登录会话 Cookie（管理员与工作区策略/审批操作必需）。",
+          description:
+            "浏览器登录会话 Cookie（管理员与工作区策略/审批操作必需）。",
         },
       },
     },

@@ -14,8 +14,24 @@ export type PluginServiceSnapshot = {
 };
 
 export const DEFAULT_SERVICE_CONCURRENCY = 1;
+export const CAPACITY_SERVICE_CONCURRENCY = 16;
 export const MIN_SERVICE_CONCURRENCY = 1;
 export const MAX_SERVICE_CONCURRENCY = 100;
+
+export function defaultServiceConcurrency(plugin?: {
+  defaultConcurrency?: number;
+}): number {
+  const value = plugin?.defaultConcurrency;
+  if (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= MIN_SERVICE_CONCURRENCY &&
+    value <= MAX_SERVICE_CONCURRENCY
+  ) {
+    return value;
+  }
+  return DEFAULT_SERVICE_CONCURRENCY;
+}
 
 export type PluginSchemaSnapshot = {
   configSchema: {

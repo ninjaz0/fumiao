@@ -321,7 +321,10 @@ test("Canvas editor floats CinematographyPanel, strips neon hexes and raw policy
   assert.match(overridesCss, /#3686ad|#68a8db/i);
   assert.match(overridesCss, /\.fm-cine-popover[\s\S]*?position:\s*absolute/);
   assert.match(overridesCss, /\.fm-cine-popover[\s\S]*?max-width:\s*340px/);
-  assert.match(overridesCss, /\.fm-docked-storyboard\.fm-with-agent-dock[\s\S]*?right:\s*400px/);
+  assert.match(
+    overridesCss,
+    /\.fm-docked-storyboard\.fm-with-agent-dock[\s\S]*?right:\s*var\(--fm-agent-width,\s*400px\)/,
+  );
   assert.match(overridesCss, /appearance:\s*none/);
   assert.match(overridesCss, /\.composition-bgm-gen input\[type="text"\][\s\S]*?border:\s*1px solid var\(--cv-line\)/);
   assert.match(overridesCss, /\.composition-bgm-gen \.secondary[\s\S]*?border:\s*1px solid var\(--cv-line\)/);
@@ -348,19 +351,21 @@ test("Not-found page and 503 gateway fallback use Fumiao ocean-blue adaptive the
   );
 
   const notFoundTsx = readRepoFile("apps/web/app/not-found.tsx");
+  const notFoundCss = readRepoFile("apps/web/app/not-found.css");
   assert.match(notFoundTsx, /\/static\/mark\.svg/);
-  assert.match(notFoundTsx, /页面不存在或已被移除/);
-  assert.match(notFoundTsx, /href="\/studio"[\s\S]*?返回工作台|返回工作台[\s\S]*?href="\/studio"/);
-  assert.match(notFoundTsx, /#f8f9fa/i);
-  assert.match(notFoundTsx, /#fff(?:fff)?\b/i);
-  assert.match(notFoundTsx, /#3686ad/i);
-  assert.match(notFoundTsx, /#111(?:111)?\b/i);
-  assert.match(notFoundTsx, /#1e1e1e/i);
-  assert.match(notFoundTsx, /#68a8db/i);
-  assert.match(notFoundTsx, /\[data-theme="dark"\]/);
-  assert.match(notFoundTsx, /prefers-color-scheme:\s*dark/);
-  assert.match(notFoundTsx, /PingFang SC[\s\S]*?sans-serif/);
-  assert.doesNotMatch(notFoundTsx, /Songti|STSong|SimSun/i);
+  assert.match(notFoundTsx, /页面不存在/);
+  assert.match(notFoundTsx, /href="\/studio"[\s\S]*?进入工作台/);
+  assert.match(notFoundTsx, /href="\/"[\s\S]*?返回首页/);
+  assert.match(notFoundCss, /#f8f9fa/i);
+  assert.match(notFoundCss, /#fff(?:fff)?\b/i);
+  assert.match(notFoundCss, /#3686ad/i);
+  assert.match(notFoundCss, /#111(?:111)?\b/i);
+  assert.match(notFoundCss, /#1e1e1e/i);
+  assert.match(notFoundCss, /#68a8db/i);
+  assert.match(notFoundCss, /\[data-theme="dark"\]/);
+  assert.match(notFoundCss, /prefers-color-scheme:\s*dark/);
+  assert.match(notFoundCss, /PingFang SC[\s\S]*?sans-serif/);
+  assert.doesNotMatch(notFoundCss, /Songti|STSong|SimSun/i);
 
   const proxyTs = readRepoFile("apps/web/proxy.ts");
   assert.match(proxyTs, /status:\s*503/);

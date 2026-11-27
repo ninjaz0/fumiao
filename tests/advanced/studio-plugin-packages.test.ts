@@ -8,7 +8,12 @@ import { OriginalState } from "@fumiao/original-api/state.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { migrate } from "@fumiao/platform/db.js";
 import { studioPluginProfile } from "@fumiao/platform/studio-plugin-profile.js";
-import { buildUpdateSourcePayload } from "../../apps/web/studio/settings-plugins-helpers.js";
+import {
+  CAPACITY_SERVICE_CONCURRENCY,
+  buildUpdateSourcePayload,
+  defaultServiceConcurrency,
+  parseServiceConcurrency,
+} from "../../apps/web/studio/settings-plugins-helpers.js";
 import { databaseFixture } from "../helpers/database.js";
 
 for (const id of ["muse", "flow"]) {
@@ -237,6 +242,65 @@ test("plugin settings helpers integrate with connection concurrency and update t
     pkg = await findPkg();
     assert.equal(pkg.updateUrl, updateUrl);
     assert.equal(pkg.hasUpdateToken, false);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("capacity plugins expose defaultConcurrency 16 for new service forms while preserving saved concurrency on edits", async () => {
+  const f = await databaseFixture();
+  try {
+    await f.p.registry.initializeStudio(f.db, false);
+    const identity = new OriginalIdentity(f.p);
+    const user = { name: "admin", password: "default-concurrency-test" };
+    await identity.bootstrap({ ...user, nickname: "管理员" });
+    const actor = await identity.actor(await identity.login(user, "fixture"));
+    const packages = new StudioPackages(f.p);
+
+    const museFile = JSON.parse(
+      await readFile("plugins/muse/muse.fmplugin.json", "utf8"),
+    );
+    const flowFile = JSON.parse(
+      await readFile("plugins/flow/flow.fmplugin.json", "utf8"),
+    );
+    await packages.install(actor, museFile);
+    await packages.install(actor, flowFile);
+
+    const allListed = await packages.list(actor);
+    const musePkg = allListed.find((p) => p.id === "muse")!;
+    const flowPkg = allListed.find((p) => p.id === "flow")!;
+    assert.equal(musePkg.defaultConcurrency, CAPACITY_SERVICE_CONCURRENCY);
+    assert.equal(musePkg.defaultConcurrency, 16);
+    assert.equal(flowPkg.defaultConcurrency, 1);
+
+    assert.equal(defaultServiceConcurrency(musePkg), 16);
+    assert.equal(
+      parseServiceConcurrency("", defaultServiceConcurrency(musePkg)),
+      16,
+    );
+    assert.equal(defaultServiceConcurrency(flowPkg), 1);
+    assert.equal(defaultServiceConcurrency({}), 1);
+    assert.equal(defaultServiceConcurrency({ defaultConcurrency: 0 }), 1);
+
+    for (const savedConcurrency of [1, 3]) {
+      const existingService = { concurrency: savedConcurrency };
+      const fallback =
+        existingService?.concurrency ?? defaultServiceConcurrency(musePkg);
+      assert.equal(fallback, savedConcurrency);
+      assert.equal(parseServiceConcurrency("", fallback), savedConcurrency);
+    }
+
+    const settingsSource = await readFile(
+      "apps/web/studio/SettingsPlugins.tsx",
+      "utf8",
+    );
+    assert.ok(settingsSource.includes("MUSE2API_CONCURRENCY"));
+    assert.ok(settingsSource.includes("8 张"));
+    const museUpdate = JSON.parse(
+      await readFile("plugins/muse/update.json", "utf8"),
+    );
+    assert.ok(museUpdate.notes.includes("MUSE2API_CONCURRENCY"));
+    assert.ok(museUpdate.notes.includes("存量连接"));
   } finally {
     await f.cleanup();
   }

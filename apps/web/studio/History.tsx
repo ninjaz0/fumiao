@@ -7,7 +7,13 @@ import {
   useCardClasses,
 } from "./AssetMedia";
 import { Icon } from "./Icon";
-import { mediaURL, modelAvailable, type Job, type StudioState } from "./state";
+import {
+  jobDownloadFilename,
+  mediaURL,
+  modelAvailable,
+  type Job,
+  type StudioState,
+} from "./state";
 
 const labels = {
   queued: "排队中",
@@ -240,7 +246,7 @@ export function JobCard({
         )}
         {job.result && (
           <>
-            <Download id={job.result} />
+            <Download id={job.result} filename={jobDownloadFilename(job)} />
             <Favorite id={key} saved={saved} change={favorite} />
           </>
         )}

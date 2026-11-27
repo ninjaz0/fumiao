@@ -35,19 +35,19 @@ const POLICY_LABELS: Record<AgentPolicy, string> = {
 export function ProposalDiffPreview({
   workspace,
   projectId,
-  revision,
   canEditPolicy,
-  onApplied,
+  onApproveProposal,
   onPendingCountChange,
   onClose,
+  embedded = false,
 }: {
   workspace: number;
   projectId: string;
-  revision: number;
   canEditPolicy: boolean;
-  onApplied: (canvas: any) => void;
+  onApproveProposal: (proposalId: string) => Promise<{ conflict?: string }>;
   onPendingCountChange?: (count: number) => void;
   onClose: () => void;
+  embedded?: boolean;
 }) {
   const [proposals, setProposals] = useState<CanvasProposal[]>([]);
   const [policy, setPolicy] = useState<AgentPolicy>("plan_only");
@@ -123,12 +123,13 @@ export function ProposalDiffPreview({
     setError("");
     setNotice("");
     try {
-      const res = await req(`/api/canvases/${projectId}/proposals/${p.id}/apply`, {
-        expected_revision: revision,
-      });
-      onApplied(res.canvas);
-      setNotice(`提案「${p.title}」已原子落图（不自动触发扣费生成）`);
+      const res = await onApproveProposal(p.id);
       await load();
+      if (res?.conflict) {
+        setError(res.conflict);
+      } else {
+        setNotice(`提案「${p.title}」已原子落图（不自动触发扣费生成）`);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -150,22 +151,27 @@ export function ProposalDiffPreview({
   };
 
   return (
-    <aside className="fm-agent-dock" aria-label="提案式画布 Agent 停靠栏">
-      <div className="fm-docked-head">
-        <strong>
-          <Sparkles size={15} /> 画布 Agent 提案箱
-        </strong>
-        <div className="fm-agent-head-btns">
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="关闭 Agent 提案箱"
-            onClick={onClose}
-          >
-            <X size={16} />
-          </button>
+    <aside
+      className={embedded ? "fm-agent-dock-embedded" : "fm-agent-dock"}
+      aria-label="提案式画布 Agent 停靠栏"
+    >
+      {!embedded && (
+        <div className="fm-docked-head">
+          <strong>
+            <Sparkles size={15} /> 画布 Agent 提案箱
+          </strong>
+          <div className="fm-agent-head-btns">
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="关闭 Agent 提案箱"
+              onClick={onClose}
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="fm-policy-banner">
         <ShieldCheck size={15} />

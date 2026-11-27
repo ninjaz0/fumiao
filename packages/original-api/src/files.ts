@@ -3,6 +3,10 @@ import { createHash, randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Request, Response } from "express";
+import {
+  contentDisposition,
+  type ContentDispositionType,
+} from "@fumiao/plugin-sdk/media-filename.js";
 export type PrivateFile = {
   size: number;
   mime: string;
@@ -71,32 +75,35 @@ export function parseRanges(header: string, size: number): [number, number][] {
   }
   return merged;
 }
-export function disposition(filename: string) {
-  // urllib.parse.quote leaves slashes and unreserved characters intact.
-  const encoded = encodeURIComponent(filename)
-    .replaceAll("%2F", "/")
-    .replace(
-      /[!'()*]/g,
-      (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
-    );
-  return encoded === filename
-    ? `attachment; filename="${filename}"`
-    : `attachment; filename*=utf-8''${encoded}`;
+export function disposition(
+  filename: string,
+  type: ContentDispositionType = "attachment",
+) {
+  return contentDisposition(filename, type);
 }
 export async function sendFile(
   req: Request,
   res: Response,
   file: PrivateFile,
   filename?: string,
+  dispositionType: ContentDispositionType = "attachment",
 ) {
   const lastModified = new Date(Math.floor(file.modified) * 1000).toUTCString();
   const seconds = Number.isInteger(file.modified)
     ? file.modified.toFixed(1)
     : String(file.modified);
+  const contentDispositionHeader = filename
+    ? disposition(filename, dispositionType)
+    : undefined;
   const etag =
     '"' +
     createHash("md5")
-      .update(seconds + "-" + file.size)
+      .update(
+        seconds +
+          "-" +
+          file.size +
+          (contentDispositionHeader ? "-" + contentDispositionHeader : ""),
+      )
       .digest("hex") +
     '"';
   const validators = { "Last-Modified": lastModified, ETag: etag };
@@ -110,11 +117,10 @@ export async function sendFile(
         : modifiedSince !== undefined &&
           Date.parse(lastModified) <= Date.parse(modifiedSince);
     if (unchanged) {
-      res
-        .set(validators)
-        .set("Cache-Control", "private, no-cache")
-        .status(304)
-        .end();
+      res.set(validators).set("Cache-Control", "private, no-cache");
+      if (contentDispositionHeader)
+        res.setHeader("Content-Disposition", contentDispositionHeader);
+      res.status(304).end();
       return;
     }
   }
@@ -144,7 +150,8 @@ export async function sendFile(
     ...validators,
     ...(file.revalidate ? { "Cache-Control": "private, no-cache" } : {}),
   });
-  if (filename) res.setHeader("Content-Disposition", disposition(filename));
+  if (contentDispositionHeader)
+    res.setHeader("Content-Disposition", contentDispositionHeader);
   let active: Readable | undefined,
     closed = false;
   async function* bytes(start: number, end: number) {

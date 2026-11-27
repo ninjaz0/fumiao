@@ -494,7 +494,7 @@ export class Platform {
         pluginId: z.string(),
         version: z.string(),
         config: z.record(z.string(), z.unknown()),
-        concurrency: z.number().int().min(1).max(100).default(1),
+        concurrency: z.number().int().min(1).max(100).optional(),
       })
       .parse(value);
     return this.db.transaction((sql) =>
@@ -510,7 +510,7 @@ export class Platform {
       pluginId: string;
       version: string;
       config: Record<string, unknown>;
-      concurrency: number;
+      concurrency?: number;
     },
     studio = false,
   ) {
@@ -587,6 +587,9 @@ export class Platform {
       requireValue(!conflict, 409, "已有该提供方连接，请编辑现有连接");
     }
     const id = randomUUID();
+    const concurrency =
+      input.concurrency ??
+      (plugin.manifest.queue?.strategy === "capacity" ? 16 : 1);
     await sql.query(
       "INSERT INTO connections(id,name,plugin_id,plugin_version,config,concurrency) VALUES($1,$2,$3,$4,$5,$6)",
       [
@@ -595,7 +598,7 @@ export class Platform {
         input.pluginId,
         input.version,
         this.vault.seal(input.config),
-        input.concurrency,
+        concurrency,
       ],
     );
     for (const model of connectionModels(plugin, input.config)) {

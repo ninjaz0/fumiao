@@ -43,6 +43,7 @@ export function useDocument(project: Project, userId: number) {
   const revision = useRef(initial.current.revision),
     serial = useRef(initial.current.dirty ? 1 : 0),
     ack = useRef(0);
+  const hasUnsavedChanges = useCallback(() => serial.current !== ack.current, []);
   const [status, setStatus] = useState(
     initial.current.conflict
       ? "conflict"
@@ -239,6 +240,7 @@ export function useDocument(project: Project, userId: number) {
   }, [remember]);
   const acceptRemote = (result: Project, expectedDraft: string, operation = "采用回答") => {
     if (JSON.stringify(ref.current) !== expectedDraft) {
+      if (serial.current === ack.current) serial.current++;
       blocked.current = true; setStatus("conflict");
       setError(operation + "期间画布发生了修改，请先处理保存冲突。");
       remember(); throw new Error("画布有新的本地修改，请先处理保存冲突");
@@ -274,6 +276,7 @@ export function useDocument(project: Project, userId: number) {
     acceptRemote,
     canUndo: undo.current.length > 0,
     canRedo: redo.current.length > 0,
-    dirty: serial.current !== ack.current,
+    dirty: hasUnsavedChanges(),
+    hasUnsavedChanges,
   };
 }

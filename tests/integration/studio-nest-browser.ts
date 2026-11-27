@@ -623,6 +623,16 @@ export async function studioBrowser(
     await expect(currentSettings).toHaveCount(0);
     await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
     await settings(page);
+    await setTab(page, "plugins");
+    await expect(page.getByRole("button", { name: "导入插件", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "ComfyUI 工作流发布器" })).toHaveCount(0);
+    for (const action of ["analyze", "publish"]) {
+      const response = await page.request.post("/api/admin/comfy/" + action, {
+        headers: { Origin: web, "X-Workspace-Id": String(workspace) },
+        data: {},
+      });
+      assert.equal(response.status(), 404);
+    }
     await verifyChatSettingsRetry(page);
     await expect(currentSettings).toHaveAttribute("aria-current", "page");
     await expect(sidebar.locator(".workspace-switch")).toBeVisible();

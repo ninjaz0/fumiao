@@ -17,10 +17,10 @@ import {
 import type { SettingsTab } from "./settings-tabs";
 import { api } from "./api";
 import {
-  DEFAULT_SERVICE_CONCURRENCY,
   MAX_SERVICE_CONCURRENCY,
   MIN_SERVICE_CONCURRENCY,
   buildUpdateSourcePayload,
+  defaultServiceConcurrency,
   describeSavedService,
   findDuplicateModelIds,
   formatFieldDefault,
@@ -77,6 +77,7 @@ type Plugin = {
   enabled: boolean;
   revision: number;
   mode: string;
+  defaultConcurrency?: number;
   configSchema: { properties?: Record<string, Field>; required?: string[] };
   choices: {
     id: string;
@@ -128,6 +129,9 @@ function ServiceForm({
   const requiredSet = new Set(plugin.configSchema.required || []);
   const requiredEntries = entries.filter(([key]) => requiredSet.has(key));
   const optionalEntries = entries.filter(([key]) => !requiredSet.has(key));
+  const pluginDefaultConcurrency = defaultServiceConcurrency(plugin);
+  const fallbackConcurrency =
+    service?.concurrency ?? pluginDefaultConcurrency;
   const hasSavedOptional = Boolean(
     service &&
       optionalEntries.some(([key]) => service.configuredFields.includes(key)),
@@ -150,7 +154,7 @@ function ServiceForm({
       }
       concurrency = parseServiceConcurrency(
         String(form.get("$concurrency") ?? ""),
-        service?.concurrency ?? DEFAULT_SERVICE_CONCURRENCY,
+        fallbackConcurrency,
       );
     } catch (err) {
       setError(
@@ -314,12 +318,14 @@ function ServiceForm({
           max={MAX_SERVICE_CONCURRENCY}
           step={1}
           inputMode="numeric"
-          defaultValue={service?.concurrency ?? DEFAULT_SERVICE_CONCURRENCY}
-          placeholder={String(DEFAULT_SERVICE_CONCURRENCY)}
+          defaultValue={fallbackConcurrency}
+          placeholder={String(fallbackConcurrency)}
           aria-describedby={`${prefix}-concurrency-hint`}
         />
         <p id={`${prefix}-concurrency-hint`} className="plugin-field-hint">
-          单条服务允许同时执行的任务上限（1–100 的整数，默认 1），可按上游配额或吞吐能力调整。
+          {plugin.id === "muse"
+            ? `单条服务允许同时执行的任务上限（1–100 的整数，默认 ${pluginDefaultConcurrency}），实际派发取上游容量与本上限的较小值（图片任务同时最多接单 8 张，队列接口返回外部图片或未标注类型任务时按图片槽位保守扣减）。标准 /readyz 仅提供启用账号数而无法反映外部在途任务与 MUSE2API_CONCURRENCY，请结合共享占用谨慎设置，避免任务提前进入上游排队后无法在本地取消。`
+            : `单条服务允许同时执行的任务上限（1–100 的整数，默认 ${pluginDefaultConcurrency}），可按上游配额或吞吐能力调整。`}
         </p>
       </div>
       {optionalEntries.length > 0 && (

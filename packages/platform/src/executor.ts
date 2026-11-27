@@ -1,4 +1,7 @@
-import { queuedModelPolicy } from "./studio-plugin-profile.js";
+import {
+  hasStudioPackages,
+  queuedModelPolicy,
+} from "./studio-plugin-profile.js";
 import { loadProgram } from "./plugin-program.js";
 import { randomUUID } from "node:crypto";
 import { one, type Sql } from "./db.js";
@@ -20,7 +23,11 @@ import { inspectProviderOutput } from "./provider-output.js";
 import { inspectMedia } from "./media.js";
 import { artifactCapacity } from "./capacity.js";
 import { JobTiming } from "./timing.js";
-import { FrozenQueueHealth } from "./queue-health.js";
+import {
+  FrozenQueueHealth,
+  healthConfigKey,
+  submissionEndpointKey,
+} from "./queue-health.js";
 import type { QueueHealth, QueueJob } from "@fumiao/plugin-sdk/queue.js";
 import { executableJob } from "./retired-jobs.js";
 import { hasTailChainTable, wakeTailFrameChildren } from "./tail-frame.js";
@@ -116,7 +123,7 @@ export class Executor {
         SELECT j.id,v.manifest->'requestLifecycle'->'notes'->>'unavailable' AS note
         FROM jobs j JOIN connections c ON c.id=j.connection_id
         JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
-        WHERE j.state='queued' AND c.plugin_version=j.plugin_version AND ${executableJob} AND v.manifest->'requestLifecycle' IS NOT NULL
+        WHERE j.state='queued' AND c.plugin_version=j.plugin_version AND c.config=j.config_snapshot AND ${executableJob} AND v.manifest->'requestLifecycle' IS NOT NULL
         AND v.manifest->'requestLifecycle'->'notes'->>'unavailable' IS NOT NULL
         AND j.request_note IS DISTINCT FROM v.manifest->'requestLifecycle'->'notes'->>'unavailable'
         AND (c.queue_health_revision IS DISTINCT FROM c.revision OR NOT COALESCE((c.queue_health->>'ready')::boolean,false)
@@ -331,9 +338,15 @@ export class Executor {
         );
         if (Number(count.total) >= connection.concurrency) return;
         if (plugin.requestCapacity) {
+          const currentConfigKey = healthConfigKey(p, connection.config);
+          const jobConfigKey = healthConfigKey(
+            p,
+            job.config_snapshot ?? connection.config,
+          );
           const superseded =
-            plugin.queueHealth &&
-            connection.plugin_version !== job.plugin_version;
+            Boolean(plugin.queueHealth) &&
+            (connection.plugin_version !== job.plugin_version ||
+              currentConfigKey !== jobConfigKey);
           if (superseded && !frozenHealth)
             return () =>
               this.frozenHealth.read(
@@ -342,20 +355,59 @@ export class Executor {
                 connection.id,
                 job.config_snapshot,
               );
-          const active = (
-            await sql.query(
-              `SELECT id,provider_model,kind,remote_id,input FROM jobs j WHERE connection_id=$1 AND state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
-              [connection.id],
-            )
-          ).rows;
+          const usesSharedCapacityPool = Boolean(
+            plugin.queueHealth &&
+              plugin.manifest.id === "muse" &&
+              plugin.manifest.queue?.strategy === "capacity",
+          );
+          let endpointActive: any[];
+          if (usesSharedCapacityPool) {
+            const jobEndpointKey = submissionEndpointKey(
+              p,
+              job.config_snapshot ?? connection.config,
+              plugin.manifest,
+            );
+            const shareAcrossConnections =
+              jobEndpointKey !== "" && jobEndpointKey !== "{}";
+            if (shareAcrossConnections)
+              await sql.query(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                [`queue-endpoint:${job.plugin_id}:${jobEndpointKey}`],
+              );
+            const active = (
+              await sql.query(
+                `SELECT j.id,j.provider_model,j.kind,j.remote_id,j.input,j.config_snapshot,c.config AS connection_config
+                 FROM jobs j JOIN connections c ON c.id=j.connection_id
+                 WHERE j.plugin_id=$1 AND ($2::boolean OR j.connection_id=$3)
+                 AND j.state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
+                [job.plugin_id, shareAcrossConnections, connection.id],
+              )
+            ).rows;
+            endpointActive = active.filter(
+              (j) =>
+                submissionEndpointKey(
+                  p,
+                  j.config_snapshot ?? j.connection_config,
+                  plugin.manifest,
+                ) === jobEndpointKey,
+            );
+          } else {
+            endpointActive = (
+              await sql.query(
+                `SELECT id,provider_model,kind,remote_id,input FROM jobs j WHERE connection_id=$1 AND state IN ('dispatching','running','finalizing','uncertain') AND ${executableJob}`,
+                [connection.id],
+              )
+            ).rows;
+          }
           const capacity = plugin.requestCapacity({
             stamp: Date.now() / 1000,
+            job: { kind: job.kind, model: job.provider_model },
             health: superseded
               ? frozenHealth!
               : connection.queue_health_revision === connection.revision
                 ? connection.queue_health
                 : {},
-            jobs: active.map(
+            jobs: endpointActive.map(
               (j) =>
                 ({
                   id: j.id,
@@ -373,7 +425,7 @@ export class Executor {
             500,
             "插件容量无效",
           );
-          if (capacity !== null && Number(count.total) >= capacity) {
+          if (capacity !== null && endpointActive.length >= capacity) {
             const waiting = policy?.notes.unavailable;
             if (
               superseded &&
@@ -800,9 +852,10 @@ export class Executor {
     const existingParams = (job.input?.params ?? {}) as Record<string, unknown>;
     if (existingParams._fallback_from) return false;
 
+    const hasPackages = await hasStudioPackages(sql);
     const allowed = await one(
       sql,
-      "SELECT studio_model_allowed('edge-tts', $1) AS ok",
+      `SELECT ${hasPackages ? "studio_plugin_accepts('edge-tts') AND " : ""}studio_model_allowed('edge-tts', $1) AS ok`,
       [job.workspace_id],
     );
     if (!allowed?.ok) return false;
@@ -816,6 +869,8 @@ export class Executor {
           AND c.plugin_id = 'edge-tts'
           AND c.enabled = TRUE
           AND NOT c.removed
+          AND m.enabled
+          ${hasPackages ? "AND studio_service_selected(m.catalog_id, c.id)" : ""}
         ORDER BY c.id ASC
         LIMIT 1`,
     );

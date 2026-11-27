@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Film, Music, Package, Sparkles } from "lucide-react";
+import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename";
 import { api, ApiError } from "./api";
 import type { CanvasBgm } from "./types";
 
@@ -22,7 +23,7 @@ type Result = {
   output_filename?: string | null;
 };
 
-function exportDownloadLabel(r: Result): string {
+function exportDownloadLabel(r: Partial<Result>): string {
   if (r.output_kind !== "project") return "MP4";
   if (r.exporter?.startsWith("jianying-exporter/")) return "剪映草稿 ZIP";
   if (r.output_filename?.endsWith(".edl") || r.exporter?.includes("edl"))
@@ -30,6 +31,50 @@ function exportDownloadLabel(r: Result): string {
   if (r.output_mime === "application/xml") return "FCPXML";
   if (r.exporter?.startsWith("fcpxml-exporter/")) return "FCPXML 工程包";
   return "工程包 ZIP";
+}
+
+export function compositionDownloadFilename(r: {
+  result: string;
+  output_kind?: "composition" | "project";
+  output_mime?: string;
+  output_filename?: string | null;
+}): string {
+  const cleaned =
+    typeof r.output_filename === "string"
+      ? r.output_filename.replace(/[\r\n\0"/\\]/g, "").trim()
+      : "";
+  if (cleaned) return cleaned;
+  const mime =
+    r.output_mime || (r.output_kind === "project" ? undefined : "video/mp4");
+  return mediaDownloadFilename(r.result, mime);
+}
+
+export function CompositionDownloadLink({
+  result,
+  exportResult,
+}: {
+  result: string;
+  exportResult?: Result;
+}) {
+  const filename = compositionDownloadFilename(
+    exportResult
+      ? { ...exportResult, result }
+      : {
+          result,
+          output_kind: "composition",
+          output_mime: "video/mp4",
+        },
+  );
+  return (
+    <a
+      className="secondary"
+      href={"/media/" + result + "?download=true"}
+      download={filename || true}
+    >
+      <Download size={15} />
+      {exportResult ? exportDownloadLabel(exportResult) : "MP4"}
+    </a>
+  );
 }
 
 export function Composition({
@@ -356,13 +401,10 @@ export function Composition({
                         {preview === r.id ? "收起预览" : "预览"}
                       </button>
                     )}
-                    <a
-                      className="secondary"
-                      href={"/media/" + r.result + "?download=true"}
-                    >
-                      <Download size={15} />
-                      {exportDownloadLabel(r)}
-                    </a>
+                    <CompositionDownloadLink
+                      result={r.result}
+                      exportResult={r}
+                    />
                     {!isProject && (
                       <a
                         className="secondary"

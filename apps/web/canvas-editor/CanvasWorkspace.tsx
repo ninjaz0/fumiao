@@ -40,6 +40,8 @@ import {
 import {
   ArrowLeft,
   ArrowUp,
+  Archive,
+  ArchiveRestore,
   Check,
   ChevronDown,
   ChevronRight,
@@ -82,6 +84,8 @@ import {
   Clapperboard,
   List,
   Sparkles,
+  BookOpen,
+  MessageSquare,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { api, upload, downloadJSON, ApiError, workspaceURL } from "./api";
@@ -98,6 +102,7 @@ import {
   collectDownloadTargets,
   hasDownloadableNodes,
   textDownloadFilename,
+  canvasMediaDownloadFilename,
   shouldRedirectRunsError,
   formatRunsError,
   resolveHistoryModalState,
@@ -129,10 +134,27 @@ import { Narration } from "./Narration";
 import { Composition } from "./Composition";
 import { AssetPacks, type Pack } from "./AssetPacks";
 import { CinematographyPanel } from "./CinematographyPanel";
+import { OptionSelect, SegmentedOptions } from "./OptionSelect";
+import {
+  GENERATION_MODE_OPTIONS,
+  GRID_LAYOUT_OPTIONS,
+  countActiveCinematography,
+  resolveEffectiveGenerationMode,
+} from "./composer-options";
 import { GridCropModal } from "./GridCropModal";
 import { PrecheckCostModal } from "./PrecheckCostModal";
 import { ReferencePromptInput } from "./ReferencePromptInput";
-import { ProposalDiffPreview } from "./ProposalDiffPreview";
+import { FloatingCanvasAgent } from "./FloatingCanvasAgent";
+import {
+  ScriptWorkspace,
+  type ScriptWorkspaceHandle,
+} from "./ScriptWorkspace";
+import { scriptApi, type WorkspaceCanvasSummary } from "./script-api";
+import {
+  buildCanvasLocalBackup,
+  createCanvasRunsTracker,
+  resolveChatReplaceTarget,
+} from "./script-fusion";
 import { captureFrame } from "./videoFrame";
 import { VideoThumb } from "./VideoThumb";
 import { canvasVideoThumbnails } from "./videoThumbnails";
@@ -754,19 +776,35 @@ export function CanvasWorkspace({
     [selectedEdges, setSelectedEdges] = useState<string[]>([]);
   const aliveRef = useRef(true),
     runsLoadedRef = useRef(false),
-    runsInFlightRef = useRef(false),
-    runsReqSeqRef = useRef(0);
+    runsTrackerRef = useRef(
+      createCanvasRunsTracker<Job>({
+        reconcile: reconcileRuns,
+        isAlive: () => aliveRef.current,
+      }),
+    );
   const [editing, setEditing] = useState<string | null>(null),
     [hand, setHand] = useState(false),
     [minimap, setMinimap] = useState(false),
     [showEdges, setShowEdges] = useState(true),
     [toast, setToast] = useState("");
+  const [archived, setArchived] = useState(project.archived_at != null);
+  const [archivePending, setArchivePending] = useState(false);
+  const archiveLock = useRef(false);
+  const projectMenuTrigger = useRef<HTMLSpanElement>(null);
+  const projectMenu = useRef<HTMLDivElement>(null);
+  const canvasListPath = archived ? "/canvas?view=archived" : "/canvas";
+  type LeaveTarget =
+    | { kind: "navigate"; path: string }
+    | { kind: "create" }
+    | { kind: "duplicate" }
+    | { kind: "reload" };
   const [leaveFailure, setLeaveFailure] = useState<{
-    path: string;
+    target: LeaveTarget;
     message: string;
     retained: boolean;
   } | null>(null);
   const [retryingLeave, setRetryingLeave] = useState(false);
+  const [headerBottom, setHeaderBottom] = useState(60);
   const leaveInFlight = useRef(false);
   const [activeTextNodes,setActiveTextNodes]=useState<string[]>([]);
   const textApplyQueue=useRef<Promise<void>>(Promise.resolve());
@@ -785,7 +823,6 @@ export function CanvasWorkspace({
       node?: string;
     } | null>(null);
   const [menu, setMenu] = useState<
-      | "h3-mode"
       | "project"
       | "zoom"
       | "format"
@@ -874,6 +911,35 @@ export function CanvasWorkspace({
       clearInterval(timer);
     };
   }, [project.id, project.workspace]);
+  const [surface, setSurface] = useState<"canvas" | "document">("canvas");
+  const [scriptWorkspaceMounted, setScriptWorkspaceMounted] = useState(false);
+  const [agentTab, setAgentTab] = useState<"chat" | "proposals">("chat");
+  const [agentDockedWidth, setAgentDockedWidth] = useState(0);
+  const [activeScript, setActiveScript] = useState<{
+    id: string;
+    path: string;
+    body_md: string;
+  } | null>(null);
+  const scriptWorkspaceRef = useRef<ScriptWorkspaceHandle | null>(null);
+  const [scriptJumpReq, setScriptJumpReq] = useState<{
+    docId: string;
+    anchor?: string;
+    shotId?: string;
+    line?: number;
+    seq: number;
+  } | null>(null);
+  const [projectCanvases, setProjectCanvases] = useState<
+    WorkspaceCanvasSummary[]
+  >([]);
+  const [projectSearch, setProjectSearch] = useState("");
+  useEffect(() => {
+    if (menu !== "project") return;
+    setProjectSearch("");
+    void scriptApi
+      .listCanvases()
+      .then((res) => setProjectCanvases(res.projects))
+      .catch(() => {});
+  }, [menu]);
   const [aiStoryboard, setAiStoryboard] = useState(false);
   const [packPicker, setPackPicker] = useState<string | null>(null);
   const [packMedia, setPackMedia] = useState<Record<string,string[]>>({});
@@ -1145,6 +1211,36 @@ export function CanvasWorkspace({
   };
 
   const notify = useCallback((text: string) => setToast(text), []);
+  const { hasUnsavedChanges } = doc;
+  const closeProjectMenu = useCallback(() => {
+    if (projectMenu.current?.contains(document.activeElement))
+      projectMenuTrigger.current?.querySelector("button")?.focus();
+    setMenu((current) => current === "project" ? null : current);
+  }, []);
+  useEffect(() => {
+    if (menu === "project") projectMenu.current?.querySelector("button")?.focus();
+  }, [menu]);
+  const changeArchive = async () => {
+    if (archiveLock.current) return;
+    archiveLock.current = true;
+    setArchivePending(true);
+    try {
+      const result = await api<{ archived_at: number | null }>(
+        `/api/canvases/${project.id}/archive`,
+        undefined,
+        archived ? "DELETE" : "PUT",
+      );
+      const next = result.archived_at !== null;
+      setArchived(next);
+      closeProjectMenu();
+      notify(next ? "已归档，原链接仍可编辑" : "已恢复到画布列表");
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      archiveLock.current = false;
+      setArchivePending(false);
+    }
+  };
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 4500);
@@ -1152,47 +1248,57 @@ export function CanvasWorkspace({
   }, [toast]);
   const loadRuns = useCallback(
     async (options: { showLoading?: boolean; silent?: boolean } = {}) => {
-      const seq = ++runsReqSeqRef.current;
-      runsInFlightRef.current = true;
-      if (options.showLoading) setRunsLoading(true);
-      try {
-        const [data, state] = await Promise.all([
-          api<{ runs: Job[] }>(`/api/canvases/${project.id}/runs`),
-          api<Studio>("/api/state"),
-        ]);
-        if (!aliveRef.current || seq !== runsReqSeqRef.current) return data.runs;
-        runsLoadedRef.current = true;
-        setRuns((prev) => reconcileRuns(prev, data.runs));
-        const nextFp = studioFingerprint(state);
-        if (
-          !lastPolledStudioRef.current ||
-          lastPolledStudioRef.current.fp !== nextFp ||
-          studioRef.current !== lastPolledStudioRef.current.value
-        ) {
-          lastPolledStudioRef.current = { fp: nextFp, value: state };
-          setStudio(state);
-        }
-        setRunsLoaded(true);
-        setRunsError("");
-        return data.runs;
-      } catch (e) {
-        if (aliveRef.current && seq === runsReqSeqRef.current) {
-          if (shouldRedirectRunsError(e)) {
-            location.assign("/studio");
-          } else {
-            setRunsError(formatRunsError(e));
-          }
-        }
-        if (options.silent) return [];
-        throw e;
-      } finally {
-        if (seq === runsReqSeqRef.current) {
-          runsInFlightRef.current = false;
-          if (aliveRef.current) setRunsLoading(false);
-        }
-      }
+      return runsTrackerRef.current.runFetch(
+        async () => {
+          const [data, state] = await Promise.all([
+            api<{ runs: Job[] }>(`/api/canvases/${project.id}/runs`),
+            api<Studio>("/api/state"),
+          ]);
+          return { runs: data.runs, extra: state };
+        },
+        {
+          silent: options.silent,
+          isAlive: () => aliveRef.current,
+          onStart: () => {
+            if (options.showLoading) setRunsLoading(true);
+          },
+          onCommit: (nextRuns, state) => {
+            runsLoadedRef.current = true;
+            runsRef.current = nextRuns;
+            setRuns(nextRuns);
+            const nextFp = studioFingerprint(state);
+            if (
+              !lastPolledStudioRef.current ||
+              lastPolledStudioRef.current.fp !== nextFp ||
+              studioRef.current !== lastPolledStudioRef.current.value
+            ) {
+              lastPolledStudioRef.current = { fp: nextFp, value: state };
+              setStudio(state);
+            }
+            setRunsLoaded(true);
+            setRunsError("");
+          },
+          onError: (e) => {
+            if (shouldRedirectRunsError(e) && !hasUnsavedChanges()) {
+              location.assign("/studio");
+            } else {
+              setRunsError(formatRunsError(e));
+            }
+          },
+          onFinally: () => {
+            if (aliveRef.current) setRunsLoading(false);
+          },
+        },
+      );
     },
-    [project.id],
+    [project.id, hasUnsavedChanges],
+  );
+  const ensureFreshRuns = useCallback(
+    () =>
+      runsTrackerRef.current.ensureFresh(() =>
+        loadRuns({ showLoading: false, silent: false }),
+      ),
+    [loadRuns],
   );
   const fetchRuns = useCallback(
     () => loadRuns({ showLoading: true }),
@@ -1201,13 +1307,13 @@ export function CanvasWorkspace({
   useEffect(() => {
     aliveRef.current = true;
     runsLoadedRef.current = false;
-    runsInFlightRef.current = false;
+    runsTrackerRef.current.reset([]);
     lastPolledStudioRef.current = {
       fp: studioFingerprint(studioRef.current),
       value: studioRef.current,
     };
     const update = () => {
-      if (runsInFlightRef.current) return;
+      if (runsTrackerRef.current.hasInFlight()) return;
       void loadRuns({ showLoading: !runsLoadedRef.current, silent: true });
     };
     update();
@@ -1216,8 +1322,7 @@ export function CanvasWorkspace({
     }, 5000);
     return () => {
       aliveRef.current = false;
-      runsInFlightRef.current = false;
-      runsReqSeqRef.current++;
+      runsTrackerRef.current.reset([]);
       clearInterval(timer);
     };
   }, [loadRuns]);
@@ -2014,9 +2119,17 @@ export function CanvasWorkspace({
     }
     try {
       if (keys.length === 1) {
+        const mediaNode = chosen.find(
+          (n) => resolveNode(n, runs).media === keys[0],
+        );
         const a = document.createElement("a");
         a.href = mediaURL(keys[0]) + "?download=true";
-        a.download = "";
+        a.download =
+          canvasMediaDownloadFilename(keys[0], {
+            runs,
+            studio,
+            node: mediaNode,
+          }) ?? "";
         a.click();
       } else if (keys.length) {
         const canonical = keys.map((key) => {
@@ -2050,12 +2163,31 @@ export function CanvasWorkspace({
   };
   useEffect(() => {
     const keydown = (e: KeyboardEvent) => {
+      if (menu === "project") {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeProjectMenu();
+        }
+        return;
+      }
+      const targetEl = e.target as HTMLElement | null;
       if (
-        (e.target as HTMLElement | null)?.closest?.(
-          'input,textarea,[contenteditable="true"],dialog',
+        targetEl?.closest?.(
+          'input,textarea,select,[contenteditable="true"],dialog',
         )
       )
         return;
+      if (
+        surface === "document" ||
+        targetEl?.closest?.(".fm-doc-workspace,.fm-floating-agent")
+      ) {
+        if (e.key === "Escape") {
+          setMenu(null);
+          setContext(null);
+          setDownstream(null);
+        }
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
       const viewportShortcut = matchViewportFocusShortcut(e);
       if (e.key === "Escape") {
@@ -2104,7 +2236,16 @@ export function CanvasWorkspace({
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [selected, selectedEdges, runs, studio.jobs, windowSize.w]);
+  }, [
+    selected,
+    selectedEdges,
+    runs,
+    studio.jobs,
+    windowSize.w,
+    menu,
+    closeProjectMenu,
+    surface,
+  ]);
   useEffect(() => {
     const click = (e: PointerEvent) => {
       if (!(e.target as HTMLElement).closest(".cv-menu,.menu-trigger")) {
@@ -2435,25 +2576,101 @@ export function CanvasWorkspace({
     event.stopPropagation();
     generate();
   };
-  const closeAndLeave = async (url: string) => {
+  useEffect(() => {
+    const root = workspaceRef.current;
+    const headerEl = root?.querySelector<HTMLElement>(".canvas-header");
+    if (!root || !headerEl) return;
+    const measure = () => {
+      const rootRect = root.getBoundingClientRect();
+      const rect = headerEl.getBoundingClientRect();
+      const next = Math.max(52, Math.ceil(rect.bottom - rootRect.top));
+      setHeaderBottom((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const obs = new ResizeObserver(measure);
+    obs.observe(headerEl);
+    obs.observe(root);
+    return () => obs.disconnect();
+  }, []);
+
+  const downloadLocalBackup = (baseDraft: {
+    title: string;
+    document: Project["document"];
+  }) => {
+    const unsavedScripts =
+      scriptWorkspaceRef.current?.exportUnsavedScripts() ?? [];
+    downloadJSON(
+      baseDraft.title + "-本地副本",
+      buildCanvasLocalBackup(baseDraft, unsavedScripts),
+    );
+  };
+
+  const executeLeaveTarget = async (target: LeaveTarget) => {
+    if (target.kind === "reload") {
+      scriptWorkspaceRef.current?.prepareLeave();
+      doc.reload();
+      return;
+    }
+    if (target.kind === "create") {
+      const p = await api<Project>("/api/canvases", {});
+      scriptWorkspaceRef.current?.prepareLeave();
+      doc.leave(workspaceURL("/canvas/" + p.id));
+      return;
+    }
+    if (target.kind === "duplicate") {
+      const p = await api<Project>(
+        `/api/canvases/${project.id}/duplicate`,
+        {},
+      );
+      scriptWorkspaceRef.current?.prepareLeave();
+      doc.leave(workspaceURL("/canvas/" + p.id));
+      return;
+    }
+    scriptWorkspaceRef.current?.prepareLeave();
+    doc.leave(workspaceURL(target.path));
+  };
+
+  const guardedTransition = async (target: LeaveTarget) => {
     if (leaveInFlight.current) return;
     leaveInFlight.current = true;
     setRetryingLeave(true);
     setMenu(null);
     try {
-      await doc.flush();
-      location.assign(workspaceURL(url));
+      if (target.kind === "reload") {
+        await (scriptWorkspaceRef.current?.flushAll() ?? Promise.resolve());
+      } else {
+        await Promise.all([
+          doc.flush(),
+          scriptWorkspaceRef.current?.flushAll() ?? Promise.resolve(),
+        ]);
+      }
     } catch (e) {
+      const canvasRetained =
+        target.kind === "reload" ? true : doc.remember();
+      const scriptsRetained =
+        scriptWorkspaceRef.current?.rememberAll() ?? true;
       setLeaveFailure({
-        path: url,
+        target,
         message: (e as Error).message,
-        retained: doc.remember(),
+        retained: canvasRetained && scriptsRetained,
       });
+      leaveInFlight.current = false;
+      setRetryingLeave(false);
+      return;
+    }
+    try {
+      await executeLeaveTarget(target);
+    } catch (e) {
+      notify((e as Error).message);
     } finally {
       leaveInFlight.current = false;
       setRetryingLeave(false);
     }
   };
+
+  const closeAndLeave = async (url: string) =>
+    guardedTransition({ kind: "navigate", path: url });
   const openCredits = () => void closeAndLeave("/studio?settings=credits");
   const showComposer =
     single && ["image", "video"].includes(single.type) && !editing;
@@ -2878,8 +3095,15 @@ export function CanvasWorkspace({
     <div
       ref={workspaceRef}
       className="canvas-workspace"
+      data-surface={surface}
       data-composer-open={composerOpen ? "true" : "false"}
       data-selection-toolbar={selectionToolbarOpen ? "true" : "false"}
+      style={
+        {
+          "--fm-agent-width": `${agentDockedWidth}px`,
+          "--fm-header-bottom": `${headerBottom}px`,
+        } as React.CSSProperties
+      }
       tabIndex={-1}
       onKeyDown={(e) => {
         const pop = (e.target as HTMLElement).closest(".cv-menu");
@@ -2905,7 +3129,8 @@ export function CanvasWorkspace({
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
-          setMenu(null);
+          if (menu === "project") closeProjectMenu();
+          else setMenu(null);
           setContext(null);
           setDownstream(null);
         }
@@ -3046,7 +3271,7 @@ export function CanvasWorkspace({
           <IconButton
             icon={ArrowLeft}
             label="所有画布"
-            onClick={() => closeAndLeave("/canvas")}
+            onClick={() => void closeAndLeave(canvasListPath)}
           />
           <input
             aria-label="画布名称"
@@ -3065,7 +3290,7 @@ export function CanvasWorkspace({
               if (e.key === "Enter") e.currentTarget.blur();
             }}
           />
-          <span className="menu-trigger">
+          <span className="menu-trigger" ref={projectMenuTrigger}>
             <IconButton
               icon={ChevronDown}
               label="项目菜单"
@@ -3073,6 +3298,9 @@ export function CanvasWorkspace({
               onClick={() => setMenu(menu === "project" ? null : "project")}
             />
           </span>
+          {archived && (
+            <span className="canvas-archived-pill" title="已归档，仍可编辑">已归档</span>
+          )}
           <span className="node-count fm-number">节点 {nodes.length}</span>
           <button
             className={
@@ -3100,35 +3328,37 @@ export function CanvasWorkspace({
           </button>
         </div>
         <div className="global-tools">
-          <div className="fm-view-switch" role="group" aria-label="画布与分镜表视图切换">
-            <button
-              type="button"
-              className={viewMode === "canvas" ? "active" : ""}
-              onClick={() => setViewMode("canvas")}
-              title="纯画布视图"
-            >
-              <LayoutGrid size={14} />
-              画布
-            </button>
-            <button
-              type="button"
-              className={viewMode === "split" ? "active" : ""}
-              onClick={() => setViewMode("split")}
-              title="画布 + 分镜表双轨分屏"
-            >
-              <Columns2 size={14} />
-              分屏
-            </button>
-            <button
-              type="button"
-              className={viewMode === "list" ? "active" : ""}
-              onClick={() => setViewMode("list")}
-              title="纯分镜表视图"
-            >
-              <List size={14} />
-              镜头列表
-            </button>
-          </div>
+          {surface === "canvas" && (
+            <div className="fm-view-switch" role="group" aria-label="画布与分镜表视图切换">
+              <button
+                type="button"
+                className={viewMode === "canvas" ? "active" : ""}
+                onClick={() => setViewMode("canvas")}
+                title="纯画布视图"
+              >
+                <LayoutGrid size={14} />
+                画布
+              </button>
+              <button
+                type="button"
+                className={viewMode === "split" ? "active" : ""}
+                onClick={() => setViewMode("split")}
+                title="画布 + 分镜表双轨分屏"
+              >
+                <Columns2 size={14} />
+                分屏
+              </button>
+              <button
+                type="button"
+                className={viewMode === "list" ? "active" : ""}
+                onClick={() => setViewMode("list")}
+                title="纯分镜表视图"
+              >
+                <List size={14} />
+                镜头列表
+              </button>
+            </div>
+          )}
           <IconButton
             icon={Search}
             label="搜索节点"
@@ -3148,63 +3378,152 @@ export function CanvasWorkspace({
             }}
           />
           <IconButton icon={FileText} label="AI 分镜" onClick={() => setAiStoryboard(true)} />
-          {(pendingProposals > 0 || agentDock) && (
-            <button
-              type="button"
-              className={"icon-button fm-agent-trigger" + (agentDock ? " active" : "")}
-              title="画布 Agent 提案箱"
-              aria-label="画布 Agent 提案箱"
-              aria-expanded={agentDock}
-              onClick={() => {
-                setAgentDock((prev) => {
-                  const next = !prev;
-                  if (next && window.innerWidth <= 1100 && viewMode === "split") {
-                    setViewMode("canvas");
-                  }
-                  return next;
-                });
-              }}
-            >
-              <Sparkles size={18} />
-              {pendingProposals > 0 && (
-                <span className="fm-agent-badge fm-number">{pendingProposals}</span>
-              )}
-            </button>
-          )}
+          <IconButton
+            icon={MessageSquare}
+            label="AI 创作助手"
+            active={agentDock && agentTab === "chat"}
+            onClick={() => {
+              if (agentDock && agentTab === "chat") {
+                setAgentDock(false);
+              } else {
+                setAgentTab("chat");
+                setAgentDock(true);
+                if (window.innerWidth <= 1100 && viewMode === "split") {
+                  setViewMode("canvas");
+                }
+              }
+            }}
+          />
+          <button
+            type="button"
+            className={
+              "icon-button fm-agent-trigger" +
+              (agentDock && agentTab === "proposals" ? " active" : "")
+            }
+            title="画布 Agent 提案箱"
+            aria-label="画布 Agent 提案箱"
+            aria-expanded={agentDock && agentTab === "proposals"}
+            onClick={() => {
+              if (agentDock && agentTab === "proposals") {
+                setAgentDock(false);
+              } else {
+                setAgentTab("proposals");
+                setAgentDock(true);
+                if (window.innerWidth <= 1100 && viewMode === "split") {
+                  setViewMode("canvas");
+                }
+              }
+            }}
+          >
+            <Sparkles size={18} />
+            {pendingProposals > 0 && (
+              <span className="fm-agent-badge fm-number">{pendingProposals}</span>
+            )}
+          </button>
         </div>
       </header>
+      <div
+        className="fm-surface-switcher"
+        role="tablist"
+        aria-label="画布与剧本文档切换"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={surface === "canvas"}
+          className={surface === "canvas" ? "active" : ""}
+          onClick={() => setSurface("canvas")}
+        >
+          <LayoutGrid size={14} />
+          画布
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={surface === "document"}
+          className={surface === "document" ? "active" : ""}
+          onClick={() => {
+            setScriptWorkspaceMounted(true);
+            setSurface("document");
+          }}
+        >
+          <BookOpen size={14} />
+          文档
+        </button>
+      </div>
       {menu === "project" && (
-        <div className="cv-menu project-menu">
-          <button onClick={() => closeAndLeave("/canvas")}>
+        <div
+          className="cv-menu project-menu fm-project-switcher-menu"
+          ref={projectMenu}
+        >
+          <div className="fm-project-switcher-search">
+            <Search size={14} />
+            <input
+              value={projectSearch}
+              placeholder="搜索并切换工作区画布…"
+              aria-label="搜索工作区画布"
+              onChange={(e) => setProjectSearch(e.target.value)}
+            />
+          </div>
+          {projectCanvases.length > 0 && (
+            <>
+              <div
+                className="fm-project-switcher-list"
+                role="listbox"
+                aria-label="工作区画布列表"
+              >
+                {projectCanvases
+                  .filter(
+                    (c) =>
+                      !projectSearch.trim() ||
+                      c.title
+                        .toLowerCase()
+                        .includes(projectSearch.trim().toLowerCase()),
+                  )
+                  .slice(0, 12)
+                  .map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={c.id === project.id ? "active" : ""}
+                      onClick={() => {
+                        if (c.id === project.id) {
+                          setMenu(null);
+                          return;
+                        }
+                        void closeAndLeave("/canvas/" + c.id);
+                      }}
+                    >
+                      <Layers size={14} />
+                      <span>{c.title}</span>
+                      {c.id === project.id ? (
+                        <Check size={13} />
+                      ) : (
+                        <small className="fm-number">{c.count}</small>
+                      )}
+                    </button>
+                  ))}
+              </div>
+              <div className="menu-divider" />
+            </>
+          )}
+          <button onClick={() => void closeAndLeave(canvasListPath)}>
             <LayoutGrid size={16} />
             所有画布
           </button>
           <button
-            onClick={async () => {
-              try {
-                await doc.flush();
-                const p = await api<Project>("/api/canvases", {});
-                location.assign(workspaceURL("/canvas/" + p.id));
-              } catch (e) {
-                notify((e as Error).message);
-              }
+            onClick={() => {
+              closeProjectMenu();
+              void guardedTransition({ kind: "create" });
             }}
           >
             <Plus size={16} />
             新建画布
           </button>
           <button
-            onClick={async () => {
-              try {
-                await doc.flush();
-                const p = await api<Project>(
-                  `/api/canvases/${project.id}/duplicate`,
-                  {},
-                );
-                location.assign(workspaceURL("/canvas/" + p.id));
-              } catch (e) {
-                notify((e as Error).message);
-              }
+            onClick={() => {
+              closeProjectMenu();
+              void guardedTransition({ kind: "duplicate" });
             }}
           >
             <Copy size={16} />
@@ -3213,12 +3532,23 @@ export function CanvasWorkspace({
           <button
             onClick={() => {
               downloadJSON(doc.value.title, doc.value);
-              setMenu(null);
+              closeProjectMenu();
             }}
           >
             <Download size={16} />
             下载画布文档
           </button>
+          {project.can_delete && (
+            <button
+              type="button"
+              aria-busy={archivePending}
+              aria-disabled={archivePending}
+              onClick={() => void changeArchive()}
+            >
+              {archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+              {archived ? "恢复画布" : "归档画布"}
+            </button>
+          )}
           <div className="menu-divider" />
           <button onClick={() => closeAndLeave("/studio")}>
             <ArrowLeft size={16} />
@@ -3302,6 +3632,37 @@ export function CanvasWorkspace({
             label="聚焦节点"
             onClick={() => focusNodes([single.id])}
           />
+          {typeof single.extra_params?.script_doc_id === "string" &&
+            Boolean(single.extra_params.script_doc_id) && (
+              <IconButton
+                icon={BookOpen}
+                label="查看源剧本"
+                onClick={() => {
+                  const docId = String(single.extra_params!.script_doc_id);
+                  const line =
+                    typeof single.extra_params?.script_line === "number"
+                      ? single.extra_params.script_line
+                      : undefined;
+                  const anchor =
+                    typeof single.extra_params?.script_anchor === "string"
+                      ? single.extra_params.script_anchor
+                      : undefined;
+                  const shotId =
+                    typeof single.extra_params?.script_shot_id === "string"
+                      ? single.extra_params.script_shot_id
+                      : undefined;
+                  setScriptWorkspaceMounted(true);
+                  setSurface("document");
+                  setScriptJumpReq((prev) => ({
+                    docId,
+                    anchor,
+                    shotId,
+                    line,
+                    seq: (prev?.seq ?? 0) + 1,
+                  }));
+                }}
+              />
+            )}
           <span className="menu-trigger">
             <IconButton
               icon={Palette}
@@ -3551,81 +3912,114 @@ export function CanvasWorkspace({
             </div>
           )}
           {h3Native&&<H3Inputs key={single.id} options={h3Options} ids={h3Ids} assets={studio.assets} onChange={updateH3} onAsset={a=>setStudio(s=>({...s,assets:[{...a,owner:s.me.id},...s.assets]}))} onMention={token=>edit(single.id,{prompt:single.prompt+token+' '})} onBusy={setH3Busy}/>}
-          <div className="fm-composer-wave3-bar">
-            {!h3Frames&&<div className="canvas-pack-entry">
-              <button className="secondary" onClick={() => setPackPicker(single.id)}><FolderOpen size={15}/>素材包{single.asset_packs?.length ? ` · ${single.asset_packs.length}` : ''}</button>
-            </div>}
-            <select
-              className="fm-mode-select"
-              aria-label="分镜生成链路"
-              value={
-                single.generation_mode ??
-                (h3Native
-                  ? h3Frames
-                    ? "first_last_frame"
-                    : "omni_ref"
-                  : single.type === "video"
-                    ? "first_last_frame"
-                    : "first_frame")
-              }
-              onChange={(e) => {
-                const mode = e.target.value as CanvasGenerationMode;
-                if (h3Native && mode === "omni_ref") {
-                  chooseH3Mode("reference");
-                  return;
-                }
-                if (h3Native && mode === "first_last_frame") {
-                  chooseH3Mode("frames");
-                  return;
-                }
-                edit(single.id, {
-                  generation_mode: mode,
-                  ...(mode === "grid_preview" ? { grid_layout: single.grid_layout ?? "3x3" } : {}),
-                });
-              }}
-            >
-              <option value="first_frame">标准首帧</option>
-              <option value="first_last_frame">经典首尾帧</option>
-              <option value="omni_ref">全能 @图N 多参考</option>
-              <option value="grid_preview">宫格构图预览</option>
-            </select>
-            {single.generation_mode === "grid_preview" && (
-              <select
-                className="fm-mode-select"
-                aria-label="宫格规格"
-                value={single.grid_layout ?? "3x3"}
-                onChange={(e) => edit(single.id, { grid_layout: e.target.value as "2x2" | "3x3" })}
-              >
-                <option value="2x2">2×2</option>
-                <option value="3x3">3×3</option>
-              </select>
-            )}
-            <button
-              type="button"
-              className={"secondary" + (showCinePanel ? " active" : "")}
-              onClick={() => setShowCinePanel((v) => !v)}
-            >
-              <Clapperboard size={14} />
-              导演参数
-              {single.cinematography && Object.values(single.cinematography).some(Boolean) ? " ●" : ""}
-            </button>
-            {single.type === "image" && current?.media && (
-              <button
-                type="button"
-                className="secondary"
-                onClick={() =>
-                  setGridCropTarget({
-                    nodeId: single.id,
-                    mediaId: current.media!,
-                    layout: single.grid_layout ?? "3x3",
-                  })
-                }
-              >
-                <Crop size={14} />
-                宫格裁切
-              </button>
-            )}
-          </div>
+          {(() => {
+            const effectiveGenMode = resolveEffectiveGenerationMode(
+              single,
+              h3Native,
+              h3Frames,
+            );
+            const activeCineCount = countActiveCinematography(
+              single.cinematography,
+            );
+            const genModeIcon =
+              effectiveGenMode === "grid_preview"
+                ? LayoutGrid
+                : effectiveGenMode === "omni_ref"
+                  ? Link2
+                  : effectiveGenMode === "first_last_frame"
+                    ? Film
+                    : ImageIcon;
+            return (
+              <div className="fm-composer-wave3-bar">
+                {!h3Frames && (
+                  <div className="canvas-pack-entry">
+                    <button
+                      type="button"
+                      className={
+                        "fm-ui-chip" +
+                        (single.asset_packs?.length ? " active" : "")
+                      }
+                      onClick={() => setPackPicker(single.id)}
+                    >
+                      <FolderOpen size={14} />
+                      <span>素材包</span>
+                      {single.asset_packs?.length ? (
+                        <span className="fm-chip-badge">
+                          {single.asset_packs.length}
+                        </span>
+                      ) : null}
+                    </button>
+                  </div>
+                )}
+                <OptionSelect
+                  ariaLabel="分镜生成链路"
+                  icon={genModeIcon}
+                  value={effectiveGenMode}
+                  active={effectiveGenMode === "grid_preview"}
+                  disabled={h3Busy}
+                  options={GENERATION_MODE_OPTIONS}
+                  onChange={(mode) => {
+                    if (h3Native && mode === "omni_ref") {
+                      chooseH3Mode("reference");
+                      return;
+                    }
+                    if (h3Native && mode === "first_last_frame") {
+                      chooseH3Mode("frames");
+                      return;
+                    }
+                    edit(single.id, {
+                      generation_mode: mode,
+                      ...(mode === "grid_preview"
+                        ? { grid_layout: single.grid_layout ?? "3x3" }
+                        : {}),
+                    });
+                  }}
+                />
+                {effectiveGenMode === "grid_preview" && (
+                  <SegmentedOptions
+                    ariaLabel="宫格规格"
+                    value={single.grid_layout ?? "3x3"}
+                    options={GRID_LAYOUT_OPTIONS}
+                    onChange={(layout) =>
+                      edit(single.id, { grid_layout: layout })
+                    }
+                  />
+                )}
+                <button
+                  type="button"
+                  className={
+                    "fm-ui-chip" +
+                    (showCinePanel || activeCineCount > 0 ? " active" : "")
+                  }
+                  aria-expanded={showCinePanel}
+                  onClick={() => setShowCinePanel((v) => !v)}
+                >
+                  <Clapperboard size={14} />
+                  <span>导演参数</span>
+                  {activeCineCount > 0 && (
+                    <span className="fm-chip-badge">{activeCineCount}</span>
+                  )}
+                  <ChevronDown size={13} className="fm-ui-chevron" />
+                </button>
+                {single.type === "image" && current?.media && (
+                  <button
+                    type="button"
+                    className="fm-ui-chip"
+                    onClick={() =>
+                      setGridCropTarget({
+                        nodeId: single.id,
+                        mediaId: current.media!,
+                        layout: single.grid_layout ?? "3x3",
+                      })
+                    }
+                  >
+                    <Crop size={14} />
+                    <span>宫格裁切</span>
+                  </button>
+                )}
+              </div>
+            );
+          })()}
           {showCinePanel && (
             <FloatingCinematographyPopover
               anchorNode={single}
@@ -3808,7 +4202,6 @@ export function CanvasWorkspace({
                 patchParams(spec?.provider==='flow'?{model:value,ratio:spec.ratio!,seconds:spec.seconds!,resolution:(spec.resolution==='原生'?'1K':spec.resolution) as Params['resolution'],flow_source_job:null}:{model:value,ratio:String(values.ratio ?? single.params.ratio),seconds:Number(values.seconds ?? single.params.seconds),flow_source_job:null});setModelSearch('');closeModelMenu();
               }}>{label}{FlowPicker.sameFamily(studio.model_catalog,selectedModel,value) && <Check size={14}/>}</button>)}</div>}
             </div>
-            {h3Native&&<div className="parameter-wrap menu-trigger"><button className="parameter" disabled={h3Busy} aria-haspopup="listbox" aria-expanded={menu==='h3-mode'} onClick={()=>setMenu(menu==='h3-mode'?null:'h3-mode')}>{h3Frames?<Film size={15}/>:<Link2 size={15}/>} {h3Frames?'首尾帧':'全能参考'}<ChevronDown size={13}/></button>{menu==='h3-mode'&&<div className="cv-menu duration-menu" role="listbox" aria-label="参考模式">{(form?.referenceModes ?? []).map(mode=><button key={mode} role="option" aria-selected={h3Options.mode===mode} onClick={()=>chooseH3Mode(mode)}>{mode==='frames'?'首尾帧':'全能参考'}{h3Options.mode===mode&&<Check size={14}/>}</button>)}</div>}</div>}
             <div className="parameter-wrap menu-trigger">
               <button
                 className={"parameter " + (flowModel&&!flowParameters ? "fixed-parameter " : "") + (menu === "format" ? "active" : "")}
@@ -4236,14 +4629,16 @@ export function CanvasWorkspace({
       {doc.status === "conflict" && (
         <div className="save-banner" role="alert">
           <span>画布已被其他成员修改，你的修改尚未保存到服务器。</span>
-          <button
-            onClick={() =>
-              downloadJSON(doc.value.title + "-本地副本", doc.value)
-            }
-          >
+          <button onClick={() => downloadLocalBackup(doc.value)}>
             下载本地副本
           </button>
-          <button onClick={() => setConfirm(() => () => doc.reload())}>
+          <button
+            onClick={() =>
+              setConfirm(() => () =>
+                void guardedTransition({ kind: "reload" }),
+              )
+            }
+          >
             重新载入
           </button>
         </div>
@@ -4717,7 +5112,14 @@ export function CanvasWorkspace({
             <a
               className="secondary"
               href={mediaURL(preview.media) + "?download=true"}
-              download
+              download={
+                canvasMediaDownloadFilename(preview.media, {
+                  runs,
+                  studio,
+                  node: preview.node,
+                  run: preview.run,
+                }) || true
+              }
             >
               <Download size={16} />
               下载
@@ -4743,7 +5145,7 @@ export function CanvasWorkspace({
           className={
             "fm-docked-storyboard" +
             (viewMode === "list" ? " fm-full-list" : "") +
-            (agentDock ? " fm-with-agent-dock" : "")
+            (agentDockedWidth > 0 ? " fm-with-agent-dock" : "")
           }
           aria-label="分镜表双向同步视图"
         >
@@ -4963,20 +5365,199 @@ export function CanvasWorkspace({
           />
         </Modal>
       )}
-      {agentDock && (
-        <ProposalDiffPreview
+      {(surface === "document" || scriptWorkspaceMounted) && (
+        <ScriptWorkspace
+          ref={scriptWorkspaceRef}
+          active={surface === "document"}
           workspace={project.workspace}
-          projectId={project.id}
-          revision={doc.revision.current}
-          canEditPolicy={studio.me.role === "admin" || project.owner === studio.me.id}
-          onApplied={() => {
-            void doc.reload();
-            notify("提案已批准并落图到当前画布");
+          userId={initial.me.id}
+          canvasId={project.id}
+          canvasTitle={doc.value.title}
+          canvasDoc={doc.value.document}
+          runs={runs}
+          runsKnown={runsLoaded && !runsError}
+          ensureFreshRuns={ensureFreshRuns}
+          assets={studio.assets}
+          defaultVideoModel={defaultVideoModel}
+          defaultImageModel={defaultImageModel}
+          externalOpenRequest={scriptJumpReq}
+          onActiveScriptChange={setActiveScript}
+          onChangeCanvasDoc={(updater) =>
+            doc.change((d) => ({ ...d, document: updater(d.document) }))
+          }
+          onEditCanvasNode={(nodeId, patch, history) =>
+            edit(nodeId, patch, history)
+          }
+          onFocusCanvasNode={(nodeId) => {
+            setSurface("canvas");
+            selectOne(nodeId);
+            requestAnimationFrame(() => focusNodes([nodeId]));
           }}
-          onPendingCountChange={setPendingProposals}
-          onClose={() => setAgentDock(false)}
+          onSwitchToCanvas={(focusIds) => {
+            setSurface("canvas");
+            if (focusIds?.length) {
+              setSelected(focusIds);
+              requestAnimationFrame(() => focusNodes(focusIds));
+            }
+          }}
+          onSwitchCanvasProject={(targetCanvasId) => {
+            void closeAndLeave("/canvas/" + targetCanvasId);
+          }}
+          onAssetUploaded={(asset) =>
+            setStudio((s) => ({
+              ...s,
+              assets: [{ ...asset, owner: s.me.id }, ...s.assets],
+            }))
+          }
+          onNotify={notify}
         />
       )}
+      {!agentDock && (
+        <button
+          type="button"
+          className="fm-agent-orb"
+          onClick={() => {
+            setAgentTab("chat");
+            setAgentDock(true);
+            if (window.innerWidth <= 1100 && viewMode === "split") {
+              setViewMode("canvas");
+            }
+          }}
+        >
+          <span className="fm-agent-orb-dot" aria-hidden="true" />
+          AI 创作助手
+        </button>
+      )}
+      <FloatingCanvasAgent
+        visible={agentDock}
+        activeTab={agentTab}
+        onTabChange={setAgentTab}
+        onClose={() => setAgentDock(false)}
+        onDockedWidthChange={setAgentDockedWidth}
+        workspace={project.workspace}
+        userId={initial.me.id}
+        isAdmin={studio.me.role === "admin"}
+        projectId={project.id}
+        canEditPolicy={
+          studio.me.role === "admin" || project.owner === studio.me.id
+        }
+        configureHref={
+          studio.me.role === "admin"
+            ? workspaceURL(chatSettingsPath(studio))
+            : undefined
+        }
+        onConfigureModels={
+          studio.me.role === "admin"
+            ? (e) => {
+                if (
+                  e.button === 0 &&
+                  !e.altKey &&
+                  !e.ctrlKey &&
+                  !e.metaKey &&
+                  !e.shiftKey
+                ) {
+                  e.preventDefault();
+                  void closeAndLeave(chatSettingsPath(studio));
+                }
+              }
+            : undefined
+        }
+        onRecharge={openCredits}
+        selectedNode={single}
+        activeScript={activeScript}
+        canvasNodes={doc.value.document.nodes}
+        flushScripts={(ids) =>
+          scriptWorkspaceRef.current?.flushScripts(ids) ?? Promise.resolve()
+        }
+        getCanvasRevision={() => doc.flush()}
+        onApplyChatToCanvas={(cid, message, mode, options) => {
+          const apply = async () => {
+            if (mode === "replace") {
+              const precheck = resolveChatReplaceTarget({
+                currentProjectId: project.id,
+                nodes: doc.ref.current.document.nodes,
+                messageContent: message.content,
+                options,
+              });
+              const revision = await doc.flush();
+              const postFlush = resolveChatReplaceTarget({
+                currentProjectId: project.id,
+                nodes: doc.ref.current.document.nodes,
+                messageContent: message.content,
+                options: {
+                  ...options,
+                  targetProject: project.id,
+                  targetNode: precheck.nodeId,
+                  expectedText: precheck.expectedText,
+                },
+              });
+              const snapshot = JSON.stringify(doc.ref.current);
+              const result = await chatRequest<
+                Project & { applied_node: string }
+              >(project.workspace, "/api/chats/" + cid + "/apply", {
+                uid: options?.uid || crypto.randomUUID(),
+                message: message.id,
+                project: project.id,
+                expected_revision: revision,
+                mode: "replace",
+                node: postFlush.nodeId,
+                expected_text: postFlush.expectedText,
+              });
+              doc.acceptRemote(result, snapshot);
+              return;
+            }
+
+            const revision = await doc.flush();
+            const anchorId =
+              (options?.targetProject === project.id
+                ? options?.targetNode
+                : undefined) || single?.id;
+            const snapshot = JSON.stringify(doc.ref.current);
+            const result = await chatRequest<
+              Project & { applied_node: string }
+            >(project.workspace, "/api/chats/" + cid + "/apply", {
+              uid: options?.uid || crypto.randomUUID(),
+              message: message.id,
+              project: project.id,
+              expected_revision: revision,
+              mode: "new",
+              ...(anchorId ? { node: anchorId } : {}),
+            });
+            doc.acceptRemote(result, snapshot);
+          };
+          const queued = textApplyQueue.current.then(apply);
+          textApplyQueue.current = queued.catch(() => {});
+          return queued;
+        }}
+        onApproveProposal={(proposalId) => {
+          const runApprove = async (): Promise<{ conflict?: string }> => {
+            const expectedRevision = await doc.flush();
+            const baselineSnapshot = JSON.stringify(doc.ref.current);
+            const res = await api<{ proposal: unknown; canvas: Project }>(
+              `/api/canvases/${project.id}/proposals/${proposalId}/apply`,
+              { expected_revision: expectedRevision },
+            );
+            try {
+              doc.acceptRemote(res.canvas, baselineSnapshot, "批准提案");
+              notify("提案已批准并落图到当前画布");
+              return {};
+            } catch {
+              const conflictMsg =
+                "提案已在服务器落图，但批准期间画布有新的本地修改，已保留本地草稿并标记冲突，请先处理保存冲突。";
+              notify(conflictMsg);
+              return { conflict: conflictMsg };
+            }
+          };
+          const queued = textApplyQueue.current.then(runApprove);
+          textApplyQueue.current = queued.then(
+            () => {},
+            () => {},
+          );
+          return queued;
+        }}
+        onPendingCountChange={setPendingProposals}
+        onNotify={notify}
+      />
       {leaveFailure && (
         <Modal
           title="保存失败，仍要离开？"
@@ -4986,7 +5567,7 @@ export function CanvasWorkspace({
         >
           <p className="error">{leaveFailure.message}</p>
           <p>当前修改尚未同步到服务器。{leaveFailure.retained
-            ? "本地草稿已保留。画布仍可访问时，可在此标签页重新打开继续编辑。"
+            ? "本地草稿已保留。画布或剧本文档仍可访问时，重新打开即可继续编辑。"
             : "浏览器无法保留本地草稿，离开后未保存的修改将丢失。"}</p>
           <div className="dialog-actions" style={{ flexWrap: "wrap" }}>
             <button className="secondary" disabled={retryingLeave} onClick={() => setLeaveFailure(null)}>
@@ -4995,23 +5576,38 @@ export function CanvasWorkspace({
             <button
               className="secondary"
               disabled={retryingLeave}
-              onClick={() => downloadJSON(doc.ref.current.title + "-本地副本", doc.ref.current)}
+              onClick={() => downloadLocalBackup(doc.ref.current)}
             >
               下载本地副本
             </button>
-            <button className="secondary" disabled={retryingLeave} onClick={() => {
-              if (leaveFailure.retained && !doc.remember()) {
-                setLeaveFailure({ ...leaveFailure, retained: false });
-                return;
-              }
-              doc.leave(workspaceURL(leaveFailure.path));
-            }}>
+            <button
+              className="secondary"
+              disabled={retryingLeave}
+              onClick={() => {
+                const okCanvas =
+                  leaveFailure.target.kind === "reload" ? true : doc.remember();
+                const okScripts =
+                  scriptWorkspaceRef.current?.rememberAll() ?? true;
+                if (leaveFailure.retained && !(okCanvas && okScripts)) {
+                  setLeaveFailure({ ...leaveFailure, retained: false });
+                  return;
+                }
+                void executeLeaveTarget(leaveFailure.target).catch((e) =>
+                  notify((e as Error).message),
+                );
+              }}
+            >
               仍要离开
             </button>
             <button
               className="primary"
-              disabled={retryingLeave || doc.status === "conflict"}
-              onClick={() => closeAndLeave(leaveFailure.path)}
+              disabled={
+                retryingLeave ||
+                (leaveFailure.target.kind !== "reload" &&
+                  doc.status === "conflict") ||
+                Boolean(scriptWorkspaceRef.current?.hasConflictChanges())
+              }
+              onClick={() => void guardedTransition(leaveFailure.target)}
             >
               重试保存
             </button>

@@ -42,10 +42,6 @@ import {
   tokenCreateFields,
 } from "./wave4-fields.js";
 import {
-  comfyAnalyzeFields,
-  comfyPublishFields,
-} from "./wave5-fields.js";
-import {
   budgetUpsertFields,
   moderationSettingsFields,
   reconcileJobFields,
@@ -54,6 +50,13 @@ import {
   subscriptionPlanCreateFields,
   subscriptionSubscribeFields,
 } from "./wave6-fields.js";
+import {
+  scriptCreateFields,
+  scriptReplaceFields,
+  scriptSearchFields,
+  scriptSuiteFields,
+  scriptUpdateFields,
+} from "./script-fields.js";
 export const identityBodies: Record<string, Fields> = {
   canvasNew: canvasNewFields,
   canvasSave: canvasSaveFields,
@@ -78,8 +81,6 @@ export const identityBodies: Record<string, Fields> = {
   agentPolicy: agentPolicyFields,
   proposalCreate: proposalCreateFields,
   proposalApply: proposalApplyFields,
-  comfyAnalyze: comfyAnalyzeFields,
-  comfyPublish: comfyPublishFields,
   budgetUpsert: budgetUpsertFields,
   moderationSettings: moderationSettingsFields,
   reconcileJob: reconcileJobFields,
@@ -87,6 +88,11 @@ export const identityBodies: Record<string, Fields> = {
   redeemApply: redeemApplyFields,
   subscriptionPlanCreate: subscriptionPlanCreateFields,
   subscriptionSubscribe: subscriptionSubscribeFields,
+  scriptCreate: scriptCreateFields,
+  scriptSuite: scriptSuiteFields,
+  scriptSearch: scriptSearchFields,
+  scriptReplace: scriptReplaceFields,
+  scriptUpdate: scriptUpdateFields,
   canvasShotsDownload: canvasExactRevisionFields,
   storyboardExport: storyboardExportFields,
   estimate: estimateFields,
@@ -231,6 +237,8 @@ export const canvasContracts: Contract[] = [
   { method: "GET", path: /^\/api\/canvases$/ },
   { method: "POST", path: /^\/api\/canvases$/, body: "canvasNew" },
   { method: "GET", path: /^\/api\/canvases\/[^/]+$/ },
+  { method: "PUT", path: /^\/api\/canvases\/[^/]+\/archive$/ },
+  { method: "DELETE", path: /^\/api\/canvases\/[^/]+\/archive$/ },
   {
     method: "PUT",
     path: /^\/api\/canvases\/[^/]+\/document$/,
@@ -403,6 +411,40 @@ export const identityContracts: Contract[] = [
     method: "DELETE",
     path: /^\/api\/series\/([^/]+)\/episodes\/([^/]+)\/scenes\/([^/]+)$/,
   },
+  { method: "GET", path: /^\/api\/workspace\/scripts$/ },
+  {
+    method: "POST",
+    path: /^\/api\/workspace\/scripts$/,
+    body: "scriptCreate",
+  },
+  {
+    method: "POST",
+    path: /^\/api\/workspace\/scripts\/suite$/,
+    body: "scriptSuite",
+  },
+  {
+    method: "POST",
+    path: /^\/api\/workspace\/scripts\/search$/,
+    body: "scriptSearch",
+  },
+  {
+    method: "POST",
+    path: /^\/api\/workspace\/scripts\/replace$/,
+    body: "scriptReplace",
+    exactIntegers: true,
+  },
+  { method: "GET", path: /^\/api\/workspace\/scripts\/([^/]+)$/ },
+  {
+    method: "PUT",
+    path: /^\/api\/workspace\/scripts\/([^/]+)$/,
+    body: "scriptUpdate",
+    exactIntegers: true,
+  },
+  {
+    method: "DELETE",
+    path: /^\/api\/workspace\/scripts\/([^/]+)$/,
+    booleanQuery: ["recursive"],
+  },
   { method: "POST", path: /^\/api\/assets$/ },
   { method: "PUT", path: /^\/api\/me\/avatar$/ },
   { method: "PUT", path: /^\/api\/favorites$/, body: "favorites" },
@@ -467,16 +509,6 @@ export const identityContracts: Contract[] = [
     method: "POST",
     path: /^\/api\/admin\/credits\/adjust$/,
     body: "adjustCredits",
-  },
-  {
-    method: "POST",
-    path: /^\/api\/admin\/comfy\/analyze$/,
-    body: "comfyAnalyze",
-  },
-  {
-    method: "POST",
-    path: /^\/api\/admin\/comfy\/publish$/,
-    body: "comfyPublish",
   },
   {
     method: "GET",
@@ -575,8 +607,6 @@ export function validateIdentityRequest(
           "agentPolicy",
           "proposalCreate",
           "proposalApply",
-          "comfyAnalyze",
-          "comfyPublish",
           "budgetUpsert",
           "moderationSettings",
           "reconcileJob",

@@ -1,0 +1,418 @@
+:root:has(.not-found-shell) {
+  color-scheme: light;
+  background: var(--bg, #f8f9fa);
+  color: var(--text, #000);
+  -webkit-text-size-adjust: 100%;
+}
+
+html:has(.not-found-shell),
+body:has(.not-found-shell) {
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+.not-found-shell {
+  --nf-bg: var(--bg, #f8f9fa);
+  --nf-surface: var(--surface, #fff);
+  --nf-alt: var(--alt, #f2f3f4);
+  --nf-dot: var(--dot, rgba(0, 0, 0, 0.09));
+  --nf-text: var(--text, #000);
+  --nf-body: var(--body, #262626);
+  --nf-secondary: var(--secondary, #6b6b6b);
+  --nf-muted: var(--muted, #8c8c8c);
+  --nf-hover: var(--hover, rgba(0, 0, 0, 0.05));
+  --nf-line: var(--line, rgba(0, 0, 0, 0.08));
+  --nf-hair: var(--hair, rgba(0, 0, 0, 0.1));
+  --nf-button: var(--button, #000);
+  --nf-on-button: var(--on-button, #fff);
+  --nf-focus: var(--focus, #3686ad);
+  --nf-shadow: var(--shadow, 0 8px 40px rgba(0, 0, 0, 0.08));
+  --nf-shadow-soft: var(--shadow-soft, 0 2px 10px rgba(0, 0, 0, 0.05));
+  --nf-badge-bg: rgba(54, 134, 173, 0.12);
+  --nf-badge-fg: #3686ad;
+  --nf-thread-a: #3686ad;
+  --nf-thread-b: #68a8db;
+  --nf-thread-c: #7199bc;
+
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: clip;
+  background: var(--nf-bg);
+  color: var(--nf-text);
+  font:
+    14px/1.55 -apple-system,
+    BlinkMacSystemFont,
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    Arial,
+    sans-serif;
+}
+
+:root[data-theme="dark"]:has(.not-found-shell) {
+  color-scheme: dark;
+  background: var(--bg, #111);
+  color: var(--text, #fafafa);
+}
+
+:root[data-theme="dark"] .not-found-shell {
+  --nf-bg: var(--bg, #111);
+  --nf-surface: var(--surface, #1e1e1e);
+  --nf-alt: var(--alt, #161616);
+  --nf-dot: var(--dot, rgba(255, 255, 255, 0.08));
+  --nf-text: var(--text, #fafafa);
+  --nf-body: var(--body, #e2e2e2);
+  --nf-secondary: var(--secondary, #b8b8b8);
+  --nf-muted: var(--muted, #8a8a8a);
+  --nf-hover: var(--hover, rgba(255, 255, 255, 0.07));
+  --nf-line: var(--line, rgba(204, 221, 255, 0.09));
+  --nf-hair: var(--hair, rgba(204, 221, 255, 0.12));
+  --nf-button: var(--button, #fff);
+  --nf-on-button: var(--on-button, #191919);
+  --nf-focus: var(--focus, #68a8db);
+  --nf-shadow: var(--shadow, 0 8px 40px rgba(0, 0, 0, 0.4));
+  --nf-shadow-soft: var(--shadow-soft, 0 2px 10px rgba(0, 0, 0, 0.3));
+  --nf-badge-bg: rgba(104, 168, 219, 0.16);
+  --nf-badge-fg: #68a8db;
+  --nf-thread-a: #3686ad;
+  --nf-thread-b: #68a8db;
+  --nf-thread-c: #7290ba;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]):has(
+      .not-found-shell
+    ) {
+    color-scheme: dark;
+    background: #111;
+    color: #fafafa;
+  }
+
+  :root:not([data-theme="light"]):not([data-theme="dark"]) .not-found-shell {
+    --nf-bg: #111;
+    --nf-surface: #1e1e1e;
+    --nf-alt: #161616;
+    --nf-dot: rgba(255, 255, 255, 0.08);
+    --nf-text: #fafafa;
+    --nf-body: #e2e2e2;
+    --nf-secondary: #b8b8b8;
+    --nf-muted: #8a8a8a;
+    --nf-hover: rgba(255, 255, 255, 0.07);
+    --nf-line: rgba(204, 221, 255, 0.09);
+    --nf-hair: rgba(204, 221, 255, 0.12);
+    --nf-button: #fff;
+    --nf-on-button: #191919;
+    --nf-focus: #68a8db;
+    --nf-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
+    --nf-shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.3);
+    --nf-badge-bg: rgba(104, 168, 219, 0.16);
+    --nf-badge-fg: #68a8db;
+    --nf-thread-a: #3686ad;
+    --nf-thread-b: #68a8db;
+    --nf-thread-c: #7290ba;
+  }
+}
+
+.not-found-shell *,
+.not-found-shell *::before,
+.not-found-shell *::after {
+  box-sizing: border-box;
+}
+
+.not-found-shell :where(a, button):focus-visible {
+  outline: 2px solid var(--nf-focus);
+  outline-offset: 2px;
+}
+
+.nf-skip {
+  position: fixed;
+  left: 16px;
+  top: -64px;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--nf-button);
+  color: var(--nf-on-button);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.nf-skip:focus {
+  top: 12px;
+}
+
+.nf-top {
+  border-bottom: 0.5px solid var(--nf-hair);
+  background: color-mix(in srgb, var(--nf-bg) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+}
+
+.nf-wrap {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 0 32px;
+}
+
+.nf-top-row {
+  display: flex;
+  align-items: center;
+  min-height: 64px;
+}
+
+.nf-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 6px 8px;
+  margin-left: -8px;
+  border-radius: 10px;
+  color: var(--nf-text);
+  text-decoration: none;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  touch-action: manipulation;
+  transition: background-color 0.15s;
+}
+
+.nf-brand:hover {
+  background: var(--nf-hover);
+}
+
+.nf-brand img {
+  display: block;
+  flex-shrink: 0;
+}
+
+.nf-brand b {
+  font-weight: 700;
+}
+
+.nf-main {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 40px 24px 56px;
+  background: radial-gradient(circle, var(--nf-dot) 1px, transparent 1.3px) 0
+    0 / 20px 20px;
+}
+
+.nf-main:focus {
+  outline: none;
+}
+
+.nf-card {
+  position: relative;
+  overflow: hidden;
+  width: min(560px, 100%);
+  padding: 44px 40px 40px;
+  border-radius: 20px;
+  background: var(--nf-surface);
+  box-shadow:
+    0 0 0 0.5px var(--nf-line),
+    var(--nf-shadow);
+}
+
+.nf-ribbon {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 68%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.72;
+  -webkit-mask-image: linear-gradient(115deg, transparent 22%, #000 85%);
+  mask-image: linear-gradient(115deg, transparent 22%, #000 85%);
+}
+
+.nf-thread-a {
+  stop-color: var(--nf-thread-a);
+}
+
+.nf-thread-b {
+  stop-color: var(--nf-thread-b);
+}
+
+.nf-thread-c {
+  stop-color: var(--nf-thread-c);
+}
+
+.nf-content {
+  position: relative;
+  z-index: 1;
+}
+
+.nf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--nf-badge-bg);
+  color: var(--nf-badge-fg);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.nf-code {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.nf-badge-sep {
+  opacity: 0.45;
+}
+
+.nf-title {
+  margin: 0;
+  font-size: clamp(26px, 3.6vw, 34px);
+  line-height: 1.22;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--nf-text);
+}
+
+.nf-lead {
+  margin: 14px 0 0;
+  max-width: 34em;
+  color: var(--nf-secondary);
+  font-size: 15px;
+  line-height: 1.75;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+.nf-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.nf-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 10px 22px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+  touch-action: manipulation;
+  transition:
+    opacity 0.15s,
+    background-color 0.15s,
+    transform 0.15s;
+}
+
+.nf-button-primary {
+  background: var(--nf-button);
+  color: var(--nf-on-button);
+}
+
+.nf-button-primary:hover {
+  opacity: 0.86;
+}
+
+.nf-button-secondary {
+  background: var(--nf-surface);
+  color: var(--nf-text);
+  box-shadow:
+    inset 0 0 0 0.5px var(--nf-hair),
+    var(--nf-shadow-soft);
+}
+
+.nf-button-secondary:hover {
+  background: var(--nf-alt);
+}
+
+.nf-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.nf-button-primary:hover .nf-icon {
+  transform: translateX(2px);
+}
+
+@media (max-width: 760px) {
+  .nf-wrap {
+    padding: 0 20px;
+  }
+
+  .nf-main {
+    padding: 28px 16px 40px;
+  }
+
+  .nf-card {
+    padding: 32px 24px 28px;
+    border-radius: 16px;
+  }
+
+  .nf-ribbon {
+    width: 82%;
+    opacity: 0.48;
+  }
+}
+
+@media (max-width: 560px) {
+  .nf-brand {
+    font-size: 16px;
+  }
+
+  .nf-brand img {
+    width: 24px;
+    height: 24px;
+  }
+
+  .nf-card {
+    padding: 28px 20px 24px;
+  }
+
+  .nf-lead {
+    font-size: 14px;
+  }
+
+  .nf-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .nf-button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .not-found-shell *,
+  .not-found-shell *::before,
+  .not-found-shell *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -681,20 +681,20 @@ test("CanvasWorkspace merges multi-select toolbars, deduplicates shot-list views
   );
   assert.match(
     workspaceSource,
-    /className="cv-menu project-menu"[\s\S]*?所有画布/,
+    /className="cv-menu project-menu\b[^"]*"[\s\S]*?所有画布/,
   );
   assert.match(
     workspaceSource,
     /setViewMode\(\(m\)\s*=>\s*\(m\s*===\s*"canvas"\s*\?\s*"split"\s*:\s*m\)\)/,
   );
 
-  // 3. Quietly fetch pending proposals, hide empty Agent dock trigger, and drop legacy skills modal
+  // 3. Fetch pending proposals badge, integrate FloatingCanvasAgent without legacy skills modal
   assert.doesNotMatch(workspaceSource, /SkillEditorModal|skillsModal|onOpenSkills/);
   assert.match(
     workspaceSource,
     /\/api\/canvases\/\$\{project\.id\}\/proposals\?workspace=\$\{project\.workspace\}/,
   );
-  assert.match(workspaceSource, /\(pendingProposals\s*>\s*0\s*\|\|\s*agentDock\)/);
+  assert.match(workspaceSource, /pendingProposals\s*>\s*0/);
   assert.match(workspaceSource, /fm-with-agent-dock/);
 
   // 4. No hardcoded "MiniMax H3" in CanvasWorkspace.tsx

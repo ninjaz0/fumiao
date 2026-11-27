@@ -23,7 +23,6 @@ import {
 } from "@nestjs/common";
 import express, { type Request, type Response } from "express";
 import { Platform } from "@fumiao/platform/platform.js";
-import { ComfyMicroAppCompiler } from "@fumiao/platform/comfy-compiler.js";
 import { DomainError } from "@fumiao/platform/security.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import {
@@ -56,6 +55,7 @@ import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
 import { OriginalSeries } from "@fumiao/original-api/series.js";
+import { OriginalScriptDocuments } from "@fumiao/original-api/script-documents.js";
 import {
   authorizeTokenHttpRequest,
   OriginalApiTokens,
@@ -171,9 +171,12 @@ function failure(error: any, res: Response) {
 @Controller()
 class OriginalApi {
   @Get("api/canvases") listCanvases(@Req() req: AuthRequest) {
+    const view = new URL(req.originalUrl, "http://localhost")
+      .searchParams.getAll("view").at(-1);
     return this.canvases.list(
       req.actor,
       this.selected(req, req.headersDistinct["x-workspace-id"]?.[0]),
+      view === "archived",
     );
   }
   @Post("api/canvases")
@@ -188,6 +191,19 @@ class OriginalApi {
   @Get("api/canvases/:key")
   getCanvas(@Req() req: AuthRequest, @Param("key") key: string) {
     return this.canvases.get(req.actor, key);
+  }
+  @Put("api/canvases/:key/archive")
+  archiveCanvas(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.setCanvasArchived(req, key, true);
+  }
+  @Delete("api/canvases/:key/archive")
+  restoreCanvas(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.setCanvasArchived(req, key, false);
+  }
+  private setCanvasArchived(req: AuthRequest, key: string, archived: boolean) {
+    const expectedChange = new URL(req.originalUrl, "http://localhost")
+      .searchParams.getAll("expected_archive_change").at(-1);
+    return this.canvases.setArchived(req.actor, key, archived, expectedChange);
   }
   @Put("api/canvases/:key/document")
   saveCanvas(
@@ -499,11 +515,11 @@ class OriginalApi {
   private storyboardExports: OriginalStoryboardExports;
   private batchPrecheck: OriginalBatchPrecheck;
   private series: OriginalSeries;
+  private scriptDocs: OriginalScriptDocuments;
   private apiTokens: OriginalApiTokens;
   private skills: OriginalSkills;
   private proposals: OriginalCanvasProposals;
   private agentPolicies: OriginalAgentPolicies;
-  private comfyCompiler: ComfyMicroAppCompiler;
   private observability: OriginalObservability;
   private budgets: OriginalBudgets;
   private billingExtras: OriginalBillingExtras;
@@ -519,11 +535,11 @@ class OriginalApi {
     this.storyboardExports = new OriginalStoryboardExports(identity.p);
     this.batchPrecheck = new OriginalBatchPrecheck(identity.p);
     this.series = new OriginalSeries(identity.p);
+    this.scriptDocs = new OriginalScriptDocuments(identity.p);
     this.apiTokens = new OriginalApiTokens(identity.p);
     this.skills = new OriginalSkills(identity.p);
     this.proposals = new OriginalCanvasProposals(identity.p);
     this.agentPolicies = new OriginalAgentPolicies(identity.p);
-    this.comfyCompiler = new ComfyMicroAppCompiler(identity.p);
     this.observability = new OriginalObservability(identity.p);
     this.budgets = new OriginalBudgets(identity.p, identity);
     this.billingExtras = new OriginalBillingExtras(identity.p, identity);
@@ -723,6 +739,60 @@ class OriginalApi {
   ) {
     return this.series.removeScene(req.actor, key, ep, scene);
   }
+  @Get("api/workspace/scripts")
+  listWorkspaceScripts(@Req() req: AuthRequest) {
+    return this.scriptDocs.list(req.actor, this.selected(req));
+  }
+  @Post("api/workspace/scripts")
+  @HttpCode(200)
+  createWorkspaceScript(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.scriptDocs.create(req.actor, body, this.selected(req));
+  }
+  @Post("api/workspace/scripts/suite")
+  @HttpCode(200)
+  createWorkspaceScriptSuite(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.scriptDocs.createSuite(req.actor, body, this.selected(req));
+  }
+  @Post("api/workspace/scripts/search")
+  @HttpCode(200)
+  searchWorkspaceScripts(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.scriptDocs.search(req.actor, body, this.selected(req));
+  }
+  @Post("api/workspace/scripts/replace")
+  @HttpCode(200)
+  replaceWorkspaceScripts(@Req() req: AuthRequest, @Body() body: unknown) {
+    return this.scriptDocs.replace(req.actor, body, this.selected(req));
+  }
+  @Get("api/workspace/scripts/:key")
+  getWorkspaceScript(@Req() req: AuthRequest, @Param("key") key: string) {
+    return this.scriptDocs.get(req.actor, key, this.selected(req));
+  }
+  @Put("api/workspace/scripts/:key")
+  updateWorkspaceScript(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Body() body: unknown,
+  ) {
+    return this.scriptDocs.update(req.actor, key, body, this.selected(req));
+  }
+  @Delete("api/workspace/scripts/:key")
+  removeWorkspaceScript(@Req() req: AuthRequest, @Param("key") key: string) {
+    const sp = new URL(req.originalUrl, "http://localhost").searchParams;
+    const recursive = sp.get("recursive") === "true";
+    const parseOptInt = (name: string): number | undefined => {
+      const raw = sp.get(name);
+      if (raw === null || raw === "") return undefined;
+      const n = Number(raw);
+      return Number.isInteger(n) && n >= 0 ? n : undefined;
+    };
+    const sigRaw = sp.get("expected_descendant_sig")?.trim();
+    return this.scriptDocs.remove(req.actor, key, recursive, this.selected(req), {
+      expectedRevision: parseOptInt("expected_revision"),
+      expectedDescendants: parseOptInt("expected_descendants"),
+      expectedRevisionSum: parseOptInt("expected_revision_sum"),
+      ...(sigRaw ? { expectedDescendantSig: sigRaw } : {}),
+    });
+  }
   @Put("api/favorites") favorites(
     @Req() req: AuthRequest,
     @Body() body: unknown,
@@ -856,26 +926,6 @@ class OriginalApi {
   @HttpCode(200)
   adjustCredits(@Req() req: AuthRequest, @Body() body: unknown) {
     return this.credits.adjust(req.actor, body);
-  }
-  @Post("api/admin/comfy/analyze")
-  @HttpCode(200)
-  analyzeComfyWorkflow(
-    @Req() req: AuthRequest,
-    @Body() body: { workflow?: unknown },
-  ) {
-    return this.comfyCompiler.analyzeWorkflow(req.actor, body?.workflow);
-  }
-  @Post("api/admin/comfy/publish")
-  @HttpCode(200)
-  publishComfyMicroApp(
-    @Req() req: AuthRequest,
-    @Body()
-    body: { spec?: unknown; dry_run?: boolean; auto_enable?: boolean },
-  ) {
-    return this.comfyCompiler.publish(req.actor, body?.spec, {
-      dryRun: Boolean(body?.dry_run),
-      autoEnable: Boolean(body?.auto_enable),
-    });
   }
   @Get("api/admin/observability/summary")
   observabilitySummary(@Req() req: AuthRequest) {

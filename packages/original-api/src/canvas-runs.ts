@@ -187,6 +187,7 @@ export class OriginalCanvasRuns {
               requireValue(j, 503, "画布任务尚未完成原状态迁移");
               return {
                 ...Object.fromEntries(fields.map((key) => [key, j[key]])),
+                ...(j.result_mime ? { result_mime: j.result_mime } : {}),
                 link_id: parseCanvasRunJson(l.id),
                 canvas_node: l.node,
                 inputs: parseCanvasRunJson(canvasText(l.inputs)),

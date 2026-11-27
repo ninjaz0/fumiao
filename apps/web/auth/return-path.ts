@@ -17,8 +17,15 @@ function copyParams(search: URLSearchParams, keys: readonly string[]) {
 
 const spaceParams = ["workspace", "studio_ui"] as const;
 
-export function canvasLoginPath(path: string, search: URLSearchParams) {
+function canvasParams(path: string, search: URLSearchParams) {
   const params = copyParams(search, spaceParams);
+  if (path === "/canvas" && search.getAll("view").at(-1) === "archived")
+    params.set("view", "archived");
+  return params;
+}
+
+export function canvasLoginPath(path: string, search: URLSearchParams) {
+  const params = canvasParams(path, search);
   if (canvasPath.test(path)) params.set("next", path);
   return withParams("/studio", params);
 }
@@ -26,7 +33,7 @@ export function canvasLoginPath(path: string, search: URLSearchParams) {
 export function canvasReturnPath(search: URLSearchParams) {
   const next = search.get("next");
   return next && canvasPath.test(next)
-    ? withParams(next, copyParams(search, spaceParams))
+    ? withParams(next, canvasParams(next, search))
     : undefined;
 }
 

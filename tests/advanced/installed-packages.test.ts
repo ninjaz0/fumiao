@@ -18,6 +18,7 @@ import {
 import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
 import { PluginRegistry } from "@fumiao/platform/plugins.js";
 import { QueueHealthPoller } from "@fumiao/platform/queue-health.js";
+import { QueueForecasts } from "@fumiao/platform/queue-snapshot.js";
 import { Executor } from "@fumiao/platform/executor.js";
 import { migrate, one } from "@fumiao/platform/db.js";
 import { execFileSync } from "node:child_process";
@@ -33,12 +34,20 @@ import { OriginalChatSettings } from "@fumiao/original-api/chat-settings.js";
 import { OriginalChats } from "@fumiao/original-api/chats.js";
 import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
 import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
+import { manifestSchema } from "@fumiao/plugin-sdk/index.js";
 import { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
 import { chatProviderFixture } from "../helpers/chat-provider.js";
 const load = async (id: string): Promise<PackageFile> =>
   JSON.parse(
     await readFile("plugins/" + id + "/" + id + ".fmplugin.json", "utf8"),
   );
+async function nodePoolFixture(): Promise<PackageFile> {
+  const [fixture, gpu] = await Promise.all([
+    readFile("tests/fixtures/node-pool-package.json", "utf8"),
+    load("gpu"),
+  ]);
+  return { ...JSON.parse(fixture), nodeClient: gpu.nodeClient };
+}
 async function setup(through?: string) {
   const f = await databaseFixture(through);
   await f.p.registry.initializeStudio(f.db, false);
@@ -694,7 +703,10 @@ test("update source pins package identity and checksum before activation and pre
   const f = await setup(),
     file = await load("muse"),
     updates = new StudioUpdates(f.p),
-    next = { ...file, version: "2.1.0" },
+    next = {
+      ...file,
+      version: file.version.replace(/\.(\d+)$/, (_, n) => "." + (Number(n) + 1)),
+    },
     raw = JSON.stringify(next);
   let digest = createHash("sha256").update(raw).digest("hex");
   const server = createServer((req, res) => {
@@ -1385,7 +1397,10 @@ test("installed settings pages isolate values by package, reject stale saves and
     await assert.rejects(save(1, "SRT"), { status: 409 });
     const upgraded = {
       ...first,
-      version: "2.1.0",
+      version: first.version.replace(
+        /\.(\d+)$/,
+        (_, n) => "." + (Number(n) + 1),
+      ),
       settingsPages: [
         { ...pages[0], title: "字幕选项" },
         { ...pages[0], id: "other" },
@@ -1520,7 +1535,7 @@ test("blank canvases save sticky edits and list runs across zero-plugin, v3 pack
 test("a portable node pool pairs, claims and settles its pinned release alongside GPU", async (t) => {
   const f = await setup();
   t.after(() => f.cleanup());
-  const file = await load("example-node-pool");
+  const file = await nodePoolFixture();
   const gpu = await legacyPackage("gpu");
   await seedLegacyPackage(f.p, gpu);
   await assert.rejects(
@@ -1570,7 +1585,7 @@ test("a portable node pool pairs, claims and settles its pinned release alongsid
   );
   const pair = await request(
     "/api/plugins/" + file.id + "/pages/nodes/actions/pair",
-    { payload: { name: "test", models: ["comfy-image"] } },
+    { payload: { name: "test", models: ["pool-fixture-image"] } },
   );
   const code = pair.result.value.split(" ").at(-1);
   await request("/agent/enroll", { code, secret: token }, 403);
@@ -1595,7 +1610,7 @@ test("a portable node pool pairs, claims and settles its pinned release alongsid
     f.actor,
     await gen.parse("image", {
       uid: randomUUID(),
-      model: "comfy-image",
+      model: "pool-fixture-image",
       prompt: "test",
       params: {},
     }),
@@ -1614,6 +1629,12 @@ test("a portable node pool pairs, claims and settles its pinned release alongsid
   assert.equal(claim.id, job.id);
   assert.deepEqual(claim.instruction, { prompt: "test" });
   assert.equal((await request(root + "/claim", {})).job.ticket, claim.ticket);
+  const heartbeat = await request(root + "/heartbeat", {
+    stage: "busy",
+    ticket: claim.ticket,
+    capabilities: { ready: true, comfy_object_info_hash: "legacy-info-hash" },
+  });
+  assert.equal(heartbeat.held, true);
   const bytes = await sharp({
     create: { width: 12, height: 12, channels: 3, background: "white" },
   })
@@ -1885,7 +1906,7 @@ test("sandbox media tools process private workspace assets and remove rolled-bac
   const { PluginPages } = await import("@fumiao/platform/plugin-pages.js");
   const f = await setup();
   t.after(() => f.cleanup());
-  const file = await load("example-node-pool");
+  const file = await nodePoolFixture();
   assert.match(
     (await f.packages.preview(f.actor, file)).changes.join(" "),
     /私有素材/,
@@ -2503,3 +2524,297 @@ for (const id of ["muse", "flow"])
       }
     },
   );
+
+test("upgrading Muse from sandbox 2.0.0 to 2.1.0 drains in-flight 2.0.0 video work and preserves saved connection concurrency", async () => {
+  const f = await setup();
+  const v20 = JSON.parse(
+    await readFile("plugins/muse/package/legacy-2.0.0.fmplugin.json", "utf8"),
+  ) as PackageFile;
+  const v21 = await load("muse");
+  const mp4Path = join(f.directory, "muse-upgrade.mp4");
+  execFileSync("ffmpeg", [
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=s=32x18:r=8",
+    "-t",
+    "1",
+    "-pix_fmt",
+    "yuv420p",
+    mp4Path,
+  ]);
+  const media = await readFile(mp4Path);
+  let createdTasks = 0;
+  const completedTaskIds = new Set<string>();
+  const fixture = createServer(async (req, res) => {
+    if (req.headers.authorization !== "Bearer muse-key")
+      return void res.writeHead(401).end();
+    if (req.url === "/readyz")
+      return void res.end('{"status":"ready","accounts":3}');
+    if (req.url === "/v1/models")
+      return void res.end('{"data":[{"id":"muse-video"}]}');
+    if (req.method === "POST" && req.url === "/v1/videos") {
+      for await (const _ of req) {
+        // consume body
+      }
+      const n = String(++createdTasks).padStart(32, "0");
+      const now = Math.floor(Date.now() / 1000);
+      return void res.end(
+        JSON.stringify({ id: "task_" + n, status: "queued", created_at: now }),
+      );
+    }
+    if (req.url?.startsWith("/v1/videos/task_")) {
+      const id = req.url.slice("/v1/videos/".length);
+      const now = Math.floor(Date.now() / 1000);
+      if (completedTaskIds.has(id))
+        return void res.end(
+          JSON.stringify({
+            id,
+            status: "completed",
+            url: "/v1/media/upgrade.mp4",
+            created_at: now,
+            started_at: now,
+            generating_at: now,
+          }),
+        );
+      return void res.end(
+        JSON.stringify({
+          id,
+          status: "processing",
+          phase: "generating",
+          created_at: now,
+          started_at: now,
+          generating_at: now,
+        }),
+      );
+    }
+    if (req.url === "/v1/media/upgrade.mp4") return void res.end(media);
+    res.writeHead(404).end();
+  });
+  fixture.listen(0, "127.0.0.1");
+  await once(fixture, "listening");
+  const base =
+    "http://127.0.0.1:" + (fixture.address() as { port: number }).port;
+  const sandboxSend: typeof chatHttp = (url, options) => {
+    assert.equal(url.origin, "https://1.1.1.1");
+    assert.ok(options.lookup);
+    return chatHttp(new URL(url.pathname, base), {
+      ...options,
+      lookup: undefined,
+    });
+  };
+  f.p.registry = new PluginRegistry(undefined, [], sandboxSend);
+  try {
+    assert.equal(v20.version, "2.0.0");
+    assert.equal(v21.version, "2.1.0");
+    const parsed20 = manifestSchema.parse(v20.manifest);
+    assert.ok(
+      manifestSchema.parse(v21.manifest).queue?.timingVersions.includes("2.0.0"),
+      "Muse 2.1.0 must retain 2.0.0 in timingVersions so 2.0.0 calibration samples survive upgrade",
+    );
+    await f.packages.install(f.actor, v20);
+    const { id: connId } = await f.p.createConnection(
+      f.actor,
+      {
+        name: "Muse 存量连接",
+        pluginId: "muse",
+        version: "2.0.0",
+        concurrency: 3,
+        config: { baseUrl: "https://1.1.1.1", apiKey: "muse-key" },
+      },
+      true,
+    );
+    const catalog = new StudioCatalog(f.db),
+      prices = await catalog.prices();
+    await f.db.transaction((sql) =>
+      catalog.savePrices(
+        sql,
+        Object.fromEntries(prices.items.map((i) => [i.key, 5])),
+        prices.revision,
+      ),
+    );
+    await f.packages.change(f.actor, "muse", 1, "enable");
+    const team = await one(
+      f.db,
+      "SELECT * FROM workspaces WHERE kind='team'",
+    );
+    await f.db.transaction((sql) =>
+      f.p.credit(sql, team.id, 100, randomUUID(), "adjust"),
+    );
+
+    // Seed 2.0.0 calibration samples (60s)
+    const vidFeatures = JSON.stringify({
+      kind: "video",
+      model: "muse-video",
+      executor: "muse-api",
+      workflow: "muse2api-native-v1",
+      width: 0,
+      height: 0,
+      native_ratio: "16:9",
+      seconds: 5,
+      steps: 0,
+      video_mode: "t2v",
+      quality: "native",
+      refs: 0,
+      ref_pixels: 0,
+      hardware: "muse-api",
+      profile: {},
+      runtime_id: "",
+      cold: null,
+    });
+    for (let i = 0; i < 6; i++) {
+      await f.db.query(
+        "INSERT INTO job_runs(run_key,attempt,plugin_id,plugin_version,policy,kind,model,features,created,started,finished,status,phase) VALUES($1,1,'muse','2.0.0',$2,'video','muse-video',$3,$4,$4,$5,'done','done')",
+        [
+          randomUUID(),
+          JSON.stringify(parsed20.timing),
+          vidFeatures,
+          1000 + i * 100,
+          1060 + i * 100,
+        ],
+      );
+    }
+
+    await new QueueHealthPoller(f.p).refresh(connId);
+    const g = new OriginalGeneration(f.p);
+    const executor = new Executor(f.p);
+    const submitVideo = async (prompt: string) => {
+      const res = await g.submit(
+        f.actor,
+        await g.parse("video", {
+          uid: randomUUID(),
+          model: "muse-video",
+          prompt,
+          ratio: "16:9",
+          seconds: 5,
+        }),
+        String(team.public_id),
+      );
+      return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.id]);
+    };
+
+    const running20 = await submitVideo("旧版运行中视频");
+    const queued20 = await submitVideo("旧版排队视频 1");
+    const queued20B = await submitVideo("旧版排队视频 2");
+    await executor.execute(running20.id);
+    await executor.execute(running20.id); // transitions run phase -> generating
+    await executor.execute(queued20.id); // blocked by 2.0.0 single-lane capacity
+    await executor.execute(queued20B.id); // also blocked by 2.0.0 single-lane capacity
+
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [running20.id]))
+        .state,
+      "running",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued20.id]))
+        .state,
+      "queued",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued20B.id]))
+        .state,
+      "queued",
+    );
+
+    const pkgBefore = (await f.packages.list(f.actor)).find(
+      (p) => p.id === "muse",
+    )!;
+    await f.packages.install(f.actor, v21, pkgBefore.revision);
+    const [savedConn] = await f.p.studioConnections(f.actor);
+    assert.equal(savedConn.id, connId);
+    assert.equal(savedConn.plugin_version, "2.1.0");
+    assert.equal(savedConn.concurrency, 3);
+
+    await f.db.query(
+      "UPDATE connections SET queue_refresh_until=NULL WHERE id=$1",
+      [connId],
+    );
+    await new QueueHealthPoller(f.p).refresh(connId);
+    const connHealth = await one(
+      f.db,
+      "SELECT queue_health FROM connections WHERE id=$1",
+      [connId],
+    );
+    assert.equal(connHealth.queue_health.capacity, 3);
+
+    const queued21 = await submitVideo("新版排队视频");
+    assert.equal(queued21.plugin_version, "2.1.0");
+
+    // QueueForecasts must forecast each cohort independently while keeping real shared active occupancy:
+    // - queued20 & queued20B (2.0.0) lack a trusted 2.0.0 health snapshot -> reason: "observing"
+    // - queued21 (2.1.0) sees only 1 real running job (running20) out of 3 lanes -> immediate start (median=0),
+    //   NOT pushed to >0s by the 2 unclaimable 2.0.0 queued jobs!
+    const snapshot = await new QueueForecasts(f.p).forWorkspace(
+      f.actor,
+      team.id,
+    );
+    assert.equal(snapshot.jobs[queued20.id].eta.source, "none");
+    assert.equal(snapshot.jobs[queued20.id].eta.reason, "observing");
+    assert.equal(snapshot.jobs[queued20B.id].eta.source, "none");
+    assert.equal(snapshot.jobs[queued20B.id].eta.reason, "observing");
+    assert.equal(snapshot.jobs[queued21.id].eta.source, "queue");
+    assert.equal(snapshot.jobs[queued21.id].eta.median, 0);
+
+    // Executor respects 2.0.0's 1-lane limit on queued20/queued20B while dispatching 2.1.0's queued21 immediately
+    await executor.execute(queued20.id);
+    await executor.execute(queued20B.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued20.id]))
+        .state,
+      "queued",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued20B.id]))
+        .state,
+      "queued",
+    );
+    await executor.execute(queued21.id);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [queued21.id]))
+        .state,
+      "running",
+    );
+
+    // Drain all 4 jobs cleanly once upstream finishes
+    const run20Remote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [running20.id])
+    ).remote_id;
+    const run21Remote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [queued21.id])
+    ).remote_id;
+    completedTaskIds.add(run20Remote);
+    completedTaskIds.add(run21Remote);
+    await executor.execute(running20.id);
+    await executor.execute(queued21.id);
+
+    await executor.execute(queued20.id);
+    const q20Remote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [queued20.id])
+    ).remote_id;
+    completedTaskIds.add(q20Remote);
+    await executor.execute(queued20.id);
+
+    await executor.execute(queued20B.id);
+    const q20BRemote = (
+      await one(f.db, "SELECT remote_id FROM jobs WHERE id=$1", [queued20B.id])
+    ).remote_id;
+    completedTaskIds.add(q20BRemote);
+    await executor.execute(queued20B.id);
+
+    for (const id of [running20.id, queued20.id, queued20B.id, queued21.id]) {
+      const done = await one(f.db, "SELECT * FROM jobs WHERE id=$1", [id]);
+      assert.equal(done.state, "completed", done.error);
+    }
+    assert.equal(
+      Number((await f.p.wallet(f.actor, team.id)).balance),
+      80,
+    );
+  } finally {
+    fixture.closeAllConnections();
+    await new Promise<void>((done) => fixture.close(() => done()));
+    await f.cleanup();
+  }
+});

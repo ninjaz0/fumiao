@@ -35,7 +35,7 @@ import {
 import { canvasTemplates } from "./canvas-templates.js";
 export const canvasConflict =
   "画布已被其他成员修改。你的修改已保留，请重新载入或下载本地副本。";
-const selectProject = `SELECT d.*,c.title AS original_title,c.document,c.created,c.updated,c.last_editor,
+const selectProject = `SELECT d.*,c.title AS original_title,c.document,c.created,c.updated,c.last_editor,c.archived_at,c.archive_change_id,
   w.public_id AS workspace_number,u.public_id AS owner_number,e.public_id AS editor_number
   FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
   LEFT JOIN canvas_documents c ON c.project_id=d.id LEFT JOIN users e ON e.id=c.last_editor`;
@@ -50,6 +50,10 @@ type ShotVideo = {
   mime: string;
   size: string | number;
 };
+
+function canManageCanvas(ownerId: string, user: Actor) {
+  return ownerId === user.id || user.role === "admin";
+}
 
 /** Original canvas authority. All mutations share document locks and PostgreSQL relations. */
 export class OriginalCanvases {
@@ -128,11 +132,12 @@ export class OriginalCanvases {
       owner: Number(row.owner_number),
       created: Number(row.created),
       updated: Number(row.updated),
+      archived_at: row.archived_at === null ? null : Number(row.archived_at),
       revision: row.revision,
       last_editor: Number(row.editor_number),
       workspace: Number(row.workspace_number),
       document: canvasDocumentJson(row.document),
-      can_delete: row.owner_id === user.id || user.role === "admin",
+      can_delete: canManageCanvas(row.owner_id, user),
     };
   }
   async get(user: Actor, key: string) {
@@ -424,15 +429,17 @@ export class OriginalCanvases {
       return this.library.archiveTicket(sql, user, manifest);
     });
   }
-  async list(user: Actor, selected?: string) {
+  async list(user: Actor, selected?: string, archived = false) {
     return this.p.db.transaction(async (sql) => {
       await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
       const workspace = await this.workspace(sql, user, selected);
       const rows = (
         await sql.query(
           selectProject +
-            " WHERE d.workspace_id=$1 AND d.kind='canvas' AND NOT d.deleted AND c.project_id IS NOT NULL ORDER BY c.updated DESC,d.public_id DESC LIMIT 200",
-          [workspace.id],
+            ` WHERE d.workspace_id=$1 AND d.kind='canvas' AND NOT d.deleted AND c.project_id IS NOT NULL
+              AND (c.archived_at IS NOT NULL) = $2
+              ORDER BY ${archived ? "c.archived_at" : "c.updated"} DESC,d.public_id DESC LIMIT 200`,
+          [workspace.id, archived],
         )
       ).rows;
       const pending: { project: string; node: CanvasNode }[] = [];
@@ -723,6 +730,41 @@ export class OriginalCanvases {
       return this.publicProject(row, user);
     });
   }
+  async setArchived(
+    user: Actor,
+    key: string,
+    archived: boolean,
+    expectedChange?: string,
+  ) {
+    return this.p.db.transaction(async (sql) => {
+      const row = await this.project(sql, user, key, true);
+      requireValue(
+        canManageCanvas(row.owner_id, user),
+        403,
+        "只有创建者或管理员可以归档或恢复画布",
+      );
+      requireValue(
+        expectedChange === undefined || expectedChange === row.archive_change_id,
+        409,
+        "归档状态已发生变化，无法撤销此操作",
+      );
+      const previous = row.archived_at === null ? null : Number(row.archived_at);
+      if (archived === (previous !== null))
+        return { archived_at: previous, undo_token: null };
+      const next = archived ? Math.floor(this.clock()) : null;
+      // Both directions rotate the change ID, including restorations to NULL.
+      const changeId = randomUUID();
+      await sql.query(
+        "UPDATE canvas_documents SET archived_at=$2, archive_change_id=$3 WHERE project_id=$1",
+        [row.id, next, changeId],
+      );
+      return {
+        archived_at: next,
+        undo_token: expectedChange === undefined ? changeId : null,
+      };
+    });
+  }
+
   async extractTailFrame(user: Actor, key: string, nodeId: string) {
     return this.p.db.transaction(async (sql) => {
       const row = await this.project(sql, user, key);
@@ -826,7 +868,7 @@ export class OriginalCanvases {
     return this.p.db.transaction(async (sql) => {
       const row = await this.project(sql, user, key, true);
       requireValue(
-        user.role === "admin" || user.id === row.owner_id,
+        canManageCanvas(row.owner_id, user),
         403,
         "只有创建者或管理员可以删除画布",
       );
