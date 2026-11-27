@@ -645,7 +645,6 @@ button[aria-expanded="true"] > .fm-ui-chevron {
 .cv-menu.fm-option-menu {
   top: calc(100% + 5px);
   left: 0;
-  min-width: 164px;
   max-height: 320px;
 }
 .cv-menu.fm-option-menu.fm-option-fixed {

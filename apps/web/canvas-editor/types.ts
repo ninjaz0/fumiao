@@ -10,6 +10,7 @@ import {
   resolveDialogueVoiceProfile,
   type SpeechPackCandidate,
 } from "@fumiao/plugin-sdk/speech-routing";
+import { matchChoiceMenuRect } from "./choice-menu-position";
 export type Kind = "text" | "image" | "video" | "sticky" | "plugin" | "group";
 export type CanvasGenerationMode =
   | "first_frame"
@@ -865,7 +866,7 @@ export type OptionMenuFloatingRect = {
   top?: number;
   bottom?: number;
   left: number;
-  minWidth: number;
+  width: number;
   maxHeight: number;
 };
 
@@ -879,7 +880,6 @@ export function resolveOptionMenuFloatingRect(input: {
   windowWidth: number;
   windowHeight: number;
   preferredDirection?: "down" | "up";
-  menuWidth?: number;
   safeTop?: number;
   safeBottomMargin?: number;
 }): OptionMenuFloatingRect {
@@ -899,11 +899,7 @@ export function resolveOptionMenuFloatingRect(input: {
 
   const available = direction === "up" ? spaceAbove : spaceBelow;
   const maxHeight = Math.min(320, Math.max(96, available));
-  const minWidth = Math.max(164, Math.round(input.triggerRect.width));
-  const estWidth = Math.max(minWidth, Math.round(input.menuWidth ?? minWidth));
-  const left = Math.round(
-    Math.max(8, Math.min(input.triggerRect.left, input.windowWidth - estWidth - 8)),
-  );
+  const { left, width } = matchChoiceMenuRect(input.triggerRect, input.windowWidth);
 
   if (direction === "up") {
     return {
@@ -912,7 +908,7 @@ export function resolveOptionMenuFloatingRect(input: {
         Math.max(safeBottomMargin, input.windowHeight - (input.triggerRect.top - gap)),
       ),
       left,
-      minWidth,
+      width,
       maxHeight,
     };
   }
@@ -921,7 +917,7 @@ export function resolveOptionMenuFloatingRect(input: {
     direction: "down",
     top: Math.round(Math.max(safeTop, input.triggerRect.bottom + gap)),
     left,
-    minWidth,
+    width,
     maxHeight,
   };
 }

@@ -13,6 +13,7 @@ import {
 import Auth from "../auth/Auth";
 import { ApiError, workspaceURL } from "../canvas/api";
 import { ChatWorkspace } from "../canvas-editor/chat/ChatWorkspace";
+import { matchChoiceMenuRect } from "../canvas-editor/choice-menu-position";
 import {
   resolveChatConfigTarget,
   resolveChatModelScope,
@@ -571,9 +572,12 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (!trigger?.isConnected || !element) return;
     const box = trigger.getBoundingClientRect();
     const beside = trigger.dataset.menu === "workspaces" && innerWidth > 760;
-    const choiceOffset = element.querySelector(".fm-choice-menu") ? 0 : 16;
-    const left = Math.min(
-      Math.max(12, beside ? box.right + 12 : box.left - choiceOffset),
+    const choice = element.querySelector(".fm-choice-menu")
+      ? matchChoiceMenuRect(box, innerWidth)
+      : null;
+    element.style.width = choice ? `${choice.width}px` : "";
+    const left = choice?.left ?? Math.min(
+      Math.max(12, beside ? box.right + 12 : box.left - 16),
       innerWidth - element.offsetWidth - 12,
     );
     let top = beside ? box.top : box.bottom + 8;

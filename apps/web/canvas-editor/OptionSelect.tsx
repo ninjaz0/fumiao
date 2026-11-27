@@ -34,7 +34,6 @@ export function OptionSelect<T extends string = string>({
   variant?: "chip" | "field";
 }) {
   const [open, setOpen] = useState(false);
-  const [floatingStyle, setFloatingStyle] = useState<React.CSSProperties>({});
   const [resolvedDir, setResolvedDir] = useState<"down" | "up">(direction);
   const listboxId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -48,74 +47,47 @@ export function OptionSelect<T extends string = string>({
 
   const updateFloatingPosition = useCallback(() => {
     const trigger = buttonRef.current;
-    if (!trigger || typeof window === "undefined") return;
-    const rect = trigger.getBoundingClientRect();
     const menuEl = menuRef.current;
-    const measuredWidth =
-      menuEl && menuEl.offsetWidth > 0 ? menuEl.offsetWidth : undefined;
+    if (!trigger || !menuEl) return;
     const floating = resolveOptionMenuFloatingRect({
-      triggerRect: rect,
+      triggerRect: trigger.getBoundingClientRect(),
       windowWidth: window.innerWidth,
       windowHeight: window.innerHeight,
       preferredDirection: direction,
-      menuWidth: measuredWidth,
     });
     setResolvedDir(floating.direction);
-    setFloatingStyle({
+    Object.assign(menuEl.style, {
       position: "fixed",
-      left: floating.left,
+      left: `${floating.left}px`,
       right: "auto",
-      top: floating.top ?? "auto",
-      bottom: floating.bottom ?? "auto",
-      minWidth: floating.minWidth,
-      maxHeight: floating.maxHeight,
+      top: floating.top === undefined ? "auto" : `${floating.top}px`,
+      bottom: floating.bottom === undefined ? "auto" : `${floating.bottom}px`,
+      width: `${floating.width}px`,
+      maxHeight: `${floating.maxHeight}px`,
     });
+
+    // An ancestor can establish a containing block for the fixed menu.
+    const actual = menuEl.getBoundingClientRect();
+    const dx = actual.left - floating.left;
+    if (Math.abs(dx) > 1) {
+      menuEl.style.left = `${floating.left - dx}px`;
+    }
+    if (floating.top !== undefined) {
+      const dy = actual.top - floating.top;
+      if (Math.abs(dy) > 1) {
+        menuEl.style.top = `${Math.round(floating.top - dy)}px`;
+      }
+    } else if (floating.bottom !== undefined) {
+      const dy = actual.bottom - (window.innerHeight - floating.bottom);
+      if (Math.abs(dy) > 1) {
+        menuEl.style.bottom = `${Math.round(floating.bottom + dy)}px`;
+      }
+    }
   }, [direction]);
 
   useLayoutEffect(() => {
-    if (!open) return;
-    updateFloatingPosition();
-    // Re-measure once menu width is laid out (and adjust if an ancestor sets a transformed containing block)
-    const menuEl = menuRef.current;
-    const trigger = buttonRef.current;
-    if (menuEl && trigger && typeof window !== "undefined") {
-      const floating = resolveOptionMenuFloatingRect({
-        triggerRect: trigger.getBoundingClientRect(),
-        windowWidth: window.innerWidth,
-        windowHeight: window.innerHeight,
-        preferredDirection: direction,
-        menuWidth: menuEl.offsetWidth || undefined,
-      });
-      menuEl.style.left = `${floating.left}px`;
-      menuEl.style.right = "auto";
-      menuEl.style.minWidth = `${floating.minWidth}px`;
-      menuEl.style.maxHeight = `${floating.maxHeight}px`;
-      if (floating.direction === "up") {
-        menuEl.style.top = "auto";
-        menuEl.style.bottom = `${floating.bottom!}px`;
-      } else {
-        menuEl.style.bottom = "auto";
-        menuEl.style.top = `${floating.top!}px`;
-      }
-      const actual = menuEl.getBoundingClientRect();
-      const dx = actual.left - floating.left;
-      if (Math.abs(dx) > 1) {
-        menuEl.style.left = `${Math.round(floating.left - dx)}px`;
-      }
-      if (floating.direction === "down" && floating.top !== undefined) {
-        const dy = actual.top - floating.top;
-        if (Math.abs(dy) > 1) {
-          menuEl.style.top = `${Math.round(floating.top - dy)}px`;
-        }
-      } else if (floating.direction === "up" && floating.bottom !== undefined) {
-        const expectedBottomEdge = window.innerHeight - floating.bottom;
-        const dy = actual.bottom - expectedBottomEdge;
-        if (Math.abs(dy) > 1) {
-          menuEl.style.bottom = `${Math.round(floating.bottom + dy)}px`;
-        }
-      }
-    }
-  }, [open, options.length, direction, updateFloatingPosition]);
+    if (open) updateFloatingPosition();
+  }, [open, options.length, updateFloatingPosition]);
 
   useEffect(() => {
     if (!open) return;
@@ -257,7 +229,7 @@ export function OptionSelect<T extends string = string>({
         <button
           ref={buttonRef}
           type="button"
-          className={"fm-ui-chip" + (active || open ? " active" : "")}
+          className={"fm-ui-chip fm-choice-trigger fm-choice-trigger-wide" + (active || open ? " active" : "")}
           aria-label={triggerAriaLabel}
           aria-haspopup="listbox"
           aria-expanded={open}
@@ -276,7 +248,6 @@ export function OptionSelect<T extends string = string>({
           id={listboxId}
           ref={menuRef}
           className={menuClass}
-          style={floatingStyle}
           role="listbox"
           aria-label={ariaLabel}
           tabIndex={-1}

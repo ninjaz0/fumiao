@@ -301,6 +301,10 @@ test(
         "the dropdown and the right-column trigger have the same left edge",
       );
       assert.ok(
+        Math.abs(upMenuBox.x + upMenuBox.width - lightingButtonBox.x - lightingButtonBox.width) <= 1,
+        "the dropdown and the trigger also share the right edge",
+      );
+      assert.ok(
         upMenuBox.y < popBox.y,
         `Upward menu (${upMenuBox.y}) must extend above .fm-cine-popover top (${popBox.y}) without clipping`,
       );

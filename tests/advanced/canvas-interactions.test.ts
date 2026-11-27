@@ -1103,7 +1103,6 @@ test("PR #223 Item 5: resolveCinePopoverPlacement considers both horizontal and 
     windowWidth: 1440,
     windowHeight: 900,
     preferredDirection: "up",
-    menuWidth: 180,
   });
   assert.equal(upwardDesktop.direction, "up");
   assert.equal(upwardDesktop.maxHeight, 320);
@@ -1113,6 +1112,7 @@ test("PR #223 Item 5: resolveCinePopoverPlacement considers both horizontal and 
     "upward menu top edge must remain inside viewport",
   );
   assert.equal(upwardDesktop.left, 260);
+  assert.equal(upwardDesktop.width, 150);
 
   // When trigger is near viewport top (e.g. top-docked popover at y=110) and preferredDirection="up" lacks room, auto-flips to "down"!
   const flippedDown = typesMod.resolveOptionMenuFloatingRect({
@@ -1126,12 +1126,12 @@ test("PR #223 Item 5: resolveCinePopoverPlacement considers both horizontal and 
   assert.equal(flippedDown.maxHeight, 320);
 
   const atRightEdge = typesMod.resolveOptionMenuFloatingRect({
-    triggerRect: { top: 110, bottom: 144, left: 1130, width: 120 },
+    triggerRect: { top: 110, bottom: 144, left: 1220, width: 120 },
     windowWidth: 1280,
     windowHeight: 800,
-    menuWidth: 180,
   });
-  assert.equal(atRightEdge.left, 1092);
+  assert.equal(atRightEdge.left, 1160);
+  assert.equal(atRightEdge.width, 120);
 });
 
 test("PR #223 Item 7: reconcileCanvasRightDocks collapses docked panel when resizing across 1100px breakpoint", async () => {

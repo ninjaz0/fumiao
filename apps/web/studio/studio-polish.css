@@ -378,7 +378,8 @@
 }
 
 #popover.popover:has(.fm-choice-menu) {
-  width: 184px;
+  box-sizing: border-box;
+  max-width: 100vw;
   padding: 6px;
 }
 

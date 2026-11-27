@@ -4492,7 +4492,7 @@ export function CanvasWorkspace({
             </div>
             {!((muse || flowModel) && single.type === 'image') && <div className="parameter-wrap menu-trigger">
               <button
-                className="parameter"
+                className="parameter fm-choice-trigger"
                 disabled={Boolean(flowModel&&!flowParameters)}
                 aria-label={single.type === "image" ? "图片质量" : "视频时长"}
                 onClick={() => setMenu(menu === "duration" ? null : "duration")}
@@ -4612,7 +4612,7 @@ export function CanvasWorkspace({
               </div>
             )}
             <div className="parameter-wrap menu-trigger">
-              <button className={'parameter ' + (menu === 'candidates' ? 'active' : '')}
+              <button className={'parameter fm-choice-trigger fm-choice-trigger-count ' + (menu === 'candidates' ? 'active' : '')}
                 aria-label="候选数量" aria-expanded={menu === 'candidates'}
                 onClick={() => setMenu(menu === 'candidates' ? null : 'candidates')}>{candidateCount} 个<ChevronDown size={13} /></button>
               {menu === 'candidates' && <div ref={alignChoiceMenuToTrigger} className="cv-menu duration-menu candidate-menu fm-choice-menu" role="group" aria-label="候选数量">

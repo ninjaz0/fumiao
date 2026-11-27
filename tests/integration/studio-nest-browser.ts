@@ -852,6 +852,7 @@ export async function studioBrowser(
     const creationMenuBox = await composerPopover.boundingBox();
     assert.ok(creationBox && creationMenuBox);
     assert.ok(Math.abs(creationMenuBox.x - creationBox.x) <= 1);
+    assert.ok(Math.abs(creationMenuBox.width - creationBox.width) <= 1);
     await expect(composerPopover.locator('[aria-selected="true"]')).not.toBeFocused();
     await page.keyboard.press("Escape");
     await expect(composerCreation).toBeFocused();
