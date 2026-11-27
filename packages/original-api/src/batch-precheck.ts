@@ -109,6 +109,8 @@ export class OriginalBatchPrecheck {
       );
       const bindings = await CanvasSubmissionModels.read(sql, {
         strict: false,
+        workspaceId: String(workspace.id),
+        vault: this.p.vault,
       });
       const wallet = await one(
         sql,
@@ -209,6 +211,8 @@ export class OriginalBatchPrecheck {
 
       const bindings = await CanvasSubmissionModels.read(sql, {
         strict: false,
+        workspaceId: String(project.workspace_id),
+        vault: this.p.vault,
       });
       const wallet = await one(
         sql,

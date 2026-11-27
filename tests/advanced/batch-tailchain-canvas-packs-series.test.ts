@@ -977,7 +977,13 @@ test("PR #223 Item 1 & 2: Series bible editor pins expectedRevision across episo
     applyLoadedSeriesListToBibleSession,
     submitSeriesBibleSession,
     parseBibleDraft,
+    resolveSeriesBibleSaveOutcome,
   } = await import("../../apps/web/canvas/series-bible.js");
+  assert.equal(
+    typeof resolveSeriesBibleSaveOutcome,
+    "function",
+    "resolveSeriesBibleSaveOutcome must reconcile post-submit edits safely across delayed 200 and 409 responses",
+  );
 
   // 1. P1 concurrency: Actor A opens bible editor at rev 1 -> Actor B saves rev 2 -> Actor A creates an episode triggering list refresh (live rev = 2) -> Actor A submits stale draft -> 409 conflict + draft retained!
   const created = await seriesSvc.create(
@@ -1103,10 +1109,104 @@ test("PR #223 Item 1 & 2: Series bible editor pins expectedRevision across episo
   });
   assert.equal("notes" in savedStructured.bible, false);
 
-  // Plain-text mode stores { notes } cleanly even if text contains braces or punctuation
+  // Plain-text mode stores { notes } cleanly even if text contains braces or punctuation, and blank clears {}
   assert.deepEqual(parseBibleDraft("纯文本世界观：第一幕{雨夜}", "notes"), {
     notes: "纯文本世界观：第一幕{雨夜}",
   });
+  assert.deepEqual(parseBibleDraft("   ", "notes"), {});
+  // Optional new-series creation field with allowEmpty=true still treats blank as {}
+  assert.deepEqual(parseBibleDraft("   ", "structured", { allowEmpty: true }), {});
+
+  // Round 2 Item 2: Blank structured input on existing series MUST reject and preserve draft (NOT clear bible), whereas explicit "{}" clears bible!
+  let blankStructPuts = 0;
+  const blankStructSession = {
+    ...openSeriesBibleSession(savedStructured),
+    draft: "   \n  ",
+  };
+  const blankStructOutcome = await submitSeriesBibleSession(
+    blankStructSession,
+    async (id: string, payload: any) => {
+      blankStructPuts += 1;
+      return seriesSvc.update(f.admin, id, payload);
+    },
+  );
+  assert.equal(blankStructOutcome.ok, false, "blank structured draft must not send PUT {}");
+  assert.equal(blankStructPuts, 0);
+  if (!blankStructOutcome.ok) {
+    assert.equal(blankStructOutcome.session.draft, "   \n  ");
+    assert.match(blankStructOutcome.error, /\{\}/);
+  }
+  // Explicit "{}" in structured mode clears worldbuilding cleanly
+  const explicitEmptySession = {
+    ...openSeriesBibleSession(savedStructured),
+    draft: "{}",
+  };
+  const explicitEmptyOutcome = await submitSeriesBibleSession(
+    explicitEmptySession,
+    async (id: string, payload: any) => seriesSvc.update(f.admin, id, payload),
+  );
+  assert.equal(explicitEmptyOutcome.ok, true);
+  const clearedStructured = (await seriesSvc.list(f.admin, wsPublicId)).series.find(
+    (s) => s.id === legacyStructured.id,
+  )!;
+  assert.deepEqual(clearedStructured.bible, {});
+
+  // Round 2 Item 1: Delayed PUT (both 200 and 409) preserves any post-start edits and SeriesTree disables editing while saving while keeping 409 textarea selectable/copyable!
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const seriesTreeSrc = await readFile(
+    join(process.cwd(), "apps/web/canvas/SeriesTree.tsx"),
+    "utf8",
+  );
+  assert.match(seriesTreeSrc, /resolveSeriesBibleSaveOutcome\(/);
+  assert.match(seriesTreeSrc, /aria-label="编辑世界观设定"[\s\S]{0,400}readOnly=\{busy\}/);
+
+  // Delayed 200 when user modified draft while PUT was in flight -> keeps new draft open and advances expectedRevision to saved revision!
+  const delayedStart = openSeriesBibleSession(clearedStructured);
+  const submitted200 = { ...delayedStart, mode: "notes" as const, draft: "第一版提交内容" };
+  let editedDuring200 = { ...submitted200 };
+  const delayed200Outcome = await submitSeriesBibleSession(
+    submitted200,
+    async (id: string, payload: any) => {
+      editedDuring200 = { ...editedDuring200, draft: "第一版提交内容 + 保存期间追加的新段落" };
+      return seriesSvc.update(f.admin, id, payload);
+    },
+  );
+  assert.equal(delayed200Outcome.ok, true);
+  const reconciled200 = resolveSeriesBibleSaveOutcome(
+    editedDuring200,
+    submitted200,
+    delayed200Outcome,
+  );
+  assert.ok(reconciled200, "post-submit edits must keep editor open instead of discarding new input");
+  assert.equal(reconciled200.draft, "第一版提交内容 + 保存期间追加的新段落");
+  assert.equal(reconciled200.expectedRevision, clearedStructured.revision + 1);
+  assert.equal(reconciled200.conflicted, false);
+
+  // Delayed 409 when user modified draft while PUT was in flight -> keeps new draft, marks conflicted=true, and NEVER regresses pinned expectedRevision!
+  await seriesSvc.update(f.admin, legacyStructured.id, {
+    expected_revision: clearedStructured.revision + 1,
+    bible: { notes: "协作者抢先提交的新设定" },
+  });
+  const staleSubmitted = { ...reconciled200 };
+  let editedDuring409 = { ...staleSubmitted };
+  const delayed409Outcome = await submitSeriesBibleSession(
+    staleSubmitted,
+    async (id: string, payload: any) => {
+      editedDuring409 = { ...editedDuring409, draft: "本地继续补充的冲突草稿（可完整复制）" };
+      return seriesSvc.update(f.admin, id, payload);
+    },
+  );
+  assert.equal(delayed409Outcome.ok, false);
+  const reconciled409 = resolveSeriesBibleSaveOutcome(
+    editedDuring409,
+    staleSubmitted,
+    delayed409Outcome,
+  );
+  assert.ok(reconciled409);
+  assert.equal(reconciled409.conflicted, true);
+  assert.equal(reconciled409.draft, "本地继续补充的冲突草稿（可完整复制）");
+  assert.equal(reconciled409.expectedRevision, staleSubmitted.expectedRevision);
 });
 
 test("PR #223 Item 3: Standalone scene canvas includes series.bible worldbuilding sticky note even when synopsis and scene summary are empty", async (t) => {

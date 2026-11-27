@@ -86,6 +86,15 @@ export function CinematographyPanel({
                 value={val}
                 active={Boolean(val)}
                 direction={index >= 3 ? "up" : "down"}
+                align={
+                  floating
+                    ? index % 2 === 1
+                      ? "right"
+                      : "left"
+                    : index % 3 === 2
+                      ? "right"
+                      : "left"
+                }
                 options={buildCinematographyOptions(dim.options, val)}
                 onChange={(nextVal) =>
                   onChange(updateCinematographyField(current, dim.key, nextVal))

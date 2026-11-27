@@ -112,7 +112,7 @@ import {
   hasCanvasSelectionToolbar,
   resolveBatchShots,
   resolveCinePopoverPlacement,
-  resolveNextShotVideoModel,
+  resolveNextShotContinuation,
   reconcileCanvasRightDocks,
   linkedValue,
   type CanvasClipboard,
@@ -137,6 +137,10 @@ import { Composition } from "./Composition";
 import { AssetPacks, type Pack } from "./AssetPacks";
 import { CinematographyPanel } from "./CinematographyPanel";
 import { OptionSelect, SegmentedOptions } from "./OptionSelect";
+import {
+  isBgmMusicModel,
+  pickSpeechAudioModel,
+} from "@fumiao/plugin-sdk/speech-routing";
 import {
   GENERATION_MODE_OPTIONS,
   GRID_LAYOUT_OPTIONS,
@@ -890,7 +894,7 @@ export function CanvasWorkspace({
       viewModeRef.current = resolved;
       setViewModeState(resolved);
       if (
-        resolved === "split" &&
+        resolved !== "canvas" &&
         typeof window !== "undefined" &&
         window.innerWidth <= 1100
       ) {
@@ -1060,6 +1064,44 @@ export function CanvasWorkspace({
     }
     return map;
   }, [studio.jobs]);
+  const availableModel = useCallback(
+    (model: string) =>
+      !!studio.model_forms?.[model]?.canvas &&
+      (studio.model_access || studio.model_policy?.enabled)?.[model] === true &&
+      (model !== "gpt-image-2.6-sunburst" || studio.images.configured) &&
+      (studio.model_catalog?.[model]?.provider !== "flow" ||
+        Boolean(studio.flow?.configured)),
+    [
+      studio.model_forms,
+      studio.model_access,
+      studio.model_policy,
+      studio.images.configured,
+      studio.model_catalog,
+      studio.flow?.configured,
+    ],
+  );
+  const formatVideoModelLabel = useCallback(
+    (modelId: string) =>
+      FlowPicker.label(studio.model_catalog, modelId) ||
+      studio.video_models?.[modelId] ||
+      studio.model_catalog?.[modelId]?.label ||
+      modelId,
+    [studio.model_catalog, studio.video_models],
+  );
+  const resolveNodeTailContinuation = useCallback(
+    (node: CanvasNode, run?: Job) =>
+      resolveNextShotContinuation(
+        studio,
+        node.params.model,
+        {
+          ratio: run?.ratio || node.params.ratio,
+          seconds: run?.seconds || node.params.seconds,
+        },
+        availableModel,
+        formatVideoModelLabel,
+      ),
+    [studio, availableModel, formatVideoModelLabel],
+  );
   const shots = useMemo(
     () =>
       shotIds.flatMap((id) => {
@@ -1079,6 +1121,9 @@ export function CanvasWorkspace({
             prompt: node.prompt,
             generation_mode: node.generation_mode,
             cinematography: node.cinematography ?? null,
+            tailContinuation: media
+              ? resolveNodeTailContinuation(node, source)
+              : null,
             seconds: Math.max(
               videoSeconds(source) || node.params.seconds,
               voice?.status === "done" ? voice.actual?.duration || 0 : 0,
@@ -1087,7 +1132,14 @@ export function CanvasWorkspace({
           },
         ];
       }),
-    [shotIds, nodeById, runsByNode, runById, studioJobByResult],
+    [
+      shotIds,
+      nodeById,
+      runsByNode,
+      runById,
+      studioJobByResult,
+      resolveNodeTailContinuation,
+    ],
   );
   const compositionIssue = useMemo(() => {
     if (viewMode === "canvas") return "";
@@ -1120,7 +1172,6 @@ export function CanvasWorkspace({
   }, [viewMode, shots, shotIds, nodeById, runsByNode, runById]);
   const compared = compareNode ? nodeById.get(compareNode) : undefined;
   const comparisonRuns = compared ? resolveNodeFromIndex(compared, runsByNode).list.filter((job) => job.status === "done" && job.result) : [];
-  const availableModel = (model:string) => !!studio.model_forms?.[model]?.canvas && (studio.model_access || studio.model_policy?.enabled)?.[model] === true && (model !== 'gpt-image-2.6-sunburst' || studio.images.configured) && (studio.model_catalog?.[model]?.provider!=='flow' || Boolean(studio.flow?.configured));
   const defaultImageModel =
     (studio.images.default_model && availableModel(studio.images.default_model)
       ? studio.images.default_model
@@ -2000,16 +2051,9 @@ export function CanvasWorkspace({
   const extractFrame = async ({ node: source, media, run }: Preview, next: boolean) => {
     if (!previewPlayer.current || extracting) return;
     const desiredRatio = run?.ratio || source.params.ratio;
-    const desiredSeconds = run?.seconds || source.params.seconds;
-    const nextVideoModel = next
-      ? resolveNextShotVideoModel(
-          studio,
-          source.params.model,
-          { ratio: desiredRatio, seconds: desiredSeconds },
-          availableModel,
-        )
-      : "";
-    if (next && !nextVideoModel) {
+    const continuation = next ? resolveNodeTailContinuation(source, run) : null;
+    const nextVideoModel = continuation?.model || "";
+    if (next && !continuation) {
       setFrameError("当前空间没有支持参考图首帧的视频模型");
       return;
     }
@@ -2074,15 +2118,10 @@ export function CanvasWorkspace({
       setPreview(null);
       selectOne(target.id);
       requestAnimationFrame(() => reveal(target));
-      const nextLabel = nextVideoModel
-        ? FlowPicker.label(studio.model_catalog, nextVideoModel) ||
-          studio.video_models?.[nextVideoModel] ||
-          nextVideoModel
-        : "";
       notify(
         next
-          ? nextVideoModel !== source.params.model && nextLabel
-            ? `已将当前画面设为新镜头首帧（已选用 ${nextLabel}）`
+          ? continuation?.switched
+            ? `已将当前画面设为新镜头首帧（已选用 ${continuation.label}）`
             : "已将当前画面设为新镜头首帧"
           : "已提取当前帧到画布与素材库",
       );
@@ -2975,15 +3014,12 @@ export function CanvasWorkspace({
   const availableAudioModels = Object.entries(studio.model_catalog)
     .filter(([id, spec]) => spec.kind === "audio" && availableModel(id))
     .map(([id, spec]) => ({ id, label: spec.label || id }));
-  const isBgmMusicModel = (
-    id: string,
-    spec?: { kind?: string; provider?: string },
-  ) =>
-    spec?.kind === "audio" &&
-    (spec.provider === "bgm-generator" ||
-      ["bgm-v1", "suno-v4", "udio-v1.5", "musicgen-large"].includes(id) ||
-      (typeof spec.provider === "string" &&
-        /(?:^|[-_])(bgm|music)(?:$|[-_])/i.test(spec.provider)));
+  const availableSpeechModels = availableAudioModels.filter(
+    (m) =>
+      !isBgmMusicModel(m.id, studio.model_catalog[m.id]) &&
+      (!Array.isArray(studio.canvas_speech_models) ||
+        studio.canvas_speech_models.includes(m.id)),
+  );
   const bgmModels = availableAudioModels.filter((m) =>
     isBgmMusicModel(m.id, studio.model_catalog[m.id]),
   );
@@ -3030,16 +3066,14 @@ export function CanvasWorkspace({
   const handleInheritTailFrame = async (shotId: string) => {
     const source = doc.ref.current.document.nodes.find((n) => n.id === shotId);
     if (!source) return;
-    const nextVideoModel = resolveNextShotVideoModel(
-      studio,
-      source.params.model,
-      { ratio: source.params.ratio, seconds: source.params.seconds },
-      availableModel,
-    );
-    if (!nextVideoModel) {
+    const { run, media } = resolveNodeFromIndex(source, runsByNode);
+    const sourceRun = run ?? (media ? studioJobByResult.get(media) : undefined);
+    const continuation = resolveNodeTailContinuation(source, sourceRun);
+    if (!continuation) {
       notify("当前空间没有支持参考图首帧续接的视频模型");
       return;
     }
+    const nextVideoModel = continuation.model;
     await doc.flush();
     const res = await api<{ asset_id: string; width: number; height: number }>(
       `/api/canvases/${project.id}/nodes/${shotId}/tail-frame`,
@@ -3090,7 +3124,11 @@ export function CanvasWorkspace({
         shots: [...(d.document.shots ?? []), vidNode.id],
       },
     }));
-    notify("已抽取尾帧并创建续接镜头");
+    notify(
+      continuation.switched
+        ? `已抽取尾帧并用 ${continuation.label} 创建续接镜头`
+        : "已抽取尾帧并创建续接镜头",
+    );
     if (viewMode === "list") setViewMode("split");
     selectOne(vidNode.id);
     focusNodes([vidNode.id]);
@@ -3099,18 +3137,10 @@ export function CanvasWorkspace({
     const node = doc.value.document.nodes.find((n) => n.id === shot.id);
     if (!node) return null;
     const preferred = node.narration_model?.trim();
-    const audioCandidates = [
-      ...(preferred ? [preferred] : []),
-      "breeze-tts-2",
-      "tts-1",
-      "gpt-4o-mini-tts",
-      "local-tts-compat",
-      "edge-tts",
-    ];
-    const activeAudio =
-      audioCandidates.find((m) => availableModel(m)) ??
-      availableAudioModels[0]?.id ??
-      "";
+    const activeAudio = pickSpeechAudioModel({
+      preferredModel: preferred,
+      availableSpeechIds: availableSpeechModels.map((m) => m.id),
+    });
     const priceItem = activeAudio
       ? studio.pricing.items.find((p) => p.key.startsWith(activeAudio + "|"))
       : undefined;
@@ -3130,7 +3160,7 @@ export function CanvasWorkspace({
         runs={runs}
         cost={price}
         unavailableReason={unavailableReason}
-        audioModels={availableAudioModels}
+        audioModels={availableSpeechModels}
         activeModel={activeAudio}
         onEditStart={doc.begin}
         onEditEnd={doc.end}
@@ -3492,7 +3522,7 @@ export function CanvasWorkspace({
               } else {
                 setAgentTab("chat");
                 setAgentDock(true);
-                if (window.innerWidth <= 1100 && viewMode === "split") {
+                if (window.innerWidth <= 1100 && viewMode !== "canvas") {
                   setViewMode("canvas");
                 }
               }
@@ -3513,7 +3543,7 @@ export function CanvasWorkspace({
               } else {
                 setAgentTab("proposals");
                 setAgentDock(true);
-                if (window.innerWidth <= 1100 && viewMode === "split") {
+                if (window.innerWidth <= 1100 && viewMode !== "canvas") {
                   setViewMode("canvas");
                 }
               }
@@ -5175,23 +5205,10 @@ export function CanvasWorkspace({
         </Modal>
       )}
       {preview && (() => {
-        const previewNextVideoModel =
+        const previewContinuation =
           preview.node.type === "video"
-            ? resolveNextShotVideoModel(
-                studio,
-                preview.node.params.model,
-                {
-                  ratio: preview.run?.ratio || preview.node.params.ratio,
-                  seconds: preview.run?.seconds || preview.node.params.seconds,
-                },
-                availableModel,
-              )
-            : "";
-        const previewNextVideoLabel = previewNextVideoModel
-          ? FlowPicker.label(studio.model_catalog, previewNextVideoModel) ||
-            studio.video_models?.[previewNextVideoModel] ||
-            previewNextVideoModel
-          : "";
+            ? resolveNodeTailContinuation(preview.node, preview.run)
+            : null;
         return (
         <Modal title={preview.node.title} wide onClose={() => {
           if (!extracting) { setPreview(null); setFrameError(""); }
@@ -5216,8 +5233,8 @@ export function CanvasWorkspace({
           {preview.node.type === "video" && (
             <p>
               暂停在想保留的画面，可提取为图片
-              {previewNextVideoModel
-                ? `，或设为 ${previewNextVideoLabel} 下一镜头的首帧。`
+              {previewContinuation
+                ? previewContinuation.previewHint
                 : "保存到画布与素材库。"}
             </p>
           )}
@@ -5226,9 +5243,9 @@ export function CanvasWorkspace({
               <button className="secondary" disabled={extracting} onClick={() => extractFrame(preview, false)}>
                 {extracting ? "正在提取…" : "提取当前帧"}
               </button>
-              {Boolean(previewNextVideoModel) && (
+              {Boolean(previewContinuation) && (
                 <button className="primary" disabled={extracting} onClick={() => extractFrame(preview, true)}>
-                  用作下一镜头首帧
+                  {previewContinuation!.previewButtonLabel}
                 </button>
               )}
             </>}
@@ -5543,7 +5560,7 @@ export function CanvasWorkspace({
           onClick={() => {
             setAgentTab("chat");
             setAgentDock(true);
-            if (window.innerWidth <= 1100 && viewMode === "split") {
+            if (window.innerWidth <= 1100 && viewMode !== "canvas") {
               setViewMode("canvas");
             }
           }}

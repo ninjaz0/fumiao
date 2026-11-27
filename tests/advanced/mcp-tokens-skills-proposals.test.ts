@@ -462,6 +462,66 @@ test("PR #223 Item 9: SkillEditorCard states 64 KiB SKILL.md and 256 KiB ZIP lim
       "propose_patch",
     ]);
     assert.match(saved.body_md, /雨夜反光/);
+
+    // Round 2 Item 3: Editing ONLY skill body must preserve un-normalized/un-truncated raw frontmatter (e.g. 450-char description, raw slug "Short Name", >80-char name, and missing-field fallback)
+    const longDesc = "镜".repeat(450);
+    const longName = "超长技能原始标题_" + "甲".repeat(80);
+    const rawSlugSkill = await skills.create(
+      f.admin,
+      {
+        enabled: true,
+        raw_md: [
+          "---",
+          `name: ${longName}`,
+          'slug: "Short Name"',
+          `description: ${longDesc}`,
+          "category: cinematography",
+          "---",
+          "",
+          "原始正文第一行。",
+        ].join("\n"),
+      },
+      ws,
+    );
+    assert.equal(rawSlugSkill.slug, "short-name");
+    assert.equal(rawSlugSkill.description.length, 400);
+    assert.equal((rawSlugSkill.frontmatter.description as string).length, 450);
+    assert.equal(rawSlugSkill.frontmatter.slug, "Short Name");
+    assert.equal(rawSlugSkill.frontmatter.name, longName);
+
+    const rawSerialized = serializeSkillMarkdown(rawSlugSkill);
+    const bodyEditedMd = rawSerialized.replace(
+      "原始正文第一行。",
+      "仅修改正文后的第二版规则。",
+    );
+    const savedRawMeta = await skills.update(f.admin, rawSlugSkill.id, {
+      expected_revision: rawSlugSkill.revision,
+      raw_md: bodyEditedMd,
+    });
+    assert.equal(savedRawMeta.slug, "short-name");
+    assert.equal(savedRawMeta.frontmatter.slug, "Short Name");
+    assert.equal(savedRawMeta.frontmatter.description, longDesc);
+    assert.equal((savedRawMeta.frontmatter.description as string).length, 450);
+    assert.equal(savedRawMeta.frontmatter.name, longName);
+    assert.equal(savedRawMeta.frontmatter.category, "cinematography");
+    assert.equal(savedRawMeta.body_md, "仅修改正文后的第二版规则。");
+
+    // Fallback when frontmatter lacks name/slug/description (e.g. created via JSON fields instead of raw_md)
+    const jsonCreated = await skills.create(
+      f.admin,
+      {
+        enabled: true,
+        name: "JSON 创建技能",
+        slug: "json-created-skill",
+        description: "无原始 YAML 时使用展示字段填充",
+        body_md: "JSON 初始正文。",
+      },
+      ws,
+    );
+    const jsonSerialized = serializeSkillMarkdown(jsonCreated);
+    assert.match(jsonSerialized, /name: JSON 创建技能/);
+    assert.match(jsonSerialized, /slug: json-created-skill/);
+    assert.match(jsonSerialized, /description: 无原始 YAML 时使用展示字段填充/);
   } finally {
     await f.cleanup();
   }

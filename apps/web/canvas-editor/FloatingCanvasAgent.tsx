@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useState } from "react";
 import {
   AtSign,
   FileText,
@@ -84,7 +84,7 @@ export function FloatingCanvasAgent({
     { key: string; kind: "script" | "node"; id: string; label: string; snippet: string }[]
   >([]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onDockedWidthChange(visible && docked ? width : 0);
   }, [visible, docked, width, onDockedWidthChange]);
 

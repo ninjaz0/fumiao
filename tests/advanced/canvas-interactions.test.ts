@@ -820,8 +820,8 @@ test("CanvasWorkspace centralizes <= 1100px agentDock mutual exclusion inside se
 
   assert.match(
     setViewModeBody,
-    /resolved\s*===\s*"split"\s*&&\s*typeof window\s*!==\s*"undefined"\s*&&\s*window\.innerWidth\s*<=\s*1100[\s\S]*?setAgentDock\(false\)/,
-    "setViewMode must dismiss agentDock whenever resolved === 'split' on <= 1100px viewports",
+    /resolved\s*!==\s*"canvas"\s*&&\s*typeof window\s*!==\s*"undefined"\s*&&\s*window\.innerWidth\s*<=\s*1100[\s\S]*?setAgentDock\(false\)/,
+    "setViewMode must dismiss agentDock whenever resolved !== 'canvas' (split or list) on <= 1100px viewports",
   );
 
   // Every view mode change must route through setViewMode rather than bypassing setViewModeState directly
@@ -977,6 +977,56 @@ test("PR #223 Item 4: resolveNextShotVideoModel avoids text-only video models li
     ),
     "",
   );
+
+  // Round 2 Item 4: Unified resolveNextShotContinuation governs BOTH ShotList and Preview Modal availability & target-model copy
+  assert.equal(typeof typesMod.resolveNextShotContinuation, "function");
+  const labelOf = (id: string) =>
+    (studioMock.model_catalog as Record<string, any>)[id]?.label || id;
+
+  // 1) No candidate accepts a single image -> returns null (both ShotList and Preview hide/disable continuation)
+  assert.equal(
+    typesMod.resolveNextShotContinuation(
+      studioMock,
+      "flow:veo-3.1-lite-4s-landscape",
+      { ratio: "16:9", seconds: 4 },
+      (m: string) => m === "flow:veo-3.1-lite-4s-landscape",
+      labelOf,
+    ),
+    null,
+  );
+
+  // 2) Candidate differs from source text-only model -> switched=true and both ShotList title & Preview copy surface actual target model label!
+  const switchedCont = typesMod.resolveNextShotContinuation(
+    studioMock,
+    "flow:veo-3.1-lite-4s-landscape",
+    { ratio: "16:9", seconds: 4 },
+    () => true,
+    labelOf,
+  );
+  assert.ok(switchedCont);
+  assert.equal(switchedCont.model, "flow:veo-3.1-lite-i2v-4s-landscape");
+  assert.equal(switchedCont.switched, true);
+  assert.match(switchedCont.shotTitle, /Veo 3\.1 - Lite I2V/);
+  assert.match(switchedCont.previewHint, /Veo 3\.1 - Lite I2V/);
+
+  // 3) Same model accepts a single image -> switched=false, still surfaces model label consistently
+  const sameCont = typesMod.resolveNextShotContinuation(
+    studioMock,
+    "muse-video-v1",
+    { ratio: "16:9", seconds: 5 },
+    () => true,
+    labelOf,
+  );
+  assert.ok(sameCont);
+  assert.equal(sameCont.model, "muse-video-v1");
+  assert.equal(sameCont.switched, false);
+  assert.match(sameCont.shotTitle, /Muse Video/);
+
+  const shotListSrc = await readFile(
+    join(process.cwd(), "apps/web/canvas-editor/ShotList.tsx"),
+    "utf8",
+  );
+  assert.match(shotListSrc, /tailContinuation/);
 });
 
 test("PR #223 Item 5: resolveCinePopoverPlacement considers both horizontal and vertical clearance across Split View top-composer, short viewports, and 760-960px widths", async () => {
@@ -1044,6 +1094,42 @@ test("PR #223 Item 5: resolveCinePopoverPlacement considers both horizontal and 
     overridesCss,
     /@media\s*\(max-width:\s*760px\)\s*\{[\s\S]*?\.fm-cine-popover/,
   );
+
+  // Round 2 Item 5: resolveOptionMenuFloatingRect bounds OptionSelect listbox inside viewport without clipping on .fm-cine-popover overflow
+  assert.equal(typeof typesMod.resolveOptionMenuFloatingRect, "function");
+  // Upward menu ("光影" / "镜头" / "氛围") in floating CinematographyPanel on 1440x900 desktop stays fully within [safeTop, trigger.top - 5]
+  const upwardDesktop = typesMod.resolveOptionMenuFloatingRect({
+    triggerRect: { top: 680, bottom: 714, left: 260, right: 410, width: 150 },
+    windowWidth: 1440,
+    windowHeight: 900,
+    preferredDirection: "up",
+    align: "right",
+    menuWidth: 180,
+  });
+  assert.equal(upwardDesktop.direction, "up");
+  assert.equal(upwardDesktop.maxHeight, 224);
+  assert.ok(
+    typeof upwardDesktop.bottom === "number" &&
+      900 - upwardDesktop.bottom - upwardDesktop.maxHeight >= 8,
+    "upward menu top edge must remain inside viewport",
+  );
+  assert.ok(
+    typeof upwardDesktop.left === "number" &&
+      upwardDesktop.left >= 8 &&
+      upwardDesktop.left + 180 <= 1440 - 8,
+  );
+
+  // When trigger is near viewport top (e.g. top-docked popover at y=110) and preferredDirection="up" lacks room, auto-flips to "down"!
+  const flippedDown = typesMod.resolveOptionMenuFloatingRect({
+    triggerRect: { top: 110, bottom: 144, left: 100, right: 250, width: 150 },
+    windowWidth: 1280,
+    windowHeight: 800,
+    preferredDirection: "up",
+    align: "left",
+  });
+  assert.equal(flippedDown.direction, "down");
+  assert.ok(typeof flippedDown.top === "number" && flippedDown.top >= 149);
+  assert.equal(flippedDown.maxHeight, 224);
 });
 
 test("PR #223 Item 7: reconcileCanvasRightDocks collapses docked panel when resizing across 1100px breakpoint", async () => {
@@ -1090,6 +1176,49 @@ test("PR #223 Item 7: reconcileCanvasRightDocks collapses docked panel when resi
       agentDockedWidth: 400,
     }),
     { closeAgentDock: false, switchSplitToCanvas: true },
+  );
+
+  // Round 2 Item 7: <= 1100px mutual exclusion ALSO covers viewMode === "list" (镜头列表) across resize and re-docking, while > 1100px keeps side-by-side!
+  assert.deepEqual(
+    typesMod.reconcileCanvasRightDocks({
+      prevWindowWidth: 1400,
+      windowWidth: 1320,
+      viewMode: "list",
+      agentDock: true,
+      prevAgentDockedWidth: 400,
+      agentDockedWidth: 400,
+    }),
+    { closeAgentDock: false, switchSplitToCanvas: false },
+  );
+  assert.deepEqual(
+    typesMod.reconcileCanvasRightDocks({
+      prevWindowWidth: 1320,
+      windowWidth: 1020,
+      viewMode: "list",
+      agentDock: true,
+      prevAgentDockedWidth: 400,
+      agentDockedWidth: 400,
+    }),
+    { closeAgentDock: true, switchSplitToCanvas: false },
+  );
+  assert.deepEqual(
+    typesMod.reconcileCanvasRightDocks({
+      prevWindowWidth: 980,
+      windowWidth: 980,
+      viewMode: "list",
+      agentDock: true,
+      prevAgentDockedWidth: 0,
+      agentDockedWidth: 400,
+    }),
+    { closeAgentDock: false, switchSplitToCanvas: true },
+  );
+  const workspaceSrc = await readFile(
+    join(process.cwd(), "apps/web/canvas-editor/CanvasWorkspace.tsx"),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    workspaceSrc,
+    /window\.innerWidth\s*<=\s*1100\s*&&\s*viewMode\s*===\s*["']split["']/,
   );
 });
 

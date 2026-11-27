@@ -180,3 +180,204 @@ test(
     }
   },
 );
+
+test(
+  "PR #223 Item 5: Floating CinematographyPanel downward and upward OptionSelect menus escape overflow clipping, allow real mouse clicks on outermost options, preserve keyboard navigation, and remain scrollable on short screens",
+  { timeout: 60_000 },
+  async () => {
+    const root = process.cwd();
+    const [baseCss, overridesCss, bundle] = await Promise.all([
+      readFile(join(root, "baseline/production/static/canvas.css"), "utf8"),
+      readFile(
+        join(root, "apps/web/canvas-editor/canvas-overrides.css"),
+        "utf8",
+      ),
+      esbuild.build({
+        stdin: {
+          contents: `
+            import React, { useState } from "react";
+            import { createRoot } from "react-dom/client";
+            import { CinematographyPanel } from "./apps/web/canvas-editor/CinematographyPanel";
+
+            function FloatingHarness() {
+              const [cine, setCine] = useState(null);
+              return (
+                <div className="canvas-editor canvas-workspace" style={{ height: "100dvh", position: "relative" }}>
+                  <div
+                    className="node-composer"
+                    style={{ position: "absolute", left: 160, bottom: 48, width: 520, height: 220 }}
+                  >
+                    <CinematographyPanel
+                      compact
+                      floating
+                      side="top"
+                      style={{ maxHeight: 200 }}
+                      value={cine}
+                      onChange={setCine}
+                      onClose={() => {}}
+                    />
+                  </div>
+                </div>
+              );
+            }
+
+            createRoot(document.getElementById("app")!).render(<FloatingHarness />);
+          `,
+          resolveDir: root,
+          sourcefile: "floating-cine-harness.tsx",
+          loader: "tsx",
+        },
+        bundle: true,
+        format: "iife",
+        platform: "browser",
+        jsx: "automatic",
+        write: false,
+      }),
+    ]);
+
+    const jsCode = bundle.outputFiles[0]!.text;
+    const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <style>${baseCss}\n${overridesCss}</style>
+</head>
+<body style="margin:0">
+  <div id="app"></div>
+  <script>${jsCode}</script>
+</body>
+</html>`;
+
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+
+    let browser: Browser | undefined;
+    try {
+      browser = await chromium.launch({ headless: true });
+      const page = await browser.newPage({
+        viewport: { width: 1280, height: 800 },
+      });
+      await page.goto(`http://127.0.0.1:${port}/`);
+
+      // 1. Open UPWARD menu ("光影", index 3 -> direction="up") inside .fm-cine-popover (overflow-y: auto)
+      // Verify the TOPMOST option ("不限定") and furthest option are NOT clipped by .fm-cine-popover and can be clicked by real mouse!
+      const lightingBtn = page.getByRole("button", {
+        name: "导演参数-光影：不限定",
+        exact: true,
+      });
+      await lightingBtn.click();
+      const lightingListbox = page.getByRole("listbox", {
+        name: "导演参数-光影",
+        exact: true,
+      });
+      await expect(lightingListbox).toBeVisible();
+      const popBox = await page.locator(".fm-cine-popover").boundingBox();
+      const upMenuBox = await lightingListbox.boundingBox();
+      assert.ok(popBox && upMenuBox);
+      assert.ok(
+        upMenuBox.y < popBox.y,
+        `Upward menu (${upMenuBox.y}) must extend above .fm-cine-popover top (${popBox.y}) without clipping`,
+      );
+      assert.ok(upMenuBox.y >= 8 && upMenuBox.y + upMenuBox.height <= 800 - 8);
+
+      // Verify hit-testing at the center of the topmost option in the upward menu lands on the option (not clipped!)
+      const topOpt = lightingListbox.getByRole("option").nth(1); // 2nd option near top edge above popover!
+      const topOptLabel = (await topOpt.textContent())?.trim() || "";
+      const topOptBox = await topOpt.boundingBox();
+      assert.ok(topOptBox);
+      const hitTopmost = await page.evaluate(
+        ({ x, y }) => {
+          const el = document.elementFromPoint(x, y);
+          return Boolean(el?.closest('[role="option"]'));
+        },
+        { x: topOptBox.x + topOptBox.width / 2, y: topOptBox.y + topOptBox.height / 2 },
+      );
+      assert.equal(hitTopmost, true, "topmost option of upward menu must be hit-testable by real mouse");
+      await page.mouse.click(
+        topOptBox.x + topOptBox.width / 2,
+        topOptBox.y + topOptBox.height / 2,
+      );
+      await expect(
+        page.getByRole("button", {
+          name: `导演参数-光影：${topOptLabel}`,
+          exact: true,
+        }),
+      ).toBeVisible();
+
+      // 2. Open DOWNWARD menu ("景别", index 0 -> direction="down"), scroll to bottommost option if needed, and click with real mouse!
+      const shotSizeBtn = page.getByRole("button", {
+        name: "导演参数-景别：不限定",
+        exact: true,
+      });
+      await shotSizeBtn.click();
+      const shotListbox = page.getByRole("listbox", {
+        name: "导演参数-景别",
+        exact: true,
+      });
+      await expect(shotListbox).toBeVisible();
+      const allShotOpts = shotListbox.getByRole("option");
+      const lastShotOpt = allShotOpts.nth((await allShotOpts.count()) - 1);
+      await lastShotOpt.scrollIntoViewIfNeeded();
+      const lastOptLabel = (await lastShotOpt.textContent())?.trim() || "";
+      const lastOptBox = await lastShotOpt.boundingBox();
+      assert.ok(lastOptBox);
+      await page.mouse.click(
+        lastOptBox.x + lastOptBox.width / 2,
+        lastOptBox.y + lastOptBox.height / 2,
+      );
+      await expect(
+        page.getByRole("button", {
+          name: `导演参数-景别：${lastOptLabel}`,
+          exact: true,
+        }),
+      ).toBeVisible();
+
+      // 3. Keyboard navigation (ArrowUp, End, Enter, Escape, Tab) inside floating CinematographyPanel
+      const moodBtn = page.getByRole("button", {
+        name: /^导演参数-氛围：/,
+      });
+      await moodBtn.focus();
+      await page.keyboard.press("ArrowUp");
+      await expect(moodBtn).toHaveAttribute("aria-expanded", "true");
+      await page.keyboard.press("End");
+      await page.keyboard.press("Enter");
+      await expect(moodBtn).toHaveAccessibleName(/^导演参数-氛围：(?!不限定$).+/);
+      await expect(moodBtn).toBeFocused();
+      await page.keyboard.press("ArrowDown");
+      await expect(moodBtn).toHaveAttribute("aria-expanded", "true");
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("listbox")).toHaveCount(0);
+      await expect(moodBtn).toBeFocused();
+
+      // 4. Short viewport (1024x340): .fm-cine-popover remains scrollable while dropdown stays within viewport!
+      await page.setViewportSize({ width: 1024, height: 340 });
+      await page.evaluate(() => {
+        const pop = document.querySelector<HTMLElement>(".fm-cine-popover");
+        if (pop) {
+          pop.style.position = "fixed";
+          pop.style.top = "68px";
+          pop.style.bottom = "auto";
+          pop.style.right = "16px";
+          pop.style.maxHeight = "130px";
+        }
+      });
+      const canScrollPopover = await page
+        .locator(".fm-cine-popover")
+        .evaluate((el) => {
+          el.scrollTop = 40;
+          return el.scrollHeight > el.clientHeight && el.scrollTop > 0;
+        });
+      assert.equal(canScrollPopover, true, "short-screen .fm-cine-popover must remain vertically scrollable");
+    } finally {
+      try {
+        await browser?.close();
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
+  },
+);

@@ -174,6 +174,7 @@ export type Studio = {
   model_groups?: Record<string, { kind: string; label: string; models: string[] }>;
   team_model_policies?: Record<string, { revision: number; enabled: Record<string, boolean> }>;
   canvas_nodes?: CanvasNodeEntry[];
+  canvas_speech_models?: string[];
   model_forms: Record<string, import("@fumiao/plugin-sdk/model-form").ModelForm>;
   model_catalog: Record<string,FlowModel>;
   video_models: Record<string,string>;
@@ -700,6 +701,45 @@ export function resolveNextShotVideoModel(
   return indexed[0].id;
 }
 
+export type NextShotContinuation = {
+  model: string;
+  label: string;
+  switched: boolean;
+  shotTitle: string;
+  previewHint: string;
+  previewButtonLabel: string;
+};
+
+export function resolveNextShotContinuation(
+  studio: Pick<Studio, "video_models" | "model_catalog" | "model_forms">,
+  sourceModel: string | undefined,
+  want: { ratio?: string; seconds?: number },
+  availableModel: (model: string) => boolean,
+  resolveLabel: (model: string) => string,
+): NextShotContinuation | null {
+  const model = resolveNextShotVideoModel(
+    studio,
+    sourceModel,
+    want,
+    availableModel,
+  );
+  if (!model) return null;
+  const label = resolveLabel(model) || model;
+  const switched = Boolean(sourceModel && sourceModel !== model);
+  return {
+    model,
+    label,
+    switched,
+    shotTitle: switched
+      ? `抽取尾帧并用 ${label} 续接下一镜`
+      : `抽取尾帧续接下一镜（${label}）`,
+    previewHint: `，或设为 ${label} 下一镜头的首帧。`,
+    previewButtonLabel: switched
+      ? `用作 ${label} 下一镜头首帧`
+      : "用作下一镜头首帧",
+  };
+}
+
 export type CinePopoverSide =
   | "right"
   | "left"
@@ -813,6 +853,78 @@ export function resolveCinePopoverSide(
   return resolveCinePopoverPlacement(input).side;
 }
 
+export type OptionMenuFloatingRect = {
+  direction: "up" | "down";
+  top?: number;
+  bottom?: number;
+  left: number;
+  minWidth: number;
+  maxHeight: number;
+};
+
+export function resolveOptionMenuFloatingRect(input: {
+  triggerRect: {
+    top: number;
+    bottom: number;
+    left: number;
+    right: number;
+    width: number;
+  };
+  windowWidth: number;
+  windowHeight: number;
+  preferredDirection?: "down" | "up";
+  align?: "left" | "right";
+  menuWidth?: number;
+  safeTop?: number;
+  safeBottomMargin?: number;
+}): OptionMenuFloatingRect {
+  const safeTop = input.safeTop ?? 8;
+  const safeBottomMargin = input.safeBottomMargin ?? 8;
+  const safeBottom = input.windowHeight - safeBottomMargin;
+  const gap = 5;
+  const spaceBelow = Math.floor(safeBottom - (input.triggerRect.bottom + gap));
+  const spaceAbove = Math.floor(input.triggerRect.top - gap - safeTop);
+  const pref = input.preferredDirection ?? "down";
+
+  const direction: "up" | "down" =
+    (pref === "up" && (spaceAbove >= 150 || spaceAbove >= spaceBelow)) ||
+    (pref === "down" && spaceBelow < 150 && spaceAbove > spaceBelow)
+      ? "up"
+      : "down";
+
+  const available = direction === "up" ? spaceAbove : spaceBelow;
+  const maxHeight = Math.min(224, Math.max(96, available));
+  const minWidth = Math.max(164, Math.round(input.triggerRect.width));
+  const estWidth = Math.max(minWidth, Math.round(input.menuWidth ?? minWidth));
+  const desiredLeft =
+    input.align === "right"
+      ? input.triggerRect.right - estWidth
+      : input.triggerRect.left;
+  const left = Math.round(
+    Math.max(8, Math.min(desiredLeft, input.windowWidth - estWidth - 8)),
+  );
+
+  if (direction === "up") {
+    return {
+      direction: "up",
+      bottom: Math.round(
+        Math.max(safeBottomMargin, input.windowHeight - (input.triggerRect.top - gap)),
+      ),
+      left,
+      minWidth,
+      maxHeight,
+    };
+  }
+
+  return {
+    direction: "down",
+    top: Math.round(Math.max(safeTop, input.triggerRect.bottom + gap)),
+    left,
+    minWidth,
+    maxHeight,
+  };
+}
+
 export function reconcileCanvasRightDocks(input: {
   prevWindowWidth: number;
   windowWidth: number;
@@ -821,7 +933,11 @@ export function reconcileCanvasRightDocks(input: {
   prevAgentDockedWidth: number;
   agentDockedWidth: number;
 }): { closeAgentDock: boolean; switchSplitToCanvas: boolean } {
-  if (input.windowWidth <= 1100 && input.viewMode === "split" && input.agentDock) {
+  if (
+    input.windowWidth <= 1100 &&
+    input.viewMode !== "canvas" &&
+    input.agentDock
+  ) {
     if (input.prevWindowWidth > 1100) {
       return { closeAgentDock: true, switchSplitToCanvas: false };
     }

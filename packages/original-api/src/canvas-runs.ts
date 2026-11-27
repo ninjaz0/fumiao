@@ -42,27 +42,7 @@ import { OriginalState } from "./state.js";
 
 const namespaceUrl = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
 const active = ["queued", "dispatching", "running", "finalizing", "uncertain"];
-const BGM_MODEL_IDS = new Set([
-  "bgm-v1",
-  "suno-v4",
-  "udio-v1.5",
-  "musicgen-large",
-]);
-function isBgmMusicModel(
-  modelId: string,
-  spec?: { kind?: string; provider?: string },
-): boolean {
-  if (!spec || spec.kind !== "audio") return false;
-  if (spec.provider === "bgm-generator") return true;
-  if (BGM_MODEL_IDS.has(modelId)) return true;
-  if (
-    typeof spec.provider === "string" &&
-    /(?:^|[-_])(bgm|music)(?:$|[-_])/i.test(spec.provider)
-  ) {
-    return true;
-  }
-  return false;
-}
+import { isBgmMusicModel } from "@fumiao/plugin-sdk/speech-routing.js";
 
 /** F030: Compiles structured 6-dimension director cinematography spec into clean prompt text. */
 export function compileCinematographyPrompt(
@@ -717,7 +697,10 @@ export class OriginalCanvasRuns {
         409,
         "这个镜头的旁白仍在生成",
       );
-      const bindings = await CanvasSubmissionModels.read(sql);
+      const bindings = await CanvasSubmissionModels.read(sql, {
+        workspaceId: String(p.workspace_id),
+        vault: this.p.vault,
+      });
       const draft = parseDraft(
         "audio",
         {
@@ -855,7 +838,10 @@ export class OriginalCanvasRuns {
         ? node.dialogue_lines.filter((l) => l.id === body.line_id)
         : node.dialogue_lines.filter((l) => pythonStrip(l.text));
       requireValue(targets.length > 0, 400, "未找到可合成的对白台词");
-      const bindings = await CanvasSubmissionModels.read(sql);
+      const bindings = await CanvasSubmissionModels.read(sql, {
+        workspaceId: String(p.workspace_id),
+        vault: this.p.vault,
+      });
       const catalog = await new StudioCatalog(this.p.db).catalog(sql);
       const items: {
         line_id: string;

@@ -1855,12 +1855,16 @@
 
 @media (max-width: 1480px) {
   .canvas-workspace:has(.fm-floating-agent.is-docked) .fm-surface-switcher {
-    left: 420px;
-    transform: none;
+    top: calc(var(--fm-header-bottom, 62px) + 6px);
+    left: calc((100% - var(--fm-agent-width, 0px)) / 2);
+    transform: translateX(-50%);
+  }
+  .canvas-workspace:has(.fm-floating-agent.is-docked) .fm-doc-workspace {
+    top: calc(var(--fm-header-bottom, 62px) + 46px);
   }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1180px) {
   .fm-surface-switcher,
   .canvas-workspace:has(.fm-floating-agent.is-docked) .fm-surface-switcher {
     position: absolute;

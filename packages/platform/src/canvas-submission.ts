@@ -1,23 +1,64 @@
 import type { CanvasSubmissionRule } from "@fumiao/plugin-sdk/index.js";
+import {
+  isBgmMusicModel,
+  pickSpeechAudioModel,
+} from "@fumiao/plugin-sdk/speech-routing.js";
 import type { Sql } from "./db.js";
+import { validator } from "./plugins.js";
 import { requireValue } from "./security.js";
 import { hasStudioPackages, listedStudioCatalog } from "./studio-plugin-profile.js";
+
+export interface ReadCanvasSubmissionOptions {
+  strict?: boolean;
+  workspaceId?: string | null;
+  vault?: { open(value: string): Record<string, unknown> };
+}
 
 export class CanvasSubmissionModels {
   constructor(
     readonly rules: Map<string, CanvasSubmissionRule>,
     readonly enabledConnections: ReadonlySet<string> = new Set(),
+    private readonly speechModelIds: ReadonlySet<string> = new Set(
+      [...rules.values()]
+        .filter((r) => r.kind === "audio" && !isBgmMusicModel(r.model))
+        .map((r) => r.model),
+    ),
+    private readonly policyAllowedSpeechDefaults: ReadonlySet<string> = new Set(
+      [...rules.values()]
+        .filter(
+          (r) =>
+            r.kind === "audio" && r.defaultForKind && !isBgmMusicModel(r.model),
+        )
+        .map((r) => r.model),
+    ),
   ) {}
-  static async read(sql: Sql, options?: { strict?: boolean }) {
+
+  static async read(sql: Sql, options?: ReadCanvasSubmissionOptions) {
     const strict = options?.strict ?? true;
+    const workspaceId = options?.workspaceId ?? null;
+    const hasPackages = await hasStudioPackages(sql);
+    const listedCatalog = await listedStudioCatalog(sql, "models");
     const rows = (
-      await sql.query(`SELECT c.id,c.descriptor->>'kind' AS kind,v.manifest->'canvasSubmission' AS policy
-      FROM ${await listedStudioCatalog(sql, "models")} c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
-      WHERE (COALESCE(v.manifest->'originalSubmission'->>'version','') NOT IN ('2','3') OR c.descriptor->>'kind'='audio')
-        AND c.descriptor->>'kind' IN ('image','video','audio')
-      ORDER BY c.position,c.id`)
+      await sql.query(`SELECT c.id,
+                              c.plugin_id,
+                              c.plugin_version,
+                              c.descriptor,
+                              c.descriptor->>'kind' AS kind,
+                              v.manifest->'canvasSubmission' AS policy,
+                              v.manifest AS manifest,
+                              ${hasPackages ? "studio_plugin_accepts(c.plugin_id) AND " : ""}studio_model_allowed(c.id, $1::uuid) AS policy_allowed
+                         FROM ${listedCatalog} c
+                         JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
+                        WHERE (COALESCE(v.manifest->'originalSubmission'->>'version','') NOT IN ('2','3') OR c.descriptor->>'kind'='audio')
+                          AND c.descriptor->>'kind' IN ('image','video','audio')
+                        ORDER BY c.position,c.id`, [workspaceId])
     ).rows;
+
     const rules = new Map<string, CanvasSubmissionRule>();
+    const speechModelIds = new Set<string>();
+    const policyAllowedSpeechDefaults = new Set<string>();
+    const manifestByCatalogId = new Map<string, any>();
+
     for (const r of rows) {
       let rule = r.policy?.models?.find(
         (m: CanvasSubmissionRule) => m.model === r.id && m.kind === r.kind,
@@ -31,26 +72,81 @@ export class CanvasSubmissionModels {
         continue;
       }
       rules.set(r.id, rule);
+      manifestByCatalogId.set(r.id, r.manifest);
+      if (r.kind === "audio" && !isBgmMusicModel(r.id, r.descriptor)) {
+        speechModelIds.add(r.id);
+        if (rule.defaultForKind && r.policy_allowed) {
+          policyAllowedSpeechDefaults.add(r.id);
+        }
+      }
     }
-    const pkgFilter = (await hasStudioPackages(sql))
-      ? "AND studio_plugin_accepts(c.plugin_id) AND studio_service_selected(m.catalog_id, c.id)"
+
+    const pkgFilter = hasPackages
+      ? "AND studio_plugin_accepts(sc.plugin_id) AND studio_plugin_accepts(c.plugin_id) AND studio_service_selected(m.catalog_id, c.id)"
       : "";
     const connRows = (
       await sql.query(
-        `SELECT DISTINCT m.catalog_id
-           FROM models m
+        `SELECT sc.id AS catalog_id,
+                c.config AS config
+           FROM ${listedCatalog} sc
+           JOIN models m ON m.catalog_id = sc.id
            JOIN connections c ON c.id = m.connection_id
+                             AND c.plugin_id = sc.plugin_id
+                             AND c.plugin_version = sc.plugin_version
+           LEFT JOIN model_permissions p
+                  ON p.model_id = m.id
+                 AND $1::uuid IS NOT NULL
+                 AND p.workspace_id = $1::uuid
           WHERE m.catalog_id IS NOT NULL
+            AND (m.catalog_id IS NOT NULL OR m.enabled)
             AND c.enabled = TRUE
             AND NOT c.removed
-            ${pkgFilter}`,
+            AND COALESCE(p.enabled, TRUE) = TRUE
+            ${pkgFilter}
+            AND studio_model_allowed(sc.id, $1::uuid)
+          ORDER BY c.id`,
+        [workspaceId],
       )
     ).rows;
-    const enabledConnections = new Set<string>(
-      connRows.map((r) => String(r.catalog_id)),
+
+    const byCatalogId = new Map<string, string[]>();
+    for (const row of connRows) {
+      const cid = String(row.catalog_id);
+      let list = byCatalogId.get(cid);
+      if (!list) {
+        list = [];
+        byCatalogId.set(cid, list);
+      }
+      list.push(String(row.config ?? ""));
+    }
+
+    const enabledConnections = new Set<string>();
+    for (const [cid, configs] of byCatalogId) {
+      if (configs.length !== 1) continue;
+      const manifest = manifestByCatalogId.get(cid);
+      if (
+        options?.vault &&
+        manifest?.originalSubmission?.version >= 2 &&
+        manifest?.configSchema
+      ) {
+        try {
+          const opened = options.vault.open(configs[0]);
+          if (!validator.validate(manifest.configSchema, opened)) continue;
+        } catch {
+          continue;
+        }
+      }
+      enabledConnections.add(cid);
+    }
+
+    return new CanvasSubmissionModels(
+      rules,
+      enabledConnections,
+      speechModelIds,
+      policyAllowedSpeechDefaults,
     );
-    return new CanvasSubmissionModels(rules, enabledConnections);
   }
+
   default(kind: string) {
     const candidates = [...this.rules.values()].filter(
       (r) => r.kind === kind && r.defaultForKind,
@@ -62,32 +158,37 @@ export class CanvasSubmissionModels {
     );
     return candidates[0].model;
   }
-  hasEnabledAudio(modelId: string): boolean {
-    const rule = this.rules.get(modelId);
-    return Boolean(rule && rule.kind === "audio" && this.enabledConnections.has(modelId));
+
+  availableSpeechModels(): string[] {
+    return [...this.speechModelIds].filter((id) =>
+      this.enabledConnections.has(id),
+    );
   }
+
+  hasEnabledAudio(modelId: string): boolean {
+    return (
+      this.speechModelIds.has(modelId) && this.enabledConnections.has(modelId)
+    );
+  }
+
   resolveAudio(preferredModel?: string) {
-    if (preferredModel) {
-      const explicit = this.rules.get(preferredModel);
-      if (explicit && explicit.kind === "audio") return explicit.model;
+    const defaultIds = [...this.rules.values()]
+      .filter((r) => this.speechModelIds.has(r.model) && r.defaultForKind)
+      .map((r) => r.model);
+    const chosen = pickSpeechAudioModel({
+      preferredModel,
+      availableSpeechIds: this.availableSpeechModels(),
+      defaultModelIds: defaultIds,
+    });
+    if (chosen) return chosen;
+
+    // Preserve legacy connection-level 503 error message when default audio model is policy-allowed without an active connection
+    const allowedDefaults = defaultIds.filter((id) =>
+      this.policyAllowedSpeechDefaults.has(id),
+    );
+    if (!preferredModel && allowedDefaults.length === 1) {
+      return allowedDefaults[0];
     }
-    const defaults = [...this.rules.values()].filter(
-      (r) => r.kind === "audio" && r.defaultForKind,
-    );
-    const activeDefaults = defaults.filter((r) =>
-      this.enabledConnections.has(r.model),
-    );
-    if (activeDefaults.length === 1) return activeDefaults[0].model;
-    const edge = this.rules.get("edge-tts");
-    if (edge && edge.kind === "audio" && this.enabledConnections.has("edge-tts")) {
-      return edge.model;
-    }
-    const anyActiveAudio = [...this.rules.values()].find(
-      (r) => r.kind === "audio" && this.enabledConnections.has(r.model),
-    );
-    if (anyActiveAudio) return anyActiveAudio.model;
-    // Preserve exact default/audio error behavior if catalog entry exists without an active connection
-    if (defaults.length === 1) return defaults[0].model;
     requireValue(false, 503, "音频配音服务尚未配置");
     throw new Error("音频配音服务尚未配置");
   }

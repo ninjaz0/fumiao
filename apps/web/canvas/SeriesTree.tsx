@@ -17,6 +17,7 @@ import {
   formatBibleText,
   openSeriesBibleSession,
   parseBibleDraft,
+  resolveSeriesBibleSaveOutcome,
   submitSeriesBibleSession,
   type BibleEditMode,
   type SeriesBibleEditorSession,
@@ -167,7 +168,9 @@ export function SeriesTree({ workspace }: { workspace: string }) {
     setBusy(true);
     setError("");
     try {
-      const biblePayload = parseBibleDraft(newBible, newBibleMode);
+      const biblePayload = parseBibleDraft(newBible, newBibleMode, {
+        allowEmpty: true,
+      });
       const created = await api<SeriesItem>(workspace, "/api/series", {
         title: newTitle.trim(),
         synopsis: newSynopsis.trim(),
@@ -188,12 +191,13 @@ export function SeriesTree({ workspace }: { workspace: string }) {
   };
 
   const saveSeriesBible = async () => {
-    if (!bibleSession) return;
+    const submitted = bibleSession;
+    if (!submitted) return;
     setBusy(true);
     setError("");
     try {
       const outcome = await submitSeriesBibleSession(
-        bibleSession,
+        submitted,
         (seriesId, payload) =>
           api<SeriesItem>(
             workspace,
@@ -202,17 +206,18 @@ export function SeriesTree({ workspace }: { workspace: string }) {
             "PUT",
           ),
       );
+      setBibleSession((current) =>
+        resolveSeriesBibleSaveOutcome(current, submitted, outcome),
+      );
       if (!outcome.ok) {
-        setBibleSession(outcome.session);
         setError(outcome.error);
         if (outcome.status === 409) {
           await load(true);
         }
         return;
       }
-      setBibleSession(null);
       if (Object.keys(outcome.nextBible).length > 0) {
-        setExpandedBibles((prev) => new Set([...prev, bibleSession.seriesId]));
+        setExpandedBibles((prev) => new Set([...prev, submitted.seriesId]));
       }
       await load();
     } finally {
@@ -587,6 +592,7 @@ export function SeriesTree({ workspace }: { workspace: string }) {
                                     : "secondary"
                                 }
                                 aria-pressed={bibleSession.mode === "notes"}
+                                disabled={busy}
                                 onClick={() =>
                                   setBibleSession((prev) =>
                                     prev ? { ...prev, mode: "notes" } : prev,
@@ -605,6 +611,7 @@ export function SeriesTree({ workspace }: { workspace: string }) {
                                 aria-pressed={
                                   bibleSession.mode === "structured"
                                 }
+                                disabled={busy}
                                 onClick={() =>
                                   setBibleSession((prev) =>
                                     prev
@@ -621,17 +628,21 @@ export function SeriesTree({ workspace }: { workspace: string }) {
                             aria-label="编辑世界观设定"
                             rows={3}
                             maxLength={4000}
+                            readOnly={busy}
+                            aria-readonly={busy || undefined}
                             placeholder={
                               bibleSession.mode === "structured"
                                 ? '输入合法 JSON 对象，例如：{"era": "2088", "style": "赛博霓虹"}'
                                 : "填写时代背景、视觉风格与角色设定，新建分集/分场画布时自动注入设定便签…"
                             }
                             value={bibleSession.draft}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              if (busy) return;
+                              const nextDraft = e.target.value;
                               setBibleSession((prev) =>
-                                prev ? { ...prev, draft: e.target.value } : prev,
-                              )
-                            }
+                                prev ? { ...prev, draft: nextDraft } : prev,
+                              );
+                            }}
                           />
                           <div className="fm-series-form-actions">
                             {bibleSession.conflicted && (

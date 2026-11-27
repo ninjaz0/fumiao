@@ -33,10 +33,16 @@ export function formatBibleText(
 export function parseBibleDraft(
   raw: string,
   mode: BibleEditMode = "notes",
+  options?: { allowEmpty?: boolean },
 ): Record<string, unknown> {
   const trimmed = raw.trim();
-  if (!trimmed) return {};
   if (mode === "structured") {
+    if (!trimmed) {
+      if (options?.allowEmpty) return {};
+      throw new Error(
+        "结构化世界观不能为空；如需清空世界观设定，请显式输入 {}，草稿已保留",
+      );
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed);
@@ -52,7 +58,44 @@ export function parseBibleDraft(
     }
     return parsed as Record<string, unknown>;
   }
+  if (!trimmed) return {};
   return { notes: trimmed };
+}
+
+export function resolveSeriesBibleSaveOutcome<T extends { revision?: number }>(
+  currentSession: SeriesBibleEditorSession | null,
+  submittedSession: SeriesBibleEditorSession,
+  outcome:
+    | { ok: true; result: T; nextBible: Record<string, unknown> }
+    | {
+        ok: false;
+        status?: number;
+        error: string;
+        session: SeriesBibleEditorSession;
+      },
+): SeriesBibleEditorSession | null {
+  if (!currentSession || currentSession.seriesId !== submittedSession.seriesId) {
+    return currentSession;
+  }
+  const editedDuringSave =
+    currentSession.draft !== submittedSession.draft ||
+    currentSession.mode !== submittedSession.mode;
+  if (outcome.ok) {
+    if (!editedDuringSave) return null;
+    return {
+      ...currentSession,
+      expectedRevision:
+        typeof outcome.result?.revision === "number"
+          ? outcome.result.revision
+          : submittedSession.expectedRevision + 1,
+      conflicted: false,
+    };
+  }
+  return {
+    ...currentSession,
+    expectedRevision: submittedSession.expectedRevision,
+    conflicted: outcome.status === 409 ? true : currentSession.conflicted,
+  };
 }
 
 export function openSeriesBibleSession(item: {

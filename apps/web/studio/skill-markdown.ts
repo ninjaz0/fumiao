@@ -28,10 +28,19 @@ export function serializeSkillMarkdown(skill: {
       ? skill.frontmatter
       : {};
 
+  const rawName = fm.name !== undefined ? fm.name : skill.name;
+  const rawSlug = fm.slug !== undefined ? fm.slug : skill.slug;
+  const rawDescription =
+    fm.description !== undefined
+      ? fm.description
+      : skill.description || undefined;
+
   const orderedEntries: [string, unknown][] = [
-    ["name", skill.name],
-    ["slug", skill.slug],
-    ...(skill.description ? [["description", skill.description] as [string, unknown]] : []),
+    ["name", rawName],
+    ["slug", rawSlug],
+    ...(rawDescription !== undefined
+      ? ([["description", rawDescription]] as [string, unknown][])
+      : []),
   ];
 
   for (const [key, val] of Object.entries(fm)) {
