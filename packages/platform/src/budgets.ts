@@ -97,7 +97,7 @@ export async function computeScopeSpend(
   if (scopeType === "workspace") {
     const spentRow = await one(
       sql,
-      `SELECT COALESCE(SUM(amount), 0) AS total
+      `SELECT COALESCE(SUM(ABS(amount)), 0) AS total
          FROM ledger
         WHERE workspace_id = $1 AND action = 'spend' AND created_at >= ${startExpr}`,
       [scopeId],
@@ -135,7 +135,7 @@ export async function computeScopeSpend(
   const spentRow = await one(
     sql,
     `${projectJobsCte}
-      SELECT COALESCE(SUM(l.amount), 0) AS total
+      SELECT COALESCE(SUM(ABS(l.amount)), 0) AS total
         FROM ledger l
         JOIN proj_jobs pj ON pj.job_id = l.job_id
        WHERE l.action = 'spend' AND l.created_at >= ${startExpr}`,

@@ -12,6 +12,18 @@ function revenueInFen(units: bigint): number {
   return Number((units + unitsPerFen / 2n) / unitsPerFen);
 }
 
+function costCoverage(known: number, unknown: number) {
+  const settled = known + unknown;
+  const status: "known" | "partial" | "unknown" =
+    unknown === 0 ? "known" : known === 0 ? "unknown" : "partial";
+  return {
+    cost_status: status,
+    cost_known_jobs: known,
+    cost_unknown_jobs: unknown,
+    cost_coverage_pct: settled === 0 ? 100 : Math.round((known / settled) * 1000) / 10,
+  };
+}
+
 /**
  * F005: Admin Observability Dashboard & Uncertain-Job Reconciliation.
  * Aggregates channel/model success rates, P50/P95 latency, revenue/cost gross margin,
@@ -37,38 +49,22 @@ export class OriginalObservability {
       const auditJoin = hasAudit
         ? "LEFT JOIN job_audit_meta am ON am.job_id = j.id"
         : "";
-      const costExpr = hasAudit
-        ? "COALESCE(SUM(CASE WHEN j.state = 'completed' AND am.upstream_cost_fen IS NOT NULL THEN am.upstream_cost_fen ELSE 0 END), 0)"
-        : "0";
-      const costKnownExpr = hasAudit
-        ? "COUNT(*) FILTER (WHERE j.state = 'completed' AND am.upstream_cost_fen IS NOT NULL)"
-        : "0";
-      const costUnknownExpr = hasAudit
-        ? "COUNT(*) FILTER (WHERE j.state = 'completed' AND am.upstream_cost_fen IS NULL)"
-        : "COUNT(*) FILTER (WHERE j.state = 'completed')";
-      const knownRevenueCreditsExpr = hasAudit
-        ? "COALESCE(SUM(CASE WHEN j.state = 'completed' AND am.upstream_cost_fen IS NOT NULL THEN settled.amount ELSE 0 END), 0)"
-        : "0";
+      const costFen = hasAudit ? "am.upstream_cost_fen" : "NULL::bigint";
       const rewriteExpr = hasAudit
         ? "COUNT(*) FILTER (WHERE COALESCE(am.rewrite_attempts, 0) > 0)"
         : "0";
 
       const channelRows = (
         await sql.query(
-          `SELECT
-              COALESCE(j.catalog_id, j.provider_model, j.model_id::text) AS model_key,
-              j.plugin_id,
+          `WITH operations AS (
+            SELECT COALESCE(j.catalog_id, j.provider_model, j.model_id::text) AS model_key,
+              COALESCE(j.plugin_id, '') AS plugin_id,
               j.kind,
               COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE j.state = 'completed')::int AS completed,
               COUNT(*) FILTER (WHERE j.state = 'failed')::int AS failed,
               COUNT(*) FILTER (WHERE j.state = 'uncertain')::int AS uncertain,
               COUNT(*) FILTER (WHERE j.state = 'cancelled')::int AS cancelled,
-              COALESCE(SUM(CASE WHEN j.state = 'completed' THEN settled.amount ELSE 0 END), 0) AS credits_revenue,
-              ${costExpr}::bigint AS upstream_cost_fen,
-              ${costKnownExpr}::int AS cost_known_jobs,
-              ${costUnknownExpr}::int AS cost_unknown_jobs,
-              ${knownRevenueCreditsExpr} AS known_cost_revenue_credits,
               ${rewriteExpr}::int AS rewritten_count,
               COALESCE(
                 percentile_cont(0.5) WITHIN GROUP (
@@ -83,10 +79,6 @@ export class OriginalObservability {
                 0
               ) AS p95_seconds
              FROM jobs j
-             LEFT JOIN (
-               SELECT job_id, SUM(amount) AS amount FROM ledger
-                WHERE action='spend' AND job_id IS NOT NULL GROUP BY job_id
-             ) settled ON settled.job_id=j.id
              LEFT JOIN LATERAL (
                SELECT started, finished
                  FROM job_runs
@@ -97,7 +89,37 @@ export class OriginalObservability {
              ${auditJoin}
             WHERE j.created_at >= now() - ($1::int * interval '1 day')
             GROUP BY 1, 2, 3
-            ORDER BY total DESC, model_key ASC`,
+          ), settled AS (
+            SELECT job_id, CASE WHEN job_id IS NULL THEN chat_turn_id END AS turn_id,
+                   SUM(ABS(amount)) AS credits
+              FROM ledger
+             WHERE action='spend' AND created_at >= now() - ($1::int * interval '1 day')
+             GROUP BY job_id, turn_id, CASE WHEN job_id IS NULL AND chat_turn_id IS NULL THEN id END
+          ), attributed AS (
+            SELECT COALESCE(j.catalog_id, j.provider_model, j.model_id::text, t.model, '未关联模型') AS model_key,
+                   COALESCE(j.plugin_id, t.plugin_id, '') AS plugin_id,
+                   COALESCE(j.kind, CASE WHEN t.id IS NOT NULL THEN 'chat' ELSE 'other' END) AS kind,
+                   s.credits, ${costFen} AS cost_fen
+              FROM settled s
+              LEFT JOIN jobs j ON j.id=s.job_id
+              LEFT JOIN chat_turns t ON t.id=s.turn_id
+              ${auditJoin}
+          ), income AS (
+            SELECT model_key, plugin_id, kind, SUM(credits) AS credits_revenue,
+                   SUM(cost_fen) AS upstream_cost_fen,
+                   COUNT(cost_fen) AS cost_known_jobs,
+                   COUNT(*) FILTER (WHERE cost_fen IS NULL) AS cost_unknown_jobs,
+                   SUM(credits) FILTER (WHERE cost_fen IS NOT NULL) AS known_cost_revenue_credits
+              FROM attributed
+             GROUP BY model_key, plugin_id, kind
+          )
+          SELECT model_key, plugin_id, kind,
+                 o.total, o.completed, o.failed, o.uncertain, o.cancelled,
+                 o.rewritten_count, o.p50_seconds, o.p95_seconds,
+                 i.credits_revenue, i.upstream_cost_fen, i.cost_known_jobs,
+                 i.cost_unknown_jobs, i.known_cost_revenue_credits
+            FROM operations o FULL JOIN income i USING (model_key, plugin_id, kind)
+           ORDER BY o.total DESC NULLS LAST, model_key ASC`,
           [days],
         )
       ).rows;
@@ -119,26 +141,14 @@ export class OriginalObservability {
         const failed = Number(row.failed);
         const uncertain = Number(row.uncertain);
         const cancelled = Number(row.cancelled);
-        const revenueUnits = creditUnits(String(row.credits_revenue));
+        const revenueUnits = creditUnits(String(row.credits_revenue ?? 0));
         // Studio billing baseline: 1 yuan = 10 credits => 1 credit = 10 fen
         const revenueFen = revenueInFen(revenueUnits);
         const costKnown = Number(row.cost_known_jobs ?? 0);
         const costUnknown = Number(row.cost_unknown_jobs ?? 0);
         const rawCostFen = Number(row.upstream_cost_fen ?? 0);
-        const knownRevenueUnits = creditUnits(String(row.known_cost_revenue_credits));
+        const knownRevenueUnits = creditUnits(String(row.known_cost_revenue_credits ?? 0));
         const knownRevenueFen = revenueInFen(knownRevenueUnits);
-        const costStatus: "known" | "partial" | "unknown" =
-          completed === 0
-            ? "known"
-            : costKnown === 0
-              ? "unknown"
-              : costUnknown === 0
-                ? "known"
-                : "partial";
-        const costCoveragePct =
-          completed > 0 ? Math.round((costKnown / completed) * 1000) / 10 : 100;
-        // Never treat unknown/NULL upstream cost as ¥0 (100% margin): report null when unknown,
-        // and compute gross margin strictly over cost-known completed jobs.
         const upstreamCostFen = costKnown > 0 ? rawCostFen : null;
         const grossMarginFen =
           costKnown > 0 ? knownRevenueFen - rawCostFen : null;
@@ -174,10 +184,7 @@ export class OriginalObservability {
           revenue_fen: revenueFen,
           upstream_cost_fen: upstreamCostFen,
           gross_margin_fen: grossMarginFen,
-          cost_status: costStatus,
-          cost_known_jobs: costKnown,
-          cost_unknown_jobs: costUnknown,
-          cost_coverage_pct: costCoveragePct,
+          ...costCoverage(costKnown, costUnknown),
           rewritten_count: Number(row.rewritten_count ?? 0),
         };
       });
@@ -192,18 +199,6 @@ export class OriginalObservability {
 
       const totalRevenueFen = revenueInFen(totalRevenueUnits);
       const terminalAll = completedJobs + failedJobs + uncertainJobs;
-      const totalCostStatus: "known" | "partial" | "unknown" =
-        completedJobs === 0
-          ? "known"
-          : totalCostKnownJobs === 0
-            ? "unknown"
-            : totalCostUnknownJobs === 0
-              ? "known"
-              : "partial";
-      const totalCostCoveragePct =
-        completedJobs > 0
-          ? Math.round((totalCostKnownJobs / completedJobs) * 1000) / 10
-          : 100;
       return {
         window_days: days,
         totals: {
@@ -224,10 +219,7 @@ export class OriginalObservability {
             totalCostKnownJobs > 0
               ? revenueInFen(totalKnownRevenueUnits) - totalUpstreamCostFen
               : null,
-          cost_status: totalCostStatus,
-          cost_known_jobs: totalCostKnownJobs,
-          cost_unknown_jobs: totalCostUnknownJobs,
-          cost_coverage_pct: totalCostCoveragePct,
+          ...costCoverage(totalCostKnownJobs, totalCostUnknownJobs),
           rewritten_jobs: totalRewritten,
           total_gpu_nodes: Number(nodeStats?.total_nodes ?? 0),
           online_gpu_nodes: Number(nodeStats?.online_nodes ?? 0),

@@ -12,7 +12,7 @@ import {
 } from "@fumiao/platform/credit-amount.js";
 import { OriginalBillingExtras } from "@fumiao/original-api/billing-extras.js";
 import { OriginalBudgets } from "@fumiao/original-api/budgets-api.js";
-import { checkAndRecordBudget } from "@fumiao/platform/budgets.js";
+import { checkAndRecordBudget, computeScopeSpend } from "@fumiao/platform/budgets.js";
 import { canvasRunsFixture } from "../helpers/canvas-runs.js";
 import { databaseFixture } from "../helpers/database.js";
 const password = "safe-test-password";
@@ -370,4 +370,24 @@ test("studio budget limits round-trip decimal inputs alongside legacy integer fi
     budgets.upsertPolicy(f.admin, { ...body, cap_limit: "1.0000000000001" }),
     { status: 422 },
   );
+});
+
+
+test("historical signed spend and current spend count toward both project and workspace budgets", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  const project = await f.project();
+  const accepted = await f.runs.generate(f.admin, project, "v", f.body());
+  await f.db.query(`INSERT INTO ledger(id,workspace_id,job_id,key,action,amount,balance_snapshot,held_snapshot)
+    SELECT gen_random_uuid(),workspace_id,id,'import-ledger:signed','spend',-5,995,0
+      FROM jobs WHERE public_id=$1`, [accepted.id]);
+  await f.db.query(`INSERT INTO ledger(id,workspace_id,job_id,key,action,amount,balance_snapshot,held_snapshot)
+    SELECT gen_random_uuid(),workspace_id,id,'current-debit','spend',0.25,994.75,0
+      FROM jobs WHERE public_id=$1`, [accepted.id]);
+
+  for (const [type, id] of [["workspace", f.workspace.id], ["project", project]] as const) {
+    assert.equal((await computeScopeSpend(f.db, type, String(id), "total")).exact.spent, "5.25");
+  }
+  const history = await new OriginalCredits(f.p).history(f.db, Number(f.workspace.public_id));
+  assert.ok(history.some((row) => row.action === "spend" && row.exact.amount === "-5"));
 });

@@ -8,6 +8,7 @@ import { OriginalObservability } from "@fumiao/original-api/admin-observability.
 import { OriginalBudgets } from "@fumiao/original-api/budgets-api.js";
 import { OriginalBillingExtras } from "@fumiao/original-api/billing-extras.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
+import { chatsFixture } from "../helpers/chats.js";
 import { canvasRunsFixture } from "../helpers/canvas-runs.js";
 
 test("F015: workspace 3-stage budget control records warn alerts and atomically rejects over-cap spend with 402", async (t) => {
@@ -277,6 +278,22 @@ test("F005: admin observability aggregates channel success rate, P50/P95, gross 
   assert.equal(summary.totals.gross_margin_fen, 135);
   assert.ok(summary.channels[0].p95_seconds >= summary.channels[0].p50_seconds);
 
+  // The first job was accepted before the reporting window but settled twice
+  // (legacy signed debit plus a positive spend). Count its cost once.
+  await f.db.query("UPDATE jobs SET created_at=now()-interval '9 days' WHERE idempotency_key LIKE 'obs-ok-%'");
+  await f.db.query(`UPDATE ledger l SET amount=-5 FROM jobs j WHERE l.job_id=j.id AND j.idempotency_key LIKE 'obs-ok-1-%'`);
+  await f.db.query(`INSERT INTO ledger(id,workspace_id,job_id,key,action,amount)
+    SELECT gen_random_uuid(),workspace_id,id,'extra:'||id,'spend',4.75 FROM jobs WHERE idempotency_key LIKE 'obs-ok-1-%'`);
+  await f.db.query(`UPDATE ledger l SET created_at=now()-interval '8 days' FROM jobs j
+    WHERE l.job_id=j.id AND j.idempotency_key LIKE 'obs-ok-2-%'`);
+  const window = (await obs.summary(f.admin, 7)).totals;
+  assert.equal(window.total_jobs, 1);
+  assert.equal(window.completed_jobs, 0);
+  assert.equal(window.exact.credits_revenue, "9.75");
+  assert.equal(window.cost_known_jobs, 1);
+  assert.equal(window.upstream_cost_fen, 30);
+  assert.equal(window.gross_margin_fen, 68);
+
   const beforeUncertain = await obs.uncertainJobs(f.admin);
   assert.equal(beforeUncertain.jobs.length, 1);
   assert.equal(beforeUncertain.jobs[0].id, uncertainId);
@@ -294,6 +311,27 @@ test("F005: admin observability aggregates channel success rate, P50/P95, gross 
     await f.p.db.query("SELECT state FROM jobs WHERE id=$1", [uncertainId])
   ).rows[0];
   assert.equal(jobAfter.state, "failed");
+});
+
+test("a paid conversation with no media jobs appears in settled channel revenue", async (t) => {
+  const f = await chatsFixture();
+  t.after(() => f.cleanup());
+  f.setTime(Date.now() / 1000);
+  const view = await f.chats.create(f.admin, {});
+  const sent = await f.chats.send(f.admin, view.conversation.id, await f.draft(view));
+  const turn = await f.turn(sent.conversation.active_turn!);
+  await f.chats.finish(turn.id, { state: "complete", text: "已完成" });
+
+  const summary = await new OriginalObservability(f.p).summary(f.admin, 7);
+  assert.equal(summary.totals.exact.credits_revenue, "1");
+  assert.equal(summary.totals.revenue_fen, 10);
+  assert.equal(summary.totals.total_jobs, 0);
+  const channel = summary.channels.find((row) => row.model_key === turn.model);
+  assert.equal(channel?.plugin_id, turn.plugin_id);
+  assert.equal(channel?.kind, "chat");
+  assert.equal(channel?.exact.credits_revenue, "1");
+  assert.equal(channel?.cost_status, "unknown");
+  assert.equal(channel?.gross_margin_fen, null);
 });
 
 test("F034 + Q5: batch redeem codes, invite rewards, idempotent period quota subscriptions, and CSV/PDF financial statements", async (t) => {
