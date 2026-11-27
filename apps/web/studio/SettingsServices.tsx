@@ -107,7 +107,6 @@ export function ChatSettings({
   return (
     <section className="settings-section fm-chat-service">
       <h2>对话服务</h2>
-      <button className="ledger-button" onClick={setup}>接入模型或接管兼容对话连接</button>
       {error && (
         <div className="ledger-card plugin-alert" role="alert">
           <span>{error}</span>
@@ -133,6 +132,9 @@ export function ChatSettings({
           request={request}
         />
       ))}
+      <button className="ledger-button" type="button" onClick={setup}>
+        接入模型或接管兼容对话连接
+      </button>
     </section>
   );
 }
