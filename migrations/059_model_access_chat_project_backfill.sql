@@ -34,11 +34,16 @@ WITH historical AS MATERIALIZED (
   WHERE c.project_id IS NULL AND t.route_revision_id IS NULL
 ), attributed AS (
   SELECT h.turn_id, CASE WHEN h.project_key='' THEN (
-    SELECT CASE WHEN count(DISTINCT d.id)=1 THEN (array_agg(DISTINCT d.id))[1] END
+    -- A link tied with admission could have been created afterwards. Require a
+    -- strictly earlier link and check every possible latest owner, including ties.
+    SELECT (array_agg(d.id))[1]
     FROM canvas_chat_links l
-    JOIN documents d ON d.id=l.project_id AND d.kind='canvas' AND d.workspace_id=h.workspace_id
-    WHERE l.conversation_id=h.conversation_id AND l.created<=h.created
-    GROUP BY l.created ORDER BY l.created DESC LIMIT 1
+    LEFT JOIN documents d ON d.id=l.project_id AND d.kind='canvas' AND d.workspace_id=h.workspace_id
+    WHERE l.conversation_id=h.conversation_id AND l.created BETWEEN (
+      SELECT max(prior.created) FROM canvas_chat_links prior
+      WHERE prior.conversation_id=h.conversation_id AND prior.created<h.created
+    ) AND h.created
+    HAVING count(DISTINCT l.project_id)=1
   ) ELSE d.id END AS project_id
   FROM historical h LEFT JOIN documents d ON d.public_id=h.project_key AND d.kind='canvas' AND d.workspace_id=h.workspace_id
 )

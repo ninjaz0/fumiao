@@ -840,6 +840,101 @@ test("058 旧画布预留与历史实扣在 059 升级后仍占用项目预算",
   );
 });
 
+test("旧库画布链接与受理同一时间戳时只回填可证明的项目", async (t) => {
+  const f = await chatsFixture("058_model_access_publications.sql");
+  t.after(f.cleanup);
+  const a = await f.canvas(),
+    b = await f.canvas();
+  const stamp = 1800000000.25;
+  const cases = [
+    {
+      name: "受理后首次建立同时间戳链接",
+      before: [],
+      tied: [b],
+      expected: null,
+    },
+    { name: "已有明确链接", before: [[a, -1]], tied: [], expected: a.id },
+    {
+      name: "最新已知链接与同时间戳链接冲突",
+      before: [[a, -1]],
+      tied: [b],
+      expected: null,
+    },
+    {
+      name: "仅最近的两种可能时间均指向同一项目",
+      before: [
+        [a, -2],
+        [b, -1],
+      ],
+      tied: [b],
+      expected: b.id,
+    },
+    {
+      name: "同时间戳链接不能消除之前的归属歧义",
+      before: [
+        [a, -1],
+        [b, -1],
+      ],
+      tied: [b],
+      expected: null,
+    },
+    {
+      name: "显式当轮项目优先",
+      before: [],
+      tied: [b],
+      explicit: a,
+      expected: a.id,
+    },
+  ] as const;
+  const turns: string[] = [];
+  for (const scenario of cases) {
+    f.setTime(stamp - 5);
+    const view = await f.chats.create(f.admin, {});
+    const conversation = await one(
+      f.db,
+      "SELECT id FROM chat_conversations WHERE public_id=$1",
+      [view.conversation.id],
+    );
+    let node = 0;
+    const link = (project: typeof a, time: number) =>
+      f.db.query(
+        "INSERT INTO canvas_chat_links(project_id,node,conversation_id,created) VALUES($1,$2,$3,$4)",
+        [project.id, "node-" + node++, conversation.id, time],
+      );
+    for (const [project, offset] of scenario.before)
+      await link(project, stamp + offset);
+    f.setTime(stamp);
+    const extra =
+      "explicit" in scenario
+        ? {
+            context: {
+              project: scenario.explicit.public_id,
+              expected_revision: scenario.explicit.revision,
+            },
+          }
+        : {};
+    const sent = await f.chats.send(
+      f.admin,
+      view.conversation.id,
+      await f.draft(view, extra),
+    );
+    const turn = await f.turn(sent.conversation.active_turn);
+    for (const project of scenario.tied) await link(project, turn.created);
+    await f.chats.finish(turn.id, { state: "complete", text: "历史" });
+    turns.push(turn.id);
+  }
+  const { migrate } = await import("@fumiao/platform/db.js");
+  await migrate(f.db);
+  const { rows } = await f.db.query(
+    "SELECT turn_id,project_id FROM chat_charges",
+  );
+  const projects = new Map(rows.map((r) => [r.turn_id, r.project_id]));
+  for (const [i, scenario] of cases.entries())
+    await t.test(scenario.name, () =>
+      assert.equal(projects.get(turns[i]), scenario.expected),
+    );
+});
+
 test("原样重传已受理的画布请求可跨自动保存修订和零可用余额", async (t) => {
   const f = await setupNative(t);
   const canvas = await f.request("POST", "/api/canvases", { title: "重传" });
