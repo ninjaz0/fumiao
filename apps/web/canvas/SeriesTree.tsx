@@ -266,7 +266,7 @@ export function SeriesTree({ workspace }: { workspace: string }) {
       <div className="fm-series-head">
         <h2>
           <Clapperboard size={18} />
-          剧集项目树（项目 → 季 → 集 → 场）
+          <span>剧集项目树（项目 → 季 → 集 → 场）</span>
         </h2>
         <button
           type="button"
@@ -325,9 +325,17 @@ export function SeriesTree({ workspace }: { workspace: string }) {
       {loading ? (
         <p className="fm-series-muted">正在加载剧集树…</p>
       ) : seriesList.length === 0 ? (
-        <p className="fm-series-muted">
-          按「剧集 → 季 → 分集 → 分场」四级结构管理长片与短剧，每集/每场均可独立绑定画布。
-        </p>
+        <>
+          <p className="fm-series-muted fm-series-desc">
+            按「剧集 → 季 → 分集 → 分场」四级结构管理长片与短剧，每集/每场均可独立绑定画布。
+          </p>
+          <details className="fm-series-help">
+            <summary>查看结构说明</summary>
+            <p className="fm-series-muted">
+              按「剧集 → 季 → 分集 → 分场」四级结构管理长片与短剧，每集/每场均可独立绑定画布。
+            </p>
+          </details>
+        </>
       ) : (
         <div className="fm-series-list">
           {seriesList.map((s) => {

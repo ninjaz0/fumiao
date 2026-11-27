@@ -592,11 +592,204 @@ async function checkTouchTargets(page: Page) {
   }
 }
 
+async function checkCanvasList(page: Page) {
+  await page.locator('.mobile-tabbar [data-tab="canvas"]').tap();
+  await page.waitForURL(/\/canvas/);
+  await expect(page.locator(".list-header")).toBeVisible();
+  await hideDevPortal(page);
+  const header = (await page.locator(".list-header").boundingBox())!;
+  assert.ok(header.height <= 52 + 1, `画布列表顶栏 ${header.height}`);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await expect(page.locator(".list-header .back-link")).toHaveCSS("min-height", "44px");
+
+  // 顶栏背景、底边线与右侧空间名省略截断
+  const listHeaderMetrics = await page.evaluate(() => {
+    const bar = document.querySelector<HTMLElement>(".list-header")!;
+    const style = getComputedStyle(bar);
+    const meta = bar.querySelector<HTMLElement>(":scope > span")!;
+    const original = meta.textContent;
+    meta.textContent = "非常非常长的团队空间名称用于测试画布顶栏省略 · 超级管理员".repeat(2);
+    try {
+      const metaStyle = getComputedStyle(meta);
+      return {
+        bg: style.backgroundColor,
+        borderBottom: style.borderBottomWidth,
+        noOverflow: bar.scrollWidth <= bar.clientWidth && document.documentElement.scrollWidth <= innerWidth,
+        ellipsis: metaStyle.textOverflow,
+      };
+    } finally {
+      meta.textContent = original;
+    }
+  });
+  assert.notEqual(listHeaderMetrics.bg, "rgba(0, 0, 0, 0)", "画布列表顶栏具有实体背景色");
+  assert.equal(listHeaderMetrics.borderBottom, "1px", "画布列表顶栏具有 1px 底边线");
+  assert.equal(listHeaderMetrics.noOverflow, true, "画布列表顶栏右侧长空间名不溢出");
+  assert.equal(listHeaderMetrics.ellipsis, "ellipsis", "画布列表顶栏右侧文字省略显示");
+
+  // 深色主题下画布列表顶栏不透底、不发白
+  await setTheme(page, "dark");
+  const listDarkBg = await page.evaluate(() => getComputedStyle(document.querySelector(".list-header")!).backgroundColor);
+  assert.notEqual(listDarkBg, "rgb(255, 255, 255)");
+  assert.notEqual(listDarkBg, "rgba(0, 0, 0, 0)");
+  if (evidence) await page.screenshot({ path: `${evidence}/page-canvas-list-dark.png`, animations: "disabled" });
+  await setTheme(page, "light");
+
+  // 剧集项目树卡片：标题一行省略、details 默认收起可展开、“新建剧集”视觉 36px 且触控 >= 44px
+  const seriesMetrics = await page.evaluate(() => {
+    const h2 = document.querySelector<HTMLElement>(".fm-series-head h2")!;
+    const titleSpan = h2.querySelector<HTMLElement>("span");
+    const btn = document.querySelector<HTMLElement>(".fm-series-head > button")!;
+    const btnRect = btn.getBoundingClientRect();
+    const after = getComputedStyle(btn, "::after");
+    const hasAfter = after.content !== "none" && after.content !== "normal";
+    const hitH = hasAfter ? btnRect.height - (parseFloat(after.top) || 0) - (parseFloat(after.bottom) || 0) : btnRect.height;
+    const hitW = hasAfter ? btnRect.width - (parseFloat(after.left) || 0) - (parseFloat(after.right) || 0) : btnRect.width;
+    return {
+      h2Height: h2.getBoundingClientRect().height,
+      titleEllipsis: titleSpan ? getComputedStyle(titleSpan).textOverflow : "none",
+      btnHeight: btnRect.height,
+      hitH,
+      hitW,
+    };
+  });
+  assert.ok(seriesMetrics.h2Height <= 28, `剧集卡片标题单行高度 <= 28px: ${seriesMetrics.h2Height}`);
+  assert.equal(seriesMetrics.titleEllipsis, "ellipsis", "剧集卡片标题超长省略");
+  assert.ok(Math.abs(seriesMetrics.btnHeight - 36) <= 1, `新建剧集按钮视觉高度 36px: ${seriesMetrics.btnHeight}`);
+  assert.ok(seriesMetrics.hitH >= 43.5 && seriesMetrics.hitW >= 43.5, `新建剧集触控区域 >= 44px: ${JSON.stringify(seriesMetrics)}`);
+
+  if (!(await page.locator(".fm-series-card").count())) {
+    const help = page.locator("details.fm-series-help");
+    await expect(help).toBeVisible();
+    await expect(help).not.toHaveJSProperty("open", true);
+    await help.locator("summary").tap();
+    await expect(help).toHaveJSProperty("open", true);
+    await expect(help).toContainText("四级结构");
+    await help.locator("summary").tap();
+    await expect(help).not.toHaveJSProperty("open", true);
+
+    // 桌面端 (>=761px) 保持原有非折叠说明与 72px 顶栏外观不变
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(help).toBeHidden();
+    await expect(page.locator(".fm-series-desc")).toBeVisible();
+    const desktopHeader = (await page.locator(".list-header").boundingBox())!;
+    assert.ok(Math.abs(desktopHeader.height - 72) <= 1, `桌面端画布列表顶栏保持 72px: ${desktopHeader.height}`);
+    if (evidence) await page.screenshot({ path: `${evidence}/page-canvas-list-desktop.png`, animations: "disabled" });
+    await page.setViewportSize({ width: 375, height: 667 });
+  }
+
+  // 页面标题 20px、“新建画布”按钮 40px（触控 >= 44px）、分段切换 40px（触控 >= 44px）
+  await expect(page.locator(".project-list-heading h1")).toHaveCSS("font-size", "20px");
+  const headingControls = await page.evaluate(() => {
+    const createBtn = document.querySelector<HTMLElement>('.project-list-heading button[aria-label="新建画布"]')!;
+    const createRect = createBtn.getBoundingClientRect();
+    const createAfter = getComputedStyle(createBtn, "::after");
+    const createHasAfter = createAfter.content !== "none" && createAfter.content !== "normal";
+    const createHitH = createHasAfter
+      ? createRect.height - (parseFloat(createAfter.top) || 0) - (parseFloat(createAfter.bottom) || 0)
+      : createRect.height;
+    const tabs = document.querySelector<HTMLElement>(".canvas-list-tabs")!;
+    const tabsRect = tabs.getBoundingClientRect();
+    const tabBtns = [...tabs.querySelectorAll<HTMLElement>(":scope > button")];
+    const tabHitHeights = tabBtns.map((b) => {
+      const r = b.getBoundingClientRect();
+      const a = getComputedStyle(b, "::after");
+      const has = a.content !== "none" && a.content !== "normal";
+      return has ? r.height - (parseFloat(a.top) || 0) - (parseFloat(a.bottom) || 0) : r.height;
+    });
+    return {
+      createHeight: createRect.height,
+      createHitH,
+      tabsHeight: tabsRect.height,
+      tabHitHeights,
+    };
+  });
+  assert.ok(Math.abs(headingControls.createHeight - 40) <= 1, `新建画布按钮高度 40px: ${headingControls.createHeight}`);
+  assert.ok(headingControls.createHitH >= 43.5, `新建画布按钮触控高度 >= 44px: ${headingControls.createHitH}`);
+  assert.ok(Math.abs(headingControls.tabsHeight - 40) <= 1, `分段切换高度 40px: ${headingControls.tabsHeight}`);
+  assert.ok(
+    headingControls.tabHitHeights.every((h) => h >= 43.5),
+    `分段切换按钮触控高度 >= 44px: ${headingControls.tabHitHeights.join(", ")}`,
+  );
+
+  // 画布编辑器顶栏验证：临时新建画布，检查 52px 顶栏、44px 返回按钮点击区、标题省略与无横向溢出，最后清理临时画布
+  await page.getByRole("button", { name: "新建画布", exact: true }).tap();
+  await page.waitForURL(/\/canvas\/[^/?]+/);
+  const editorUrl = new URL(page.url());
+  const canvasId = editorUrl.pathname.split("/")[2];
+  const workspace = editorUrl.searchParams.get("workspace");
+  try {
+    await expect(page.locator(".canvas-header")).toBeVisible();
+    await hideDevPortal(page);
+    const editorHeader = (await page.locator(".canvas-header").boundingBox())!;
+    assert.ok(Math.abs(editorHeader.height - 52) <= 1, `画布编辑器顶栏高度 52px: ${editorHeader.height}`);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "画布编辑器无横向滚动");
+
+    const editorMetrics = await page.evaluate(() => {
+      const bar = document.querySelector<HTMLElement>(".canvas-header")!;
+      const barStyle = getComputedStyle(bar);
+      const back = bar.querySelector<HTMLElement>(".cv-brand")!;
+      const backRect = back.getBoundingClientRect();
+      const after = getComputedStyle(back, "::after");
+      const hasAfter = after.content !== "none" && after.content !== "normal";
+      const backHitW = hasAfter ? backRect.width - (parseFloat(after.left) || 0) - (parseFloat(after.right) || 0) : backRect.width;
+      const backHitH = hasAfter ? backRect.height - (parseFloat(after.top) || 0) - (parseFloat(after.bottom) || 0) : backRect.height;
+      const input = bar.querySelector<HTMLInputElement>('.project-heading input[aria-label="画布名称"]')!;
+      const prevVal = input.value;
+      input.value = "非常非常长的画布项目标题用于测试手机端编辑器顶栏单行省略不换行".repeat(2);
+      try {
+        return {
+          bg: barStyle.backgroundColor,
+          borderBottom: barStyle.borderBottomWidth,
+          backHitW,
+          backHitH,
+          titleEllipsis: getComputedStyle(input).textOverflow,
+          headerHeightAfterLongTitle: bar.getBoundingClientRect().height,
+          noPageOverflow: document.documentElement.scrollWidth <= innerWidth,
+        };
+      } finally {
+        input.value = prevVal;
+      }
+    });
+    assert.notEqual(editorMetrics.bg, "rgba(0, 0, 0, 0)", "画布编辑器顶栏具有实体背景色");
+    assert.equal(editorMetrics.borderBottom, "1px", "画布编辑器顶栏具有 1px 底边线");
+    assert.ok(
+      editorMetrics.backHitW >= 43.5 && editorMetrics.backHitH >= 43.5,
+      `画布编辑器返回按钮触控区 >= 44×44px: ${JSON.stringify(editorMetrics)}`,
+    );
+    assert.equal(editorMetrics.titleEllipsis, "ellipsis", "画布编辑器标题省略显示");
+    assert.ok(
+      editorMetrics.headerHeightAfterLongTitle <= 53 && editorMetrics.noPageOverflow,
+      `长标题下画布编辑器顶栏保持单行 52px 且不溢出: ${JSON.stringify(editorMetrics)}`,
+    );
+
+    await setTheme(page, "dark");
+    const editorDarkBg = await page.evaluate(() => getComputedStyle(document.querySelector(".canvas-header")!).backgroundColor);
+    assert.notEqual(editorDarkBg, "rgb(255, 255, 255)");
+    assert.notEqual(editorDarkBg, "rgba(0, 0, 0, 0)");
+    if (evidence) await page.screenshot({ path: `${evidence}/page-canvas-editor-dark.png`, animations: "disabled" });
+    await setTheme(page, "light");
+    if (evidence) await page.screenshot({ path: `${evidence}/page-canvas-editor.png`, animations: "disabled" });
+  } finally {
+    const deleteRes = await page.context().request.delete(`/api/canvases/${encodeURIComponent(canvasId)}`, {
+      headers: {
+        Origin: editorUrl.origin,
+        ...(workspace ? { "X-Workspace-Id": workspace } : {}),
+      },
+    });
+    assert.ok([200, 204, 404].includes(deleteRes.status()), `清理临时画布失败: ${deleteRes.status()}`);
+  }
+  await page.goto(`/canvas${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ""}`);
+  await expect(page.locator(".list-header")).toBeVisible();
+  await expect(page.locator(".project-list-body .empty")).toHaveCount(0);
+  await hideDevPortal(page);
+}
+
 const checks = [
   checkTabBar, checkDrawerClosesAfterNavigation, checkLongWorkspaceName,
   checkDockCollapseExpand, checkLongDraft, checkWidenClearsDock, checkPickingReturnsExpanded,
   checkMenuSheet, checkDarkSurfaces,
   checkTouchTargets, checkNoOverflowAndNoCover,
+  checkCanvasList,
 ];
 
 async function fixture(harness: ChildProcess) {
