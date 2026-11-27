@@ -251,7 +251,7 @@ test("episode export freezes adopted shots in canvas order", async () => {
       [accepted.id],
     );
     assert.equal(row.exporter_version, "2.0.0");
-    assert.deepEqual(JSON.parse(row.snapshot.toString()), [
+    assert.deepEqual(JSON.parse(Buffer.from(row.snapshot).toString("utf8")), [
       {
         node: "s2",
         title: "原声",
@@ -441,7 +441,7 @@ test("episode export rejects 31 shots at admission and 10 minutes at rendering",
       "SELECT id,snapshot FROM storyboard_exports WHERE public_id=$1",
       [accepted.id],
     );
-    assert.equal(JSON.parse(row.snapshot.toString())[0].voice, f.voice.public_id);
+    assert.equal(JSON.parse(Buffer.from(row.snapshot).toString("utf8"))[0].voice, f.voice.public_id);
     await f.service.execute(row.id);
     const failed = (await f.service.list(f.admin, f.project.id)).exports[0];
     assert.equal(failed.state, "failed");
@@ -475,7 +475,7 @@ test("scope migration retains queued canvas snapshots and their submission recei
     await migrate(f.db);
     const row = await one(f.db, "SELECT scope,snapshot FROM storyboard_exports WHERE id=$1", [id]);
     assert.equal(row.scope, "canvas");
-    assert.deepEqual(row.snapshot, snapshot);
+    assert.deepEqual(Buffer.from(row.snapshot), snapshot);
     const service = new OriginalStoryboardExports(f.p);
     const replay = await service.create(admin, project.id, request);
     assert.equal(replay.id, publicId);
