@@ -96,6 +96,22 @@ const overrides = z
     tools: z.boolean().optional(),
   })
   .strict();
+const intentLabel = text.max(128).optional();
+const publicationIntent = z.union([
+  z
+    .object({
+      action: z.literal("standby"),
+      catalog_id: text,
+      label: intentLabel,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.enum(["create", "draft", "adopt"]),
+      label: intentLabel,
+    })
+    .strict(),
+]);
 const draftInput = z
   .object({
     expected_revision: z.number().int().nonnegative(),
@@ -103,6 +119,7 @@ const draftInput = z
     connection_revision: revision,
     upstream_id: text,
     purpose: purpose.nullable().optional(),
+    publication: publicationIntent.optional(),
     price: price.optional(),
     chat_prices: chatPrices.optional(),
     overrides: overrides.default({}),
@@ -733,17 +750,15 @@ export class ModelAccessConnections {
       expected(connection.revision, input.connection_revision);
       const old = await one(
         sql,
-        "SELECT * FROM model_access_drafts WHERE id=$1 FOR UPDATE",
-        [id],
+        "SELECT * FROM model_access_drafts WHERE connection_id=$1 AND upstream_id=$2 FOR UPDATE",
+        [connection.id, input.upstream_id],
+      );
+      requireValue(
+        !old || old.id === id,
+        409,
+        "其他管理员已保存此模型，请重新载入服务端草稿",
       );
       expected(old?.revision ?? 0, input.expected_revision);
-      requireValue(
-        !old ||
-          (old.connection_id === input.connection_id &&
-            old.upstream_id === input.upstream_id),
-        409,
-        "草稿已绑定其他模型",
-      );
       const directory = await one(
         sql,
         "SELECT candidates FROM model_access_discoveries WHERE connection_revision_id=$1",
@@ -753,7 +768,10 @@ export class ModelAccessConnections {
         directory?.candidates as Candidate[] | undefined
       )?.find((c) => c.upstream_id === input.upstream_id);
       const selection = draftSelection(
-        input,
+        {
+          ...input,
+          publication: input.publication ?? old?.selection?.publication,
+        },
         configOf(this.vault, connection.config),
         candidate,
       );
@@ -884,6 +902,7 @@ function draftSelection(
     reasons.push("first_frame");
   if (parameters.upscale_only) reasons.push("upscale_only");
   return {
+    ...(input.publication ? { publication: input.publication } : {}),
     purpose: kind,
     price: input.price ?? null,
     chat_prices: prices ?? null,

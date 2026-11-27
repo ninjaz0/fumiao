@@ -44,7 +44,12 @@ export async function resolvePublishedRoute(
   const row = trialRouteId
     ? await one(
         sql,
-        routeSql + " WHERE p.catalog_id=$1 AND r.id=$2 FOR SHARE OF p,c",
+        routeSql +
+          ` WHERE p.catalog_id=$1 AND r.id=$2 AND
+          (r.id=p.route_revision_id OR NOT EXISTS (
+            SELECT 1 FROM model_access_route_revisions newer
+            WHERE newer.draft_id=r.draft_id AND newer.draft_revision>r.draft_revision
+          )) FOR SHARE OF p,c`,
         [catalogId, trialRouteId],
       )
     : await one(sql, activeRouteSql + " AND p.catalog_id=$1", [catalogId]);

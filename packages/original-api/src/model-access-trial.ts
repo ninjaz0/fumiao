@@ -88,7 +88,7 @@ export async function modelRouteTrial(
     requireValue(
       route && route.priceRevisionId === body.price_revision,
       409,
-      "模型售价已更新，请重新报价",
+      "线路版本或模型售价已更新，请重新报价",
     );
     const allowed = await one(
       sql,

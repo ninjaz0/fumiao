@@ -187,6 +187,12 @@ export function ModelAccessImport({
         const target = view.publications.find(
           (p) => p.catalog_id === row.target,
         );
+        if (
+          row.target &&
+          !["draft", "adopt"].includes(row.target) &&
+          (!target || target.price.kind !== row.purpose)
+        )
+          throw Error("关联目标已更新，请重新选择公开模型");
         const legacy =
           row.target === "adopt" && connection.reused_from?.models.includes(id);
         if (
@@ -225,7 +231,7 @@ export function ModelAccessImport({
           items.push({
             ...item,
             action: "create",
-            label: row.label?.trim() || id,
+            label: body.publication?.label,
           });
       }
       if (items.length) await publish(items);
@@ -557,6 +563,15 @@ export function ModelAccessImport({
                       <option value="">
                         {old ? "请选择接管方式" : "新建公开模型"}
                       </option>
+                      {row.target &&
+                        !["adopt", "draft"].includes(row.target) &&
+                        !alternatives.some(
+                          (p) => p.catalog_id === row.target,
+                        ) && (
+                          <option value={row.target}>
+                            原目标不可用 · {row.target}
+                          </option>
+                        )}
                       {old && <option value="adopt">按新售价接管原模型</option>}
                       {alternatives.map((p) => (
                         <option key={p.catalog_id} value={p.catalog_id}>
@@ -570,6 +585,7 @@ export function ModelAccessImport({
                     <label>
                       公开名称
                       <input
+                        maxLength={128}
                         value={row.label ?? id}
                         onChange={(e) => edit(id, { label: e.target.value })}
                       />
@@ -617,16 +633,14 @@ export function ModelAccessImport({
                     hideProtocol
                   />
                 </details>
-                {draft &&
-                  row.revision !== undefined &&
-                  row.revision !== draft.revision && (
-                    <button
-                      className="ledger-button"
-                      onClick={() => restoreDraft(id)}
-                    >
-                      重新载入服务端草稿
-                    </button>
-                  )}
+                {draft && (row.revision ?? 0) !== draft.revision && (
+                  <button
+                    className="ledger-button"
+                    onClick={() => restoreDraft(id)}
+                  >
+                    重新载入服务端草稿
+                  </button>
+                )}
                 {draft?.missing.length ? (
                   <small>
                     待补充 ·{" "}

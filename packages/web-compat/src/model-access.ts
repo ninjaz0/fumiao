@@ -95,7 +95,11 @@ export interface DraftOverrides {
   chat_response?: "stream" | "json";
   tools?: boolean;
 }
+export type DraftPublicationIntent =
+  | { action: "standby"; catalog_id: string; label?: string }
+  | { action: "create" | "draft" | "adopt"; label?: string };
 export interface SaveModelDraft {
+  publication?: DraftPublicationIntent;
   expected_revision: number;
   connection_id: string;
   connection_revision: number;

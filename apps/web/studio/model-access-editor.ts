@@ -88,7 +88,17 @@ export function newRow(
   const o = d?.overrides;
   return {
     upstream,
-    label: c?.name ?? upstream,
+    label: d?.publication
+      ? (d.publication.label ?? upstream)
+      : c?.name && c.name !== upstream
+        ? c.name.slice(0, 128)
+        : upstream,
+    target:
+      d?.publication?.action === "standby"
+        ? d.publication.catalog_id
+        : d?.publication?.action === "create"
+          ? ""
+          : d?.publication?.action,
     purpose: d?.purpose ?? c?.purpose ?? "",
     id: d?.id,
     revision: d?.revision,
@@ -162,11 +172,29 @@ export function draftPayload(
     if (row.tools !== undefined) overrides.tools = row.tools;
     if (row.response) overrides.chat_response = row.response;
   }
+  const name = row.label?.trim();
+  const label = name && name !== row.upstream ? name : undefined;
   return {
     expected_revision: row.revision ?? 0,
     connection_revision: connection.revision,
     connection_id: connection.id,
     upstream_id: row.upstream,
+    publication:
+      row.target && !["adopt", "draft"].includes(row.target)
+        ? {
+            action: "standby",
+            catalog_id: row.target,
+            label,
+          }
+        : {
+            action:
+              row.target === "adopt"
+                ? "adopt"
+                : row.target === "draft"
+                  ? "draft"
+                  : "create",
+            label,
+          },
     purpose: row.purpose || null,
     ...(row.purpose === "chat"
       ? { chat_prices: chatRates(row) }

@@ -189,6 +189,22 @@ async function publishOne(
   );
   const { purpose, protocol, parameters, missing, price, chat_prices } =
     draft.selection;
+  const intent = draft.selection.publication;
+  if (intent) {
+    const matches =
+      intent.action === "create"
+        ? item.action === "create" &&
+          (intent.label ?? draft.upstream_id) ===
+            (item.label ?? draft.upstream_id)
+        : intent.action === "standby"
+          ? item.action === "standby" && intent.catalog_id === catalogId
+          : intent.action === "adopt"
+            ? item.action === "activate" &&
+              catalogId === draft.upstream_id &&
+              item.expected_revision === 0
+            : false;
+    requireValue(matches, 409, "上架方式已改变，请重新确认草稿及目标模型");
+  }
   const existing = await one(
     sql,
     "SELECT * FROM model_access_publications WHERE catalog_id=$1 FOR UPDATE",

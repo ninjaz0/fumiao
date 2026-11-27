@@ -476,3 +476,377 @@ test("管理线路按来源展示生效版和最新备选版，历史修订不�
     [null, "B2"],
   ]);
 });
+
+test("新的备用修订替换旧报价；已受理 UID 仍返回首次回执，当前旧版仍可试用", async (t) => {
+  const f = await databaseFixture();
+  t.after(f.cleanup);
+  const identity = new OriginalIdentity(f.p);
+  await identity.bootstrap({
+    name: "admin",
+    nickname: "管理员",
+    password: "revision-fixture",
+  });
+  const actor = await identity.actor(
+    await identity.login(
+      { name: "admin", password: "revision-fixture" },
+      "test",
+    ),
+  );
+  const workspace = Number(
+    (await identity.activeWorkspace(f.db, actor)).public_id,
+  );
+  const { OriginalModelAccess } =
+    await import("@fumiao/original-api/model-access.js");
+  const api = new OriginalModelAccess(identity);
+  const publish = (items: unknown[]) =>
+    api.publish(actor, { uid: randomUUID(), items });
+  async function line(name: string) {
+    const conn = await api.create(actor, {
+      base_url: "https://1.1.1.1/" + name,
+      api_key: "test-key",
+    });
+    const id = randomUUID();
+    const save = (revision: number, connRevision = 1) =>
+      api.saveDraft(actor, id, {
+        expected_revision: revision,
+        connection_id: conn.id,
+        connection_revision: connRevision,
+        upstream_id: name,
+        purpose: "image",
+        price: "0",
+      });
+    await save(0);
+    return { id, conn, save };
+  }
+  const a = await line("current"),
+    b = await line("backup");
+  const {
+    items: [first],
+  } = await publish([{ action: "create", draft_id: a.id, draft_revision: 1 }]);
+  const catalog_id = first.catalog_id;
+  const standby = (
+    draft_id: string,
+    draft_revision: number,
+    expected_revision: number,
+  ) =>
+    publish([
+      {
+        action: "standby",
+        draft_id,
+        draft_revision,
+        catalog_id,
+        expected_revision,
+      },
+    ]);
+  await standby(b.id, 1, 1);
+  const model = (await api.view(actor)).publications[0];
+  const old = model.routes.find((r) => r.draft_id === b.id)!.route_revision_id;
+  const sample = (route_revision: string) => ({
+    uid: randomUUID(),
+    workspace,
+    prompt: "样例",
+    route_revision,
+    price_revision: model.price_revision_id,
+  });
+  async function quoted(route: string) {
+    const draft = sample(route);
+    return { ...draft, quote: await api.trial(actor, route, draft, false) };
+  }
+  const accepted = await quoted(old),
+    unaccepted = await quoted(old),
+    racing = await quoted(old);
+  const receipt = await api.trial(actor, old, accepted, true);
+  await api.edit(actor, b.conn.id, {
+    expected_revision: 1,
+    base_url: "https://1.1.1.1/new-backup",
+    api_key: "new-key",
+  });
+  await b.save(1, 2);
+  const [published, race] = await Promise.allSettled([
+    standby(b.id, 2, 2),
+    api.trial(actor, old, racing, true),
+  ]);
+  assert.equal(published.status, "fulfilled");
+  if (race.status === "rejected") assert.equal(race.reason.status, 409);
+  else assert.deepEqual(await api.trial(actor, old, racing, true), race.value);
+  await assert.rejects(api.trial(actor, old, unaccepted, true), {
+    status: 409,
+  });
+  await assert.rejects(api.trial(actor, old, sample(old), false), {
+    status: 409,
+  });
+  assert.deepEqual(await api.trial(actor, old, accepted, true), receipt);
+  const oldJobs = (
+    await f.db.query(
+      "SELECT native_snapshot->>'connectionRevisionId' AS config FROM jobs WHERE route_revision_id=$1",
+      [old],
+    )
+  ).rows;
+  assert.equal(oldJobs.length, race.status === "fulfilled" ? 2 : 1);
+  assert.ok(oldJobs.every((row) => row.config === b.conn.revision_id));
+  await a.save(1);
+  await standby(a.id, 2, 3);
+  assert.ok(await quoted(first.route_revision_id));
+});
+
+test("保存后重开草稿保留公开名称、目标和上架方式，旧草稿仍能编辑", async (t) => {
+  const f = await databaseFixture();
+  t.after(f.cleanup);
+  const identity = new OriginalIdentity(f.p);
+  await identity.bootstrap({
+    name: "admin",
+    nickname: "管理员",
+    password: "intent-fixture",
+  });
+  const actor = await identity.actor(
+    await identity.login({ name: "admin", password: "intent-fixture" }, "test"),
+  );
+  const { OriginalModelAccess } =
+    await import("@fumiao/original-api/model-access.js");
+  const { draftPayload, newRow } =
+    await import("../../apps/web/studio/model-access-editor.js");
+  const api = new OriginalModelAccess(identity),
+    conn = await api.create(actor, {
+      base_url: "https://1.1.1.1/v1",
+      api_key: "fixture",
+    });
+  await identity.createMember(actor, {
+    name: "other-editor",
+    nickname: "编辑",
+    password: "intent-fixture",
+  });
+  await f.db.query("UPDATE users SET role='admin' WHERE name='other-editor'");
+  const otherAdmin = await identity.actor(
+    await identity.login(
+      { name: "other-editor", password: "intent-fixture" },
+      "test",
+    ),
+  );
+  const base = {
+    upstream: "studio-test",
+    purpose: "image" as const,
+    unit: "4",
+    label: "自定义公开名",
+  };
+  const id = randomUUID();
+  let revision = 0;
+  for (const target of ["", "model-existing", "draft", "adopt"]) {
+    const body = draftPayload({ ...base, target, revision }, conn, "");
+    await api.saveDraft(actor, id, body);
+    const saved = (await api.view(actor)).drafts.find((d) => d.id === id)!;
+    const reopened = newRow(base.upstream, undefined, saved);
+    assert.equal(reopened.label, base.label);
+    assert.equal(reopened.target ?? "", target);
+    await assert.rejects(
+      api.saveDraft(otherAdmin, id, {
+        ...body,
+        publication: { action: "create", label: "其他管理员的旧页面" },
+      }),
+      { status: 409 },
+    );
+    assert.deepEqual(
+      (await api.view(otherAdmin)).drafts.find((d) => d.id === id)?.publication,
+      saved.publication,
+    );
+    if (target)
+      await assert.rejects(
+        api.publish(actor, {
+          uid: randomUUID(),
+          items: [
+            {
+              action: "create",
+              draft_id: id,
+              draft_revision: saved.revision,
+              label: base.label,
+            },
+          ],
+        }),
+        { status: 409 },
+      );
+    revision = saved.revision;
+  }
+  const oldId = randomUUID();
+  const { draft } = await api.saveDraft(actor, oldId, {
+    expected_revision: 0,
+    connection_id: conn.id,
+    connection_revision: 1,
+    purpose: "image",
+    price: "1",
+    upstream_id: "older",
+  });
+  assert.equal(newRow("older", undefined, draft).label, "older");
+  await assert.rejects(
+    api.saveDraft(otherAdmin, randomUUID(), draftPayload(base, conn, "")),
+    { status: 409 },
+  );
+  const fallback = await api.saveDraft(
+    actor,
+    id,
+    draftPayload({ ...base, revision, label: "" }, conn, ""),
+  );
+  const candidate = {
+    upstream_id: base.upstream,
+    name: "目录在另一次读取后改了名称",
+    purpose: "image" as const,
+    purpose_source: null,
+    parameters: {},
+    directories: [],
+    change: "changed" as const,
+    metadata_status: "declared" as const,
+  };
+  assert.equal(
+    newRow(base.upstream, candidate, fallback.draft).label,
+    base.upstream,
+  );
+});
+
+test("旧 ID 接管和备用关联丢失成功响应后，重新打开仍重试相同的草稿、操作和 UID", async (t) => {
+  const { chatSettingsFixture } = await import("../helpers/chat-settings.js");
+  const { OriginalModelAccess } =
+    await import("@fumiao/original-api/model-access.js");
+  const { recoverablePublications, sendPublication } =
+    await import("../../apps/web/studio/model-access-publication-recovery.js");
+  const f = await chatSettingsFixture();
+  t.after(f.cleanup);
+  await f.reset({ deepseek: "fixture-owned" });
+  const origin = (
+    await f.db.query("SELECT * FROM connections WHERE id=$1", [f.ids.deepseek])
+  ).rows[0];
+  await f.db.query("UPDATE connections SET config=$2 WHERE id=$1", [
+    origin.id,
+    f.p.vault.seal({
+      ...f.p.vault.open(origin.config),
+      baseUrl: "https://1.1.1.1/legacy",
+    }),
+  ]);
+  const api = new OriginalModelAccess(new OriginalIdentity(f.p));
+  const reused = await api.reuse(f.admin, {
+    connection_id: origin.id,
+    expected_revision: origin.revision,
+  });
+  const studioId = "deepseek-flash";
+  const data = new Map<string, string>();
+  const storage = {
+    get length() {
+      return data.size;
+    },
+    key: (i: number) => [...data.keys()][i] ?? null,
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v);
+    },
+    removeItem: (k: string) => {
+      data.delete(k);
+    },
+  };
+  for (const action of ["activate", "standby"] as const) {
+    const connection =
+      action === "activate"
+        ? reused
+        : await api.create(f.admin, {
+            base_url: "https://1.1.1.1/alternate",
+            api_key: "demo",
+          });
+    const id = randomUUID();
+    await api.saveDraft(f.admin, id, {
+      expected_revision: 0,
+      connection_revision: 1,
+      connection_id: connection.id,
+      upstream_id: action === "activate" ? studioId : "alias",
+      purpose: "chat",
+      chat_prices: { input: "1", output: "2" },
+      publication:
+        action === "activate"
+          ? { action: "adopt" }
+          : { action: "standby", catalog_id: studioId },
+    });
+    const operation = {
+      uid: randomUUID(),
+      items: [
+        {
+          action,
+          catalog_id: studioId,
+          expected_revision: action === "activate" ? 0 : 1,
+          draft_id: id,
+          draft_revision: 1,
+        },
+      ],
+    };
+    let committed: unknown;
+    await assert.rejects(
+      sendPublication(storage, 17, operation, async (_path, body) => {
+        committed = await api.publish(f.admin, body);
+        throw new TypeError("connection reset after commit");
+      }),
+      /connection reset/,
+    );
+    const [restored] = recoverablePublications(storage, 17);
+    assert.deepEqual(restored, operation);
+    assert.deepEqual(recoverablePublications(storage, 18), []);
+    const { ApiError } = await import("../../apps/web/canvas/api.js");
+    await assert.rejects(
+      sendPublication(storage, 17, restored, async () => {
+        throw new ApiError("登录已过期", 401);
+      }),
+      { status: 401 },
+    );
+    assert.deepEqual(recoverablePublications(storage, 17), [operation]);
+    assert.deepEqual(
+      await sendPublication(storage, 17, restored, (_path, body) =>
+        api.publish(f.admin, body),
+      ),
+      committed,
+    );
+    assert.deepEqual(recoverablePublications(storage, 17), []);
+    const view = await api.view(f.admin);
+    assert.equal(view.publications[0].revision, action === "activate" ? 1 : 2);
+    assert.equal(
+      view.publications[0].routes.filter((r) => r.draft_id === id).length,
+      1,
+    );
+    assert.equal(view.drafts.find((d) => d.id === id)?.revision, 1);
+    if (action === "standby") {
+      const conflicting = { uid: randomUUID(), items: operation.items };
+      await assert.rejects(
+        sendPublication(storage, 17, conflicting, async (_path, body) => {
+          try {
+            return await api.publish(f.admin, body);
+          } catch (e) {
+            throw new ApiError(
+              (e as Error).message,
+              (e as { status: number }).status,
+            );
+          }
+        }),
+        { status: 409 },
+      );
+      assert.deepEqual(recoverablePublications(storage, 17), []);
+      const draft = await api.saveDraft(f.admin, id, {
+        expected_revision: 1,
+        connection_revision: 1,
+        connection_id: connection.id,
+        upstream_id: "alias",
+        purpose: "chat",
+        overrides: { chat_response: "json" },
+        publication: { action: "standby", catalog_id: studioId },
+      });
+      const reconfirmed = {
+        uid: randomUUID(),
+        items: [
+          {
+            ...operation.items[0],
+            expected_revision: 2,
+            draft_revision: draft.draft.revision,
+          },
+        ],
+      };
+      const changed = await sendPublication(
+        storage,
+        17,
+        reconfirmed,
+        (_path, body) => api.publish(f.admin, body),
+      );
+      assert.equal(changed.items![0].revision, 3);
+    }
+  }
+});

@@ -4,6 +4,11 @@ import type {
   ModelConnection,
   PublicationItem,
 } from "@fumiao/web-compat/model-access.js";
+import {
+  recoverablePublications,
+  sendPublication,
+  type PublicationOperation,
+} from "./model-access-publication-recovery";
 import { ModelAccessImport } from "./ModelAccessImport";
 import { PublicationCard } from "./ModelAccessPublication";
 import type { AdminSave } from "./settings-admin";
@@ -31,7 +36,16 @@ export function SettingsModelAccess({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
-  const publication = useRef<{ key: string; uid: string } | null>(null);
+  const [outstanding, setOutstanding] = useState<PublicationOperation[]>([]);
+  const syncReceipts = useCallback(
+    () => setOutstanding(recoverablePublications(localStorage, state.me.id)),
+    [state.me.id],
+  );
+  useEffect(() => {
+    syncReceipts();
+    window.addEventListener("storage", syncReceipts);
+    return () => window.removeEventListener("storage", syncReceipts);
+  }, [syncReceipts]);
   const reload = useCallback(async () => {
     setView((await request(path)) as ModelAccessView);
   }, [request]);
@@ -71,16 +85,25 @@ export function SettingsModelAccess({
         setBusy(false);
       });
   }
+  async function submitPublication(operation: PublicationOperation) {
+    try {
+      await sendPublication(localStorage, state.me.id, operation, request);
+    } finally {
+      syncReceipts();
+    }
+    await refresh().catch(() => setError("发布已确认，工作区数据暂时未刷新"));
+  }
   async function publish(items: PublicationItem[]) {
-    const key = JSON.stringify(items);
-    if (publication.current?.key !== key)
-      publication.current = { key, uid: crypto.randomUUID() };
-    await request(path + "/publications", {
-      uid: publication.current.uid,
-      items,
-    });
-    publication.current = null;
-    await refresh();
+    await submitPublication({ uid: crypto.randomUUID(), items });
+  }
+  async function recover(operation: PublicationOperation) {
+    try {
+      await submitPublication(operation);
+      setMode("catalog");
+      setMessage(`已确认 ${operation.items.length} 项发布结果`);
+    } finally {
+      await reload();
+    }
   }
   async function created(c: ModelConnection) {
     setSecret("");
@@ -141,8 +164,27 @@ export function SettingsModelAccess({
         </p>
       )}
       {!view && !error && <p role="status">正在读取模型…</p>}
+      {outstanding.map((operation) => (
+        <div className="ledger-card" key={operation.uid}>
+          <p>
+            上次提交了 {operation.items.length} 项模型变更，发布回执待确认。
+          </p>
+          <button
+            className="ledger-button ledger-primary"
+            disabled={busy}
+            onClick={() => run(() => recover(operation))}
+          >
+            重试发布并读取回执
+          </button>
+        </div>
+      ))}
       {view && (
-        <fieldset className="access-body" disabled={busy} aria-busy={busy}>
+        <fieldset
+          className="access-body"
+          style={outstanding.length ? { display: "none" } : undefined}
+          disabled={busy || !!outstanding.length}
+          aria-busy={busy}
+        >
           {mode === "catalog" ? (
             <>
               {!view.publications.length && (
