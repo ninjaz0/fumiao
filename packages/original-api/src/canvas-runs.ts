@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { canvasTailSourceId } from "@fumiao/web-compat/director.js";
+import { canvasTailSourceId, directorBatchUnclaimed, directorTargetKey, type DirectorBatchSelection, type DirectorTarget } from "@fumiao/web-compat/director.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
-import { hash, requireValue } from "@fumiao/platform/security.js";
+import { DomainError, hash, requireValue } from "@fumiao/platform/security.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { uuid5 } from "@fumiao/platform/uuid.js";
@@ -13,6 +13,7 @@ import type { OriginalActor } from "./identity.js";
 import { parseBody } from "./validation.js";
 import { parseDraft } from "./drafts.js";
 import {
+  canvasBatchFields,
   canvasBatchRunFields,
   canvasBgmRunFields,
   canvasCandidatesFields,
@@ -21,8 +22,16 @@ import {
   parseCanvasDocument,
 } from "./canvas-draft.js";
 import {
+  canvasBatchRequestHash,
+  directorDraft,
+  directorLinkNode,
+  directorTargetShots,
   expandGroupNodeIds,
+  normalizeDirectorSelection,
   OriginalBatchPrecheck,
+  validateDirectorSelection,
+  type DirectorTicket,
+  type DirectorTicketItem,
   type PrecheckStage,
 } from "./batch-precheck.js";
 import {
@@ -34,6 +43,7 @@ import {
   canvasNarrationInput,
   canvasVisualPayload,
   resolveCanvasVisualBase,
+  resolveDirectorInput,
 } from "./director-inputs.js";
 import {
   canvasBytes,
@@ -53,6 +63,11 @@ type Run = {
   uid: string;
   expected_revision: number | bigint;
   price_revision: number | bigint | null;
+};
+type BatchRunResponse = {
+  submitted: { node: string; stage: PrecheckStage; job_id: number; line_id?: string }[];
+  skipped: { node: string; stage: PrecheckStage; reason: string; line_id?: string }[];
+  total_credits: number;
 };
 export class OriginalCanvasRuns {
   readonly canvases: OriginalCanvases;
@@ -777,6 +792,76 @@ export class OriginalCanvasRuns {
       return { items };
     });
   }
+  private async submitDirectorItem(
+    sql: Sql,
+    user: OriginalActor,
+    projectKey: string,
+    body: Run,
+    selection: DirectorBatchSelection,
+    target: DirectorTarget,
+    ticketItem?: DirectorTicketItem,
+  ) {
+    const project = await this.canvases.project(sql, user, projectKey, true);
+    const key = directorTargetKey(target);
+    const uid = uuid5(body.uid, `director:${project.id}:${key}`);
+    const nodeName = directorLinkNode(target);
+    const previous = await one(sql,
+      `SELECT j.public_id,j.price FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
+       WHERE l.project_id=$1 AND l.owner_id=$2 AND l.uid=$3 AND l.node=$4`,
+      [project.id, user.id, uid, nodeName],
+    );
+    if (previous) return { id: Number(previous.public_id), credits: Number(previous.price) };
+    requireValue(ticketItem, 409, "预检已标记阻塞，请检查此项后重新预检");
+    await this.ownerLock(sql, user);
+    const executionKey = `canvas-director:${project.id}:${key}:${uid}`;
+    if ((target.stage === "image" || target.stage === "video") && (user.tokenId || user.agentAction)) {
+      await enforceAgentPolicyInTx(sql, project.workspace_id, {
+        projectId: project.id,
+        nodeId: target.node_id,
+        executionKey,
+        approvedProposalId: user.agentAction?.approvedProposalId ?? null,
+      });
+    }
+    await this.generation.lockSubmission(sql, user, project.workspace_id);
+    const document = parseCanvasDocument(canvasDocumentJson(project.document));
+    const { ordered } = await validateDirectorSelection(
+      sql, this.canvases, { workspace_id: project.workspace_id, revision: project.revision },
+      document, body.expected_revision, selection, true,
+    );
+    directorTargetShots(document, ordered, target);
+    requireValue(!(await this.busy(sql, project.id, nodeName)), 409, "此项正在生成，请等待任务结束");
+    const bindings = await CanvasSubmissionModels.read(sql, {
+      strict: false, workspaceId: project.workspace_id, vault: this.p.vault, registry: this.p.registry,
+    });
+    const input = await resolveDirectorInput(
+      sql, { id: project.id, workspace_id: project.workspace_id }, document, target, bindings, { lock: true },
+    );
+    requireValue(input.basis === ticketItem.basis, 409, "生成输入、素材或声线已变更，请重新预检");
+    const catalog = await new StudioCatalog(this.p.db).catalog(sql);
+    const draft = directorDraft(input, catalog, uid);
+    const submitted = await this.generation.submitOn(
+      sql, user, draft, String(project.workspace_number), body.price_revision,
+      { projectId: project.id, nodeId: target.node_id, executionKey },
+      { checked: "checked" in input ? input.checked : undefined, quote: ticketItem.quote },
+    );
+    const inputs = {
+      ...input.payload,
+      director_basis: input.basis,
+      revision: project.revision,
+      ...("sources" in input ? { sources: input.sources } : {}),
+      ...(input.stage === "dialogue" ? {
+        line_id: input.line.id,
+        speaker: input.line.speaker,
+        pack_id: input.voice.packId,
+        voice_id: input.voice.voiceId ?? null,
+        text: input.payload.prompt,
+      } : {}),
+      ...(input.stage === "narration" ? { text: input.payload.prompt } : {}),
+    };
+    await this.link(sql, project, user, nodeName, uid, submitted.id, inputs);
+    return { id: submitted.id, credits: ticketItem.quote.amount };
+  }
+
   /**
    * F007 + F010: Partial workflow group / multi-node batch rerun (`POST /api/canvases/:key/batch-runs`).
    * Expands group nodes into children and submits only requested stages (`image`, `video`,
@@ -784,30 +869,21 @@ export class OriginalCanvasRuns {
    * `in_progress` -> `completed` receipt state machine in `canvas_batch_runs`.
    */
   async batchRun(user: OriginalActor, projectKey: string, value: unknown) {
-    type BatchRunResponse = {
-      submitted: {
-        node: string;
-        stage: PrecheckStage;
-        job_id: number;
-        line_id?: string;
-      }[];
-      skipped: { node: string; stage: PrecheckStage; reason: string }[];
-      total_credits: number;
-    };
-
-    const body = parseBody(value, canvasBatchRunFields, true) as Run & {
+    const body = parseBody(value, canvasBatchFields(value, canvasBatchRunFields), true) as Run & {
       node_ids: string[];
       stages: PrecheckStage[];
+      director?: DirectorBatchSelection;
       precheck_token?: string;
       expected_total_credits?: number;
       executable_keys?: string[];
     };
-    const requestHash = hash(
-      JSON.stringify({
-        node_ids: [...new Set(body.node_ids)].sort(),
-        stages: [...new Set(body.stages)].sort(),
-      }),
-    );
+    const director = body.director && normalizeDirectorSelection(body.director);
+    const selectionHash = canvasBatchRequestHash({ ...body, director });
+    const requestHash = director ? hash(JSON.stringify({
+      selectionHash, expected_revision: String(body.expected_revision), price_revision: String(body.price_revision),
+      precheck_token: body.precheck_token, expected_total_credits: body.expected_total_credits,
+    })) : selectionHash;
+    const unclaimed = (message: string) => director ? directorBatchUnclaimed + message : message;
     const claimId = randomUUID();
     const itemUid = (node: string, stage: PrecheckStage) =>
       uuid5(body.uid, `batch:${projectKey}:${node}:${stage}`);
@@ -1059,13 +1135,13 @@ export class OriginalCanvasRuns {
       }
 
       // 2. NEW submission: enforce expected_revision + mandatory server-bound precheck ticket!
-      const { plan, shotIndexMap } = loadExecutionPlan(p);
-      requireValue(p.revision === body.expected_revision, 409, canvasConflict);
+      const { plan, shotIndexMap } = director ? { plan: [], shotIndexMap: new Map<string, number>() } : loadExecutionPlan(p);
+      requireValue(p.revision === body.expected_revision, 409, unclaimed(canvasConflict));
       requireValue(
         typeof body.precheck_token === "string" &&
           body.precheck_token.trim().length > 0,
         400,
-        "请先执行批量预检并携带有效预检票据后再确认提交",
+        unclaimed("请先执行批量预检并携带有效预检票据后再确认提交"),
       );
 
       let serverAllowedKeys: Set<string> | null = null;
@@ -1074,6 +1150,7 @@ export class OriginalCanvasRuns {
         const ticket = await one(
           sql,
           `SELECT token, revision, price_revision, request_hash, executable_keys, total_credits, budget_blocked
+                    ${director ? ", director_items" : ""}
              FROM canvas_precheck_tickets
             WHERE token=$1 AND owner_id=$2 AND project_id=$3`,
           [body.precheck_token, user.id, p.id],
@@ -1081,18 +1158,24 @@ export class OriginalCanvasRuns {
         requireValue(
           ticket,
           409,
-          "预检票据不存在或已失效，请重新预检后再确认提交",
+          unclaimed("预检票据不存在或已失效，请重新预检后再确认提交"),
         );
         requireValue(
-          String(ticket.request_hash) === requestHash &&
+          String(ticket.request_hash) === selectionHash &&
             Number(ticket.revision) === Number(p.revision),
           409,
-          "画布版本或选中节点/阶段与预检票据不一致，请重新预检",
+          unclaimed("画布版本或选中节点/阶段与预检票据不一致，请重新预检"),
         );
         requireValue(
           !ticket.budget_blocked,
           402,
-          "预检显示已超出预算硬上限，无法提交",
+          unclaimed("预检显示已超出预算硬上限，无法提交"),
+        );
+        if (director) requireValue(
+          ticket.director_items &&
+          Number(ticket.price_revision) === body.price_revision &&
+          (body.expected_total_credits === undefined || Number(ticket.total_credits) === body.expected_total_credits),
+          409, unclaimed("报价版本或积分与预检票据不一致，请重新预检"),
         );
         serverAllowedKeys = new Set(
           Array.isArray(ticket.executable_keys)
@@ -1116,6 +1199,56 @@ export class OriginalCanvasRuns {
 
     if (init.kind === "completed") {
       return init.replayResponse;
+    }
+
+    const refreshClaim = async (sql: Sql) => ensureClaim(await one(
+      sql,
+      `UPDATE canvas_batch_runs SET updated_at=now()
+       WHERE owner_id=$1 AND project_id=$2 AND uid=$3 AND claim_id=$4 AND status='in_progress' RETURNING uid`,
+      [user.id, init.projectUuid, body.uid, claimId],
+    ));
+    const claim = (keys: Set<string>) => one(
+      this.p.db,
+      `INSERT INTO canvas_batch_runs(
+         owner_id, project_id, uid, request_hash, status,
+         expected_revision, allowed_keys, response, updated_at, claim_id
+       ) VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], '{}'::jsonb, now(), $7)
+       ON CONFLICT (owner_id, project_id, uid) DO NOTHING RETURNING uid`,
+      [user.id, init.projectUuid, body.uid, requestHash, Number(body.expected_revision), [...keys].sort(), claimId],
+    );
+
+    if (director) {
+      requireValue(init.hasRunsTable, 503, "批量回执尚未启用");
+      let allowed = init.serverAllowedKeys;
+      if (init.kind !== "new" || !(await claim(allowed ?? new Set()))) {
+        const outcome = await waitOrReclaim(init.projectUuid);
+        if (outcome.mode === "completed") return outcome.response;
+        allowed = outcome.allowedKeys;
+      }
+      const ticket = await one(
+        this.p.db,
+        "SELECT director_items FROM canvas_precheck_tickets WHERE token=$1 AND owner_id=$2 AND project_id=$3",
+        [body.precheck_token, user.id, init.projectUuid],
+      );
+      const checked = (ticket?.director_items ?? {}) as DirectorTicket;
+      const response: BatchRunResponse = { submitted: [], skipped: [], total_credits: 0 };
+      for (const target of director.targets) {
+        const { node_id: node, ...stage } = target;
+        const key = directorTargetKey(target);
+        const item = allowed?.has(key) ? checked[key] : undefined;
+        try {
+          const result = await this.p.db.transaction(async (sql) => {
+            await refreshClaim(sql);
+            return this.submitDirectorItem(sql, user, projectKey, body, director, target, item);
+          });
+          response.submitted.push({ node, ...stage, job_id: result.id });
+          response.total_credits += result.credits;
+        } catch (error) {
+          if (!(error instanceof DomainError)) throw error;
+          response.skipped.push({ node, ...stage, reason: error.message });
+        }
+      }
+      return complete(this.p.db, init.projectUuid, response);
     }
 
     let plan = init.plan;
@@ -1183,25 +1316,7 @@ export class OriginalCanvasRuns {
 
       // Persist the original executable targets before dispatching any jobs.
       if (!resume && init.hasRunsTable) {
-        const claimed = await one(
-          this.p.db,
-          `INSERT INTO canvas_batch_runs(
-               owner_id, project_id, uid, request_hash, status,
-               expected_revision, allowed_keys, response, updated_at, claim_id
-             )
-             VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], '{}'::jsonb, now(), $7)
-             ON CONFLICT (owner_id, project_id, uid) DO NOTHING
-             RETURNING uid`,
-          [
-            user.id,
-            init.projectUuid,
-            body.uid,
-            requestHash,
-            Number(body.expected_revision),
-            [...allowedKeys].sort(),
-            claimId,
-          ],
-        );
+        const claimed = await claim(allowedKeys);
         resume = !claimed;
       }
     }
@@ -1268,17 +1383,7 @@ export class OriginalCanvasRuns {
         }
 
         if (init.hasRunsTable) {
-          ensureClaim(
-            await one(
-              this.p.db,
-              `UPDATE canvas_batch_runs
-                SET updated_at = now()
-              WHERE owner_id=$1 AND project_id=$2 AND uid=$3
-                AND claim_id=$4 AND status='in_progress'
-              RETURNING uid`,
-              [user.id, init.projectUuid, body.uid, claimId],
-            ),
-          );
+          await refreshClaim(this.p.db);
         }
 
         const uid = itemUid(node.id, stage);

@@ -272,6 +272,27 @@ export const canvasCandidatesFields: Fields = {
   count: literal([1, 2], 1),
 };
 const batchStageField = literal(["image", "video", "narration", "dialogue"]);
+const directorBatchFields: Fields = {
+  director: {
+    kind: "object",
+    optional: true,
+    extra: true,
+    fields: {
+      script_revision: { kind: "integer", min: 1, max: 2 ** 31 - 1 },
+      use_confirmed_script: { kind: "boolean", strict: true, optional: true },
+      targets: {
+        kind: "list",
+        item: object({
+          node_id: identifier,
+          stage: batchStageField,
+          line_id: { ...identifier, optional: true },
+        }),
+        min: 1,
+        max: 480,
+      },
+    },
+  },
+};
 export const canvasBatchPrecheckFields: Fields = {
   expected_revision: { ...integer(null), nullable: true, min: 1 },
   node_ids: { ...list(identifier, 120), min: 1 },
@@ -279,14 +300,11 @@ export const canvasBatchPrecheckFields: Fields = {
     ...list(batchStageField, 4),
     default: ["image", "video"],
   },
+  ...directorBatchFields,
 };
 export const canvasBatchRunFields: Fields = {
+  ...canvasBatchPrecheckFields,
   ...canvasRunFields,
-  node_ids: { ...list(identifier, 120), min: 1 },
-  stages: {
-    ...list(batchStageField, 4),
-    default: ["image", "video"],
-  },
   precheck_token: { kind: "string", max: 128, optional: true },
   expected_total_credits: { kind: "integer", min: 0, max: 100_000_000, optional: true },
   executable_keys: {
@@ -296,6 +314,13 @@ export const canvasBatchRunFields: Fields = {
     optional: true,
   },
 };
+export function canvasBatchFields(value: unknown, fields: Fields): Fields {
+  if (value && typeof value === "object" && Object.hasOwn(value, "director")) {
+    const { node_ids: _nodes, stages: _stages, ...director } = fields;
+    return director;
+  }
+  return fields;
+}
 export const canvasGridCropFields: Fields = {
   rows: literal([2, 3], 3),
   cols: literal([2, 3], 3),

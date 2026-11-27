@@ -1,6 +1,7 @@
 import { hasStudioPackages } from "@fumiao/platform/studio-plugin-profile.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
 import { randomUUID } from "node:crypto";
+import { directorBasis } from "@fumiao/web-compat/director.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import {
@@ -26,6 +27,13 @@ import {
   type OriginalReference,
   type OriginalTask,
 } from "@fumiao/plugin-sdk/index.js";
+
+/** Snapshot resolved by the director before preparing the provider request. */
+export type CheckedDirectorVisual = {
+  expanded: Awaited<ReturnType<typeof expandOriginalPacks>>;
+  source?: NonNullable<Awaited<ReturnType<typeof originalTask>>>;
+};
+export type DirectorGenerationQuote = { amount: number; key: string; binding: string };
 
 export class OriginalGeneration {
   constructor(readonly p: Platform) {}
@@ -59,6 +67,24 @@ export class OriginalGeneration {
       this.submitOn(sql, user, value, selected),
     );
   }
+  async lockSubmission(sql: Sql, user: OriginalActor, workspaceId: string) {
+    // Global policy -> owner identity -> workspace wallet.
+    await sql.query("SELECT price_revision FROM studio_policy FOR SHARE");
+    await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+      "original-submit:" + user.id,
+    ]);
+    await sql.query(
+      "SELECT workspace_id FROM wallets WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId],
+    );
+  }
+
+  async quoteDirectorOn(sql: Sql, user: OriginalActor, value: OriginalDraft, selected: string, checked?: CheckedDirectorVisual) {
+    const result = await this.evaluateSubmission(sql, user, value, selected, null, undefined, { mode: "quote", checked });
+    if ("id" in result) throw new Error("Unexpected director quote result");
+    return result;
+  }
+
   /** Join the caller's transaction so a candidate batch and its links/holds are atomic.
    * The canvas wire contract also accepts price revisions outside the provider draft range. */
   async submitOn(
@@ -68,7 +94,24 @@ export class OriginalGeneration {
     selected?: string,
     priceRevision: number | bigint | null = value.price_revision,
     meta?: AcceptTaskMeta,
+    director?: { checked?: CheckedDirectorVisual; quote: DirectorGenerationQuote },
   ) {
+    const result = await this.evaluateSubmission(sql, user, value, selected, priceRevision, meta,
+      director && { mode: "submit", ...director });
+    if (!("id" in result)) throw new Error("Unexpected original submission result");
+    return result;
+  }
+
+  private async evaluateSubmission(
+    sql: Sql,
+    user: OriginalActor,
+    value: OriginalDraft,
+    selected: string | undefined,
+    priceRevision: number | bigint | null,
+    meta: AcceptTaskMeta | undefined,
+    director?: { mode: "quote" | "submit"; checked?: CheckedDirectorVisual; quote?: DirectorGenerationQuote },
+  ): Promise<{ id: number } | DirectorGenerationQuote> {
+    const quoting = director?.mode === "quote";
     const draft = structuredClone(value);
     try {
       const catalog = await one(
@@ -105,19 +148,10 @@ export class OriginalGeneration {
         "插件请求命名空间无效",
       );
       const uid = `${user.public_id}${namespace}-${draft.uid}`;
-      // Global policy -> owner identity -> workspace wallet. Configuration and
-      // queue admission remain stable through acceptance; no external calls.
-      await sql.query("SELECT price_revision FROM studio_policy FOR SHARE");
-      await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
-        "original-submit:" + user.id,
-      ]);
-      await sql.query(
-        "SELECT workspace_id FROM wallets WHERE workspace_id=$1 FOR UPDATE",
-        [workspace.id],
-      );
+      if (!quoting) await this.lockSubmission(sql, user, workspace.id);
       if (!draft.asset_packs.length) adapter.validate(draft, "before-retry");
       const packages = await hasStudioPackages(sql);
-      const previous = await one(
+      const previous = !quoting && await one(
         sql,
         packages
           ? `SELECT * FROM jobs WHERE deleted_at IS NULL AND (original_uid=$1 OR (owner_id=$2 AND catalog_id=$3 AND studio_client_uid=$4 AND EXISTS(SELECT 1 FROM studio_shared_models WHERE model_id=$3))) LIMIT 1`
@@ -125,6 +159,7 @@ export class OriginalGeneration {
         packages ? [uid, user.id, draft.model, draft.uid] : [uid],
       );
       if (previous) {
+        requireValue(!director, 409, "生成任务已存在，请恢复原提交回执");
         await new OriginalLibrary(this.p).access(
           sql,
           user,
@@ -136,7 +171,7 @@ export class OriginalGeneration {
       let snapshots: Awaited<ReturnType<typeof expandOriginalPacks>>["snapshots"] = [];
       if (draft.asset_packs.length) {
         await new OriginalIdentity(this.p).requireWorkspace(sql, user, Number(workspace.public_id));
-        const expanded = await expandOriginalPacks(sql, workspace.id, draft, true);
+        const expanded = director?.checked?.expanded ?? await expandOriginalPacks(sql, workspace.id, draft, !quoting);
         snapshots = expanded.snapshots;
         draft.prompt = expanded.prompt;
         draft.refs = expanded.refs;
@@ -171,7 +206,7 @@ export class OriginalGeneration {
         await sql.query(
           `SELECT m.*,c.plugin_id,c.plugin_version,c.config,c.enabled AS connection_enabled FROM models m JOIN connections c ON c.id=m.connection_id
           LEFT JOIN model_permissions p ON p.model_id=m.id AND p.workspace_id=$2
-          WHERE m.catalog_id=$1 ${(await hasStudioPackages(sql)) ? "AND studio_service_selected(m.catalog_id,c.id)" : ""} AND c.plugin_id=$3 AND c.plugin_version=$4 AND COALESCE(p.enabled,true)=true ORDER BY c.id FOR SHARE OF c`,
+          WHERE m.catalog_id=$1 ${(await hasStudioPackages(sql)) ? "AND studio_service_selected(m.catalog_id,c.id)" : ""} AND c.plugin_id=$3 AND c.plugin_version=$4 AND COALESCE(p.enabled,true)=true ORDER BY c.id ${quoting ? "" : "FOR SHARE OF c"}`,
           [
             draft.model,
             workspace.id,
@@ -228,7 +263,9 @@ export class OriginalGeneration {
           id,
           await one(
             sql,
-            "SELECT a.*,r.seconds,r.fps,r.has_audio,r.name FROM assets a LEFT JOIN asset_reference_media r ON r.asset_id=a.id WHERE a.public_id=$1 AND a.state='ready' FOR KEY SHARE OF a",
+            `SELECT a.*,r.seconds,r.fps,r.has_audio,r.name FROM assets a
+           LEFT JOIN asset_reference_media r ON r.asset_id=a.id
+           WHERE a.public_id=$1 AND a.state='ready' ${quoting ? "" : "FOR KEY SHARE OF a"}`,
             [id],
           ),
         );
@@ -272,7 +309,7 @@ export class OriginalGeneration {
           plan.referenceBytes.message,
         );
       const admit = async () => {
-        if (!plan.admission) return;
+        if (!plan.admission || quoting) return;
         await sql.query(
           "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
           ["original-admission:" + catalog.plugin_id],
@@ -293,6 +330,8 @@ export class OriginalGeneration {
           plan.admission.message,
         );
       };
+      const source = director?.checked?.source;
+      if (source) await new OriginalLibrary(this.p).access(sql, user, { kind: "job", row: source.row }, workspace.id);
       const prepared = await adapter.prepare(draft, {
         references,
         owner: {
@@ -300,10 +339,12 @@ export class OriginalGeneration {
           site: process.env.PUBLIC_URL || "http://localhost:3000",
         },
         parent: await this.task(sql, user, workspace.id, draft.parent),
-        source: await this.task(sql, user, workspace.id, plan.source, true),
+        source: director
+          ? source?.task
+          : await this.task(sql, user, workspace.id, plan.source, true),
         admit,
         capacity: async () => {
-          await capacity(sql, this.p.storage, JOB_RESERVE);
+          if (!quoting) await capacity(sql, this.p.storage, JOB_RESERVE);
         },
       });
       const frozen = preparedInputSchema.safeParse({
@@ -325,14 +366,28 @@ export class OriginalGeneration {
       );
       // Mandatory core checks also prevent an adapter from bypassing admission/capacity.
       await admit();
-      await capacity(sql, this.p.storage, JOB_RESERVE);
+      if (!quoting) await capacity(sql, this.p.storage, JOB_RESERVE);
       const quote = await new StudioCatalog(this.p.db).quote(
         sql,
         { ...model, catalog_id: draft.model },
         workspace.id,
         prepared.params,
         priceRevision ?? undefined,
+        !quoting,
       );
+      if (director) {
+        // The adapter may generate a random seed. Bind the actual selected service
+        // and authorized reference metadata and compare its resolved price tier.
+        const binding = await directorBasis({
+          model: model.id, plugin: model.plugin_id, version: model.plugin_version,
+          config: typeof model.config === "string" ? hash(model.config) : model.config,
+          references,
+        });
+        const actual = { amount: quote.amount, key: quote.key, binding };
+        if (quoting) return actual;
+        requireValue(director.quote?.binding === binding && director.quote.key === quote.key &&
+          director.quote.amount === quote.amount, 409, "模型连接、参考素材或积分报价已变更，请重新预检");
+      }
       const input = {
         modelId: model.id,
         key: randomUUID(),

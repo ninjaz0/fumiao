@@ -49,6 +49,7 @@ export async function canvasNodeMedia(
   project: string,
   node: CanvasNode,
   adoptedOnly = false,
+  fixedInput = false,
 ): Promise<string | null> {
   if (node.use_media) return node.media_id;
   if (adoptedOnly && !node.active_job) return null;
@@ -56,10 +57,12 @@ export async function canvasNodeMedia(
     sql,
     `${selectNodeJob}
     WHERE l.project_id=$1 AND l.node=$2 ${node.active_job ? "AND j.public_id=$3" : "ORDER BY l.id DESC LIMIT 1"}
-    ${adoptedOnly ? "AND j.kind='video' FOR SHARE OF j" : ""}`,
+    ${adoptedOnly ? "AND j.kind='video' FOR SHARE OF j" : ""}
+    ${fixedInput && node.active_job ? `AND j.state='completed'
+      AND j.workspace_id=(SELECT workspace_id FROM documents WHERE id=$1) FOR SHARE OF j` : ""}`,
     [project, node.id, ...(node.active_job ? [node.active_job] : [])],
   );
-  if (!row) return adoptedOnly ? null : node.media_id;
+  if (!row) return adoptedOnly || (fixedInput && node.active_job) ? null : node.media_id;
   return row.state === "completed" && row.result ? row.result : null;
 }
 type ShotVideo = {
@@ -599,11 +602,11 @@ export class OriginalCanvases {
         )),
     };
   }
-  private directorScript(sql: Sql, workspaceId: string, key: string) {
+  directorScript(sql: Sql, workspaceId: string, key: string, lock = true) {
     return one(
       sql,
       `SELECT workspace_id, revision FROM workspace_script_documents
-       WHERE public_id=$1 AND workspace_id=$2 AND entry_type='file' AND NOT deleted FOR SHARE`,
+       WHERE public_id=$1 AND workspace_id=$2 AND entry_type='file' AND NOT deleted ${lock ? "FOR SHARE" : ""}`,
       [key, workspaceId],
     );
   }

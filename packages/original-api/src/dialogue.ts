@@ -67,6 +67,7 @@ export async function resolveSpeakerVoice(
     voice_id?: string;
     instruction?: string;
   },
+  lock = false,
 ): Promise<ResolvedSpeakerVoice> {
   let matchedPackId: string | null = null;
   let profile: PackVoiceProfile | null = null;
@@ -116,6 +117,16 @@ export async function resolveSpeakerVoice(
     }
   }
 
+  if (lock && matchedPackId) {
+    await sql.query(
+      "SELECT id FROM documents WHERE workspace_id=$1 AND kind='pack' AND public_id=$2 FOR SHARE",
+      [workspaceId, matchedPackId],
+    );
+    const fresh = await resolveSpeakerVoice(sql, workspaceId, line);
+    requireValue(fresh.packId === matchedPackId, 409, "角色声线来源已变更，请重新预检");
+    return fresh;
+  }
+
   const baseInstruction = [profile?.emotion, profile?.instruction]
     .filter((s): s is string => Boolean(s && s.trim()))
     .join("，");
@@ -137,10 +148,11 @@ export async function resolveDialogueInput(
   workspaceId: string,
   line: DialogueLine,
   bindings: CanvasSubmissionModels,
+  lock = false,
 ) {
   const prompt = pythonStrip(line.text);
   requireValue(prompt, 400, "对白台词不能为空");
-  const voice = await resolveSpeakerVoice(sql, workspaceId, line);
+  const voice = await resolveSpeakerVoice(sql, workspaceId, line, lock);
   const params = {
     ...(voice.voiceId ? { voice: voice.voiceId } : {}),
     ...(voice.rate ? { rate: voice.rate } : {}),

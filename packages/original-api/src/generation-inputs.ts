@@ -17,7 +17,8 @@ export async function originalTask(
     sql,
     `SELECT j.*,(${ordinaryFlowSource}) AS ordinary_origin FROM jobs j
      WHERE j.public_id=$1 AND j.workspace_id=$2 AND j.deleted_at IS NULL
-     ${lock ? "FOR SHARE OF j" : ""}`,
+     ${lock ? `AND j.state='completed' AND j.kind='video' AND j.plugin_id='flow'
+       AND (${ordinaryFlowSource}) FOR SHARE OF j` : ""}`,
     [id, workspaceId],
   );
   if (!row) return;

@@ -28,6 +28,7 @@ export type CinematographySpec = {
 export type PrecheckStage = "image" | "video" | "narration" | "dialogue";
 export type PrecheckItem = {
   node_id: string;
+  line_id?: string;
   title: string;
   node_type: Kind;
   stage: PrecheckStage;
@@ -150,7 +151,7 @@ export type Project = Draft & {
 export type Job = {
   model_label?: string;
   batch?:{uid:string;index:number;count:number}|null;
-  inputs?: {instruction?:string;prompt?:string;refs?:string[];params?:Params;asset_packs?:{id:string;revision:number}[]};
+  inputs?: {director_basis?:string;instruction?:string;voice_id?:string;pack_id?:string;prompt?:string;refs?:string[];params?:Params;asset_packs?:{id:string;revision:number}[]};
   actual?: {width:number;height:number;duration?:number;flow_media_id?:string;flow_source_job?:number};
   id: number;
   canvas_node?: string;

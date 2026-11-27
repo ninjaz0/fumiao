@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { chromium, expect, type Browser, type Locator, type Response, type Route } from "@playwright/test";
 import sharp from "sharp";
-import { directorBasis, directorShotIds } from "../../packages/web-compat/src/director.js";
+import { directorBasis, directorScriptConflict, directorShotIds } from "../../packages/web-compat/src/director.js";
 import { newNode, type Project, type Studio } from "../../apps/web/canvas-editor/types.js";
 
 const externalOrigin = process.env.STUDIO_TEST_ORIGIN;
@@ -803,6 +803,65 @@ try {
     }
     await director.getByRole("button", { name: "确认素材", exact: true }).click();
     await expect(director.getByRole("button", { name: "素材已确认" })).toBeDisabled();
+    // Transport loss after confirmation leaves the original request recoverable across a reload.
+    const batchQuoteUrl = `**/api/canvases/${canvasA.id}/batch-precheck`;
+    const batchRunUrl = `**/api/canvases/${canvasA.id}/batch-runs`;
+    const batchRequests: unknown[] = [];
+    const quoteRequests: { expected_revision: number; director: { script_revision: number; use_confirmed_script: boolean; targets: unknown[] } }[] = [];
+    const quoteBatch = async (route: Route) => {
+      const payload = route.request().postDataJSON() as typeof quoteRequests[number];
+      quoteRequests.push(payload);
+      if (quoteRequests.length === 1) {
+        await route.fulfill({ status: 409, json: { detail: directorScriptConflict } });
+        return;
+      }
+      await route.fulfill({ status: 200, json: {
+        revision: payload.expected_revision, stale_revision: false, price_revision: 4, precheck_token: "browser-recovery-quote",
+        executable_keys: [`${secondId}:video`],
+        items: [{ node_id: secondId, title: "选中镜头", node_type: "video", stage: "video", model: "fixture", credits: 2, status: "ready", issues: [] }],
+        summary: { total: 1, ready: 1, warning: 0, blocked: 0, runnable: 1, total_credits: 2, available_credits: 10, sufficient: true },
+      } });
+    };
+    const runBatch = async (route: Route) => {
+      batchRequests.push(route.request().postDataJSON());
+      if (batchRequests.length === 1) {
+        await route.abort("failed");
+        return;
+      }
+      await route.fulfill({ status: 200, json: {
+        submitted: [{ node: secondId, stage: "video", job_id: 20001 }], skipped: [], total_credits: 2,
+      } });
+    };
+    await page.route(batchQuoteUrl, quoteBatch);
+    await page.route(batchRunUrl, runBatch);
+    try {
+      await director.getByRole("checkbox", { name: /^选择S01-02.*参与批量生成/ }).check();
+      await director.getByRole("button", { name: /^预检视频/ }).click();
+      const videoQuote = page.getByRole("dialog", { name: "视频生成预检" });
+      await videoQuote.getByRole("button", { name: /使用已确认的剧本版本 .* 预检/ }).click();
+      await videoQuote.getByRole("button", { name: /确认冻结 2 积分并提交/ }).click();
+      await expect(videoQuote.getByRole("button", { name: "恢复上次提交" })).toBeEnabled();
+      assert.deepEqual(quoteRequests.map(({ director }) => director.targets), [
+        [{ node_id: secondId, stage: "video" }], [{ node_id: secondId, stage: "video" }],
+      ]);
+      assert.deepEqual(quoteRequests.map(({ director }) => director.use_confirmed_script), [false, true]);
+      await page.reload();
+      await directorTab.click();
+      await director.getByRole("button", { name: "恢复上次提交" }).click();
+      const receipt = page.getByRole("dialog", { name: "导演台提交回执" });
+      await receipt.getByRole("button", { name: "恢复上次提交" }).click();
+      await expect(receipt.getByRole("heading", { name: "已接单 1 项 · 冻结 2 积分" })).toBeVisible();
+      await expect(receipt.getByRole("heading", { name: "跳过 0 项" })).toBeVisible();
+      assert.deepEqual(batchRequests[0], batchRequests[1]);
+      assert.equal(quoteRequests.length, 2, "recovery must not ask for a new quote");
+      console.log("PASS director batch browser: explicit confirmed-script version, original request replay after reload, and separate receipt summary");
+      await receipt.getByRole("button", { name: "重新预检并补跑" }).click();
+      await expect(receipt).toBeHidden();
+      await director.getByRole("button", { name: /^S01-02/ }).click();
+    } finally {
+      await page.unroute(batchQuoteUrl, quoteBatch);
+      await page.unroute(batchRunUrl, runBatch);
+    }
     const firstImage = await material.locator("img").getAttribute("src");
     await material.getByRole("button", { name: "定位素材节点" }).click();
     const candidateUrl = `**/api/canvases/${canvasA.id}/nodes/${s02Grid.id}/candidates`;

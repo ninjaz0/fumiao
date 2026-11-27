@@ -20,6 +20,16 @@ export type DirectorTarget = {
   line_id?: string;
 };
 
+export function directorTargetKey(target: DirectorTarget) {
+  return [target.node_id, target.stage, target.line_id].filter(Boolean).join(":");
+}
+
+export type DirectorBatchSelection = {
+  script_revision: number;
+  use_confirmed_script?: boolean;
+  targets: DirectorTarget[];
+};
+
 export type DirectorShotInputs = {
   revision: number;
   description: string;
@@ -29,6 +39,7 @@ export type DirectorShotInputs = {
   pack_texts: { id: string; text: string }[];
   visual_issues: string[];
   material_issues: string[];
+  audio_input_bases: Record<string, string>;
   voices: {
     speaker: string;
     model: string;
@@ -40,6 +51,7 @@ export type DirectorShotInputs = {
   }[];
 };
 
+export const directorBatchUnclaimed = "本次提交未创建回执。";
 export const directorScriptConflict = "主剧本已更新，请重新预览后同步。";
 
 export function directorShotIds(

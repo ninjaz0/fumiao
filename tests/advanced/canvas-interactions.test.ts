@@ -24,6 +24,56 @@ import {
   type Job,
 } from "../../apps/web/canvas-editor/types.js";
 
+import { directorGenerationTargets, directorAudioAttachment } from "../../apps/web/canvas-editor/director-batch.js";
+
+test("director quotes only missing or failed audio for the effective strategy", () => {
+  const shot = { ...newNode("video", 0, 0, 1), id: "shot" };
+  const dialogue = { ...shot, narration_text: "旁白", dialogue_lines: [
+    { id: "done", text: "你好", speaker: "甲", audio_job: 11 },
+    { id: "failed", text: "再见", speaker: "乙", audio_pending: 12 },
+  ] };
+  const runs = [
+    makeJob({ id: 11, kind: "audio", prompt: "你好", canvas_node: "dialogue:shot:done" }),
+    makeJob({ id: 12, kind: "audio", status: "failed", prompt: "再见", canvas_node: "dialogue:shot:failed" }),
+  ];
+  assert.deepEqual(directorGenerationTargets([dialogue], runs, "audio"), [
+    { node_id: "shot", stage: "dialogue", line_id: "failed" },
+  ]);
+  assert.deepEqual(directorGenerationTargets([{ ...shot, narration_text: "旁白" }], runs, "audio"), [
+    { node_id: "shot", stage: "narration" },
+  ]);
+  const newerVoices = { "shot:dialogue:done": "new" };
+  const previousVoices = [{ ...runs[0], inputs: { director_basis: "old" } }, runs[1]];
+  assert.deepEqual(directorGenerationTargets([dialogue], previousVoices, "audio", newerVoices).map(({ line_id }) => line_id),
+    ["done", "failed"]);
+  const original = { ...dialogue, audio_strategy: "keep_original" } as const;
+  assert.deepEqual(directorGenerationTargets([original], runs, "audio"), []);
+  assert.deepEqual(directorGenerationTargets([original], runs, "video"), [{ node_id: "shot", stage: "video" }]);
+});
+
+test("director recovers only the accepted dialogue link on the current canvas", () => {
+  const shot = { ...newNode("video", 0, 0, 1), id: "shot", dialogue_lines: [
+    { id: "done", text: "你好", speaker: "甲", audio_job: 11 },
+    { id: "failed", text: "再见", speaker: "乙", audio_pending: 12 },
+  ] };
+  const graph = { schemaVersion: 1, nodes: [shot], edges: [] } as Doc;
+  const accepted = { node: "shot", stage: "dialogue", job_id: 13, line_id: "failed" } as const;
+  const job = makeJob({ id: 13, kind: "audio", prompt: "再见", canvas_node: "dialogue:shot:failed", status: "queued" });
+  const attachment = directorAudioAttachment(graph, [accepted], [job]);
+  assert.deepEqual(attachment.document.nodes[0].dialogue_lines, [
+    shot.dialogue_lines[0], { ...shot.dialogue_lines[1], audio_pending: 13 },
+  ]);
+  assert.deepEqual(directorAudioAttachment(attachment.document, [accepted], [job]).document, attachment.document);
+  const edited = { ...graph, nodes: [{ ...shot, dialogue_lines: [shot.dialogue_lines[0], { ...shot.dialogue_lines[1], text: "新台词" }] }] };
+  assert.equal(directorAudioAttachment(edited, [accepted], [job]).document, edited);
+  const oldVoice = { ...job, inputs: { director_basis: "old" } };
+  const mismatch = directorAudioAttachment(graph, [accepted], [oldVoice], { "shot:dialogue:failed": "new" });
+  assert.equal(mismatch.document, graph);
+  assert.equal(mismatch.detached, 1);
+  const matching = directorAudioAttachment(graph, [accepted], [oldVoice], { "shot:dialogue:failed": "old" });
+  assert.deepEqual(matching.document, attachment.document);
+});
+
 function makeJob(overrides: Partial<Job>): Job {
   return {
     id: 1,

@@ -1,5 +1,5 @@
 import type { CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
-import { canvasTailSourceId, directorBasis, directorShotIds, type DirectorShotInputs } from "@fumiao/web-compat/director.js";
+import { canvasTailSourceId, directorBasis, directorShotIds, type DirectorBatchSelection, type DirectorShotInputs, type DirectorTarget } from "@fumiao/web-compat/director.js";
 import { PluginNodeForm, PluginNodePorts, PluginNodeOutputs } from "./PluginNode";
 import {
   evaluateFormConstraints,
@@ -90,6 +90,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { api, upload, downloadJSON, ApiError, workspaceURL } from "./api";
+import { directorAudioAttachment, type BatchReceipt, type PendingDirectorBatch } from "./director-batch";
 import { useDocument } from "./useDocument";
 import {
   newNode,
@@ -921,7 +922,26 @@ export function CanvasWorkspace({
     title?: string;
     stages?: PrecheckStage[];
     lockedStages?: boolean;
+    director?: DirectorBatchSelection | "recover";
   } | null>(null);
+  const directorBatchKey = `fm-director-batch:${initial.me.id}:${project.workspace}:${project.id}`;
+  const [directorPending, setDirectorPending] = useState<PendingDirectorBatch | null>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(directorBatchKey) ?? "null") as PendingDirectorBatch | null;
+    } catch {
+      return null;
+    }
+  });
+  const saveDirectorBatch = (pending: PendingDirectorBatch | null) => {
+    try {
+      if (pending) localStorage.setItem(directorBatchKey, JSON.stringify(pending));
+      else localStorage.removeItem(directorBatchKey);
+    } catch {
+      // A request saved before submission can still be replayed if receipt storage fails.
+      if (pending && !pending.receipt && !pending.rejected) throw new Error("浏览器无法保存提交号，请允许本地存储后重试。");
+    }
+    setDirectorPending(pending);
+  };
   const [gridCropTarget, setGridCropTarget] = useState<{
     nodeId: string;
     mediaId: string;
@@ -2539,11 +2559,83 @@ export function CanvasWorkspace({
       edit(source.id, { use_media: true, media_id: media, active_job: null });
     }
   };
-  const precheckDirectorImage = async (nodeId: string) => {
+  const precheckDirector = async (targets: DirectorTarget[], title = "导演台生成预检") => {
+    if (directorPending) {
+      setPrecheckTarget({ nodeIds: [], title: "导演台提交回执", lockedStages: true, director: "recover" });
+      return;
+    }
     await doc.flush();
+    const production = doc.ref.current.document.director;
+    if (!production) throw new Error("本集片单已移除。");
+    setPrecheckTarget({
+      nodeIds: [], title, lockedStages: true,
+      director: { script_revision: production.script_revision, targets },
+    });
+  };
+  const precheckDirectorImage = async (nodeId: string) => {
     const node = doc.ref.current.document.nodes.find((item) => item.id === nodeId && item.type === "image");
     if (!node) throw new Error("参考图节点已移除。");
-    setPrecheckTarget({ nodeIds: [nodeId], title: `参考图预检 · ${node.title}`, stages: ["image"], lockedStages: true });
+    await precheckDirector([{ node_id: node.id, stage: "image" }], `参考图预检 · ${node.title}`);
+  };
+  const attachDirectorReceipt = async (receipt: BatchReceipt) => {
+    if (!receipt.submitted.some((item) => item.stage === "narration" || item.stage === "dialogue")) {
+      await fetchRuns();
+      return {};
+    }
+    const { runs: latest } = await api<{ runs: Job[] }>(`/api/canvases/${project.id}/runs`);
+    const revision = await doc.flush();
+    const document = doc.ref.current.document;
+    const ids = [...new Set(receipt.submitted.filter((item) =>
+      (item.stage === "narration" || item.stage === "dialogue") && document.director?.shot_ids.includes(item.node),
+    ).map(({ node }) => node))];
+    const checked = await Promise.all(ids.map(readDirectorInputs));
+    if (checked.some((input) => input.revision !== revision) || document !== doc.ref.current.document) {
+      throw new Error("画布版本已变更，请重新载入");
+    }
+    const bases = Object.assign({}, ...checked.map((input) => input.audio_input_bases)) as Record<string, string>;
+    const attachment = directorAudioAttachment(document, receipt.submitted, latest, bases);
+    if (attachment.document !== document) {
+      changeDirectorDocument(() => attachment.document);
+      await doc.flush();
+    }
+    await fetchRuns();
+    return attachment.detached
+      ? { note: `${attachment.detached} 项音轨的镜头、台词或设置已变更，原任务仍可在画布记录中查看。` }
+      : {};
+  };
+  const recheckDirectorReceipt = async (pending: PendingDirectorBatch) => {
+    await doc.flush();
+    const document = doc.ref.current.document;
+    const production = document.director;
+    if (!production) {
+      setPrecheckTarget(null);
+      return;
+    }
+    const { runs: latest } = await api<{ runs: Job[] }>(`/api/canvases/${project.id}/runs`);
+    const receipt = pending.receipt;
+    const matches = (target: DirectorTarget, item: BatchReceipt["submitted"][number] | BatchReceipt["skipped"][number]) =>
+      target.node_id === item.node && target.stage === item.stage && target.line_id === item.line_id;
+    const targets = pending.request.director.targets.filter((target) => {
+      if (!document.nodes.some((node) => node.id === target.node_id)) return false;
+      if (target.stage !== "image" && !production.shot_ids.includes(target.node_id)) return false;
+      if (!receipt || receipt.skipped.some((item) => matches(target, item))) return true;
+      const accepted = receipt.submitted.find((item) => matches(target, item));
+      return accepted && latest.some((job) => job.id === accepted.job_id && (job.status === "failed" || job.status === "cancelled"));
+    });
+    if (!targets.length) {
+      setPrecheckTarget(null);
+      notify("此回执中没有需要补跑的任务。");
+      return;
+    }
+    setPrecheckTarget({
+      nodeIds: [], title: "导演台补跑预检", lockedStages: true,
+      director: { script_revision: production.script_revision, targets },
+    });
+  };
+  const describeDirectorReceiptItem = (item: { node: string; line_id?: string }) => {
+    const node = doc.ref.current.document.nodes.find((entry) => entry.id === item.node);
+    const line = item.line_id && node?.dialogue_lines?.find((entry) => entry.id === item.line_id);
+    return [node?.title || item.node, line && (line.speaker || line.text)].filter(Boolean).join(" · ");
   };
   const importAssets = () => {
     const assets = assetItems.filter((a) => assetSelection.has(a.id));
@@ -5617,6 +5709,14 @@ export function CanvasWorkspace({
             title={precheckTarget.title}
             initialStages={precheckTarget.stages}
             lockedStages={precheckTarget.lockedStages}
+            director={precheckTarget.director ? {
+              selection: precheckTarget.director === "recover" ? undefined : precheckTarget.director,
+              pending: directorPending,
+              onPending: saveDirectorBatch,
+              onAttach: attachDirectorReceipt,
+              onRecheck: recheckDirectorReceipt,
+              describe: describeDirectorReceiptItem,
+            } : undefined}
             onSubmitted={async (res) => {
               // F010/F027 (#9): Write back submitted narration_pending & dialogue_lines[].audio_pending
               // so completed batch audio jobs promote cleanly for playback and storyboard export.
@@ -5783,6 +5883,9 @@ export function CanvasWorkspace({
             openCanvasNode(image.id);
           }}
           onPrecheckImage={precheckDirectorImage}
+          onPrecheck={precheckDirector}
+          hasPendingBatch={Boolean(directorPending)}
+          onRecoverBatch={() => setPrecheckTarget({ nodeIds: [], title: "导演台提交回执", lockedStages: true, director: "recover" })}
           onChoosePack={setPackPicker}
           onFixTailFrame={fixDirectorTailFrame}
         />

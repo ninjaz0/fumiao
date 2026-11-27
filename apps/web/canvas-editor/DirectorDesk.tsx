@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, BookOpen, Crosshair, ListVideo, Plus, X } from "lucide-react";
-import { canvasTailSourceId, directorBasis, directorShotIds, type DirectorShotInputs } from "@fumiao/web-compat/director.js";
+import { canvasTailSourceId, directorAudioTargets, directorBasis, directorShotIds, type DirectorShotInputs, type DirectorTarget } from "@fumiao/web-compat/director.js";
+import { directorGenerationTargets } from "./director-batch";
 import { scriptApi, type ScriptDocumentDetail } from "./script-api";
 import {
   directorShotDescription,
@@ -33,6 +34,9 @@ type DirectorDeskProps = {
   onPinImage: (edge: CanvasEdge, media: string) => void;
   onAddImage: (shotId: string) => void;
   onPrecheckImage: (nodeId: string) => Promise<void>;
+  onPrecheck: (targets: DirectorTarget[], title: string) => Promise<void>;
+  hasPendingBatch: boolean;
+  onRecoverBatch: () => void;
   onChoosePack: (nodeId: string) => void;
   onFixTailFrame: (sourceId: string, nodeId: string) => Promise<void>;
 };
@@ -58,6 +62,9 @@ export function DirectorDesk({
   onPinImage,
   onAddImage,
   onPrecheckImage,
+  onPrecheck,
+  hasPendingBatch,
+  onRecoverBatch,
   onChoosePack,
   onFixTailFrame,
 }: DirectorDeskProps) {
@@ -71,6 +78,7 @@ export function DirectorDesk({
   const [loadedSource, setLoadedSource] = useState<ScriptDocumentDetail>();
   const [sourceErrorId, setSourceErrorId] = useState<string>();
   const [manualId, setManualId] = useState("");
+  const [selectedShots, setSelectedShots] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [confirmedOrder, setConfirmedOrder] = useState<string>();
@@ -204,10 +212,32 @@ export function DirectorDesk({
   };
 
   const activeIndex = order.indexOf(node?.id ?? "");
-  const orderConfirmed = canvasSaved && !error && Boolean(production?.order_basis && production.order_basis === confirmedOrder);
+  const orderConfirmed = canvasSaved && Boolean(production?.order_basis && production.order_basis === confirmedOrder);
   const savedState = production?.shots?.find((shot) => shot.node_id === nodeId);
   const storyConfirmed = Boolean(inputs?.story_basis && inputs.story_basis === savedState?.story_basis);
   const materialConfirmed = Boolean(inputs?.material_basis && inputs.material_basis === savedState?.material_basis);
+  const selectedIds = order.filter((id) => selectedShots.includes(id));
+  const selected = (selectedIds.length ? selectedIds : node ? [node.id] : [])
+    .map((id) => videoNodes.find((item) => item.id === id))
+    .filter((shot) => shot !== undefined);
+  // The current shot also has a live inspection. Other selected shots are
+  // validated against their current input in the server's per-item precheck.
+  const eligible = selected.filter((shot) => {
+    if (shot.id === nodeId) return storyConfirmed && materialConfirmed;
+    const confirmation = production?.shots?.find((item) => item.node_id === shot.id);
+    return Boolean(confirmation?.story_basis && confirmation.material_basis);
+  });
+  const videoTargets = directorGenerationTargets(eligible, runs, "video");
+  const audioShots = eligible.filter((shot) => directorAudioTargets(shot).length);
+  const audioTargets = directorGenerationTargets(audioShots, runs, "audio", inputs?.audio_input_bases);
+  const precheckAudio = async () => {
+    const checked = await Promise.all(audioShots.map((shot) => onReadInputs(shot.id)));
+    if (checked.some((item) => item.revision !== revision)) throw new Error("画布版本已变更，请重新载入。");
+    const bases = Object.assign({}, ...checked.map((item) => item.audio_input_bases)) as Record<string, string>;
+    const targets = directorGenerationTargets(audioShots, runs, "audio", bases);
+    if (!targets.length) throw new Error("所选镜头的音频已就绪或正在生成。");
+    await onPrecheck(targets, "音频生成预检");
+  };
   const tailSource = node?.tail_inherited && videoNodes.find((item) => item.id === canvasTailSourceId(document, node.id));
   const imageRefs = document.edges.flatMap((edge) => {
     if (edge.target !== nodeId) return [];
@@ -237,11 +267,14 @@ export function DirectorDesk({
             <p className="fm-director-note">主剧本有新的已保存版本，可更新本集分镜。</p>
           )}
         </div>
-        {production && (
-          <button type="button" className="secondary" onClick={() => onUpdateScript(production.script_id)}>
-            <BookOpen size={14} /> 更新本集分镜
-          </button>
-        )}
+        <div className="fm-director-actions">
+          {hasPendingBatch && <button type="button" className="secondary" onClick={onRecoverBatch}>恢复上次提交</button>}
+          {production && (
+            <button type="button" className="secondary" onClick={() => onUpdateScript(production.script_id)}>
+              <BookOpen size={14} /> 更新本集分镜
+            </button>
+          )}
+        </div>
       </header>
       {!production ? (
         <div className="fm-director-empty">
@@ -256,6 +289,15 @@ export function DirectorDesk({
               {order.map((id) => {
                 const shot = videoNodes.find((item) => item.id === id);
                 return shot && <li key={id}>
+                  <input
+                    type="checkbox"
+                    aria-label={`选择${shot.title}参与批量生成`}
+                    checked={selectedIds.includes(id)}
+                    onChange={(event) => {
+                      const included = event.target.checked;
+                      setSelectedShots((ids) => included ? [...ids, id] : ids.filter((item) => item !== id));
+                    }}
+                  />
                   <button type="button" aria-pressed={shot.id === node?.id} onClick={() => onSelectShot(id)}>
                     <span>{shot.title}</span>
                     <small>{shot.extra_params?.script_doc_id === production.script_id ? "主剧本" : "手动纳入"}</small>
@@ -324,7 +366,7 @@ export function DirectorDesk({
                         <div className="fm-director-actions">
                           {media && !fixed && <button type="button" className="secondary" onClick={() => void apply(() => onPinImage(edge, media))}>固定此图</button>}
                           {!source.extension && <button type="button" className="secondary" onClick={() => onChooseImage(source.id, null)}>{media ? "替换图片" : "选择或上传图片"}</button>}
-                          {!source.extension && <button type="button" className="secondary" disabled={pending} onClick={() => void apply(() => onPrecheckImage(source.id))}>预检参考图</button>}
+                          {source.type === "image" && <button type="button" className="secondary" disabled={pending || !orderConfirmed || !storyConfirmed} onClick={() => void apply(() => onPrecheckImage(source.id))}>预检参考图</button>}
                           <button type="button" className="secondary" onClick={() => onFocusCanvas(source.id)}>定位素材节点</button>
                         </div>
                       </div>
@@ -364,6 +406,21 @@ export function DirectorDesk({
                     <button type="button" className="primary" disabled={!inputs?.material_basis || pending || materialConfirmed}
                       onClick={() => inputs?.material_basis && void apply(() => onConfirmShot(node.id, "material_basis", inputs.material_basis!))}>
                       {materialConfirmed ? "素材已确认" : savedState?.material_basis && inputs ? "素材已变更，重新确认" : "确认素材"}
+                    </button>
+                  </div>
+                </section>
+                <section className="fm-director-card">
+                  <h4>预检与生成</h4>
+                  {!orderConfirmed && <p>保存并确认本集片单顺序后可预检。</p>}
+                  {orderConfirmed && selected.length !== eligible.length && <p>所选镜头中有 {selected.length - eligible.length} 镜待确认分镜或素材。</p>}
+                  <div className="fm-director-actions">
+                    <button type="button" className="primary" disabled={pending || !orderConfirmed || !videoTargets.length}
+                      onClick={() => void apply(() => onPrecheck(videoTargets, "视频生成预检"))}>
+                      预检视频{videoTargets.length ? `（${videoTargets.length} 镜）` : ""}
+                    </button>
+                    <button type="button" className="secondary" disabled={pending || !orderConfirmed || !audioShots.length}
+                      onClick={() => void apply(precheckAudio)}>
+                      预检待生成音频{audioTargets.length ? `（${audioTargets.length} 项）` : ""}
                     </button>
                   </div>
                 </section>

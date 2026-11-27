@@ -80,6 +80,7 @@
   overflow: auto;
 }
 
+.fm-director-list li { display: flex; align-items: center; gap: 6px; }
 .fm-director-list li + li { margin-top: 5px; }
 
 .fm-director-list li button {

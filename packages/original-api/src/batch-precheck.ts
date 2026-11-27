@@ -1,23 +1,29 @@
+import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
+import { directorAudioTargets, directorBasis, directorScriptConflict, directorShotIds, directorTargetKey, type DirectorBatchSelection, type DirectorTarget } from "@fumiao/web-compat/director.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { evaluateBudgetImpact } from "@fumiao/platform/budgets.js";
 import type { Platform } from "@fumiao/platform/platform.js";
-import { one } from "@fumiao/platform/db.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { ReferencePacks } from "@fumiao/platform/packs.js";
 import { DomainError, hash, requireValue } from "@fumiao/platform/security.js";
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
-import { OriginalCanvases } from "./canvases.js";
+import { OriginalCanvases, canvasConflict } from "./canvases.js";
 import { resolveDialogueInput } from "./dialogue.js";
-import { canvasRawPrompt, inspectDirectorShotInputs, resolveCanvasSources } from "./director-inputs.js";
+import { canvasRawPrompt, inspectDirectorShotInputs, resolveCanvasSources, resolveDirectorInput } from "./director-inputs.js";
 import {
   batchQuoteFields,
+  canvasBatchFields,
   canvasBatchPrecheckFields,
   parseCanvasDocument,
+  type CanvasDocument,
   type CanvasNode,
 } from "./canvas-draft.js";
 import { canvasDocumentJson } from "./canvas-values.js";
 import { parseBody } from "./validation.js";
+import { OriginalGeneration, type DirectorGenerationQuote } from "./generation.js";
+import { parseDraft } from "./drafts.js";
 
 const ACTIVE_STATES = [
   "queued",
@@ -32,6 +38,7 @@ export type PrecheckHealth = "ready" | "warning" | "blocked";
 
 export type PrecheckItem = {
   node_id: string;
+  line_id?: string;
   title: string;
   node_type: CanvasNode["type"];
   stage: PrecheckStage;
@@ -40,6 +47,80 @@ export type PrecheckItem = {
   status: PrecheckHealth;
   issues: string[];
 };
+
+export type DirectorTicketItem = { basis: string; quote: DirectorGenerationQuote };
+export type DirectorTicket = Record<string, DirectorTicketItem>;
+
+export function directorLinkNode(target: DirectorTarget) {
+  if (target.stage === "dialogue") return `dialogue:${target.node_id}:${target.line_id}`;
+  if (target.stage === "narration") return `voice:${target.node_id}`;
+  return target.node_id;
+}
+
+export function normalizeDirectorSelection(selection: DirectorBatchSelection): DirectorBatchSelection {
+  for (const target of selection.targets) {
+    requireValue((target.stage === "dialogue") === Boolean(target.line_id), 400, "仅对白生成可以选择对应的台词");
+  }
+  return {
+    script_revision: selection.script_revision,
+    use_confirmed_script: selection.use_confirmed_script === true,
+    targets: [...new Map(selection.targets.map((target) => [directorTargetKey(target), target])).values()],
+  };
+}
+
+export function canvasBatchRequestHash(body: { node_ids: string[]; stages: PrecheckStage[]; director?: DirectorBatchSelection }) {
+  if (body.director) {
+    return hash(JSON.stringify(body.director));
+  }
+  return hash(JSON.stringify({
+    node_ids: [...new Set(body.node_ids)].sort(),
+    stages: [...new Set(body.stages)].sort(),
+  }));
+}
+
+export async function validateDirectorSelection(
+  sql: Sql,
+  canvases: OriginalCanvases,
+  project: { workspace_id: string; revision: number },
+  document: CanvasDocument,
+  revision: number | bigint | null,
+  selection: DirectorBatchSelection,
+  lock = false,
+) {
+  requireValue(revision === project.revision, 409, canvasConflict);
+  const production = document.director;
+  requireValue(production?.script_revision === selection.script_revision, 409, "已同步剧本版本不一致，请重新预检");
+  const script = await canvases.directorScript(sql, project.workspace_id, production.script_id, lock);
+  requireValue(script && script.revision >= production.script_revision, 409, "主剧本文档不存在或版本不可用");
+  requireValue(script.revision === production.script_revision || selection.use_confirmed_script, 409, directorScriptConflict);
+  const ordered = directorShotIds(document.shots ?? [], production);
+  requireValue(ordered.length > 0 && ordered.length === production.shot_ids.length &&
+    production.order_basis === await directorBasis(ordered), 409, "请先保存并确认本集片单顺序");
+  return { production, ordered };
+}
+
+export function directorTargetShots(document: CanvasDocument, ordered: string[], target: DirectorTarget) {
+  const node = document.nodes.find(({ id }) => id === target.node_id);
+  requireValue(node && node.type === (target.stage === "image" ? "image" : "video"), 400, "生成阶段与节点类型不匹配");
+  if (target.stage === "image") {
+    const shots = document.edges.filter((edge) =>
+      edge.source === node.id && ordered.includes(edge.target) && canvasSourceKind(node, edge.sourcePort) === "image",
+    ).map(({ target: id }) => id);
+    requireValue(shots.length, 400, "参考图与本集镜头没有关联");
+    return { node, shots };
+  }
+  requireValue(ordered.includes(node.id), 400, "镜头不属于本集");
+  if (target.stage !== "video") {
+    requireValue(directorAudioTargets(node).some((item) => directorTargetKey(item) === directorTargetKey(target)),
+      400, "音频目标不符合本镜策略或台词不属于本镜");
+  }
+  return { node, shots: [node.id] };
+}
+
+export function directorDraft(input: Awaited<ReturnType<typeof resolveDirectorInput>>, catalog: Awaited<ReturnType<StudioCatalog["catalog"]>>, uid: string) {
+  return parseDraft(input.stage === "image" || input.stage === "video" ? input.stage : "audio",
+    { ...input.payload, uid }, catalog);
+}
 
 export function expandGroupNodeIds(
   nodes: CanvasNode[],
@@ -217,23 +298,127 @@ export class OriginalBatchPrecheck {
     });
   }
 
+  private async directorPrecheck(user: OriginalActor, projectKey: string, revision: number | null, selection: DirectorBatchSelection, requestHash: string) {
+    const snapshot = await this.p.db.transaction(async (sql) => {
+      await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      const project = await this.canvases.project(sql, user, projectKey);
+      const document = parseCanvasDocument(canvasDocumentJson(project.document));
+      const { production, ordered } = await validateDirectorSelection(sql, this.canvases, { workspace_id: project.workspace_id, revision: project.revision }, document, revision, selection);
+      const bindings = await CanvasSubmissionModels.read(sql, {
+        strict: false, workspaceId: project.workspace_id, vault: this.p.vault, registry: this.p.registry,
+      });
+      const catalog = await this.catalog.catalog(sql);
+      const generation = new OriginalGeneration(this.p);
+      const confirmations = new Map(production.shots?.map((shot) => [shot.node_id, shot]));
+      const inputs = new Map<string, Awaited<ReturnType<typeof inspectDirectorShotInputs>>>();
+      const inspect = async (id: string) => {
+        const cached = inputs.get(id);
+        if (cached) return cached;
+        const shot = document.nodes.find((node) => node.id === id)!;
+        const current = await inspectDirectorShotInputs(sql, { id: project.id, workspace_id: project.workspace_id }, document, shot, bindings);
+        inputs.set(id, current);
+        return current;
+      };
+      const imageIds = new Set(selection.targets.filter(({ stage }) => stage === "image").map(({ node_id }) => node_id));
+      const busyRows = await sql.query<{ node: string }>(
+        `SELECT DISTINCT l.node FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id AND j.deleted_at IS NULL
+         WHERE l.project_id=$1 AND j.state=ANY($2::text[]) AND l.node=ANY($3::text[])`,
+        [project.id, ACTIVE_STATES, selection.targets.map(directorLinkNode)],
+      );
+      const busy = new Set(busyRows.rows.map(({ node }) => node));
+      const directorItems: DirectorTicket = {};
+      const items: PrecheckItem[] = [];
+      for (const target of selection.targets) {
+        const { node, shots } = directorTargetShots(document, ordered, target);
+        const item: PrecheckItem = {
+          ...target, title: node.title || node.id, node_type: node.type, model: "", credits: 0, status: "ready", issues: [],
+        };
+        const line = node.dialogue_lines?.find(({ id }) => id === target.line_id);
+        if (line) item.title += ` · ${line.speaker ? line.speaker + "：" : ""}${line.text}`;
+        try {
+          let storyConfirmed = false;
+          for (const id of shots) {
+            const current = await inspect(id);
+            if (current.story_basis && current.story_basis === confirmations.get(id)?.story_basis) storyConfirmed = true;
+          }
+          requireValue(storyConfirmed, 409, "请先确认关联镜头的分镜");
+          if (target.stage === "video") {
+            requireValue(!document.edges.some((edge) => edge.target === node.id && imageIds.has(edge.source)),
+              409, "请先生成并固定本镜参考图，再重新预检视频");
+          }
+          if (target.stage !== "image") {
+            const current = await inspect(node.id);
+            requireValue(current.material_basis && current.material_basis === confirmations.get(node.id)?.material_basis,
+              409, [...current.visual_issues, ...current.material_issues].join("；") || "素材或声线已变更，请重新确认本镜素材");
+          }
+          requireValue(!busy.has(directorLinkNode(target)), 409, "此项正在生成，请等待任务结束");
+          const input = await resolveDirectorInput(sql, { id: project.id, workspace_id: project.workspace_id }, document, target, bindings);
+          item.model = input.payload.model;
+          const quote = await generation.quoteDirectorOn(
+            sql, user, directorDraft(input, catalog, "00000000-0000-4000-8000-000000000000"),
+            String(project.workspace_number), "checked" in input ? input.checked : undefined,
+          );
+          directorItems[directorTargetKey(target)] = { basis: input.basis, quote };
+          item.credits = quote.amount;
+        } catch (error) {
+          if (!(error instanceof DomainError)) throw error;
+          item.status = "blocked";
+          item.issues.push(error.message);
+        }
+        items.push(item);
+      }
+      const wallet = await one(sql, "SELECT balance,held FROM wallets WHERE workspace_id=$1", [project.workspace_id]);
+      const availableCredits = Number(wallet?.balance ?? 0) - Number(wallet?.held ?? 0);
+      const price = await one(sql, "SELECT price_revision FROM studio_policy");
+      const priceRevision = Number(price?.price_revision ?? 1);
+      const totalCredits = items.reduce((sum, item) => sum + item.credits, 0);
+      const budget = await evaluateBudgetImpact(sql, { workspaceId: project.workspace_id, projectId: project.id, amount: totalCredits });
+      const executableKeys = Object.keys(directorItems);
+      const precheckToken = await directorBasis({
+        user: user.id, project: project.id, requestHash, revision, priceRevision, directorItems,
+      });
+      return {
+        projectId: project.id,
+        directorItems,
+        result: {
+          revision: Number(project.revision), stale_revision: false, price_revision: priceRevision,
+          precheck_token: precheckToken, executable_keys: executableKeys, items,
+          summary: {
+            total: items.length, ready: executableKeys.length, warning: 0,
+            blocked: items.length - executableKeys.length, runnable: executableKeys.length,
+            total_credits: totalCredits, available_credits: availableCredits, sufficient: availableCredits >= totalCredits,
+            budget_blocked: budget.blocked, budget_blocks: budget.blocks, budget_warnings: budget.warnings,
+          },
+        },
+      };
+    });
+    const { result } = snapshot;
+    await this.p.db.query(
+      `INSERT INTO canvas_precheck_tickets(
+         token,owner_id,project_id,revision,price_revision,request_hash,executable_keys,total_credits,budget_blocked,director_items
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+       ON CONFLICT (token) DO UPDATE SET created_at=now(),budget_blocked=EXCLUDED.budget_blocked`,
+      [result.precheck_token, user.id, snapshot.projectId, result.revision, result.price_revision, requestHash,
+        result.executable_keys, result.summary.total_credits, result.summary.budget_blocked, JSON.stringify(snapshot.directorItems)],
+    );
+    return result;
+  }
+
   /**
    * F010 + F007: Canvas node/group Precheck (`POST /api/canvases/:key/batch-precheck`).
    * Validates prompts, busy jobs, asset pack revisions, ref limits, model permissions,
    * and exact credit cost in a single lock-free REPEATABLE READ READ ONLY transaction.
    */
   async precheckCanvas(user: OriginalActor, projectKey: string, value: unknown) {
-    const body = parseBody(value, canvasBatchPrecheckFields, true) as {
+    const body = parseBody(value, canvasBatchFields(value, canvasBatchPrecheckFields), true) as {
       expected_revision: number | null;
       node_ids: string[];
       stages: PrecheckStage[];
+      director?: DirectorBatchSelection;
     };
-    const requestHash = hash(
-      JSON.stringify({
-        node_ids: [...new Set(body.node_ids)].sort(),
-        stages: [...new Set(body.stages)].sort(),
-      }),
-    );
+    if (body.director) body.director = normalizeDirectorSelection(body.director);
+    const requestHash = canvasBatchRequestHash(body);
+    if (body.director) return this.directorPrecheck(user, projectKey, body.expected_revision, body.director, requestHash);
     const snapshot = await this.p.db.transaction(async (sql) => {
       await sql.query(
         "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",

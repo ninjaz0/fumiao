@@ -7,6 +7,7 @@ import {
   canvasTailSourceId,
   directorAudioTargets,
   directorBasis,
+  directorTargetKey,
   type DirectorShotInputs,
   type DirectorTarget,
 } from "@fumiao/web-compat/director.js";
@@ -56,6 +57,7 @@ export async function resolveCanvasSources(
   projectId: string,
   document: CanvasDocument,
   nodeId: string,
+  lock = false,
 ) {
   const nodes = new Map(document.nodes.map((node) => [node.id, node]));
   const sources: {
@@ -71,7 +73,7 @@ export async function resolveCanvasSources(
     const output = edge.sourcePort && node.extension?.result?.[edge.sourcePort];
     const value = kind === "text"
       ? pythonStrip(node.extension ? output || "" : node.text)
-      : node.extension ? output || null : await canvasNodeMedia(sql, projectId, node);
+      : node.extension ? output || null : await canvasNodeMedia(sql, projectId, node, false, lock);
     sources.push({ node, kind, value });
   }
   return sources;
@@ -204,7 +206,7 @@ export async function resolveDirectorInput(
   if (target.stage === "dialogue") {
     const line = node.dialogue_lines?.find(({ id }) => id === target.line_id);
     requireValue(line, 400, "未找到可合成的对白台词");
-    const input = await resolveDialogueInput(sql, project.workspace_id, line, bindings ?? await CanvasSubmissionModels.read(sql));
+    const input = await resolveDialogueInput(sql, project.workspace_id, line, bindings ?? await CanvasSubmissionModels.read(sql), options?.lock);
     requireValue(!line.pack_id || input.voice.packId === line.pack_id, 409, `对白“${line.speaker || line.id}”的角色素材包不可用，请重新选择`);
     const { model, instruction, params } = input.payload;
     const material = { target, speaker: line.speaker, pack: input.voice.packId, model, instruction, params };
@@ -228,7 +230,8 @@ export async function resolveDirectorInput(
   }
   const base = await resolveCanvasVisualBase(
     sql, project.id, document, node,
-    bindings ?? await CanvasSubmissionModels.read(sql), options?.sources,
+    bindings ?? await CanvasSubmissionModels.read(sql),
+    options?.sources ?? (options?.lock ? await resolveCanvasSources(sql, project.id, document, node.id, true) : undefined),
   );
   const payload = canvasVisualPayload(node, base);
   const native = "h3" in payload ? payload.h3 : undefined;
@@ -265,7 +268,9 @@ export async function resolveDirectorInput(
   let referenceMedia: DirectorShotInputs["references"] = [];
   if (mediaToCheck.length) {
     const { rows } = await sql.query<{ id: string; mime: string }>(
-      "SELECT public_id AS id,mime FROM assets WHERE public_id=ANY($1::text[]) AND workspace_id=$2 AND state='ready'",
+      `SELECT public_id AS id,mime FROM assets
+       WHERE public_id=ANY($1::text[]) AND workspace_id=$2 AND state='ready'
+       ORDER BY id ${options?.lock ? "FOR SHARE" : ""}`,
       [mediaToCheck, project.workspace_id],
     );
     requireValue(rows.length === mediaToCheck.length, 409, "有参考素材已删除或不可访问，请重新选择");
@@ -284,6 +289,7 @@ export async function resolveDirectorInput(
   return {
     stage: target.stage,
     payload,
+    checked: { expanded, source: flowSource && { row: flowSource.row, task: flowSource.task } },
     sources: base.sources,
     references: referenceMedia,
     pack_texts: expanded.texts,
@@ -314,7 +320,7 @@ export async function inspectDirectorShotInputs(
 ): Promise<Omit<DirectorShotInputs, "revision">> {
   const result: Omit<DirectorShotInputs, "revision"> = {
     description: "", story_basis: null, material_basis: null,
-    references: [], pack_texts: [], visual_issues: [], material_issues: [], voices: [],
+    references: [], pack_texts: [], visual_issues: [], material_issues: [], voices: [], audio_input_bases: {},
   };
   const sources = await resolveCanvasSources(sql, project.id, document, node.id);
   const texts = sources.filter(({ kind }) => kind === "text");
@@ -350,6 +356,7 @@ export async function inspectDirectorShotInputs(
     try {
       const input = await resolveDirectorInput(sql, project, document, target, models);
       materials.push(input.material);
+      result.audio_input_bases[directorTargetKey(target)] = input.basis;
       if (input.stage === "dialogue") {
         result.voices.push({
           speaker: input.line.speaker,

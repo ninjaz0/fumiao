@@ -9,6 +9,7 @@ import sharp from "sharp";
 import { ProviderError, type ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 import { wakeTailFrameChildren } from "@fumiao/platform/tail-frame.js";
 import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
+import { directorBasis } from "@fumiao/web-compat/director.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
 import { parseCanvasDocument } from "@fumiao/original-api/canvas-draft.js";
 import { inspectDirectorShotInputs, resolveDirectorInput, resolveDirectorInputBasis } from "@fumiao/original-api/director-inputs.js";
@@ -181,6 +182,31 @@ test("director Flow continuation binds the private provider output and the actua
   assert.equal(submitted.input.params.source_media_id, "private-second", "ordinary continuation can use a retained provider output without a local preview");
   await f.db.query("UPDATE jobs SET deleted_at=now() WHERE id=$1", [source.id]);
   await assert.rejects(resolve(), { message: /续写来源/ });
+
+  const active = await f.job(802, "video", "running");
+  await f.db.query("UPDATE jobs SET plugin_id='flow' WHERE id=$1", [active.id]);
+  const activeGraph = parseCanvasDocument({ nodes: [{
+    id: video.node_id, x: 0, y: 0, type: "video", prompt: "镜头向前", params: { model: sourceModel, flow_source_job: 802 },
+  }], edges: [] });
+  let signalLocked!: () => void;
+  let signalRelease!: () => void;
+  const locked = new Promise<void>((resolve) => { signalLocked = resolve; });
+  const release = new Promise<void>((resolve) => { signalRelease = resolve; });
+  const worker = f.db.transaction(async (sql) => {
+    await sql.query("SELECT id FROM jobs WHERE id=$1 FOR UPDATE", [active.id]);
+    signalLocked();
+    await release;
+  });
+  try {
+    await locked;
+    await assert.rejects(f.db.transaction(async (sql) => {
+      await sql.query("SET LOCAL lock_timeout='500ms'");
+      await resolveDirectorInput(sql, project, activeGraph, video, undefined, { lock: true });
+    }), { status: 409, message: /续写来源/ });
+  } finally {
+    signalRelease();
+    await worker;
+  }
 });
 
 test("director pack inputs match actual submit, including expanded prompt and deduplicated limits", async (t) => {
@@ -254,6 +280,231 @@ test("pack generation rechecks workspace membership after waiting for the wallet
   assert.ok(revoked);
   const count = (await f.db.query("SELECT count(*) AS count FROM jobs WHERE workspace_id=$1", [f.team.id])).rows[0];
   assert.equal(Number(count.count), 0);
+});
+
+async function saveDirectorCanvas(
+  f: Awaited<ReturnType<typeof canvasRunsFixture>>,
+  nodes: Parameters<typeof f.project>[0],
+  shots: string[],
+  edges: Parameters<typeof f.project>[1] = [],
+) {
+  const precheck = new OriginalBatchPrecheck(f.p);
+  const scriptId = randomUUID().replaceAll("-", "");
+  await f.db.query(
+    "INSERT INTO workspace_script_documents(id, public_id, workspace_id, owner_id, path) VALUES ($1,$2,$3,$4,'主剧本.md')",
+    [randomUUID(), scriptId, f.workspace.id, f.admin.id],
+  );
+  const canvasId = await f.project(nodes, edges);
+  const canvas = await f.canvases.project(f.db, f.admin, canvasId);
+  const target = { id: String(canvas.id), workspace_id: f.workspace.id };
+  const document = parseCanvasDocument({ nodes, edges, shots });
+  const confirmations = await f.db.transaction(async (sql) => {
+    const states = [];
+    for (const id of shots) {
+      const { story_basis, material_basis } = await inspectDirectorShotInputs(sql, target, document, document.nodes.find((node) => node.id === id)!);
+      states.push({ node_id: id, ...(story_basis ? { story_basis } : {}), ...(material_basis ? { material_basis } : {}) });
+    }
+    return states;
+  });
+  const save = await f.canvases.save(f.admin, canvasId, {
+    title: "生成画布",
+    expected_revision: 2,
+    document: {
+      nodes, edges, shots,
+      director: {
+        script_id: scriptId, script_revision: 1, shot_ids: shots,
+        order_basis: await directorBasis(shots), shots: confirmations,
+      },
+    },
+  });
+  const quote = (targets: unknown[], extra = {}) => precheck.precheckCanvas(f.admin, canvasId, {
+    expected_revision: save.revision,
+    director: { script_revision: 1, targets, ...extra },
+  });
+  const request = (pre: Awaited<ReturnType<typeof quote>>, targets: unknown[], extra = {}) => ({
+    expected_revision: pre.revision,
+    price_revision: pre.price_revision,
+    precheck_token: pre.precheck_token,
+    expected_total_credits: pre.summary.total_credits,
+    director: { script_revision: 1, targets, ...extra },
+    uid: randomUUID(),
+  });
+  return { canvasId, scriptId, savedRevision: save.revision, quote, request };
+}
+
+test("director retries one failed line and recovers accepted receipt", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  await ensureBuiltinEdgeTts(f.p);
+  await f.db.query("UPDATE studio_prices SET amount=4 WHERE model_id='edge-tts'");
+  const line = (line_id: string) => ({ node_id: "shot", stage: "dialogue", line_id });
+  const first = line("first");
+  const second = line("second");
+  const { canvasId, scriptId, quote, request } = await saveDirectorCanvas(f, [{
+    id: "shot", x: 0, y: 0, type: "video", prompt: "两人交谈", dialogue_lines: [
+      { id: first.line_id, text: "天亮了。", model: "edge-tts" },
+      { id: second.line_id, text: "出发吧。", model: "edge-tts" },
+    ],
+  }], ["shot"]);
+  const wallet = async () => (await f.db.query("SELECT balance, held FROM wallets WHERE workspace_id=$1", [f.workspace.id])).rows[0];
+  const jobRows = async (ids: number[]) => (await f.db.query(
+    "SELECT * FROM jobs WHERE public_id=ANY($1::bigint[]) ORDER BY public_id", [ids],
+  )).rows;
+  const initial = await quote([first, second]);
+  assert.equal(initial.summary.total_credits, 8, JSON.stringify(initial.items));
+  assert.equal(initial.summary.runnable, 2);
+  const initialRequest = request(initial, [first, second]);
+  await assert.rejects(f.runs.batchRun(f.admin, canvasId, {
+    ...initialRequest, director: { ...initialRequest.director, targets: [second] },
+  }), { status: 409 });
+  const accepted = await f.runs.batchRun(f.admin, canvasId, initialRequest);
+  assert.deepEqual(accepted.submitted.map((item) => item.line_id), ["first", "second"]);
+  assert.deepEqual(await f.runs.batchRun(f.admin, canvasId, initialRequest), accepted);
+  await assert.rejects(f.runs.batchRun(f.admin, canvasId, {
+    ...initialRequest, expected_total_credits: 0,
+  }), { status: 409 });
+
+  assert.equal(Number((await wallet()).held), 8);
+  const [firstJob, secondJob] = await jobRows(accepted.submitted.map((item) => item.job_id));
+  await f.db.transaction(async (sql) => {
+    await f.p.settle(sql, firstJob, "completed");
+    await f.p.settle(sql, secondJob, "failed");
+  });
+  const afterSettlement = await wallet();
+  assert.equal(Number(afterSettlement.held), 0);
+  const retry = await quote([second]);
+  assert.equal(retry.summary.total_credits, 4);
+  assert.equal(retry.items.length, 1);
+  assert.equal(retry.items[0].line_id, "second");
+  const retryRequest = request(retry, [second]);
+  const retried = await f.runs.batchRun(f.admin, canvasId, retryRequest);
+  assert.deepEqual(retried.submitted.map((item) => item.line_id), ["second"]);
+  assert.deepEqual(await f.runs.batchRun(f.admin, canvasId, retryRequest), retried);
+  assert.equal(Number((await wallet()).held), 4);
+  const [retriedJob] = await jobRows(retried.submitted.map((item) => item.job_id));
+  await f.db.transaction((sql) => f.p.settle(sql, retriedJob, "failed"));
+  const boughtAgain = await f.runs.batchRun(f.admin, canvasId, { ...retryRequest, uid: randomUUID() });
+  assert.deepEqual(boughtAgain.submitted.map((item) => item.line_id), ["second"]);
+  assert.notEqual(boughtAgain.submitted[0].job_id, retried.submitted[0].job_id);
+  assert.equal(Number((await wallet()).held), 4);
+  assert.equal((await wallet()).balance, afterSettlement.balance);
+  assert.equal((await jobRows([accepted.submitted[0].job_id]))[0].state, "completed");
+  assert.deepEqual((await f.db.query(
+    "SELECT action,count(*)::int AS count FROM ledger WHERE workspace_id=$1 AND job_id=$2 GROUP BY action ORDER BY action",
+    [f.workspace.id, firstJob.id],
+  )).rows, [{ action: "hold", count: 1 }, { action: "spend", count: 1 }]);
+
+  await f.db.query("UPDATE workspace_script_documents SET revision=revision+1 WHERE public_id=$1", [scriptId]);
+  await assert.rejects(quote([second]), { status: 409, message: /主剧本已更新/ });
+  await assert.rejects(quote([second], { script_revision: 2, use_confirmed_script: true }), { status: 409 });
+  const previousScript = await quote([first], { use_confirmed_script: true });
+  assert.equal(previousScript.summary.runnable, 1);
+  const previousScriptReceipt = await f.runs.batchRun(f.admin, canvasId, request(previousScript, [first], { use_confirmed_script: true }));
+  assert.deepEqual(previousScriptReceipt.submitted.map((item) => item.line_id), ["first"]);
+  assert.deepEqual(await f.runs.batchRun(f.admin, canvasId, initialRequest), accepted);
+});
+
+test("director quotes a missing reference image separately from its dependent video", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  const image = { node_id: "ref", stage: "image" };
+  const video = { node_id: "shot", stage: "video" };
+  const { canvasId, quote, request } = await saveDirectorCanvas(f, [
+    { id: "ref", x: 0, y: 0, type: "image", prompt: "窗外的灯塔" },
+    { id: "other", x: 0, y: 0, type: "image", prompt: "无关图片" },
+    { id: "shot", x: 0, y: 0, type: "video", prompt: "走到窗边" },
+  ], ["shot"], [{ id: "ref-link", source: "ref", target: "shot" }]);
+  await assert.rejects(quote([{ node_id: "other", stage: "image" }]), { status: 400 });
+  await assert.rejects(quote([{ ...video, line_id: "first" }]), { status: 400 });
+  const pre = await quote([image, video]);
+  assert.deepEqual(pre.items.map(({ status }) => status), ["ready", "blocked"]);
+  const receipt = await f.runs.batchRun(f.admin, canvasId, request(pre, [image, video]));
+  assert.deepEqual(receipt.submitted.map(({ node, stage }) => [node, stage]), [["ref", "image"]]);
+  assert.deepEqual(receipt.skipped.map(({ node, stage }) => [node, stage]), [["shot", "video"]]);
+});
+
+test("director preserves accepted inputs when references, voice or script drift between items", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  await ensureBuiltinEdgeTts(f.p);
+  const packs = new OriginalPacks(f.p);
+  const reference = await seedImageAsset(f);
+  const voice = await packs.save(f.admin, {
+    name: "小林", purpose: "subject", media: [reference.publicId],
+    voice_profile: { model: "edge-tts", voice_id: "zh-CN-XiaoxiaoNeural" },
+  }, String(f.workspace.public_id));
+  const nodes = [
+    { id: "first", x: 0, y: 0, type: "video", prompt: "首镜" },
+    { id: "ref", x: 0, y: 0, type: "image", media_id: reference.publicId, use_media: true },
+    { id: "vis", x: 0, y: 0, type: "video", prompt: "次镜" },
+    { id: "speech", x: 0, y: 0, type: "video", prompt: "人物开口", dialogue_lines: [
+      { id: "line", speaker: "小林", text: "出发吧", pack_id: voice.id },
+    ] },
+    { id: "next", x: 0, y: 0, type: "video", prompt: "末镜" },
+  ];
+  const edges = [{ id: "ref-edge", source: "ref", target: "vis" }];
+  const { canvasId, scriptId, savedRevision, quote, request } = await saveDirectorCanvas(
+    f, nodes, ["first", "vis", "speech", "next"], edges,
+  );
+  const targets = [
+    { node_id: "first", stage: "video" },
+    { node_id: "vis", stage: "video" },
+    { node_id: "speech", stage: "dialogue", line_id: "line" },
+    { node_id: "next", stage: "video" },
+  ];
+  const pre = await quote(targets);
+  assert.equal(pre.summary.runnable, 4, JSON.stringify(pre.items));
+  const order = await f.canvases.project(f.db, f.admin, canvasId);
+  await f.db.query(`CREATE TABLE director_drift_fixture (
+    project_id uuid, asset_id uuid, pack_id text, script_id text, change_script boolean
+  )`);
+  await f.db.query("INSERT INTO director_drift_fixture VALUES ($1,$2,$3,$4,false)",
+    [order.id, reference.id, voice.id, scriptId]);
+  await f.db.query(`
+    CREATE FUNCTION drift_after_director_link() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.node <> 'first' THEN RETURN NEW; END IF;
+      UPDATE assets a SET state='uploading'
+        FROM director_drift_fixture f WHERE f.project_id=NEW.project_id AND a.id=f.asset_id AND NOT f.change_script;
+      UPDATE asset_pack_meta m SET voice_profile=jsonb_set(m.voice_profile,'{voice_id}','"zh-CN-YunxiNeural"')
+        FROM documents d, director_drift_fixture f WHERE f.project_id=NEW.project_id AND d.public_id=f.pack_id
+          AND d.id=m.pack_id AND NOT f.change_script;
+      UPDATE workspace_script_documents d SET revision=revision+1
+        FROM director_drift_fixture f WHERE f.project_id=NEW.project_id AND d.public_id=f.script_id AND f.change_script;
+      RETURN NEW;
+    END $$;
+    CREATE TRIGGER director_link_drift AFTER INSERT ON canvas_job_links
+      FOR EACH ROW EXECUTE FUNCTION drift_after_director_link();
+  `);
+  const original = request(pre, targets);
+  const accepted = await f.runs.batchRun(f.admin, canvasId, original);
+  assert.deepEqual(accepted.submitted.map(({ node }) => node), ["first", "next"]);
+  assert.match(accepted.skipped.find(({ node }) => node === "vis")?.reason ?? "", /素材/);
+  assert.match(accepted.skipped.find(({ node }) => node === "speech")?.reason ?? "", /声线/);
+  const jobs = (await f.db.query("SELECT * FROM jobs WHERE public_id=ANY($1::bigint[]) ORDER BY public_id",
+    [accepted.submitted.map((item) => item.job_id)])).rows;
+  assert.deepEqual(jobs.map((job) => job.input.prompt), ["首镜", "末镜"]);
+  for (const job of jobs) await f.db.transaction((sql) => f.p.settle(sql, job, "failed"));
+  await f.db.query("UPDATE director_drift_fixture SET change_script=true");
+  const scriptTargets = [targets[0], targets[3]];
+  const scriptQuote = await quote(scriptTargets);
+  const scriptRequest = request(scriptQuote, scriptTargets);
+  const partial = await f.runs.batchRun(f.admin, canvasId, scriptRequest);
+  assert.deepEqual(partial.submitted.map(({ node }) => node), ["first"]);
+  assert.match(partial.skipped[0].reason, /主剧本已更新/);
+  assert.deepEqual(await f.runs.batchRun(f.admin, canvasId, original), accepted);
+  assert.deepEqual(await f.runs.batchRun(f.admin, canvasId, scriptRequest), partial);
+
+  await f.db.query("UPDATE assets SET state='ready' WHERE id=$1", [reference.id]);
+  // A later canvas edit must leave the old revision conflict visible while recovery returns the same receipt.
+  const changed = await f.canvases.save(f.admin, canvasId, {
+    title: "其他成员已保存", expected_revision: savedRevision, document: { nodes, edges },
+  });
+  assert.equal(changed.revision, savedRevision + 1);
+  await assert.rejects(f.canvases.save(f.admin, canvasId, {
+    title: "挂接前的草稿", expected_revision: savedRevision, document: { nodes, edges },
+  }), { status: 409 });
+  assert.deepEqual(await f.runs.batchRun(f.admin, canvasId, scriptRequest), partial);
 });
 
 test("#9 F010/F007/F027: mixed-price dialogue precheck matches batchRun, rejects quote drift 409, replays idempotently, and returns line_id", async (t) => {
