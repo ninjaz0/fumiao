@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { directorScriptConflict } from "@fumiao/web-compat/director.js";
 import { api, ApiError } from "./api";
 import { draftEquals } from "./performance";
 import type { Draft, Project } from "./types";
@@ -197,7 +198,8 @@ export function useDocument(project: Project, userId: number) {
         return revision.current;
       })
       .catch((e) => {
-        const conflict = e instanceof ApiError && e.status === 409;
+        const conflict = e instanceof ApiError && e.status === 409 &&
+          e.message !== directorScriptConflict;
         if (alive.current) {
           if (conflict) {
             blocked.current = true;

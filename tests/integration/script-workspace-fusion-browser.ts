@@ -1041,6 +1041,44 @@ try {
     await expect(director.getByRole("button", { name: "保存并确认顺序" })).toBeVisible();
     await expect(director.getByRole("button", { name: "顺序已确认" })).toHaveCount(0);
 
+    const recoveryResponse = await context.request.post("/api/canvases", {
+      headers,
+      data: { title: `重试本集_${runTag}` },
+    });
+    assert.equal(recoveryResponse.status(), 200);
+    const recoveryCanvas: Project = await recoveryResponse.json();
+    const recoverySave = `/api/canvases/${recoveryCanvas.id}/document`;
+    const scriptPath = `/api/workspace/scripts/${docB.id}`;
+    let reviewedRevision: number | undefined;
+    await page.route(`**${recoverySave}`, async (route) => {
+      if (route.request().method() === "PUT" && reviewedRevision === undefined) {
+        const previous = await (await context.request.get(scriptPath, { headers })).json();
+        const changed = await context.request.put(scriptPath, {
+          headers,
+          data: { expected_revision: previous.revision, body_md: `${previous.body_md}\n> 保存期间更新的备注` },
+        });
+        assert.equal(changed.status(), 200, await changed.text());
+        reviewedRevision = (await changed.json()).revision;
+      }
+      await route.continue();
+    });
+    await page.goto(`/canvas/${recoveryCanvas.id}?workspace=${workspace}`);
+    await page.getByRole("tab", { name: "文档", exact: true }).click();
+    await page.getByRole("treeitem").filter({ hasText: fileBName }).dblclick();
+    await page.getByRole("button", { name: "用于本集制作" }).click();
+    await directorSync.getByRole("button", { name: "保存并进入导演台" }).click();
+    await expect(directorSync.getByRole("alert")).toContainText("主剧本已更新，请重新预览后同步");
+    await directorSync.getByRole("button", { name: "关闭同步窗口" }).click();
+    await page.getByRole("button", { name: "更新本集分镜" }).click();
+    await directorSync.getByRole("button", { name: "保存并进入导演台" }).click();
+    await expect(directorTab).toHaveAttribute("aria-selected", "true");
+    const recovered: Project = await (
+      await context.request.get(`/api/canvases/${recoveryCanvas.id}`, { headers })
+    ).json();
+    assert.equal(recovered.document.director?.script_revision, reviewedRevision);
+    assert.equal(recovered.revision, recoveryCanvas.revision + 1);
+    await page.unroute(`**${recoverySave}`);
+
     console.log(
       "PASS script-workspace-fusion-browser: mobile layout, directory rename, search and replace, rich and source jumps, director navigation and order, and script and director draft conflict recovery",
     );

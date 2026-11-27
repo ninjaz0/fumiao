@@ -9,7 +9,7 @@ import { ReferencePacks } from "@fumiao/platform/packs.js";
 import { createTailFrameAsset } from "@fumiao/platform/tail-frame.js";
 import { cropGridCell } from "@fumiao/platform/grid-crop.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
-import type { DirectorProduction } from "@fumiao/web-compat/director.js";
+import { directorScriptConflict, type DirectorProduction } from "@fumiao/web-compat/director.js";
 import { OriginalIdentity } from "./identity.js";
 import { archiveEntry, OriginalLibrary } from "./library.js";
 import { parseBody } from "./validation.js";
@@ -649,7 +649,7 @@ export class OriginalCanvases {
         row.workspace_id,
       );
       if (expectedScriptRevision !== undefined) {
-        requireValue(director.script_revision === script.revision, 409, "主剧本已更新，请重新预览后同步。");
+        requireValue(director.script_revision === script.revision, 409, directorScriptConflict);
       }
       requireValue(
         director.script_revision <= script.revision,

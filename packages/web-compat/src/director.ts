@@ -14,6 +14,8 @@ export type DirectorProduction = {
   shots?: DirectorShotState[];
 };
 
+export const directorScriptConflict = "主剧本已更新，请重新预览后同步。";
+
 export function directorShotIds(
   shots: readonly string[],
   director: DirectorProduction,
