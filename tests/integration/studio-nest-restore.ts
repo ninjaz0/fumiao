@@ -10,9 +10,11 @@ import {
   type S3Client,
 } from "@aws-sdk/client-s3";
 import sharp from "sharp";
+import { creditUnits } from "@fumiao/platform/credit-amount.js";
 import { one } from "@fumiao/platform/db.js";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
 import type { chatProviderFixture } from "../helpers/chat-provider.js";
+import type { prepareModelAccess } from "./studio-model-access.js";
 import type { studioPayment } from "./studio-nest-payment.js";
 import {
   prepareStudioMediaRestore,
@@ -173,6 +175,20 @@ export async function restoreSnapshot(
     "chat_messages",
     "chat_turns",
     "chat_charges",
+    "chat_turn_bills",
+    "model_access_connection_revisions",
+    "model_access_reused_connections",
+    "model_access_discoveries",
+    "model_access_drafts",
+    "model_access_route_revisions",
+    "model_access_price_revisions",
+    "model_access_publications",
+    "model_access_publication_receipts",
+    "model_access_job_uids",
+    "model_access_submissions",
+    "model_access_image_parts",
+    "model_access_staging",
+    "model_access_trial_receipts",
     "chat_outbox",
     "schema_migrations",
   ];
@@ -198,7 +214,7 @@ export async function restoreSnapshot(
   return { cluster, rows };
 }
 
-function studio(origin: string, cookie = "") {
+export function studio(origin: string, cookie = "") {
   async function request(
     path: string,
     method = "GET",
@@ -351,8 +367,8 @@ async function reconcileWallets(platform: Platform) {
   );
   assert.ok(result.rows.length >= 2);
   for (const row of result.rows) {
-    assert.equal(row.balance, row.balance_snapshot ?? "0", row.name);
-    assert.equal(row.held, row.held_snapshot ?? "0", row.name);
+    assert.equal(creditUnits(row.balance), creditUnits(row.balance_snapshot ?? "0"), row.name);
+    assert.equal(creditUnits(row.held), creditUnits(row.held_snapshot ?? "0"), row.name);
   }
 }
 
@@ -364,6 +380,7 @@ export async function prepareStudioRestore(
   payment: Awaited<ReturnType<typeof studioPayment>>,
   provider: Awaited<ReturnType<typeof chatProviderFixture>>,
   mediaProvider: Awaited<ReturnType<typeof mediaProviderFixture>>,
+  prepareNative: () => ReturnType<typeof prepareModelAccess>,
   pauseWorker: () => void,
 ) {
   const client = studio(origin);
@@ -436,6 +453,8 @@ export async function prepareStudioRestore(
     },
     25_000,
   );
+
+  const verifyNative = await prepareNative();
 
   const canvas = await client.write("/api/canvases", { title: "备份恢复画布" });
   const canvasPath = "/api/canvases/" + canvas.id;
@@ -517,6 +536,11 @@ export async function prepareStudioRestore(
     );
   const history = await waitForChat(client, completed.path, "complete");
   assert.equal(history.messages.at(-1).content, "隔离验收回复");
+  const fixedBill = (await client.read(completed.path + "/bills")).bills;
+  assert.equal(fixedBill.length, 1);
+  assert.equal(fixedBill[0].kind, "fixed");
+  assert.equal(fixedBill[0].charged, fixedBill[0].held);
+  assert.ok(creditUnits(fixedBill[0].charged) > 0n);
   const cleanCredit = await client.read("/api/credits");
   assert.equal(cleanCredit.wallet.reserved, 0);
   assert.deepEqual(
@@ -572,6 +596,8 @@ export async function prepareStudioRestore(
     const recovered = studio(targetOrigin, client.cookie);
     const recoveredMember = studio(targetOrigin, member.cookie);
     const { outputs, spent } = await inflight.verify(target, recovered);
+    const nativeKeys = await verifyNative(target, targetOrigin);
+    assert.equal(nativeKeys.length, 3);
     assert.deepEqual(await idOf(recovered), state);
     assert.deepEqual(await idOf(recoveredMember), memberState);
     const fresh = studio(targetOrigin);
@@ -619,8 +645,8 @@ export async function prepareStudioRestore(
         targetS3,
         item,
       );
-    const restoredKeys = [...media, ...outputs].map(({ key }) => key).sort();
-    const expectedDerivativeCount = [...media, ...outputs].filter(
+    const restoredKeys = [...nativeKeys, ...[...media, ...outputs].map(({ key }) => key)].sort();
+    const expectedDerivativeCount = nativeKeys.length + [...media, ...outputs].filter(
       ({ mime }) => mime.startsWith("image/") || mime.startsWith("video/"),
     ).length;
     async function verifyBucket() {
@@ -692,6 +718,7 @@ export async function prepareStudioRestore(
     assert.deepEqual(await recovered.read(canvasPath), canvasBefore);
     await recoveredMember.json(await recoveredMember.request(canvasPath), 404);
     assert.deepEqual(await recovered.read(completed.path), history);
+    assert.deepEqual((await recovered.read(completed.path + "/bills")).bills, fixedBill);
     assert.deepEqual(await recovered.read("/api/recharge"), rechargeBefore);
     assert.deepEqual(await recovered.read(orderPath), paid);
     console.log(
@@ -728,6 +755,9 @@ export async function prepareStudioRestore(
         row.action === "spend",
     );
     assert.ok(queuedSpend.amount > 0);
+    const [queuedBill] = (await recovered.read(queued.path + "/bills")).bills;
+    assert.equal(queuedBill.kind, "fixed");
+    assert.equal(queuedBill.charged, queuedSpend.exact.amount);
     assert.equal(
       after.wallet.balance,
       cleanCredit.wallet.balance - queuedSpend.amount - spent,
@@ -740,7 +770,7 @@ export async function prepareStudioRestore(
       const view = await recovered.read(turn.path);
       assert.deepEqual(
         await recovered.write(turn.path + "/messages", turn.draft),
-        view,
+        { ...view, accepted_turn: view.messages.at(-1).turn },
       );
     }
     const { warning, ...paidSummary } = paid;

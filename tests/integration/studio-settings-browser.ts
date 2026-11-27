@@ -65,15 +65,13 @@ export async function request(
   method: string,
   act: () => Promise<unknown>,
 ) {
-  const response = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return (
-      url.pathname + url.search === path &&
-      response.request().method() === method
-    );
-  });
-  await act();
-  const result = await response;
+  const [result] = await Promise.all([
+    page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname + url.search === path && response.request().method() === method;
+    }),
+    act(),
+  ]);
   assert.equal(result.headers()["x-fumiao-web"], "next");
   return result;
 }
