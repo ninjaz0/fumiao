@@ -460,7 +460,10 @@ export class OriginalChats {
           409,
           "发送标识已使用",
         );
-        return this.snapshot(sql, chat, actor);
+        const snapshot = await this.snapshot(sql, chat, actor);
+        return previous.native_snapshot
+          ? { ...snapshot, accepted_turn: previous.public_id }
+          : snapshot;
       }
       requireValue(
         chat.revision === body.expected_revision,
@@ -738,11 +741,12 @@ export class OriginalChats {
         "UPDATE chat_conversations SET title=$2,model=$3,updated=$4,revision=revision+1 WHERE id=$1",
         [chat.id, title, body.model, stamp],
       );
-      return this.snapshot(
+      const snapshot = await this.snapshot(
         sql,
         await this.access(sql, actor, key, workspace.id),
         actor,
       );
+      return native ? { ...snapshot, accepted_turn: turn.public_id } : snapshot;
     });
   }
   private async ledger(

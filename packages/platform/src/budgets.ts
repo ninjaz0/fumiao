@@ -159,7 +159,8 @@ export async function computeScopeSpend(
     sql,
     `SELECT
     COALESCE((SELECT SUM(c.amount) FROM chat_charges c WHERE c.project_id=$1 AND c.state='held'),0) AS held,
-    COALESCE((SELECT SUM(ABS(l.amount)) FROM ledger l JOIN chat_charges c ON c.turn_id=l.chat_turn_id
+    COALESCE((SELECT SUM(ABS(l.amount)) FROM chat_charges c JOIN chat_turns t ON t.id=c.turn_id
+              JOIN ledger l ON l.workspace_id=c.workspace_id AND (l.chat_turn_id=t.id OR (l.chat_turn_id IS NULL AND l.original_chat_turn=t.public_id))
               WHERE c.project_id=$1 AND l.action='spend' AND l.created_at>=${startExpr}),0) AS spent`,
     [canonicalUuid],
   );

@@ -552,3 +552,358 @@ test("缓存时长与累计别名去重、精确封顶与余额/线路上限", a
   );
   assert.deepEqual(tight, { max_output_tokens: 2, max_charge: "0.0008" });
 });
+
+test("原生正文、跨片段字段、工具和标题在写入前阻止凭据回显", async (t) => {
+  const f = await setupNative(t, { free: true, tools: true });
+  const canvas = await f.request("POST", "/api/canvases", { title: "测试" });
+  const context = {
+    project: canvas.body.id,
+    expected_revision: canvas.body.revision,
+  };
+  for (const mode of [
+    "stream",
+    "json",
+    "reason",
+    "tools",
+    "escapedArgs",
+    "name",
+    "id",
+    "title",
+    "safe",
+  ]) {
+    await t.test(mode, async () => {
+      const conversation = (
+        await f.chats.create(f.admin, { model: f.model, context })
+      ).conversation;
+      const spec = { model: f.model, context, text: "合成测试" };
+      const quote = await f.chats.quote(f.admin, {
+        ...spec,
+        cid: conversation.id,
+      });
+      const accepted = await f.chats.send(f.admin, conversation.id, {
+        ...spec,
+        ...quote,
+        expected_revision: conversation.revision,
+        uid: randomUUID(),
+      });
+      const turn = await f.turn(accepted.conversation.active_turn);
+      const store = new ChatExecution(f.chats);
+      let exposed = false,
+        calls = 0;
+      const progress = store.progress.bind(store);
+      const key = "synthetic-only";
+      store.progress = async (...args) => {
+        exposed ||= args[2].includes(key) || args[2].endsWith(key.slice(0, 6));
+        return progress(...args);
+      };
+      const runtime = new ChatRuntime(store, {
+        nativeHttp: async () => {
+          calls++;
+          const frame = (
+            delta: unknown,
+            finish_reason: string | null = null,
+          ) => ({ choices: [{ delta, finish_reason }] });
+          const json = (content: string, finish_reason = "stop") => ({
+            status: 200,
+            contentType: "application/json",
+            body: Buffer.from(
+              JSON.stringify({
+                choices: [{ message: { content }, finish_reason }],
+              }),
+            ),
+          });
+          if (mode === "json" || (mode === "title" && calls === 2))
+            return json(key);
+          if (mode === "reason") return json("正常", key);
+          if (mode === "safe" || mode === "title" || calls > 1)
+            return json("正常");
+          const fragments =
+            mode === "escapedArgs"
+              ? [
+                  frame(
+                    {
+                      tool_calls: [
+                        {
+                          id: "graph",
+                          index: 0,
+                          type: "function",
+                          function: {
+                            name: "fm_read_canvas_graph",
+                            arguments:
+                              '{"project_id":"\\u0073' + key.slice(1) + '"}',
+                          },
+                        },
+                      ],
+                    },
+                    "tool_calls",
+                  ),
+                ]
+              : mode === "name" || mode === "id"
+                ? [
+                    frame({
+                      tool_calls: [
+                        {
+                          id: mode === "id" ? key.slice(0, 6) : "graph",
+                          index: 0,
+                          type: "function",
+                          function: {
+                            name:
+                              mode === "name"
+                                ? key.slice(0, 6)
+                                : "fm_read_canvas_graph",
+                            arguments: "{}",
+                          },
+                        },
+                      ],
+                    }),
+                    frame(
+                      {
+                        tool_calls: [
+                          {
+                            index: 0,
+                            ...(mode === "id"
+                              ? { id: key.slice(6) }
+                              : { function: { name: key.slice(6) } }),
+                          },
+                        ],
+                      },
+                      "tool_calls",
+                    ),
+                  ]
+                : mode === "tools"
+                  ? [
+                      frame({
+                        tool_calls: [
+                          {
+                            id: "graph",
+                            index: 0,
+                            type: "function",
+                            function: {
+                              name: "fm_read_canvas_graph",
+                              arguments: '{"project_id":"' + key.slice(0, 6),
+                            },
+                          },
+                        ],
+                      }),
+                      frame(
+                        {
+                          tool_calls: [
+                            {
+                              index: 0,
+                              function: { arguments: key.slice(6) + '"}' },
+                            },
+                          ],
+                        },
+                        "tool_calls",
+                      ),
+                    ]
+                  : [
+                      frame({ content: "正常" }),
+                      frame({ content: key.slice(0, 6) }),
+                      frame({ content: key.slice(6) }, "stop"),
+                    ];
+          return {
+            status: 200,
+            contentType: "text/event-stream",
+            body: Buffer.from(
+              fragments
+                .map((v) => "data: " + JSON.stringify(v) + "\n\n")
+                .join(""),
+            ),
+          };
+        },
+        monotonic: (() => {
+          let time = 0;
+          return () => ++time;
+        })(),
+      });
+      await runtime.execute(turn.id);
+      await runtime.close();
+      const result = await f.chats.get(f.admin, conversation.id);
+      assert.equal(
+        exposed,
+        false,
+        "progress contained a credential or an unconfirmed suffix",
+      );
+      assert.equal(
+        JSON.stringify(result).includes(key),
+        false,
+        "member-visible snapshot contained credential",
+      );
+      const ok = ["title", "safe"].includes(mode);
+      assert.equal(result.messages.at(-1)?.state, ok ? "complete" : "failed");
+      assert.equal(calls, ok ? 2 : 1);
+      if (mode === "stream")
+        assert.equal(result.messages.at(-1)?.content, "正常");
+      if (mode === "safe") assert.equal(result.conversation.title, "正常");
+    });
+  }
+});
+
+test("058 旧画布预留与历史实扣在 059 升级后仍占用项目预算", async (t) => {
+  const f = await chatsFixture("058_model_access_publications.sql");
+  t.after(f.cleanup);
+  const a = await f.canvas(),
+    b = await f.canvas(),
+    other = await f.canvas(f.member, f.memberSpace);
+  const context = { project: a.public_id, expected_revision: a.revision };
+  async function legacy(
+    raw: string,
+    link: Array<[string, number]>,
+    complete = true,
+  ) {
+    const view = await f.chats.create(f.admin, {});
+    const sent = await f.chats.send(
+      f.admin,
+      view.conversation.id,
+      await f.draft(view),
+    );
+    const turn = await f.turn(sent.conversation.active_turn);
+    await f.db.query("UPDATE chat_messages SET context=$2 WHERE id=$1", [
+      turn.user_message,
+      raw,
+    ]);
+    for (const [project, offset] of link)
+      await f.db.query("INSERT INTO canvas_chat_links VALUES($1,'',$2,$3)", [
+        project,
+        turn.conversation_id,
+        turn.created + offset,
+      ]);
+    if (complete)
+      await f.chats.finish(turn.id, { state: "complete", text: "历史" });
+    return turn;
+  }
+  const spent = await legacy(
+    JSON.stringify({ project: a.public_id, text: "旧\u0000文本" }),
+    [],
+  );
+  await f.db.query(
+    "UPDATE ledger SET chat_turn_id=NULL WHERE chat_turn_id=$1",
+    [spent.id],
+  );
+  const held = await legacy(
+    "{}",
+    [
+      [a.id, -1],
+      [b.id, 10],
+    ],
+    false,
+  );
+  const ambiguous = await legacy("{}", [
+    [a.id, -1],
+    [b.id, -1],
+  ]);
+  const invalid = await legacy("{malformed", []);
+  const foreign = await legacy(
+    JSON.stringify({ project: other.public_id }),
+    [],
+  );
+  const { migrate } = await import("@fumiao/platform/db.js");
+  await migrate(f.db);
+  const charges = await f.db.query(
+    "SELECT turn_id,project_id FROM chat_charges",
+  );
+  const attribution = Object.fromEntries(
+    charges.rows.map((r) => [r.turn_id, r.project_id]),
+  );
+  assert.deepEqual(
+    [spent, held, ambiguous, invalid, foreign].map((r) => attribution[r.id]),
+    [a.id, a.id, null, null, null],
+  );
+  assert.deepEqual(
+    (await computeScopeSpend(f.db, "project", a.id, "total")).exact,
+    { held: "1", spent: "1", committed: "2" },
+  );
+  await f.db.query(
+    "INSERT INTO budget_policies(scope_type,scope_id,period,mode,cap_limit) VALUES('project',$1,'total','cap',2)",
+    [a.public_id],
+  );
+  const next = await f.chats.create(f.admin, { context });
+  await assert.rejects(
+    f.chats.send(
+      f.admin,
+      next.conversation.id,
+      await f.draft(next, { context }),
+    ),
+    /预算上限/,
+  );
+  await f.chats.finish(held.id, { state: "complete", text: "完成" });
+  assert.deepEqual(
+    (await computeScopeSpend(f.db, "project", a.public_id, "total")).exact,
+    { held: "0", spent: "2", committed: "2" },
+  );
+});
+
+test("原样重传已受理的画布请求可跨自动保存修订和零可用余额", async (t) => {
+  const f = await setupNative(t);
+  const canvas = await f.request("POST", "/api/canvases", { title: "重传" });
+  const context = {
+    project: canvas.body.id,
+    expected_revision: canvas.body.revision,
+  };
+  const spec = { model: f.model, text: "保留请求", context };
+  const base = await f.chats.create(f.admin, { model: f.model, context });
+  const cid = base.conversation.id;
+  const quote = await f.chats.quote(f.admin, { ...spec, cid });
+  await f.db.query("UPDATE wallets SET balance=$2 WHERE workspace_id=$1", [
+    f.workspace.id,
+    quote.max_charge,
+  ]);
+  const body = {
+    ...spec,
+    ...quote,
+    uid: randomUUID(),
+    expected_revision: base.conversation.revision,
+  };
+  const original = await f.chats.send(f.admin, cid, body);
+  await f.db.query(
+    "UPDATE documents SET revision=revision+1 WHERE public_id=$1",
+    [context.project],
+  );
+  const wallet = await one(
+    f.db,
+    "SELECT (balance-held)=0 AS empty FROM wallets WHERE workspace_id=$1",
+    [f.workspace.id],
+  );
+  assert.ok(wallet.empty);
+  await assert.rejects(
+    f.chats.send(f.admin, cid, {
+      ...body,
+      context: { ...context, expected_revision: context.expected_revision + 1 },
+    }),
+    { status: 409 },
+  );
+  assert.deepEqual(await f.chats.send(f.admin, cid, body), original);
+  const turn = await f.turn(original.conversation.active_turn);
+  assert.equal(
+    (
+      await one(
+        f.db,
+        "SELECT COUNT(*)::int AS n FROM ledger WHERE chat_turn_id=$1",
+        [turn.id],
+      )
+    ).n,
+    1,
+  );
+  await f.chats.finish(turn.id, {
+    state: "complete",
+    text: "完成",
+    calls: [{ input: 3n, cacheRead: 0n, cacheWrite: 0n, output: 1n }],
+  });
+  const replay = await f.chats.send(f.admin, cid, body);
+  assert.equal(
+    (replay as { accepted_turn?: string }).accepted_turn,
+    turn.public_id,
+  );
+  assert.equal((await f.chats.bills(f.admin, cid)).bills.length, 1);
+  assert.equal(
+    (
+      await one(
+        f.db,
+        "SELECT COUNT(*)::int AS n FROM ledger WHERE chat_turn_id=$1 AND action='spend'",
+        [turn.id],
+      )
+    ).n,
+    1,
+  );
+});

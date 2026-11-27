@@ -129,6 +129,7 @@ export class ChatRuntime {
           route.connectionRevisionId,
           this.options.nativeHttp ?? generationTransport,
         );
+        const output = client.createOutputGuard();
         config = {};
         useTools =
           route.capabilities.tools ??
@@ -163,6 +164,7 @@ export class ChatRuntime {
               route.capabilities.chat_response !== "json",
               request.signal,
               (usage) => calls.push(usage),
+              output,
             );
           },
           async chatTitle(request) {

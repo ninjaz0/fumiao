@@ -1,3 +1,4 @@
+import { ChatReplyError } from "./chat.js";
 import { z } from "zod";
 
 const key = z
@@ -119,3 +120,26 @@ export const toolFragmentSchema = z
   })
   .strict();
 export type ToolFragment = z.infer<typeof toolFragmentSchema>;
+
+export function appendToolFragments(
+  calls: Map<number, ToolCall>,
+  fragments: ToolFragment[],
+) {
+  for (const fragment of fragments) {
+    const call = calls.get(fragment.index) ?? {
+      id: "",
+      type: "function",
+      function: { name: "", arguments: "" },
+    };
+    call.id += fragment.id ?? "";
+    call.function.name += fragment.function?.name ?? "";
+    call.function.arguments += fragment.function?.arguments ?? "";
+    if (
+      call.id.length > 128 ||
+      call.function.name.length > 64 ||
+      Buffer.byteLength(call.function.arguments) > 16384
+    )
+      throw new ChatReplyError("模型返回的工具调用过长");
+    calls.set(fragment.index, call);
+  }
+}

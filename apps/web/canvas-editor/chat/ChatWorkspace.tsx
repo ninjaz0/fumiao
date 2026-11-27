@@ -10,8 +10,9 @@ import {chatFreshness} from './freshness';
 import {scrollMotion} from '../../app/motion';
 import {chatSettingsHref,hasAvailableChatModels} from './guidance';
 
-export type Message={id:number;role:'user'|'assistant';content:string;state:string;model:string;author_name:string;error?:string;context:string;reply_to:number|null};
-type Snapshot={conversation:Conversation;messages:Message[]};
+export type Message={id:number;role:'user'|'assistant';content:string;state:string;model:string;author_name:string;error?:string;turn?:string|null;context:string;reply_to:number|null};
+type Snapshot={conversation:Conversation;messages:Message[];accepted_turn?:string};
+type PendingSend={cid:string;body:{uid:string;model:string;text:string;expected_revision:number;price_revision:string|number;retry:number|null;context?:ChatContext;max_charge?:string}};
 type Config={models:Record<string,{label:string;provider:string;billing?:"token"}>;pricing:{revision:number;items:{key:string;amount:number|null}[]};credits:{available:number;exact?:{available:string}}};
 export type ChatContext={project:string;node:string;expected_revision:number;writeback?:boolean;script_ids?:string[];node_ids?:string[]};
 export type ApplyOptions={automatic?:boolean;expectedText?:string;targetNode?:string;targetProject?:string;uid?:string};
@@ -59,6 +60,16 @@ export function ChatWorkspace(props:Props){
  const creatingConversation=useRef(false);
  const initialHistory=useRef(true), cfgRef=useRef<Config|null>(null);
  const scroll=useRef<HTMLDivElement>(null),input=useRef<HTMLTextAreaElement>(null),follow=useRef(true),alive=useRef(true),current=useRef(cid),pending=useRef<{signature:string;uid:string}|null>(null);
+ const [pendingVersion,refreshPending]=useState(0);
+ const pendingKey=(id:string)=>scope+'-pending-send-'+id;
+ const waiting=useMemo(()=>{
+  if(!cid)return null;
+  try{const value=JSON.parse(sessionStorage.getItem(pendingKey(cid))||'null') as PendingSend|null;return value?.cid===cid&&value.body?.uid?value:null}catch{return null}
+ },[scope,cid,pendingVersion]);
+ const savePending=(p:PendingSend,done=false)=>{
+  if(done)sessionStorage.removeItem(pendingKey(p.cid));else sessionStorage.setItem(pendingKey(p.cid),JSON.stringify(p));
+  refreshPending(v=>v+1);
+ };
  const req=<T=any,>(path:string,body?:unknown,method?:string)=>chatRequest<T>(workspace,path,body,method);
  const loadList=async()=>{const started=acceptConversation.startList();try{const r=await req<{conversations:Conversation[]}>('/api/chats'+(project?'?project='+encodeURIComponent(project)+'&node='+encodeURIComponent(node||''):''));if(alive.current){setList(items=>acceptConversation.reconcile(r.conversations,items,started));setListError('');if(initialHistory.current&&compact&&!current.current&&r.conversations.length){const id=r.conversations[0].id;current.current=id;setCid(id);sessionStorage.setItem(scope+'-active',id)}initialHistory.current=false}}catch(e){if(alive.current)setListError((e as Error).message);throw e}finally{if(alive.current)setListLoading(false)}};
  const loadConfig=async()=>{const c=await req<Config>('/api/chat/config');if(alive.current){cfgRef.current=c;setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')}};
@@ -111,8 +122,8 @@ export function ChatWorkspace(props:Props){
  const retryId=latest && ['failed','stopped','interrupted'].includes(latest.state)?latest.id:undefined;
  const quoteKey=JSON.stringify([workspace,model,cid,revision,project,node,config?.pricing.revision,balance]);
  const quoteFor=async(text:string,retry?:number)=>req<ChatQuote>('/api/chat/quote',{cid:cid||null,model,text,retry,context:await props.getContext?.()});
- const offered=useChatQuote(native&&!running&&draft.trim()?JSON.stringify([quoteKey,draft]):null,()=>quoteFor(draft));
- const retryOffer=useChatQuote(native&&!running&&retryId?JSON.stringify([quoteKey,retryId]):null,()=>quoteFor('',retryId));
+ const offered=useChatQuote(native&&!waiting&&!running&&draft.trim()?JSON.stringify([quoteKey,draft]):null,()=>quoteFor(draft));
+ const retryOffer=useChatQuote(native&&!waiting&&!running&&retryId?JSON.stringify([quoteKey,retryId]):null,()=>quoteFor('',retryId));
  const fixedPrice=config?.pricing.items.find(p=>p.key===model+'|reply')?.amount;
  const price=native?offered.quote?.max_charge:fixedPrice;
  const funds=(p:string|number|null|undefined)=>!!config&&quoteFunded(balance,config.credits.available,p);
@@ -120,7 +131,7 @@ export function ChatWorkspace(props:Props){
   ? (offered.error||retryOffer.error)&&<p className="fm-chat-balance" role="status">{offered.error||retryOffer.error}<button type="button" onClick={()=>{offered.refresh();retryOffer.refresh()}}>重新报价</button>{props.onRecharge&&<button type="button" onClick={props.onRecharge}>去充值</button>}</p>
   : price==null?<p className="fm-chat-balance" role="status">当前对话模型尚未定价</p>
   : !funds(price)&&<p className="fm-chat-balance" role="status">当前空间积分不足{props.onRecharge&&<button type="button" onClick={props.onRecharge}>去充值</button>}</p>);
- const ready=!!model&&!busy&&!applying&&!running&&!loading&&(!cid||!!data);
+ const ready=!!model&&!waiting&&!busy&&!applying&&!running&&!loading&&(!cid||!!data);
  const canSend=ready&&funds(price);
  const canRetry=ready&&funds(native?retryOffer.quote?.max_charge:fixedPrice);
  const [billing,setBilling]=useState<{cid:string;bills:TurnBill[];error?:string}>();
@@ -158,9 +169,37 @@ export function ChatWorkspace(props:Props){
   try{await fn()}catch(e){if(alive.current)setError((e as Error).message)}
   finally{operationPending.current=false;creatingConversation.current=false;if(alive.current)setBusy(false)}
  };
+ const transmit=async(p:PendingSend)=>{
+  const {cid:sentId,body}=p;
+  let result:Snapshot;
+  try{result=await req<Snapshot>('/api/chats/'+sentId+'/messages',body)}
+  catch(e){
+   if(e instanceof ApiError&&e.status>=400&&e.status<500){
+    savePending(p,true);
+    if(e.status===409){
+     offered.refresh();retryOffer.refresh();update(await req('/api/chats/'+sentId));await loadConfig();
+    }
+   }
+   throw e;
+  }
+  savePending(p,true);
+  if(body.context?.writeback&&props.onApply){
+   const reply=result.accepted_turn?result.messages.find(m=>m.turn===result.accepted_turn):[...result.messages].reverse().find(m=>m.role==='assistant');
+   if(reply)saveWrites(current=>({...current,[reply.id]:{cid:result.conversation.id,uid:current[reply.id]?.uid||crypto.randomUUID()}}));
+  }
+  update(result);
+  if(!body.retry)setDraft(latest=>{
+    const key=scope+'-draft-'+sentId;
+    if(current.current!==sentId){if(sessionStorage.getItem(key)===body.text)sessionStorage.removeItem(key);return latest}
+    if(latest===body.text){sessionStorage.removeItem(key);return ''}
+    return latest;
+  });
+  pending.current=null;follow.current=true;await loadConfig();
+ };
+ const confirmSend=waiting&&!busy&&<button className="fm-chat-primary" type="button" onClick={()=>void safely(()=>transmit(waiting))}>确认上次发送</button>;
  const send=async(retry?:number)=>safely(async()=>{
   const quote=retry?retryOffer.quote:offered.quote;
-  if(!model||(!retry&&!draft.trim())||(native&&!quote))return;
+  if(waiting||!model||(!retry&&!draft.trim())||(native&&!quote))return;
   setPendingDraft(null);
   let active=data;
   creatingConversation.current=!active;
@@ -169,11 +208,8 @@ export function ChatWorkspace(props:Props){
   creatingConversation.current=false;
   const signature=JSON.stringify([active.conversation.id,model,draft,retry]);
   if(pending.current?.signature!==signature)pending.current={signature,uid:crypto.randomUUID()};
-  try{
-   const result=await req<Snapshot>('/api/chats/'+active.conversation.id+'/messages',{uid:pending.current.uid,model,text:retry?'':draft,expected_revision:active.conversation.revision,price_revision:config!.pricing.revision,...quote,retry:retry||null,context});
-   if(context?.writeback&&props.onApply){const reply=[...result.messages].reverse().find(m=>m.role==='assistant');if(reply)saveWrites(current=>({...current,[reply.id]:{cid:result.conversation.id,uid:current[reply.id]?.uid||crypto.randomUUID()}}))}
-   update(result);const sentId=active.conversation.id;setDraft(latest=>{if(current.current!==sentId){if(sessionStorage.getItem(scope+'-draft-'+sentId)===draft)sessionStorage.removeItem(scope+'-draft-'+sentId);return latest}if(latest===draft){sessionStorage.removeItem(scope+'-draft-');sessionStorage.removeItem(scope+'-draft-'+sentId);return ''}sessionStorage.setItem(scope+'-draft-'+sentId,latest);return latest});pending.current=null;follow.current=true;await loadConfig();
-  }catch(e){if(e instanceof ApiError&&e.status===409){offered.refresh();retryOffer.refresh();update(await req('/api/chats/'+active.conversation.id));await loadConfig()}throw e}
+  const request={cid:active.conversation.id,body:{uid:pending.current.uid,model,text:retry?'':draft,expected_revision:active.conversation.revision,price_revision:config!.pricing.revision,...quote,retry:retry||null,context}};
+  savePending(request);await transmit(request);
  });
  const stop=()=>safely(async()=>{update(await req('/api/chats/'+cid+'/stop',{}));await loadConfig()});
  const removeConversation=async(item:Conversation)=>{const r=await req<{conversation:Pick<Conversation,'id'|'revision'>}>('/api/chats/'+item.id,undefined,'DELETE');acceptConversation.remove(r.conversation);deletedWasCurrent.current=item.id===current.current;setDeleted(item.id);setList(items=>items.filter(c=>c.id!==item.id));if(deletedWasCurrent.current)choose('');setHistory(false)};
@@ -223,7 +259,7 @@ export function ChatWorkspace(props:Props){
     {running?<button type="button" className="fm-chat-send" aria-label="停止生成" onClick={()=>void stop()} disabled={busy}><Square className="fm-state-change" size={15} fill="currentColor"/></button>:model&&<button type="submit" className="fm-chat-send" aria-label="生成文本" disabled={!canSend||!draft.trim()}><ArrowUp className="fm-state-change" size={21}/></button>}
    </div>
    {draftLimit}
-   {creditNotice}
+   {confirmSend}{!waiting&&creditNotice}
    {billError}{bills.filter(b=>b.user_message===latest?.reply_to).map(b=><ChatBill key={b.turn} bill={b}/>)}
   </form>
  </div>;
@@ -262,7 +298,7 @@ export function ChatWorkspace(props:Props){
      {(model||running)&&<div className="fm-chat-composer-bottom">{model&&config&&<><ModelSelect models={config.models} value={model} disabled={busy||applying||running} onChange={setModel}/>{cost}</>}{running?<button type="button" className="fm-chat-send" aria-label="停止回复" onClick={()=>void stop()} disabled={busy}><Square className="fm-state-change" size={15} fill="currentColor"/></button>:<button type="submit" className="fm-chat-send" aria-label="发送" disabled={!canSend||!draft.trim()}><ArrowUp className="fm-state-change" size={21}/></button>}</div>}
     </form>
     {draftLimit}
-    {creditNotice}
+    {confirmSend}{!waiting&&creditNotice}
    </div>
   </section>
  </div>;

@@ -6,8 +6,8 @@ import {
   type OriginalActor,
 } from "@fumiao/original-api/identity.js";
 import { one } from "@fumiao/platform/db.js";
-export async function chatsFixture() {
-  const f = await chatSettingsFixture();
+export async function chatsFixture(throughMigration?: string) {
+  const f = await chatSettingsFixture(throughMigration);
   try {
     await f.reset({
       deepseek: "sk-fixture-native-chat",

@@ -1,4 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
+import {ChatBill,type TurnBill} from './chat/ChatBill';
 import {ModelSelect} from './chat/ModelSelect';
 import {useChatQuote,quoteFunded} from './chat/useChatQuote';
 import {chatRequest} from './chat/ChatWorkspace';
@@ -13,9 +14,33 @@ export type StoryboardApplyOptions={
 
 const MAX_STORYBOARD_SHOTS = 120;
 
-function restoreStoryboard(text:string):{message:number|null;shots:SuggestedShot[]}{
- try{const data=JSON.parse(text),rows=Array.isArray(data)?data:data?.shots;if(Array.isArray(rows)&&rows.length<=MAX_STORYBOARD_SHOTS&&rows.every(r=>r&&typeof r.title==='string'&&typeof r.prompt==='string'&&typeof r.narration==='string'&&[5,10,15].includes(r.seconds)))return {message:Array.isArray(data)||data.message===null?null:Number.isSafeInteger(data.message)&&data.message>0?data.message:0,shots:rows}}catch{}
- return {message:0,shots:[]};
+type ReplySource={cid:string;message:number};
+function StoryboardBill({workspace,source}:{workspace:number;source:ReplySource}){
+ const {cid,message}=source;
+ const [bill,setBill]=useState<TurnBill>();
+ const [error,setError]=useState(false),[retry,setRetry]=useState(0);
+ useEffect(()=>{
+  let current=true;
+  setBill(undefined);setError(false);
+  void chatRequest<{bills:TurnBill[]}>(workspace,'/api/chats/'+cid+'/bills').then(r=>{
+   if(current)setBill(r.bills.find(b=>b.message===message));
+  },()=>{if(current)setError(true)});
+  return ()=>{current=false};
+ },[workspace,cid,message,retry]);
+ if(error)return <button type="button" onClick={()=>setRetry(n=>n+1)}>重新载入分镜账单</button>;
+ return bill?<ChatBill bill={bill}/>:null;
+}
+
+function restoreStoryboard(text:string):{message:number|null;shots:SuggestedShot[];source:ReplySource|null}{
+ try{
+  const data=JSON.parse(text),rows=Array.isArray(data)?data:data?.shots;
+  if(Array.isArray(rows)&&rows.length<=MAX_STORYBOARD_SHOTS&&rows.every(r=>r&&typeof r.title==='string'&&typeof r.prompt==='string'&&typeof r.narration==='string'&&[5,10,15].includes(r.seconds))){
+   const message=Array.isArray(data)||data.message===null?null:Number.isSafeInteger(data.message)&&data.message>0?data.message:0;
+   const source=typeof data.source?.cid==='string'&&Number.isSafeInteger(data.source.message)?data.source:null;
+   return {message,shots:rows,source};
+  }
+ }catch{}
+ return {message:0,shots:[],source:null};
 }
 export function parseStoryboard(text:string):SuggestedShot[]{
  const raw=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
@@ -33,6 +58,25 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
  const key=`fm-storyboard-${userId}-${workspace}-${project}`;
  const [draft,setDraft]=useState(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]'));
  const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(draft.shots),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
+ const [shotSource,setShotSource]=useState<ReplySource|null>(draft.source);
+ const [latestReceipt,setLatestReceipt]=useState<ReplySource|null>(null);
+ const showReceipt=(source:ReplySource|null)=>source&&<StoryboardBill key={source.cid+'-'+source.message} workspace={workspace} source={source}/>;
+ const setResult=(chat:string,m:any)=>{
+  const source={cid:chat,message:m.id};
+  setLatestReceipt(current=>current?.cid===chat&&current.message===m.id?current:source);
+  if(m.state!=='complete'){lastMessage.current=m.id;setError(m.error||'生成未完成，积分已退回');return}
+  if(lastMessage.current===m.id){
+   // Older local drafts carried the globally unique assistant message ID.
+   if(draft.message===m.id && draft.shots.length && !draft.source){
+    try{parseStoryboard(m.content);setShotSource(current=>current??source)}
+    catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}
+   }
+   return;
+  }
+  lastMessage.current=m.id;setComplete(true);
+  try{setShots(parseStoryboard(m.content));setShotSource(source);setError('')}
+  catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}
+ };
  const [targetCount,setTargetCount]=useState<number>(12);
  const [generationMode,setGenerationMode]=useState<CanvasGenerationMode>('first_last_frame');
  const [tailChain,setTailChain]=useState<boolean>(true);
@@ -53,19 +97,20 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
    if(lastMessage.current===null&&draft.shots.length){
     const p=pending.current,boundary=s.messages.find((r:any)=>r.role==='assistant'&&(r.state==='running'||r.turn===s.conversation.active_turn))||(p?.cid===cid&&s.conversation.revision>p.body.expected_revision?[...s.messages].reverse().find((r:any)=>r.role==='user'&&r.content===p.body.text):null);
     const rows=boundary?s.messages.slice(0,s.messages.indexOf(boundary)):s.messages,previous=[...rows].reverse().find((r:any)=>r.role==='assistant'&&r.state!=='running');
+    if(previous?.state==='complete' && !draft.source){
+     try{parseStoryboard(previous.content);setShotSource({cid,message:previous.id})}catch{/* Legacy draft has no verifiable source. */}
+    }
     lastMessage.current=previous?.id||0;setDraft(d=>({...d,message:lastMessage.current}));
    }
    if(m.state==='running')return;
    pending.current=null;localStorage.removeItem(key+'-pending');
-   if(lastMessage.current===m.id)return;lastMessage.current=m.id;
-   if(m.state!=='complete'){setError(m.error||'生成未完成，积分已退回');return;}
-   setComplete(true);try{setShots(parseStoryboard(m.content));setError('')}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}
+   setResult(cid,m);
   };
   void req('/api/chats/'+cid).then(accept).catch(e=>setError(e.message));
   const events=new EventSource('/api/chats/'+cid+'/events?workspace='+workspace);events.onmessage=e=>accept(JSON.parse(e.data));
   return()=>{closed=true;events.close()};
  },[cid,workspace]);
- useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:lastMessage.current,shots}))},[shots,key,draft.message]);
+ useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:lastMessage.current,shots,source:shotSource}))},[shots,key,draft.message,shotSource]);
  const trackHint = generationMode === 'omni_ref'
       ? '采用全能多参考链路（可在画面描述中引用 @角色名/@场景名 或 <Picture N>）。'
       : generationMode === 'grid_preview'
@@ -89,7 +134,7 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
     pending.current={cid:chat,body:{uid:crypto.randomUUID(),model,text,expected_revision:c.conversation.revision,price_revision:config.pricing.revision,...offered.quote,context}};
     localStorage.setItem(key+'-pending',JSON.stringify(pending.current));
    }
-   const p=pending.current;setCid(p.cid);setComplete(false);const snapshot=await req('/api/chats/'+p.cid+'/messages',p.body);setRunning(!!snapshot.conversation.active_turn);const reply=[...snapshot.messages].reverse().find((m:any)=>m.role==='assistant');if(reply?.state==='complete'){lastMessage.current=reply.id;setComplete(true);try{setShots(parseStoryboard(reply.content))}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}}
+   const p=pending.current;setCid(p.cid);setComplete(false);const snapshot=await req('/api/chats/'+p.cid+'/messages',p.body);setRunning(!!snapshot.conversation.active_turn);const reply=[...snapshot.messages].reverse().find((m:any)=>m.role==='assistant');if(reply&&reply.state!=='running')setResult(p.cid,reply);
   }catch(e){if((e as any).status && (e as any).status<500){offered.refresh();pending.current=null;localStorage.removeItem(key+'-pending');void req('/api/chat/config').then(updateConfig);}setError((e as Error).message)}finally{setBusy(false)}
  };
  const stop=async()=>{
@@ -137,8 +182,9 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
    : price==null ? <p role="status">{native?(offered.error||(brief.trim()?"正在报价":"按 Token 计费")):"当前对话模型尚未定价"}{native&&offered.error&&<button type="button" onClick={offered.refresh}>重新报价</button>}</p>
    : !funded && <p role="status">当前空间积分不足<button className="secondary" type="button" onClick={onRecharge}>去充值</button></p>)}
   {error&&<p className="error" role="alert">{error}</p>}
+  {latestReceipt?.cid===cid && (latestReceipt.cid!==shotSource?.cid || latestReceipt.message!==shotSource.message) && showReceipt(latestReceipt)}
 
-  {!!shots.length&&<><div className="storyboard-proposal">{shots.map((shot,i)=><section key={i}><label>镜头 {i+1}<input value={shot.title} maxLength={80} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,title:e.target.value}:r))}/></label><label>画面<textarea rows={3} value={shot.prompt} maxLength={12000} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,prompt:e.target.value}:r))}/></label><label>旁白<textarea rows={2} maxLength={300} value={shot.narration} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,narration:e.target.value}:r))}/></label><div className="storyboard-seconds" role="group" aria-label={`镜头 ${i+1} 时长`}>{([5,10,15] as const).map(seconds=><button key={seconds} aria-pressed={shot.seconds===seconds} onClick={()=>setShots(rows=>rows.map((r,j)=>j===i?{...r,seconds}:r))}>{seconds}s</button>)}</div></section>)}</div>
+  {!!shots.length&&<>{showReceipt(shotSource)}<div className="storyboard-proposal">{shots.map((shot,i)=><section key={i}><label>镜头 {i+1}<input value={shot.title} maxLength={80} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,title:e.target.value}:r))}/></label><label>画面<textarea rows={3} value={shot.prompt} maxLength={12000} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,prompt:e.target.value}:r))}/></label><label>旁白<textarea rows={2} maxLength={300} value={shot.narration} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,narration:e.target.value}:r))}/></label><div className="storyboard-seconds" role="group" aria-label={`镜头 ${i+1} 时长`}>{([5,10,15] as const).map(seconds=><button key={seconds} aria-pressed={shot.seconds===seconds} onClick={()=>setShots(rows=>rows.map((r,j)=>j===i?{...r,seconds}:r))}>{seconds}s</button>)}</div></section>)}</div>
    <div className="dialog-actions"><span className="fm-number">{shots.length} 个镜头 · {shots.reduce((t,s)=>t+s.seconds,0)} 秒</span><button className="primary" disabled={busy||shots.some(s=>!s.title.trim()||!s.prompt.trim())} onClick={async()=>{setBusy(true);setApplying(true);try{await onApply(shots,{generationMode,tailChain,gridLayout})}catch(e){setError((e as Error).message)}finally{setBusy(false);setApplying(false)}}}>{applying?'正在加入画布…':'采用分镜，不生成视频'}</button></div></>}
  </div>
 }

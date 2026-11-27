@@ -8,7 +8,7 @@ import {
   requirePublicHttps,
   type HttpTransport,
 } from "../plugin-host.js";
-import { hash, requireValue, type Vault } from "../security.js";
+import { DomainError, hash, requireValue, type Vault } from "../security.js";
 import {
   discoverModels,
   isOpenRouter,
@@ -391,6 +391,38 @@ export async function resolveConnectionRevision(
     scope: structuredClone(scope),
     base_url: config.base_url,
     default_video_protocol: config.default_video_protocol,
+    // Keep only the possible prefix of this credential across streamed output.
+    // Prefix fallback avoids rescanning a long repeated prefix for each chunk.
+    createOutputGuard() {
+      const fallback = new Uint16Array(resolvedKey.length);
+      for (let i = 1, matched = 0; i < resolvedKey.length; i++) {
+        while (matched && resolvedKey[i] !== resolvedKey[matched])
+          matched = fallback[matched - 1];
+        if (resolvedKey[i] === resolvedKey[matched]) matched++;
+        fallback[i] = matched;
+      }
+      let matched = 0;
+      return {
+        write(chunk: string) {
+          const combined = resolvedKey.slice(0, matched) + chunk;
+          for (const char of chunk) {
+            while (matched && char !== resolvedKey[matched])
+              matched = fallback[matched - 1];
+            if (char === resolvedKey[matched]) matched++;
+            if (matched === resolvedKey.length) {
+              matched = 0;
+              throw new DomainError(502, "上游响应包含受保护的凭据");
+            }
+          }
+          return combined.slice(0, combined.length - matched);
+        },
+        finish() {
+          const pending = resolvedKey.slice(0, matched);
+          matched = 0;
+          return pending;
+        },
+      };
+    },
     containsCredential(text: string) {
       return text.includes(resolvedKey);
     },

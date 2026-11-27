@@ -5,6 +5,8 @@ import {
 } from "@fumiao/plugin-sdk/chat.js";
 import {
   toolFragmentSchema,
+  appendToolFragments,
+  type ToolCall,
   type ModelTool,
 } from "@fumiao/plugin-sdk/chat-tools.js";
 import { httpChunks } from "../plugin-host.js";
@@ -68,6 +70,7 @@ export async function* chatCompletion(
   stream: boolean,
   signal: AbortSignal,
   record?: (usage: ChatCallUsage) => void,
+  output = client.createOutputGuard(),
 ): AsyncGenerator<ChatChunk> {
   const res = await client.request(
     {
@@ -92,6 +95,8 @@ export async function* chatCompletion(
   }
   let usage: NormalizedUsage | null = null;
   let reported = false;
+  let finish: unknown;
+  const calls = new Map<number, ToolCall>();
   try {
     for await (const event of events(
       res.body,
@@ -106,23 +111,57 @@ export async function* chatCompletion(
       }
       const choice = event.choices?.[0];
       const fragment = choice?.delta ?? choice?.message;
-      yield {
-        text: fragment?.content,
-        reason: choice?.finish_reason,
-        ...(fragment?.tool_calls
-          ? {
-              toolCalls: fragment.tool_calls.map(
-                (call: unknown, index: number) =>
-                  toolFragmentSchema.parse(
-                    choice.message && call && typeof call === "object"
-                      ? { ...call, index }
-                      : call,
-                  ),
-              ),
-            }
-          : {}),
-      };
+      if (fragment?.tool_calls) {
+        appendToolFragments(
+          calls,
+          fragment.tool_calls.map((call: unknown, index: number) =>
+            toolFragmentSchema.parse(
+              choice.message && call && typeof call === "object"
+                ? { ...call, index }
+                : call,
+            ),
+          ),
+        );
+      }
+      if (choice?.finish_reason != null) {
+        if (
+          ![
+            "stop",
+            "length",
+            "tool_calls",
+            "content_filter",
+            "function_call",
+          ].includes(choice.finish_reason) ||
+          client.containsCredential(choice.finish_reason)
+        )
+          throw new ChatReplyError("对话服务返回的结束状态无效");
+        finish = choice.finish_reason;
+      }
+      if (fragment?.content != null) {
+        if (typeof fragment.content !== "string")
+          throw new ChatReplyError("对话服务返回的正文无效");
+        const text = output.write(fragment.content);
+        if (text) yield { text };
+      }
     }
+    // Only assembled tool fields can be validated: fragments can split a name,
+    // an ID, or even a JSON escape sequence inside a tool argument.
+    const toolCalls = [];
+    for (const [index, call] of calls) {
+      const args = JSON.stringify(JSON.parse(call.function.arguments));
+      if (
+        [call.id, call.function.name, call.function.arguments, args].some((s) =>
+          client.containsCredential(s),
+        )
+      )
+        throw new ChatReplyError("对话工具返回了受保护的内容");
+      toolCalls.push({ ...call, index });
+    }
+    yield {
+      text: finish === "tool_calls" ? "" : output.finish(),
+      reason: finish,
+      ...(toolCalls.length ? { toolCalls } : {}),
+    };
   } finally {
     record?.(usage ?? (reported ? "invalid" : null));
   }

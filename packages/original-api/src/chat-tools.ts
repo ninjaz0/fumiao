@@ -18,7 +18,10 @@ import type { Actor } from "@fumiao/platform/platform.js";
 import type { ChatExecution } from "./chat-execution.js";
 import type { OriginalActor } from "./identity.js";
 import { OriginalCanvasProposals } from "./proposals.js";
-import { toolArguments } from "@fumiao/plugin-sdk/chat-tools.js";
+import {
+  toolArguments,
+  appendToolFragments,
+} from "@fumiao/plugin-sdk/chat-tools.js";
 
 export async function freezeChatTools(sql: Sql, turnId: string, role: string) {
   const inserted = await sql.query(
@@ -262,23 +265,7 @@ async function buildTools(
 export class ChatToolCalls {
   readonly calls = new Map<number, ToolCall>();
   append(fragments: ToolFragment[]) {
-    for (const fragment of fragments) {
-      const call = this.calls.get(fragment.index) ?? {
-        id: "",
-        type: "function",
-        function: { name: "", arguments: "" },
-      };
-      call.id += fragment.id ?? "";
-      call.function.name += fragment.function?.name ?? "";
-      call.function.arguments += fragment.function?.arguments ?? "";
-      if (
-        call.id.length > 128 ||
-        call.function.name.length > 64 ||
-        Buffer.byteLength(call.function.arguments) > 16384
-      )
-        throw new ChatReplyError("模型返回的工具调用过长");
-      this.calls.set(fragment.index, call);
-    }
+    appendToolFragments(this.calls, fragments);
   }
   prepare(tools: Map<string, FrozenTool>, used: Set<string>) {
     const ordered = [];
