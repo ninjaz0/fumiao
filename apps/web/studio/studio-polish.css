@@ -98,43 +98,6 @@
     border-color: color-mix(in srgb, var(--text) 18%, transparent);
   }
 }
-.mobile-asset-composer .asset-composer-toggle {
-  display: none;
-}
-@media (max-width: 760px) {
-  .assets-view:has(+ .mobile-asset-composer:not([hidden])) {
-    padding-bottom: 72px;
-  }
-  .assets-view:has(+ .mobile-asset-composer[data-expanded="true"]:not([hidden])) {
-    padding-bottom: 16px;
-  }
-  .mobile-asset-composer:not([data-expanded="true"]) {
-    pointer-events: none;
-  }
-  .mobile-asset-composer:not([data-expanded="true"]) #asset-composer-panel {
-    display: none;
-  }
-  .mobile-asset-composer[data-expanded="true"] {
-    position: static;
-    margin: 0 16px 12px;
-  }
-  .mobile-asset-composer .asset-composer-toggle {
-    display: block;
-    min-height: 44px;
-    margin-left: auto;
-    padding: 0 14px;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    color: var(--text);
-    background: var(--composer);
-    box-shadow: 0 1px 8px rgb(0 0 0 / 8%);
-    pointer-events: auto;
-  }
-  .mobile-asset-composer[data-expanded="true"] .asset-composer-toggle {
-    margin-bottom: 8px;
-  }
-}
-
 /* 页面标题与空状态 */
 .page-heading {
   gap: 12px;
@@ -293,25 +256,6 @@
   color: var(--danger);
   font-size: 13px;
 }
-@media (max-width: 760px) {
-  #modal.asset-preview-modal {
-    padding: 20px;
-  }
-  .preview-dialog .h3-media-preview video {
-    max-height: min(44dvh, 340px);
-  }
-}
-@media (max-width: 560px) {
-  .asset-actions {
-    right: 6px;
-    gap: 3px;
-  }
-  .asset-actions button,
-  .asset-actions a {
-    width: 26px;
-    height: 26px;
-  }
-}
 
 /* 对话无可用模型空态引导 */
 .fm-chat-empty-actions {
@@ -356,31 +300,7 @@
 .side :is(.nav-label, .brand > span) {
   transition: opacity var(--motion-feedback) var(--motion-ease);
 }
-
-@media (max-width: 760px) {
-  .shell > .rail-backdrop {
-    position: fixed;
-    inset: 0 0 0 64px;
-    z-index: 19;
-    background: rgb(0 0 0 / 22%);
-    opacity: 0;
-    pointer-events: none;
-    transition:
-      opacity var(--motion-exit) var(--motion-ease),
-      display var(--motion-exit) allow-discrete;
-  }
-  .shell:not(.collapsed) > .rail-backdrop {
-    inset-inline-start: 64px;
-    opacity: 1;
-    pointer-events: auto;
-    transition-duration: var(--motion-feedback);
-  }
-  @starting-style {
-    .shell:not(.collapsed) > .rail-backdrop {
-      opacity: 0;
-    }
-  }
-}
+/* The phone drawer and its backdrop live in studio-mobile.css. */
 
 #popover.popover:has(.fm-choice-menu) {
   box-sizing: border-box;
@@ -456,14 +376,6 @@ html #toast.visible {
 
 .detail-view :is(.video-stage, .audio-stage) > :is(.player, .detail-audio, .result-pending) {
   animation: fm-reveal var(--motion-enter) var(--motion-ease);
-}
-.mobile-asset-composer[data-expanded="true"] #asset-composer-panel {
-  transition: opacity var(--motion-feedback) var(--motion-ease);
-}
-@starting-style {
-  .mobile-asset-composer[data-expanded="true"] #asset-composer-panel {
-    opacity: 0;
-  }
 }
 .inline-reference > video,
 .inline-reference > .h3-audio-thumb {

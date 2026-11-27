@@ -12,6 +12,7 @@ import {
 } from "react";
 import { Chevron, Icon } from "./Icon";
 import { estimateTime } from "./History";
+import { dockNotice } from "./composer-dock";
 import { ReferenceMedia } from "./AssetMedia";
 import type { ComposerMenu } from "./ComposerMenu";
 import {
@@ -150,6 +151,7 @@ export function Composer({
   flowSourceContents,
   restoreDraft,
   onRecharge,
+  expand,
 }: {
   state: StudioState;
   session: DraftSession;
@@ -176,6 +178,8 @@ export function Composer({
   managePlugins: () => void;
   restoreDraft?: () => void;
   onRecharge: () => void;
+  /** Opens the phone bottom sheet; the collapsed bar's notice calls it. */
+  expand?: () => void;
 }) {
   const { draft } = session;
   const box = useRef<HTMLElement>(null);
@@ -219,6 +223,11 @@ export function Composer({
   const statusMessage = status || (unavailable && hasAnyAvailableModel && !hasAvailableModel
     ? "当前类型暂无可用模型，可切换创作类型"
     : "");
+  const notice = dockNotice({
+    status: statusMessage,
+    busy: uploading || submitting,
+    canRestoreDraft: !!restoreDraft,
+  });
   const ratio = audio
     ? ""
     : frameMode && activeReferences(session).length
@@ -853,6 +862,9 @@ export function Composer({
           </label>
         )}
       </div>
+      <button type="button" className="composer-dock-notice" hidden={!notice} onClick={expand}>
+        {notice}
+      </button>
       <div className="composer-status" aria-live="polite">
         {statusMessage && <span className="fm-state-change" key={statusMessage}>{statusMessage}</span>}
       </div>
