@@ -3,6 +3,7 @@ import {
   validCanvasResult,
 } from "@fumiao/plugin-sdk/canvas-nodes.js";
 import { packageContributions } from "@fumiao/plugin-sdk/contributions.js";
+import { retiredShotPromptPluginId } from "@fumiao/platform/canvas-node-plugins.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import type { Actor } from "@fumiao/platform/platform.js";
 import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
@@ -68,6 +69,11 @@ export async function runCanvasPlugin(
       const extension = nodes.get(nodeId)?.extension;
       requireValue(extension, 400, "请选择插件节点");
       const definition = extension.definition;
+      requireValue(
+        definition.plugin !== retiredShotPromptPluginId,
+        409,
+        "镜头提示词节点已停用，仍可查看已保存的输出",
+      );
       const pkg = await one(
         sql,
         `SELECT p.version,r.package->'contributes' AS contributes FROM studio_packages p

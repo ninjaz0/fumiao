@@ -17,7 +17,6 @@ import { api, ApiError, workspaceURL, type Studio } from "./api";
 
 import { PluginImport } from "../studio/PluginImport";
 import { VideoThumb } from "../canvas-editor/VideoThumb";
-import { SeriesTree } from "./SeriesTree";
 
 const COVER_VIDEO_PLACEHOLDER_STYLE = {
   display: "block",
@@ -491,7 +490,6 @@ export default function ProjectList({
             {workspaceName ? `「${workspaceName}」` : "可访问的工作区"}。
           </p>
         )}
-        <SeriesTree workspace={workspace} />
         <div className="project-list-heading">
           <h1>画布</h1>
           <PluginImport

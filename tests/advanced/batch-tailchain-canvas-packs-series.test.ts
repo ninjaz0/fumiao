@@ -11,7 +11,6 @@ import { wakeTailFrameChildren } from "@fumiao/platform/tail-frame.js";
 import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
 import { OriginalPacks } from "@fumiao/original-api/packs.js";
-import { OriginalSeries } from "@fumiao/original-api/series.js";
 import { canvasRunsFixture } from "../helpers/canvas-runs.js";
 
 function generateValidMp4Bytes(): Buffer {
@@ -626,80 +625,6 @@ test("#12 F009/F032: character asset pack supports turnaround views generation+b
     packs.turnaround(f.admin, created.id, { views: { front: null } }, wsPublicId),
     (err: unknown) => [409, 423].includes(Number((err as { status?: number })?.status)),
   );
-});
-
-test("#19 F026: 4-level Series -> Season -> Episode -> Scene hierarchy supports multiple seasons/episodes/scenes while keeping flat canvas list intact", async (t) => {
-  const f = await canvasRunsFixture();
-  t.after(() => f.cleanup());
-  const seriesSvc = new OriginalSeries(f.p);
-  const wsPublicId = String(f.workspace.public_id);
-
-  const created = await seriesSvc.create(
-    f.admin,
-    { title: "暗夜侦探录", synopsis: "悬疑连续剧" },
-    wsPublicId,
-  );
-
-  // Season 1: 2 episodes, Episode 1 has 2 scenes
-  const s1e1 = await seriesSvc.createEpisode(f.admin, created.id, { season_no: 1, episode_no: 1, title: "雨夜序幕" });
-  await seriesSvc.createEpisode(f.admin, created.id, { season_no: 1, episode_no: 2, title: "失踪线索" });
-  const s1e1sc1 = await seriesSvc.createScene(
-    f.admin,
-    created.id,
-    s1e1.id,
-    { scene_no: 1, title: "码头相遇", summary: "主角在雨夜码头发现第一条线索", create_canvas: true },
-  );
-  const s1e1sc2 = await seriesSvc.createScene(
-    f.admin,
-    created.id,
-    s1e1.id,
-    { scene_no: 2, title: "旧仓库追逐", summary: "黑衣人逃入仓库", create_canvas: true },
-  );
-  assert.ok(s1e1sc1.canvas_id);
-  assert.ok(s1e1sc2.canvas_id);
-
-  // Season 2: 2 episodes, Episode 1 has 2 scenes
-  const s2e1 = await seriesSvc.createEpisode(f.admin, created.id, { season_no: 2, episode_no: 1, title: "重返旧城" });
-  await seriesSvc.createEpisode(f.admin, created.id, { season_no: 2, episode_no: 2, title: "真相浮现" });
-  await seriesSvc.createScene(
-    f.admin,
-    created.id,
-    s2e1.id,
-    { scene_no: 1, title: "列车抵达", summary: "主角返回旧城车站", create_canvas: true },
-  );
-  await seriesSvc.createScene(
-    f.admin,
-    created.id,
-    s2e1.id,
-    { scene_no: 2, title: "钟楼对峙", summary: "最终线索在钟楼揭晓", create_canvas: true },
-  );
-
-  // Verify 4-level tree structure
-  const listed = await seriesSvc.list(f.admin, wsPublicId);
-  const found = listed.series.find((s) => s.id === created.id);
-  assert.ok(found);
-  assert.equal(found.seasons.length, 2);
-  assert.equal(found.seasons[0].season_no, 1);
-  assert.equal(found.seasons[0].episodes.length, 2);
-  assert.equal(found.seasons[0].episodes[0].scenes.length, 2);
-  assert.equal(found.seasons[1].season_no, 2);
-  assert.equal(found.seasons[1].episodes.length, 2);
-  assert.equal(found.seasons[1].episodes[0].scenes.length, 2);
-
-  // Update scene works cleanly
-  await seriesSvc.updateScene(f.admin, created.id, s1e1.id, s1e1sc2.id, { title: "旧仓库夜战" });
-  const afterUpdate = (await seriesSvc.list(f.admin, wsPublicId)).series.find((s) => s.id === created.id)!;
-  assert.equal(afterUpdate.seasons[0].episodes[0].scenes[1].title, "旧仓库夜战");
-
-  // Backward compatibility: flat canvases.list() opens and includes bound episode & scene canvases!
-  const flatCanvases = await f.canvases.list(f.admin, wsPublicId);
-  const flatIds = new Set(flatCanvases.projects.map((p) => p.id));
-  assert.ok(flatIds.has(s1e1.canvas_id!), "Episode bound canvas must remain accessible in flat list");
-  assert.ok(flatIds.has(s1e1sc1.canvas_id!), "Scene bound canvas must remain accessible in flat list");
-
-  // Scene canvas itself can be fetched cleanly via OriginalCanvases.get()
-  const openedSceneCanvas = await f.canvases.get(f.admin, s1e1sc1.canvas_id!);
-  assert.ok(openedSceneCanvas.document.nodes.some((n: { type?: string }) => n.type === "sticky"));
 });
 
 test("#9 F010 concurrent retry & crash recovery: in-flight retry waits for full 2-item receipt (never seals 1-item half-receipt), survives revision bump, and stale crash recovery resumes remaining items idempotently", async (t) => {

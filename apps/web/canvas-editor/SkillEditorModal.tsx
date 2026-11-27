@@ -233,7 +233,7 @@ export function SkillEditorModal({ workspace }: { workspace: number }) {
       ) : loading ? (
         <p>正在加载工作区技能…</p>
       ) : skills.length === 0 ? (
-        <p className="fm-series-muted">
+        <p className="canvas-muted">
           尚未配置工作区技能。导入 `SKILL.md` 后，对话与分镜 Agent 将自动遵循技能规范并在每轮冻结快照。
         </p>
       ) : (

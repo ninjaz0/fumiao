@@ -681,7 +681,7 @@ test("F035: REST allowlist and OpenAPI spec stay 1-to-1 with real NestJS control
     );
   }
 
-  // 4. Live HTTP check: real PUT /api/series/:key succeeds, wrong method PATCH & ghost routes fail 403
+  // Live HTTP check: canvas document updates work, unsupported routes fail 403.
   const f = await canvasRunsFixture();
   t.after(() => f.cleanup());
   const app = await createOriginalApp(f.p);
@@ -699,33 +699,38 @@ test("F035: REST allowlist and OpenAPI spec stay 1-to-1 with real NestJS control
     "Content-Type": "application/json",
   };
 
-  const createSeries = await fetch(`${http.url}/api/series`, {
+  const createCanvas = await fetch(`${http.url}/api/canvases`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ title: "路由契约测试剧" }),
+    body: JSON.stringify({ title: "路由契约测试画布" }),
   });
-  assert.equal(createSeries.status, 200);
-  const created = (await createSeries.json()) as { id: string; revision: number };
+  assert.equal(createCanvas.status, 200);
+  const created = (await createCanvas.json()) as { id: string; revision: number };
 
   // Real NestJS method PUT succeeds
-  const putSeries = await fetch(`${http.url}/api/series/${created.id}`, {
+  const putCanvas = await fetch(`${http.url}/api/canvases/${created.id}/document`, {
     method: "PUT",
     headers,
-    body: JSON.stringify({ title: "路由契约测试剧-已更新", expected_revision: created.revision }),
+    body: JSON.stringify({
+      title: "路由契约测试画布-已更新",
+      expected_revision: created.revision,
+      document: { nodes: [], edges: [] },
+    }),
   });
-  assert.equal(putSeries.status, 200);
+  assert.equal(putCanvas.status, 200);
 
   // Wrong method PATCH is rejected 403
-  const patchSeries = await fetch(`${http.url}/api/series/${created.id}`, {
+  const patchCanvas = await fetch(`${http.url}/api/canvases/${created.id}/document`, {
     method: "PATCH",
     headers,
     body: JSON.stringify({ title: "wrong method" }),
   });
-  assert.equal(patchSeries.status, 403);
+  assert.equal(patchCanvas.status, 403);
 
   // Ghost routes that do not exist on NestJS are rejected 403
   for (const [m, p] of [
     ["GET", `/api/canvases/${created.id}/graph`],
+    ["GET", "/api/series"],
     ["POST", "/api/generate/video"],
     ["GET", "/api/jobs"],
     ["POST", "/api/state"],
@@ -734,9 +739,7 @@ test("F035: REST allowlist and OpenAPI spec stay 1-to-1 with real NestJS control
     assert.equal(resp.status, 403, `Expected 403 on unsupported ${m} ${p}`);
   }
 
-  // 5. #19 Live browser Cookie-authenticated HTTP E2E for 4-level Series -> Season -> Episode -> Scene
-  // verifying real POST /api/login -> Cookie -> OriginalAuthMiddleware populates req.actor
-  // for POST/PUT/DELETE scenes and bound canvas opens!
+  // Canvas archive is available only to browser sessions.
   const loginOrigin = "http://localhost:3000";
   const loginResp = await fetch(`${http.url}/api/login`, {
     method: "POST",
@@ -753,52 +756,10 @@ test("F035: REST allowlist and OpenAPI spec stay 1-to-1 with real NestJS control
     "X-Workspace-Id": String(f.workspace.public_id),
     "Content-Type": "application/json",
   };
-  const epResp = await fetch(`${http.url}/api/series/${created.id}/episodes`, {
-    method: "POST",
-    headers: cookieHeaders,
-    body: JSON.stringify({ season_no: 1, episode_no: 1, title: "第一集" }),
-  });
-  assert.equal(epResp.status, 200, await epResp.clone().text());
-  const ep = (await epResp.json()) as { id: string; canvas_id: string };
+  const retired = await fetch(`${http.url}/api/series`, { headers: cookieHeaders });
+  assert.equal(retired.status, 404);
 
-  const scResp = await fetch(
-    `${http.url}/api/series/${created.id}/episodes/${ep.id}/scenes`,
-    {
-      method: "POST",
-      headers: cookieHeaders,
-      body: JSON.stringify({
-        scene_no: 1,
-        title: "第一场 · 码头初遇",
-        summary: "雨夜码头发现神秘线索",
-        create_canvas: true,
-      }),
-    },
-  );
-  assert.equal(scResp.status, 200, await scResp.clone().text());
-  const scene = (await scResp.json()) as { id: string; canvas_id: string | null };
-  assert.ok(scene.canvas_id, "Scene creation over Cookie HTTP must return bound canvas_id");
-
-  const scPut = await fetch(
-    `${http.url}/api/series/${created.id}/episodes/${ep.id}/scenes/${scene.id}`,
-    {
-      method: "PUT",
-      headers: cookieHeaders,
-      body: JSON.stringify({ title: "第一场 · 码头初遇（修订）" }),
-    },
-  );
-  assert.equal(scPut.status, 200, await scPut.clone().text());
-
-  const boundCanvasResp = await fetch(
-    `${http.url}/api/canvases/${scene.canvas_id}`,
-    { method: "GET", headers: cookieHeaders },
-  );
-  assert.equal(boundCanvasResp.status, 200, await boundCanvasResp.clone().text());
-  const boundCanvas = (await boundCanvasResp.json()) as {
-    document: { nodes: { type: string }[] };
-  };
-  assert.ok(boundCanvas.document.nodes.some((n) => n.type === "sticky"));
-
-  const archivePath = `${http.url}/api/canvases/${scene.canvas_id}/archive`;
+  const archivePath = `${http.url}/api/canvases/${created.id}/archive`;
   const withoutSession = await fetch(archivePath, { method: "PUT" });
   assert.equal(withoutSession.status, 401);
   const withToken = await fetch(archivePath, { method: "PUT", headers });
@@ -809,7 +770,7 @@ test("F035: REST allowlist and OpenAPI spec stay 1-to-1 with real NestJS control
   assert.ok(undoToken);
   const archivedList = await fetch(`${http.url}/api/canvases?view=current&view=archived`, { headers: cookieHeaders });
   assert.equal(archivedList.status, 200);
-  assert.ok((await archivedList.json()).projects.some(({ id }: { id: string }) => id === scene.canvas_id));
+  assert.ok((await archivedList.json()).projects.some(({ id }: { id: string }) => id === created.id));
   const undo = await fetch(`${archivePath}?expected_archive_change=${encodeURIComponent(undoToken)}`, {
     method: "DELETE",
     headers: cookieHeaders,
@@ -817,9 +778,4 @@ test("F035: REST allowlist and OpenAPI spec stay 1-to-1 with real NestJS control
   assert.equal(undo.status, 200);
   assert.deepEqual(await undo.json(), { archived_at: null, undo_token: null });
 
-  const scDel = await fetch(
-    `${http.url}/api/series/${created.id}/episodes/${ep.id}/scenes/${scene.id}`,
-    { method: "DELETE", headers: cookieHeaders },
-  );
-  assert.equal(scDel.status, 200, await scDel.clone().text());
 });
