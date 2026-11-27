@@ -597,7 +597,7 @@
     padding-inline: var(--mobile-gutter);
   }
   #app .assets-view.is-selecting {
-    padding-bottom: 112px;
+    padding-bottom: 132px;
   }
   #app .library-scopes,
   #app .asset-filter {
@@ -708,13 +708,17 @@
     background: var(--pop);
     box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
   }
+  #app .bulk-toolbar button {
+    min-width: var(--mobile-touch-size);
+    min-height: var(--mobile-touch-size);
+  }
   #app .bulk-actions {
     order: 2;
     flex: 1 0 100%;
   }
   #app .bulk-actions button {
     flex: 1;
-    min-height: 36px;
+    min-height: var(--mobile-touch-size);
   }
   html #modal.asset-preview-modal {
     padding: 20px;
@@ -789,7 +793,8 @@
     min-height: 0;
   }
   #app .job-row .job-actions button {
-    min-height: 36px;
+    min-width: var(--mobile-touch-size);
+    min-height: var(--mobile-touch-size);
   }
   #app .job-row .job-row-main > .metadata {
     grid-column: 1 / 3;
@@ -888,7 +893,18 @@
     border-radius: 8px;
     background: var(--pop);
   }
-  #app .ledger-settings .price-row input {
+  #app .ledger-settings .price-row {
+    gap: 12px;
+  }
+  #app .ledger-settings .price-row > span:first-child {
+    min-width: 0;
+  }
+  #app .ledger-settings .price-row > span:last-child {
+    flex: none;
+    white-space: nowrap;
+  }
+  #app .settings-page.ledger-settings .settings-content .price-row input {
+    flex: none;
     width: 112px;
   }
   #app .ledger-settings .workspace-row .workspace-row-name {

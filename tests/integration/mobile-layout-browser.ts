@@ -480,6 +480,20 @@ async function checkNoOverflowAndNoCover(page: Page) {
         await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
         `设置(${section}) 无横向滚动`,
       );
+      if (section === "prices") {
+        const priceWidths = await page.locator(".price-row input").evaluateAll((inputs) =>
+          inputs.map((input) => getComputedStyle(input).width),
+        );
+        assert.ok(priceWidths.length > 0, "生成定价分类至少渲染一个价格输入框");
+        assert.ok(
+          priceWidths.every((width) => width === "112px"),
+          `生成定价输入框保持 112px 宽度: ${priceWidths.join(", ")}`,
+        );
+        if (evidence) {
+          await page.evaluate(() => scrollTo({ top: 0, behavior: "instant" }));
+          await page.screenshot({ path: `${evidence}/page-settings-prices.png`, animations: "disabled" });
+        }
+      }
       if (evidence && ["plugins", "models", "credits", "team", "workspaces"].includes(section)) {
         await page.evaluate(() => scrollTo({ top: 0, behavior: "instant" }));
         await page.screenshot({ path: `${evidence}/page-settings-${section}.png`, animations: "disabled" });
@@ -523,6 +537,52 @@ async function checkTouchTargets(page: Page) {
     assert.equal(metrics.small, 0, "顶栏、标签栏与卡片操作按钮尺寸均不小于 36px");
     assert.equal(metrics.actionVisible, true, "手机触屏下资产卡片操作按钮可见可达");
     assert.equal(metrics.expandedHit, true, "资产卡片操作按钮 ::after 触控区扩展至 44px");
+    await page.evaluate(() => scrollTo({ top: 0, behavior: "instant" }));
+    await page.getByRole("button", { name: "多选", exact: true }).tap();
+    await expect(page.locator(".bulk-toolbar")).toBeVisible();
+    const bulkTargets = await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll<HTMLElement>(".bulk-toolbar button")].filter(
+        (e) => e.getClientRects().length > 0,
+      );
+      const actionCount = document.querySelectorAll(".bulk-actions button").length;
+      const under44 = buttons.filter((e) => {
+        const r = e.getBoundingClientRect();
+        const after = getComputedStyle(e, "::after");
+        const hasAfter = after.content !== "none" && after.content !== "normal";
+        const w = hasAfter ? r.width - (parseFloat(after.left) || 0) - (parseFloat(after.right) || 0) : r.width;
+        const h = hasAfter ? r.height - (parseFloat(after.top) || 0) - (parseFloat(after.bottom) || 0) : r.height;
+        return w < 43.5 || h < 43.5;
+      }).length;
+      return { actionCount, under44 };
+    });
+    assert.ok(bulkTargets.actionCount > 0, "多选工具条至少包含一组批量操作按钮");
+    assert.equal(bulkTargets.under44, 0, "多选工具条与批量操作按钮触控尺寸均不小于 44px");
+    await page.getByRole("button", { name: "取消选择", exact: true }).tap();
+
+    await page.locator('.mobile-tabbar [data-tab="queue"]').tap();
+    const queueActionTarget = await page.evaluate(() => {
+      const surface = document.querySelector("#view .list-surface")!;
+      const probe = document.createElement("div");
+      probe.className = "job-row";
+      probe.innerHTML = '<div class="job-actions"><button type="button" class="quiet-button">取消生成</button></div>';
+      surface.appendChild(probe);
+      try {
+        const btn = probe.querySelector<HTMLElement>(".job-actions button")!;
+        const r = btn.getBoundingClientRect();
+        const after = getComputedStyle(btn, "::after");
+        const hasAfter = after.content !== "none" && after.content !== "normal";
+        const w = hasAfter ? r.width - (parseFloat(after.left) || 0) - (parseFloat(after.right) || 0) : r.width;
+        const h = hasAfter ? r.height - (parseFloat(after.top) || 0) - (parseFloat(after.bottom) || 0) : r.height;
+        return { w, h };
+      } finally {
+        probe.remove();
+      }
+    });
+    assert.ok(
+      queueActionTarget.w >= 43.5 && queueActionTarget.h >= 43.5,
+      `队列任务操作按钮触控尺寸 >= 44×44px: ${JSON.stringify(queueActionTarget)}`,
+    );
+
     await page.locator(".mobile-account").tap();
     await page.locator("#popover").getByRole("button", { name: "设置" }).tap();
     const toggleBox = (await page.locator(".ledger-navigation-toggle").boundingBox())!;
