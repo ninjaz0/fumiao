@@ -19,7 +19,18 @@ import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import { capacity, EXPORT_RESERVE } from "@fumiao/platform/capacity.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
-import { directorBasis, directorShotIds } from "@fumiao/web-compat/director.js";
+import {
+  directorAdoptionBasis,
+  directorAudioEvidenceMismatch,
+  directorAudioTargets,
+  directorBasis,
+  directorShotIds,
+  directorTargetKey,
+  directorVideoSelection,
+  episodeMaxShots,
+  type DirectorTarget,
+} from "@fumiao/web-compat/director.js";
+import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import {
   originalStoryboard,
   type CompositionOptions,
@@ -28,6 +39,8 @@ import {
 } from "@fumiao/platform/composition/renderer.js";
 import { webVtt } from "@fumiao/platform/composition/subtitles.js";
 import { OriginalCanvases, canvasConflict } from "./canvases.js";
+import { directorLinkNode, validateDirectorScriptRevision } from "./batch-precheck.js";
+import { inspectDirectorShotInputs } from "./director-inputs.js";
 import { parseBody } from "./validation.js";
 import { parseCanvasDocument, storyboardExportFields } from "./canvas-draft.js";
 import {
@@ -92,13 +105,17 @@ export class OriginalStoryboardExports {
       output_filename: row.output_filename ?? null,
     };
   }
-  async list(user: Actor, key: string) {
+  async list(user: Actor, key: string, scope?: string) {
+    requireValue(scope === undefined || scope === "canvas" || scope === "episode", 400, "导出范围无效");
     return this.p.db.transaction(async (sql) => {
       const project = await this.canvases.project(sql, user, key);
       const rows = (
         await sql.query(
-          "SELECT e.*,a.public_id AS result FROM storyboard_exports e LEFT JOIN assets a ON a.id=e.result_id WHERE e.project_id=$1 ORDER BY e.created DESC,e.ordinal DESC LIMIT 20",
-          [project.id],
+          `SELECT e.*,a.public_id AS result FROM storyboard_exports e
+           LEFT JOIN assets a ON a.id=e.result_id
+           WHERE e.project_id=$1 AND ($2::text IS NULL OR e.scope=$2)
+           ORDER BY e.created DESC,e.ordinal DESC LIMIT 20`,
+          [project.id, scope ?? null],
         )
       ).rows;
       const exporters = (await canvasExporters(sql)).map(
@@ -108,7 +125,8 @@ export class OriginalStoryboardExports {
           output_kind: outputKind,
           file_extension: fileExtension,
         }),
-      );
+      ).filter((item) => scope !== "episode" || (item.key === "storyboard/mp4" &&
+        item.output_kind === "composition" && item.file_extension === "mp4"));
       return { exports: rows.map((row) => this.public(row)), exporters };
     });
   }
@@ -209,14 +227,19 @@ export class OriginalStoryboardExports {
       let shotIds = doc.shots ?? [];
       if (isEpisode) {
         requireValue(doc.director, 409, "请先确认本集片单");
+        await validateDirectorScriptRevision(sql, this.canvases, project.workspace_id, doc.director, {
+          script_revision: body.script_revision ?? doc.director.script_revision,
+          use_confirmed_script: body.script_revision !== undefined && body.use_confirmed_script === true,
+        }, true);
         shotIds = directorShotIds(shotIds, doc.director);
         requireValue(
-          shotIds.length > 0 && shotIds.length <= 30,
+          shotIds.length > 0 && shotIds.length <= episodeMaxShots,
           400,
           "本集合成需要 1–30 个镜头",
         );
         requireValue(
-          doc.director.order_basis === (await directorBasis(shotIds)),
+          shotIds.length === doc.director.shot_ids.length &&
+            doc.director.order_basis === (await directorBasis(shotIds)),
           409,
           "请重新确认本集镜头顺序",
         );
@@ -250,6 +273,12 @@ export class OriginalStoryboardExports {
       );
       const shots: Shot[] = [],
         assets = new Map<string, any>();
+      const models = isEpisode ? await CanvasSubmissionModels.read(sql, {
+        strict: false,
+        workspaceId: project.workspace_id,
+        vault: this.p.vault,
+        registry: this.p.registry,
+      }) : undefined;
       const voiceInProgress = async (key: number) => {
         const job = await one(
           sql,
@@ -288,9 +317,10 @@ export class OriginalStoryboardExports {
       };
       for (const [i, nid] of shotIds.entries()) {
         const n = doc.nodes.find((n) => n.id === nid)!;
+        const selection = directorVideoSelection(n);
         if (isEpisode) {
           requireValue(
-            n.use_media ? n.media_id : n.active_job,
+            selection,
             409,
             `镜头 ${i + 1} 尚未采用视频`,
           );
@@ -322,17 +352,46 @@ export class OriginalStoryboardExports {
           // A node's current inheritance setting doesn't prove a match between adopted clips.
           ...(!isEpisode && n.tail_inherited ? { tailInherited: true } : {}),
         };
+        const inputs = isEpisode
+          ? await inspectDirectorShotInputs(sql, { id: project.id, workspace_id: project.workspace_id }, doc, n, models, { adoption: true, lock: true })
+          : undefined;
+        const requireAdoption = async () => {
+          if (!isEpisode) return;
+          const saved = doc.director?.shots?.find(({ node_id }) => node_id === nid);
+          const current = selection && inputs?.adoption_input_basis &&
+            await directorAdoptionBasis(inputs.adoption_input_basis, selection);
+          requireValue(current && saved?.adoption_basis === current, 409,
+            `镜头 ${i + 1} 的视频待确认，请采用视频或确认沿用已采用视频`);
+        };
+        const requireCurrentVoice = async (job: any, target: DirectorTarget, label: string) => {
+          if (!inputs) return;
+          const link = await one(sql,
+            `SELECT inputs FROM canvas_job_links WHERE project_id=$1 AND job_id=$2 AND node=$3
+             ORDER BY id DESC LIMIT 1`,
+            [project.id, job.id, directorLinkNode(target)],
+          );
+          const recorded = link ? canvasDocumentJson(link.inputs) : {};
+          requireValue(!directorAudioEvidenceMismatch({
+            model: job.original_view?.model,
+            instruction: job.original_view?.audio_settings?.instruction,
+            ...recorded,
+          }, inputs.audio_inputs[directorTargetKey(target)]), 409,
+          `镜头 ${i + 1} 的${label}声线已变更，请重新生成语音`);
+        };
         if (isEpisode && n.audio_strategy === "keep_original") {
+          await requireAdoption();
           shots.push(shot);
           continue;
         }
         const lines = n.dialogue_lines ?? [];
+        const audioTargets = isEpisode ? directorAudioTargets(n) : [];
         if (
-          isEpisode ? lines.some((line) => pythonStrip(line.text)) : lines.length
+          isEpisode ? audioTargets[0]?.stage === "dialogue" : lines.length
         ) {
           const dialogue: NonNullable<Shot["dialogue"]> = [];
           for (const [dIdx, line] of lines.entries()) {
-            if (!pythonStrip(line.text) && (isEpisode || !line.audio_job))
+            if (isEpisode ? !audioTargets.some(({ line_id }) => line_id === line.id) :
+              !pythonStrip(line.text) && !line.audio_job)
               continue;
             requireValue(
               !line.audio_job || !line.audio_stale?.includes(line.audio_job),
@@ -371,6 +430,7 @@ export class OriginalStoryboardExports {
               409,
               `镜头 ${i + 1} 的第 ${dIdx + 1} 句对白台词已修改，请重新生成语音`,
             );
+            await requireCurrentVoice(job, { node_id: nid, stage: "dialogue", line_id: line.id }, `第 ${dIdx + 1} 句对白`);
             await pinVoice(voice);
             dialogue.push({
               voice: voice.public_id,
@@ -379,7 +439,7 @@ export class OriginalStoryboardExports {
             });
           }
           if (dialogue.length) shot.dialogue = dialogue;
-        } else if (!isEpisode || pythonStrip(n.narration_text)) {
+        } else if (!isEpisode || audioTargets[0]?.stage === "narration") {
           requireValue(
             !n.narration_pending || !(await voiceInProgress(n.narration_pending)),
             409,
@@ -408,6 +468,7 @@ export class OriginalStoryboardExports {
               409,
               `镜头 ${i + 1} 的旁白文字已修改，请重新生成旁白或移除音轨`,
             );
+            await requireCurrentVoice(job, { node_id: nid, stage: "narration" }, "旁白");
             await pinVoice(voice);
             shot.voice = voice.public_id;
             shot.text = job.input.prompt;
@@ -418,6 +479,7 @@ export class OriginalStoryboardExports {
               `镜头 ${i + 1} 已填写旁白，请先生成语音或清空旁白`,
             );
         }
+        await requireAdoption();
         shots.push(shot);
       }
 

@@ -203,3 +203,24 @@
   padding: 5px 0;
 }
 .fm-director-dialogue-targets li span { min-width: 0; overflow-wrap: anywhere; }
+
+.fm-director-approved-video {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.fm-director-approved-video video {
+  display: block;
+  width: min(100%, 400px);
+  max-height: 230px;
+  background: #000;
+  border-radius: 8px;
+}
+.fm-director-versions summary {
+  cursor: pointer;
+  margin: 8px 0;
+}
+@media (max-width: 760px) {
+  .fm-director-versions .version-compare { grid-template-columns: 1fr; }
+}

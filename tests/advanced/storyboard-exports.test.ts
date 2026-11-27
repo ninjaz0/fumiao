@@ -14,6 +14,10 @@ import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-expor
 import { originalStoryboard } from "@fumiao/platform/composition/renderer.js";
 import { OriginalMedia } from "@fumiao/original-api/media.js";
 import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
+import { OriginalPacks } from "@fumiao/original-api/packs.js";
+import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
+import { directorAdoptionBasis, type DirectorProduction } from "@fumiao/web-compat/director.js";
 import { OriginalIdentity, type OriginalActor } from "@fumiao/original-api/identity.js";
 const exec = promisify(execFile);
 function deferred<T = void>() {
@@ -143,6 +147,7 @@ async function deployStoryboardExporter(
 test("episode export freezes adopted shots in canvas order", async () => {
   const f = await fixture();
   try {
+    await seedEpisodeScript(f);
     const imported = f.video;
     const adopted = await f.asset("a".repeat(32), "video");
     const trial = await f.asset("b".repeat(32), "video");
@@ -189,7 +194,7 @@ test("episode export freezes adopted shots in canvas order", async () => {
     };
     const shots = ["s2", "trial", "s1"];
     const director = episode(["s1", "s2"], shots);
-    const doc = { nodes: [s1, s2, trialNode], shots, director };
+    const doc = await confirmEpisodeAdoptions(f, { nodes: [s1, s2, trialNode], shots, director });
     const request = {
       uid: randomUUID(),
       expected_revision: 1,
@@ -279,6 +284,7 @@ test("episode export freezes adopted shots in canvas order", async () => {
 test("episode keeps the head of adjacent legacy clips after adopting a different predecessor", async () => {
   const f = await fixture();
   try {
+    await seedEpisodeScript(f);
     const original = await f.job(901, "video", "completed", f.video.id);
     const replacementClip = await f.asset(randomUUID().replaceAll("-", ""), "video");
     await f.job(902, "video", "completed", replacementClip.id);
@@ -289,7 +295,7 @@ test("episode keeps the head of adjacent legacy clips after adopting a different
     await f.db.query("INSERT INTO job_tail_chains(child_job_id,parent_job_id) VALUES($1,$2)", [child.id, original.id]);
     const shots = ["prior", "next"];
     for (const inherited of [true, false]) {
-      await setCanvas(f, {
+      await confirmEpisodeAdoptions(f, {
         nodes: [
           { id: "prior", type: "video", x: 0, y: 0, active_job: 902 },
           { id: "next", type: "video", x: 300, y: 0, active_job: 903, tail_inherited: inherited },
@@ -314,7 +320,8 @@ test("episode keeps the head of adjacent legacy clips after adopting a different
 test("episode receipt remains available when the renderer is down", async () => {
   const f = await fixture();
   try {
-    await setCanvas(f, { ...f.doc, director: episode(f.doc.shots) });
+    await seedEpisodeScript(f);
+    await confirmEpisodeAdoptions(f, { ...f.doc, director: episode(f.doc.shots) });
     const request = {
       uid: randomUUID(),
       expected_revision: f.project.revision,
@@ -390,6 +397,7 @@ test("a stalled renderer probe does not lock an existing export receipt", async 
 test("episode exporter requires MP4 composition output", async () => {
   const f = await fixture();
   try {
+    await seedEpisodeScript(f);
     await setCanvas(f, { ...f.doc, director: episode(f.doc.shots) });
     const request = {
       uid: randomUUID(),
@@ -421,6 +429,7 @@ test("episode exporter requires MP4 composition output", async () => {
 test("episode export rejects 31 shots at admission and 10 minutes at rendering", async () => {
   const f = await fixture();
   try {
+    await seedEpisodeScript(f);
     const nodes = Array.from({ length: 31 }, (_, index) => ({
       id: `s${index}`,
       type: "video",
@@ -469,7 +478,8 @@ test("episode export rejects 31 shots at admission and 10 minutes at rendering",
       join(f.directory, f.video.id),
     ]);
     const episodeNodes = [{ ...narrated, narration_job: 900 }, ...nodes.slice(1, 6)];
-    await setShots(episodeNodes, episodeNodes.map((n) => n.id));
+    const episodeIds = episodeNodes.map(({ id }) => id);
+    await confirmEpisodeAdoptions(f, { nodes: episodeNodes, shots: episodeIds, director: episode(episodeIds) });
     const accepted = await f.service.create(f.admin, f.project.id, request);
     const row = await one(
       f.db,
@@ -1596,6 +1606,122 @@ test("fractional ffprobe duration retains 124 frames without an extra silent fra
       ),
     );
     assert.equal((await f.service.subtitles(f.admin, done.id)).body, "");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("episode admission requires matching adoption evidence for an explicit media pin", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    const node = { ...f.doc.nodes[0], prompt: "同一镜头", audio_strategy: "keep_original" };
+    await setCanvas(f, { ...f.doc, nodes: [node], director: episode(f.doc.shots) });
+    const request = { uid: randomUUID(), expected_revision: 1, scope: "episode" };
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /采用/ });
+    const approved = await confirmEpisodeAdoptions(f, { ...f.doc, nodes: [node], director: episode(f.doc.shots) });
+    const another = await f.asset(randomUUID().replaceAll("-", ""), "video");
+    await setCanvas(f, { ...approved, nodes: [{ ...node, media_id: another.public_id }] });
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /采用/ });
+    await setCanvas(f, { ...approved, nodes: [{ ...node, prompt: "分镜已改写" }] });
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /采用/ });
+    await setCanvas(f, { ...approved, nodes: [{ ...node, x: 100 }] });
+    assert.equal((await f.service.create(f.admin, f.project.id, request)).scope, "episode");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("episode admission refuses a drifted script unless its exact confirmed revision was chosen", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f, 2);
+    await confirmEpisodeAdoptions(f, { ...f.doc, director: episode(f.doc.shots) });
+    const request = { uid: randomUUID(), expected_revision: 1, scope: "episode" };
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /主剧本已更新/ });
+    await assert.rejects(f.service.create(f.admin, f.project.id, {
+      ...request, script_revision: 2, use_confirmed_script: true,
+    }), { status: 409, message: /剧本版本/ });
+    await confirmEpisodeAdoptions(f, { ...f.doc, director: episode(f.doc.shots) });
+    const exact = { ...request, script_revision: 1, use_confirmed_script: true };
+    const accepted = await f.service.create(f.admin, f.project.id, exact);
+    await f.db.query("UPDATE workspace_script_documents SET deleted=true WHERE public_id=$1", ["c".repeat(32)]);
+    assert.deepEqual(await f.service.create(f.admin, f.project.id, exact), accepted);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+async function confirmEpisodeAdoptions<T extends { director: DirectorProduction; nodes: { id: string; media_id?: string | null; use_media?: boolean; active_job?: number | null }[] }>(
+  f: Awaited<ReturnType<typeof fixture>>,
+  document: T,
+) {
+  await setCanvas(f, document);
+  const director = new OriginalBatchPrecheck(f.p);
+  const shots: NonNullable<DirectorProduction["shots"]> = [];
+  for (const nodeId of document.director.shot_ids) {
+    const node = document.nodes.find(({ id }) => id === nodeId)!;
+    const inputs = await director.directorInputs(f.admin, f.project.id, nodeId);
+    assert.ok(inputs.adoption_input_basis);
+    const selection = node.use_media ? { media_id: node.media_id! } : { job_id: node.active_job! };
+    shots.push({ node_id: nodeId, adoption_basis: await directorAdoptionBasis(inputs.adoption_input_basis, selection) });
+  }
+  const approved = { ...document, director: { ...document.director, shots } };
+  await setCanvas(f, approved);
+  return approved;
+}
+
+async function seedEpisodeScript(f: Awaited<ReturnType<typeof fixture>>, revision = 1) {
+  await f.db.query(
+    `INSERT INTO workspace_script_documents(id, public_id, workspace_id, owner_id, path, revision)
+     SELECT $1,$2,workspace_id,owner_id,'主剧本.md',$3 FROM documents WHERE id=$4`,
+    [randomUUID(), "c".repeat(32), revision, f.projectId],
+  );
+}
+
+test("episode admission rechecks selected tracked audio against the current effective voice", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    await ensureBuiltinEdgeTts(f.p);
+    const packs = new OriginalPacks(f.p);
+    const workspace = String(f.workspace.public_id);
+    const reference = await f.asset(randomUUID().replaceAll("-", ""), "ref");
+    const packDraft = (voice_id: string) => ({
+      name: "林默",
+      purpose: "subject",
+      media: [reference.public_id],
+      voice_profile: { model: "edge-tts", voice_id },
+    });
+    const oldVoice = "zh-CN-XiaoxiaoNeural";
+    const pack = await packs.save(f.admin, packDraft(oldVoice), workspace);
+    const node = { ...f.doc.nodes[0], prompt: "对白镜头", narration_job: null, narration_text: "", dialogue_lines: [
+      { id: "line", speaker: "林默", text: "你好。😀!", audio_job: 900, pack_id: pack.id },
+    ] };
+    const approved = await confirmEpisodeAdoptions(f, { ...f.doc, nodes: [node], director: episode(f.doc.shots) });
+    const checked = await new OriginalBatchPrecheck(f.p).directorInputs(f.admin, f.project.id, node.id);
+    const expected = checked.audio_inputs["shot:dialogue:line"];
+    assert.equal(expected.voice_id, oldVoice);
+    const link = await f.link(f.project.id, "dialogue:shot:line", 900, JSON.stringify({ director_basis: expected.basis }));
+    const request = { uid: randomUUID(), expected_revision: 1, scope: "episode" };
+    const accepted = await f.service.create(f.admin, f.project.id, request);
+    const row = await one(f.db, "SELECT id FROM storyboard_exports WHERE public_id=$1", [accepted.id]);
+    await f.service.execute(row.id);
+    assert.equal((await f.service.list(f.admin, f.project.id, "episode")).exports[0].state, "done");
+
+    await packs.save(f.admin, { ...packDraft("zh-CN-YunxiNeural"), expected_revision: pack.revision }, workspace, pack.id);
+    const retry = () => f.service.create(f.admin, f.project.id, { ...request, uid: randomUUID() });
+    await assert.rejects(retry(), { status: 409, message: /声线.*重新生成/ });
+    // Updating the video approval still leaves the selected voice take stale.
+    await confirmEpisodeAdoptions(f, approved);
+    await assert.rejects(retry(), { status: 409, message: /声线.*重新生成/ });
+    // An ordinary take carries individual voice fields instead of a Director digest.
+    const ordinary = { model: "edge-tts", pack_id: pack.id, voice_id: oldVoice };
+    await f.db.query("UPDATE canvas_job_links SET inputs=$2 WHERE id=$1", [link.id, Buffer.from(JSON.stringify(ordinary))]);
+    await assert.rejects(retry(), { status: 409, message: /声线.*重新生成/ });
+    const receipt = await f.service.create(f.admin, f.project.id, request);
+    assert.equal(receipt.id, accepted.id);
+    assert.equal(receipt.state, "done");
   } finally {
     await f.cleanup();
   }

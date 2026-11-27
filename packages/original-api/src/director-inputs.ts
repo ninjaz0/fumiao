@@ -58,6 +58,7 @@ export async function resolveCanvasSources(
   document: CanvasDocument,
   nodeId: string,
   lock = false,
+  fixedInputs = lock,
 ) {
   const nodes = new Map(document.nodes.map((node) => [node.id, node]));
   const sources: {
@@ -73,7 +74,7 @@ export async function resolveCanvasSources(
     const output = edge.sourcePort && node.extension?.result?.[edge.sourcePort];
     const value = kind === "text"
       ? pythonStrip(node.extension ? output || "" : node.text)
-      : node.extension ? output || null : await canvasNodeMedia(sql, projectId, node, false, lock);
+      : node.extension ? output || null : await canvasNodeMedia(sql, projectId, node, false, fixedInputs, lock);
     sources.push({ node, kind, value });
   }
   return sources;
@@ -317,12 +318,13 @@ export async function inspectDirectorShotInputs(
   document: CanvasDocument,
   node: CanvasNode,
   bindings?: CanvasSubmissionModels,
+  options?: { adoption?: boolean; lock?: boolean },
 ): Promise<Omit<DirectorShotInputs, "revision">> {
   const result: Omit<DirectorShotInputs, "revision"> = {
     description: "", story_basis: null, material_basis: null,
     references: [], pack_texts: [], visual_issues: [], material_issues: [], voices: [], audio_input_bases: {}, audio_inputs: {},
   };
-  const sources = await resolveCanvasSources(sql, project.id, document, node.id);
+  const sources = await resolveCanvasSources(sql, project.id, document, node.id, options?.lock, options?.adoption || options?.lock);
   const texts = sources.filter(({ kind }) => kind === "text");
   const raw = canvasRawPrompt(texts.flatMap(({ value }) => value ? [value] : []), node);
   result.description = raw;
@@ -340,9 +342,11 @@ export async function inspectDirectorShotInputs(
 
   const models = bindings ?? await CanvasSubmissionModels.read(sql, { strict: false });
   const materials: unknown[] = [];
+  let visualBasis: string | undefined;
   try {
-    const visual = await resolveDirectorInput(sql, project, document, { node_id: node.id, stage: "video" }, models, { sources });
+    const visual = await resolveDirectorInput(sql, project, document, { node_id: node.id, stage: "video" }, models, { sources, lock: options?.lock });
     if (visual.stage === "video") {
+      visualBasis = visual.basis;
       materials.push(visual.material);
       result.references = visual.references;
       result.pack_texts = visual.pack_texts;
@@ -354,7 +358,7 @@ export async function inspectDirectorShotInputs(
   }
   for (const target of directorAudioTargets(node)) {
     try {
-      const input = await resolveDirectorInput(sql, project, document, target, models);
+      const input = await resolveDirectorInput(sql, project, document, target, models, { lock: options?.lock });
       materials.push(input.material);
       if (input.stage !== "dialogue" && input.stage !== "narration") continue;
       const key = directorTargetKey(target);
@@ -365,6 +369,7 @@ export async function inspectDirectorShotInputs(
         pack_id: input.stage === "dialogue" ? input.voice.packId : null,
         voice_id: input.stage === "dialogue" ? input.voice.voiceId ?? null : null,
         instruction: input.payload.instruction ?? "",
+        ...(options?.adoption && "params" in input.payload ? { params: input.payload.params } : {}),
       };
       if (input.stage === "dialogue") {
         result.voices.push({
@@ -386,5 +391,79 @@ export async function inspectDirectorShotInputs(
   }
   if (result.visual_issues.length === 0 && result.material_issues.length === 0)
     result.material_basis = await directorBasis({ materials, audio_strategy: node.audio_strategy ?? "replace" });
+  if (options?.adoption) {
+    const audioTargets = directorAudioTargets(node).map((target) => {
+      const line = node.dialogue_lines?.find(({ id }) => id === target.line_id);
+      const { model, pack_id, voice_id, instruction } = line ?? {};
+      return {
+        target,
+        basis: result.audio_input_bases[directorTargetKey(target)],
+        settings: line
+          ? { model, pack_id, voice_id, instruction }
+          : { model: node.narration_model, instruction: node.narration_instruction },
+      };
+    });
+    result.adoption_input_basis = await directorBasis({
+      node: node.id,
+      story: result.story_basis ?? result.description,
+      material: result.material_basis,
+      audio: audioTargets,
+      strategy: node.audio_strategy ?? "replace",
+      ...(node.audio_strategy === "mix" ? { gain: node.original_audio_gain ?? 0.35 } : {}),
+      visual: visualBasis ?? await legacyAdoptionVisual(sql, project, document, node, sources, options.lock),
+    });
+  }
   return result;
+}
+
+// An existing clip may have been adopted before the shot could be generated in
+// the Director Desk. Retaining it still captures the editable inputs and live
+// references that can affect the shot.
+async function legacyAdoptionVisual(
+  sql: Sql,
+  project: InputProject,
+  document: CanvasDocument,
+  node: CanvasNode,
+  sources: Awaited<ReturnType<typeof resolveCanvasSources>>,
+  lock = false,
+) {
+  const packIds = node.asset_packs.map(({ id }) => id);
+  const packs = packIds.length ? (await sql.query(
+    `SELECT public_id, revision FROM documents
+     WHERE workspace_id=$1 AND kind='pack' AND NOT deleted AND public_id=ANY($2::text[])
+     ORDER BY id ${lock ? "FOR SHARE" : ""}`,
+    [project.workspace_id, packIds],
+  )).rows : [];
+  const tail = node.tail_inherited
+    ? document.nodes.find(({ id }) => id === canvasTailSourceId(document, node.id))
+    : undefined;
+  const native = node.params.h3;
+  const mediaIds = [...new Set([
+    ...sources.flatMap(({ kind, value }) => kind === "image" && value ? [value] : []),
+    ...node.params.h3_refs,
+    ...(native ? [native.first_frame, native.last_frame, ...native.video_audio] : []),
+  ].filter((value): value is string => Boolean(value)))];
+  const media = mediaIds.length ? (await sql.query(
+    `SELECT public_id, state FROM assets WHERE workspace_id=$1 AND public_id=ANY($2::text[]) ORDER BY id`,
+    [project.workspace_id, mediaIds],
+  )).rows : [];
+  return {
+    prompt: node.prompt,
+    storyboard: {
+      narration: pythonStrip(node.narration_text),
+      dialogue: node.dialogue_lines?.filter((line) => pythonStrip(line.text))
+        .map(({ id, speaker, text }) => ({ id, speaker, text: pythonStrip(text) })),
+    },
+    params: node.params,
+    extra: Object.fromEntries(Object.entries(node.extra_params ?? {}).filter(([key]) => !key.startsWith("script_"))),
+    cinematography: node.cinematography,
+    mode: node.generation_mode,
+    grid: node.grid_layout,
+    inheritTail: node.tail_inherited ?? false,
+    sources: sources.map(({ node: source, kind, value }) => ({ id: source.id, kind, value })),
+    media,
+    packBindings: node.asset_packs,
+    packs,
+    ...(tail ? { tail: { id: tail.id, media: await canvasNodeMedia(sql, project.id, tail, false, true, lock) } } : {}),
+  };
 }

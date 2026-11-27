@@ -36,6 +36,7 @@ export type DirectorAudioInputs = Record<string, {
   pack_id: string | null;
   voice_id: string | null;
   instruction: string;
+  params?: Record<string, unknown>;
 }>;
 
 export type DirectorShotInputs = {
@@ -43,6 +44,7 @@ export type DirectorShotInputs = {
   description: string;
   story_basis: string | null;
   material_basis: string | null;
+  adoption_input_basis?: string;
   references: { id: string; mime: string; role?: "continuation" }[];
   pack_texts: { id: string; text: string }[];
   visual_issues: string[];
@@ -62,6 +64,44 @@ export type DirectorShotInputs = {
 
 export const directorBatchUnclaimed = "本次提交未创建回执。";
 export const directorScriptConflict = "主剧本已更新，请重新预览后同步。";
+export const episodeMaxShots = 30;
+export const episodeMaxSeconds = 300;
+
+export type DirectorVideoSelection = { media_id: string } | { job_id: number };
+
+export function directorVideoSelection(node: {
+  media_id: string | null;
+  active_job: number | null;
+  use_media?: boolean;
+}): DirectorVideoSelection | null {
+  if (node.use_media) return node.media_id ? { media_id: node.media_id } : null;
+  return node.active_job ? { job_id: node.active_job } : null;
+}
+
+export function directorAdoptionBasis(inputs: string, selection: DirectorVideoSelection) {
+  return directorBasis({ inputs, selection });
+}
+
+export function directorAudioEvidenceMismatch(
+  recorded: Record<string, unknown>,
+  current?: DirectorAudioInputs[string],
+) {
+  if (typeof recorded.director_basis === "string")
+    return recorded.director_basis !== current?.basis;
+  const fields = ["model", "pack_id", "voice_id", "instruction"] as const;
+  if (!current) return fields.some((key) => typeof recorded[key] === "string" && recorded[key].trim());
+  const normalize = (value: unknown) => typeof value === "string" ? value.trim() || null : value;
+  for (const key of fields) {
+    if (recorded[key] === undefined) continue;
+    if (normalize(recorded[key]) !== normalize(current[key])) return true;
+  }
+  if (recorded.params && typeof recorded.params === "object") {
+    const params = recorded.params as Record<string, unknown>;
+    for (const key of ["voice", "rate", "pitch"])
+      if (params[key] !== undefined && current.params?.[key] !== undefined && params[key] !== current.params[key]) return true;
+  }
+  return false;
+}
 
 export function directorShotIds(
   shots: readonly string[],
@@ -96,9 +136,10 @@ export function directorAudioTargets(node: {
   dialogue_lines?: readonly { id: string; text: string }[];
 }): DirectorTarget[] {
   if (node.audio_strategy === "keep_original") return [];
-  const lines = node.dialogue_lines?.filter((line) => line.text.trim()) ?? [];
+  const hasWords = /[^\p{White_Space}\u001c-\u001f]/u;
+  const lines = node.dialogue_lines?.filter((line) => hasWords.test(line.text)) ?? [];
   if (lines.length) return lines.map((line) => ({ node_id: node.id, stage: "dialogue", line_id: line.id }));
-  return node.narration_text?.trim() ? [{ node_id: node.id, stage: "narration" }] : [];
+  return hasWords.test(node.narration_text ?? "") ? [{ node_id: node.id, stage: "narration" }] : [];
 }
 
 function canonicalJson(value: unknown): string {

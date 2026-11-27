@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, BookOpen, Crosshair, ListVideo, Plus, X } from "lucide-react";
-import { canvasTailSourceId, directorAudioTargets, directorBasis, directorShotIds, type DirectorAudioInputs, type DirectorShotInputs, type DirectorTarget } from "@fumiao/web-compat/director.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
+import { canvasTailSourceId, directorAdoptionBasis, directorAudioEvidenceMismatch, directorAudioTargets, directorBasis, directorShotIds, directorTargetKey, directorVideoSelection, episodeMaxSeconds, episodeMaxShots, type DirectorAudioInputs, type DirectorShotInputs, type DirectorTarget, type DirectorVideoSelection } from "@fumiao/web-compat/director.js";
+import { Composition } from "./Composition";
+import { VideoVersions } from "./VideoVersions";
 import { directorGenerationTargets } from "./director-batch";
 import { scriptApi, type ScriptDocumentDetail } from "./script-api";
 import {
@@ -11,7 +14,37 @@ import {
   scriptSourceJump,
 } from "./script-fusion";
 import type { Pack } from "./AssetPacks";
-import { linkedValue, type CanvasEdge, type Doc, type Job } from "./types";
+import { linkedValue, videoSeconds, type Asset, type CanvasEdge, type CanvasNode, type Doc, type Job } from "./types";
+
+type Inspection = { value?: DirectorShotInputs; error?: string; adoption?: string };
+const readyRun = (run?: Job): run is Job & { result: string } => run?.status === "done" && Boolean(run.result);
+
+function adoptedVideo(node: CanvasNode, runs: Job[]) {
+  const pin = directorVideoSelection(node);
+  if (pin && "media_id" in pin) return { pin, media: pin.media_id, job: runs.find(({ result }) => result === pin.media_id) };
+  const job = pin ? runs.find((run) => run.id === pin.job_id && run.kind === "video" && run.canvas_node === node.id) : undefined;
+  return { pin, job, media: readyRun(job) ? job.result : null };
+}
+
+function episodeShotAudio(node: CanvasNode, runs: Job[], inputs: DirectorShotInputs) {
+  let seconds = 0;
+  const targets = directorAudioTargets(node);
+  for (const target of targets) {
+    const line = target.stage === "dialogue" ? node.dialogue_lines?.find(({ id }) => id === target.line_id) : undefined;
+    const label = line ? "对白" : "旁白";
+    const pending = runs.find(({ id }) => id === (line ? line.audio_pending : node.narration_pending));
+    if (pending && ["queued", "running", "processing", "uncertain"].includes(pending.status)) return { seconds, issue: `${label}仍在生成` };
+    const voice = runs.find(({ id }) => id === (line ? line.audio_job : node.narration_job));
+    if (!readyRun(voice) || voice.kind !== "audio") return { seconds, issue: `${label}尚未就绪` };
+    const text = line ? line.text : node.narration_text;
+    if (line?.audio_stale?.includes(voice.id) || pythonStrip(voice.prompt) !== pythonStrip(text ?? "") ||
+      directorAudioEvidenceMismatch(voice.inputs ?? {}, inputs.audio_inputs[directorTargetKey(target)])) {
+      return { seconds, issue: `${label}已变更，请重新生成语音` };
+    }
+    seconds += voice.actual?.duration || 0;
+  }
+  return { seconds: seconds + Math.max(0, targets.length - 1) * 0.15, issue: "" };
+}
 
 type DirectorDeskProps = {
   document: Doc;
@@ -39,6 +72,11 @@ type DirectorDeskProps = {
   onRecoverBatch: () => void;
   onChoosePack: (nodeId: string) => void;
   onFixTailFrame: (sourceId: string, nodeId: string) => Promise<void>;
+  onAdoptVideo: (nodeId: string, selection: DirectorVideoSelection, reviewed: string, continuing?: boolean) => Promise<void>;
+  onSave: () => Promise<number>;
+  project: string;
+  account: string;
+  assets: Asset[];
 };
 
 export function DirectorDesk({
@@ -67,6 +105,11 @@ export function DirectorDesk({
   onRecoverBatch,
   onChoosePack,
   onFixTailFrame,
+  onAdoptVideo,
+  onSave,
+  project,
+  account,
+  assets,
 }: DirectorDeskProps) {
   const production = document.director;
   const order = production ? directorShotIds(document.shots ?? [], production) : [];
@@ -82,26 +125,40 @@ export function DirectorDesk({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [confirmedOrder, setConfirmedOrder] = useState<string>();
-  const [inputState, setInputState] = useState<{ nodeId: string; revision: number; value?: DirectorShotInputs; error?: string }>();
+  const [inputState, setInputState] = useState<{ key: string; revision: number; byNode: Map<string, Inspection> }>();
   const orderKey = JSON.stringify(order);
   const nodeId = node?.id;
-  const inspected = canvasSaved && inputState?.nodeId === nodeId && inputState?.revision === revision ? inputState : undefined;
+  const inspectKey = JSON.stringify(videoNodes.flatMap((shot) => {
+    const pin = directorVideoSelection(shot);
+    return shot.id === nodeId || (pin && order.length <= episodeMaxShots && order.includes(shot.id))
+      ? [{ id: shot.id, pin }] : [];
+  }));
+  const checked = canvasSaved && inputState?.key === inspectKey && inputState.revision === revision ? inputState.byNode : undefined;
+  const inspected = nodeId ? checked?.get(nodeId) : undefined;
   const inputs = inspected?.value;
 
   useEffect(() => {
-    if (!active || !canvasSaved || !nodeId) return;
+    if (!active || !canvasSaved) return;
+    const targets: { id: string; pin: DirectorVideoSelection | null }[] = JSON.parse(inspectKey);
+    if (!targets.length) return;
     let current = true;
     let reading = false;
     const read = async () => {
       if (reading || globalThis.document.hidden) return;
       reading = true;
       try {
-        const value = await onReadInputs(nodeId);
-        if (current) setInputState(value.revision === revision
-          ? { nodeId, revision, value }
-          : { nodeId, revision, error: "画布已有新版本，请重新载入。" });
-      } catch (cause) {
-        if (current) setInputState({ nodeId, revision, error: (cause as Error).message });
+        const results = await Promise.all(targets.map(async ({ id, pin }): Promise<[string, Inspection]> => {
+          try {
+            const value = await onReadInputs(id);
+            if (value.revision !== revision) return [id, { error: "画布已有新版本，请重新载入。" }];
+            const adoption = pin && value.adoption_input_basis
+              ? await directorAdoptionBasis(value.adoption_input_basis, pin) : undefined;
+            return [id, { value, adoption }];
+          } catch (cause) {
+            return [id, { error: (cause as Error).message }];
+          }
+        }));
+        if (current) setInputState({ key: inspectKey, revision, byNode: new Map(results) });
       } finally {
         reading = false;
       }
@@ -115,7 +172,7 @@ export function DirectorDesk({
       window.clearInterval(timer);
       window.removeEventListener("focus", refresh);
     };
-  }, [active, canvasSaved, nodeId, onReadInputs, revision]);
+  }, [active, canvasSaved, inspectKey, onReadInputs, revision]);
 
   useEffect(() => {
     if (!active || !sourceId) return;
@@ -216,6 +273,36 @@ export function DirectorDesk({
   const savedState = production?.shots?.find((shot) => shot.node_id === nodeId);
   const storyConfirmed = Boolean(inputs?.story_basis && inputs.story_basis === savedState?.story_basis);
   const materialConfirmed = Boolean(inputs?.material_basis && inputs.material_basis === savedState?.material_basis);
+  const adopted = node && adoptedVideo(node, runs);
+  const adoptionConfirmed = Boolean(inspected?.adoption && inspected.adoption === savedState?.adoption_basis);
+  const candidates = node ? runs.filter((run) => run.canvas_node === node.id && run.kind === "video" && readyRun(run)) : [];
+  const adopt = (selection: DirectorVideoSelection, continuing = false) => {
+    if (node && inputs?.adoption_input_basis)
+      void apply(() => onAdoptVideo(node.id, selection, inputs.adoption_input_basis!, continuing));
+  };
+  let episodeIssue = !order.length ? "请先确认本集片单。"
+    : order.length > episodeMaxShots ? "本集最多 30 镜，请缩减片单。"
+    : !orderConfirmed ? "请保存并确认本集片单顺序。" : "";
+  let episodeSeconds = 0;
+  if (!episodeIssue) {
+    for (const [index, id] of order.entries()) {
+      const shot = videoNodes.find((item) => item.id === id)!;
+      const video = adoptedVideo(shot, runs);
+      const input = checked?.get(id);
+      const saved = production?.shots?.find((item) => item.node_id === id);
+      let issue = "";
+      if (!video.media || !saved?.adoption_basis) issue = "请明确采用视频";
+      else if (input?.error) issue = input.error;
+      else if (!input?.value) issue = "正在检查镜头依据";
+      else if (!input.adoption || input.adoption !== saved.adoption_basis) issue = "请重新采用视频或确认沿用已采用视频";
+      const audio = input?.value && episodeShotAudio(shot, runs, input.value);
+      if (!episodeIssue && (issue || audio?.issue)) episodeIssue = `镜头 ${index + 1} · ${issue || audio?.issue}`;
+      const duration = videoSeconds(video.job) || assets.find((asset) => asset.id === video.media)?.seconds || shot.params.seconds;
+      const seconds = Math.max(duration, audio ? audio.seconds : 0);
+      episodeSeconds += Math.ceil(seconds * 24 - 1e-4) / 24;
+    }
+    if (episodeSeconds > episodeMaxSeconds) episodeIssue = "预计成片超过 5 分钟，请缩减片单或缩短音轨。";
+  }
   const selectedIds = order.filter((id) => selectedShots.includes(id));
   const selected = (selectedIds.length ? selectedIds : node ? [node.id] : [])
     .map((id) => videoNodes.find((item) => item.id === id))
@@ -447,6 +534,35 @@ export function DirectorDesk({
                     </ul>
                   )}
                 </section>
+                <section className="fm-director-card fm-director-versions" aria-label="逐镜选版">
+                  <h4>逐镜选版</h4>
+                  {adopted?.media && <div className="fm-director-approved-video">
+                    <p>{adoptionConfirmed ? "本镜视频已采用"
+                      : savedState?.adoption_basis && inspected ? "本镜分镜或素材已变更，视频待确认"
+                      : inspected ? "正在使用画布选定的视频，请确认用于本集" : "正在核对已采用的视频"}
+                      {adopted.job && ` · #${adopted.job.id}`}</p>
+                    <video src={`/media/${adopted.media}`} controls playsInline preload="metadata" />
+                    {!adoptionConfirmed && adopted.pin && <button type="button" className="secondary"
+                      disabled={pending || !inputs?.adoption_input_basis}
+                      onClick={() => adopt(adopted.pin!, true)}>确认沿用已采用视频</button>}
+                  </div>}
+                  {!adopted?.media && !candidates.length && <p>完成的视频候选会显示在这里。</p>}
+                  {candidates.length === 1 && candidates[0].id !== adopted?.job?.id && <div className="fm-director-approved-video">
+                    <video src={`/media/${candidates[0].result}`} controls playsInline preload="metadata" />
+                    <button type="button" className="primary"
+                      disabled={pending || !storyConfirmed || !materialConfirmed}
+                      onClick={() => adopt({ job_id: candidates[0].id })}>采用此视频</button>
+                  </div>}
+                  {candidates.length > 1 && <details>
+                    <summary>比较视频候选（{candidates.length}）</summary>
+                    <VideoVersions key={node.id} runs={candidates}
+                      adopted={node.use_media ? null : node.active_job}
+                      disabled={pending || !storyConfirmed || !materialConfirmed}
+                      onAdopt={(job_id) => adopt({ job_id })} />
+                  </details>}
+                  {candidates.length > 0 && (!storyConfirmed || !materialConfirmed) &&
+                    <p className="fm-director-note">确认当前分镜和素材后可采用候选视频。</p>}
+                </section>
                 <section className="fm-director-card">
                   <h4>剧本原文</h4>
                   {source ? (
@@ -462,6 +578,21 @@ export function DirectorDesk({
                 </section>
               </>
             ) : <p>本集尚无镜头。可更新剧本分镜，或从画布纳入已有镜头。</p>}
+            <div className="fm-director-card">
+              <Composition
+                active={active}
+                project={project}
+                scope="episode"
+                episode={{
+                  account,
+                  scriptRevision: production.script_revision,
+                  readScriptRevision: async () => (await scriptApi.get(production.script_id)).revision,
+                }}
+                getRevision={onSave}
+                ready={!episodeIssue}
+                waitingReason={episodeIssue}
+              />
+            </div>
           </main>
         </div>
       )}

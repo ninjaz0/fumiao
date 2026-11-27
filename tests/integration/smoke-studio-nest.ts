@@ -48,12 +48,14 @@ import {
 } from "./studio-nest-restore.js";
 import { mediaProviderFixture } from "./studio-nest-restore-media.js";
 import { auditRoutes } from "./studio-nest-routes.js";
+import { verifyDirectorDesk } from "./studio-director-desk.js";
 import { verifyRemoteProvider } from "./studio-remote-provider.js";
 import { verifyStudioReplicas } from "./studio-nest-replicas.js";
 
 const host = "127.0.0.1";
 const restoring = process.argv.includes("--restore");
 const https = process.argv.includes("--https");
+const directorDesk = process.argv.includes("--director-desk");
 const remoteProvider = process.argv.includes("--remote-provider");
 const replicas = process.argv.includes("--replicas");
 const useS3 = restoring || replicas || process.argv.includes("--s3");
@@ -843,6 +845,7 @@ async function start() {
   if (
     !https &&
     !remoteProvider &&
+    !directorDesk &&
     !replicas &&
     !process.argv.includes("--serve")
   )
@@ -964,6 +967,10 @@ async function start() {
       profileEnv.REDIS_URL,
       s3,
     );
+    return;
+  }
+  if (directorDesk) {
+    await verifyDirectorDesk(p, webOrigin, user);
     return;
   }
   if (remoteProvider) {

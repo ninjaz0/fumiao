@@ -50,6 +50,7 @@ export async function canvasNodeMedia(
   node: CanvasNode,
   adoptedOnly = false,
   fixedInput = false,
+  lock = fixedInput,
 ): Promise<string | null> {
   if (node.use_media) return node.media_id;
   if (adoptedOnly && !node.active_job) return null;
@@ -59,7 +60,8 @@ export async function canvasNodeMedia(
     WHERE l.project_id=$1 AND l.node=$2 ${node.active_job ? "AND j.public_id=$3" : "ORDER BY l.id DESC LIMIT 1"}
     ${adoptedOnly ? "AND j.kind='video' FOR SHARE OF j" : ""}
     ${fixedInput && node.active_job ? `AND j.state='completed'
-      AND j.workspace_id=(SELECT workspace_id FROM documents WHERE id=$1) FOR SHARE OF j` : ""}`,
+      AND j.workspace_id=(SELECT workspace_id FROM documents WHERE id=$1)
+      ${lock ? "FOR SHARE OF j" : ""}` : ""}`,
     [project, node.id, ...(node.active_job ? [node.active_job] : [])],
   );
   if (!row) return adoptedOnly || (fixedInput && node.active_job) ? null : node.media_id;

@@ -1,5 +1,5 @@
 import type { CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
-import { canvasTailSourceId, directorBasis, directorShotIds, type DirectorAudioInputs, type DirectorBatchSelection, type DirectorShotInputs, type DirectorTarget } from "@fumiao/web-compat/director.js";
+import { canvasTailSourceId, directorAdoptionBasis, directorBasis, directorShotIds, directorVideoSelection, type DirectorAudioInputs, type DirectorBatchSelection, type DirectorShotInputs, type DirectorTarget, type DirectorVideoSelection } from "@fumiao/web-compat/director.js";
 import { PluginNodeForm, PluginNodePorts, PluginNodeOutputs } from "./PluginNode";
 import {
   evaluateFormConstraints,
@@ -973,6 +973,11 @@ export function CanvasWorkspace({
   }, [project.id, project.workspace]);
   const [surface, setSurface] = useState<"canvas" | "document" | "director">("canvas");
   const [directorShotId, setDirectorShotId] = useState<string | null>(null);
+  const directorAccount = `${initial.me.id}:${project.workspace}`;
+  const directorShotKey = `fm-director-shot:${directorAccount}:${project.id}`;
+  useEffect(() => {
+    if (directorShotId) sessionStorage.setItem(directorShotKey, directorShotId);
+  }, [directorShotId, directorShotKey]);
   const [directorMounted, setDirectorMounted] = useState(false);
   const [scriptWorkspaceMounted, setScriptWorkspaceMounted] = useState(false);
   const [agentTab, setAgentTab] = useState<"chat" | "proposals">("chat");
@@ -1002,7 +1007,7 @@ export function CanvasWorkspace({
     if (production && (!request || production.script_id === request.docId)) {
       const members = directorShotIds(current.shots ?? [], production);
       setDirectorShotId((previous) => {
-        const target = request?.nodeId ?? previous;
+        const target = request?.nodeId ?? previous ?? sessionStorage.getItem(directorShotKey);
         return target && members.includes(target) ? target : members[0] ?? null;
       });
     }
@@ -1037,6 +1042,50 @@ export function CanvasWorkspace({
     if (checked.some((input) => input.revision !== revision)) throw new Error("画布版本已变更，请重新载入");
     return Object.assign({}, ...checked.map((input) => input.audio_inputs)) as DirectorAudioInputs;
   }, [readDirectorInputs]);
+  const adoptDirectorVideo = async (nodeId: string, selection: DirectorVideoSelection, reviewed: string, continuing = false) => {
+    const revision = await doc.flush();
+    const current = doc.ref.current.document;
+    const inputs = await readDirectorInputs(nodeId);
+    const node = current.nodes.find((item) => item.id === nodeId && item.type === "video");
+    const director = current.director;
+    if (!node || !director?.shot_ids.includes(nodeId) || inputs.revision !== revision ||
+      inputs.adoption_input_basis !== reviewed) {
+      throw new Error("镜头的采用依据已更新，请检查后重新确认。");
+    }
+    const previous = director.shots?.find((shot) => shot.node_id === nodeId);
+    if (continuing) {
+      const pin = directorVideoSelection(node);
+      const same = "job_id" in selection
+        ? pin && "job_id" in pin && pin.job_id === selection.job_id
+        : pin && "media_id" in pin && pin.media_id === selection.media_id;
+      if (!same) throw new Error("已采用的视频已变更，请检查后重新确认。");
+    } else if (!inputs.story_basis || inputs.story_basis !== previous?.story_basis ||
+      !inputs.material_basis || inputs.material_basis !== previous?.material_basis) {
+      throw new Error("请先确认当前分镜和素材。");
+    }
+    if ("job_id" in selection && !runsRef.current.some((run) =>
+      run.id === selection.job_id && run.canvas_node === nodeId && run.kind === "video" && run.status === "done" && run.result)) {
+      throw new Error("这一版视频尚未就绪。");
+    }
+    const adoption_basis = await directorAdoptionBasis(reviewed, selection);
+    changeDirectorDocument((latest) => {
+      if (latest !== current) throw new Error("镜头的采用依据已更新，请检查后重新确认。");
+      const approved = { ...previous, node_id: nodeId, adoption_basis };
+      return {
+        ...current,
+        director: {
+          ...director,
+          shots: previous
+            ? director.shots?.map((shot) => shot.node_id === nodeId ? approved : shot)
+            : [...(director.shots ?? []), approved],
+        },
+        nodes: !continuing && "job_id" in selection
+          ? current.nodes.map((item) => item.id === nodeId ? { ...node, active_job: selection.job_id, use_media: false } : item)
+          : current.nodes,
+      };
+    });
+    await doc.flush();
+  };
   const confirmDirectorShot = async (nodeId: string, field: "story_basis" | "material_basis", reviewedBasis: string) => {
     const revision = await doc.flush();
     const current = doc.ref.current.document;
@@ -2758,7 +2807,7 @@ export function CanvasWorkspace({
     const { document } = doc.ref.current;
     const directorReference = single.type === "image" && single.use_media && single.media_id &&
       document.edges.some((edge) => edge.source === nid && document.director?.shot_ids.includes(edge.target));
-    if (!single.active_job && !directorReference) edit(nid, { use_media: false });
+    if (single.type === "image" && !single.active_job && !directorReference) edit(nid, { use_media: false });
     setSubmitting(nid);
     try {
       const rev = await doc.flush();
@@ -5891,6 +5940,11 @@ export function CanvasWorkspace({
           onRecoverBatch={openDirectorReceipt}
           onChoosePack={setPackPicker}
           onFixTailFrame={fixDirectorTailFrame}
+          onAdoptVideo={adoptDirectorVideo}
+          onSave={doc.flush}
+          project={project.id}
+          account={directorAccount}
+          assets={studio.assets}
         />
       )}
       {(surface === "document" || scriptWorkspaceMounted) && (

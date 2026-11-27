@@ -89,14 +89,26 @@ export async function validateDirectorSelection(
 ) {
   requireValue(revision === project.revision, 409, canvasConflict);
   const production = document.director;
-  requireValue(production?.script_revision === selection.script_revision, 409, "已同步剧本版本不一致，请重新预检");
-  const script = await canvases.directorScript(sql, project.workspace_id, production.script_id, lock);
-  requireValue(script && script.revision >= production.script_revision, 409, "主剧本文档不存在或版本不可用");
-  requireValue(script.revision === production.script_revision || selection.use_confirmed_script, 409, directorScriptConflict);
+  requireValue(production, 409, "已同步剧本版本不一致，请重新预检");
+  await validateDirectorScriptRevision(sql, canvases, project.workspace_id, production, selection, lock);
   const ordered = directorShotIds(document.shots ?? [], production);
   requireValue(ordered.length > 0 && ordered.length === production.shot_ids.length &&
     production.order_basis === await directorBasis(ordered), 409, "请先保存并确认本集片单顺序");
   return { production, ordered };
+}
+
+export async function validateDirectorScriptRevision(
+  sql: Sql,
+  canvases: OriginalCanvases,
+  workspaceId: string,
+  production: NonNullable<CanvasDocument["director"]>,
+  selection: { script_revision: number; use_confirmed_script?: boolean },
+  lock: boolean,
+) {
+  requireValue(production.script_revision === selection.script_revision, 409, "已同步剧本版本不一致，请重新确认");
+  const script = await canvases.directorScript(sql, workspaceId, production.script_id, lock);
+  requireValue(script && script.revision >= production.script_revision, 409, "主剧本文档不存在或版本不可用");
+  requireValue(script.revision === production.script_revision || selection.use_confirmed_script, 409, directorScriptConflict);
 }
 
 export function directorTargetShots(document: CanvasDocument, ordered: string[], target: DirectorTarget) {
@@ -177,7 +189,7 @@ export class OriginalBatchPrecheck {
         vault: this.p.vault,
         registry: this.p.registry,
       });
-      const inputs = await inspectDirectorShotInputs(sql, { id: project.id, workspace_id: project.workspace_id }, doc, node, bindings);
+      const inputs = await inspectDirectorShotInputs(sql, { id: project.id, workspace_id: project.workspace_id }, doc, node, bindings, { adoption: true });
       return { revision: Number(project.revision), ...inputs };
     });
   }

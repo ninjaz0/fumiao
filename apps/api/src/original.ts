@@ -17,6 +17,7 @@ import {
   Patch,
   Put,
   Post,
+  Query,
   Req,
   RequestMethod,
   Res,
@@ -227,8 +228,8 @@ class OriginalApi {
     return this.canvasRuns.list(req.actor, key);
   }
   @Get("api/canvases/:key/exports")
-  listStoryboardExports(@Req() req: AuthRequest, @Param("key") key: string) {
-    return this.storyboardExports.list(req.actor, key);
+  listStoryboardExports(@Req() req: AuthRequest, @Param("key") key: string, @Query("scope") scope?: string) {
+    return this.storyboardExports.list(req.actor, key, scope);
   }
   @Post("api/canvases/:key/exports")
   @HttpCode(200)

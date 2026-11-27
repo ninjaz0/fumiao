@@ -63,7 +63,7 @@ async function composerMedia(directory: string) {
   return path;
 }
 
-function mediaModel(kind: "video" | "audio"): ModelSpec {
+export function mediaModel(kind: "video" | "audio"): ModelSpec {
   const video = kind === "video";
   const tiers = video
     ? [

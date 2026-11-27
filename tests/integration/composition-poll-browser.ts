@@ -46,7 +46,7 @@ try {
     await route.fulfill({ json: { ...project, document: { ...project.document, nodes: [node], shots: [node.id] } } });
   });
   let polls = 0;
-  await page.route(`**${path}/exports`, async (route) => {
+  await page.route((url) => url.pathname === `${path}/exports`, async (route) => {
     if (route.request().method() === "POST") {
       return route.fulfill({ status: 400, json: { detail: "启动成片失败" } });
     }
@@ -56,9 +56,9 @@ try {
   });
   await page.goto(`/canvas/${id}?workspace=${state.workspace_id}`);
   await page.getByRole("button", { name: "镜头列表", exact: true }).click();
-  const composition = page.getByRole("region", { name: "成片预览与导出" });
+  const composition = page.getByRole("region", { name: "全画布成片预览与导出" });
   await expect(composition.getByRole("alert")).toHaveText("成片列表暂不可用");
-  const recovered = await page.waitForResponse((response) => response.url().endsWith("/exports") && response.ok());
+  const recovered = await page.waitForResponse((response) => response.url().endsWith("/exports?scope=canvas") && response.ok());
   await recovered.finished();
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   assert.ok(polls >= 2);
@@ -71,7 +71,7 @@ try {
   console.log("Composition poll error clears after successful empty poll: passed");
   await composition.getByRole("button", { name: "合成预览" }).click();
   await expect(composition.getByRole("alert")).toHaveText("启动成片失败");
-  const next = await page.waitForResponse((response) => response.url().endsWith("/exports") && response.ok());
+  const next = await page.waitForResponse((response) => response.url().endsWith("/exports?scope=canvas") && response.ok());
   await next.finished();
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await expect(composition.getByRole("alert")).toHaveText("启动成片失败");

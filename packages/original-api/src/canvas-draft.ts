@@ -226,6 +226,8 @@ export const canvasPluginRunFields: Fields = {
 export const storyboardExportFields: Fields = {
   exporter: text(120, "storyboard/mp4"),
   scope: literal(["canvas", "episode"], "canvas"),
+  script_revision: { ...integer(), min: 1, exactInteger: true, optional: true },
+  use_confirmed_script: { kind: "boolean", strict: true, optional: true },
   uid: { kind: "uuid" },
   bgm_asset: { ...media, nullable: true, optional: true },
   bgm_volume: { kind: "float", min: 0.02, max: 1, optional: true },
