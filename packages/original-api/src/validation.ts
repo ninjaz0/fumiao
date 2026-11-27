@@ -1,4 +1,5 @@
 /** Original FastAPI request shapes. Failures keep its status and detail envelope. */
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { DomainError } from "@fumiao/platform/security.js";
 type Issue = {
   type: string;
@@ -15,6 +16,7 @@ export class ValidationError extends DomainError {
 export type Field = {
   kind:
     | "string"
+    | "credits"
     | "integer"
     | "float"
     | "boolean"
@@ -175,6 +177,16 @@ export function parseBody(
             })),
           );
         }
+      }
+    } else if (field.kind === "credits" && typeof value === "string" && value.includes(".")) {
+      try {
+        const units = creditUnits(value);
+        if ((field.min !== undefined && units < creditUnits(String(field.min))) ||
+            (field.max !== undefined && units > creditUnits(String(field.max)))) {
+          issue(key, "value_error", "积分金额超出允许范围", value);
+        } else out[key] = formatCredits(units);
+      } catch {
+        issue(key, "value_error", "积分必须为至多十二位小数的十进制数", value);
       }
     } else if (field.kind === "literal") {
       const choices = field.values!;

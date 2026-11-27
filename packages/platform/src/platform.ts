@@ -1,3 +1,4 @@
+import { creditUnits, formatCredits } from "./credit-amount.js";
 import {
   addressPause,
   connectionBase,
@@ -349,7 +350,7 @@ export class Platform {
   async credit(
     sql: Sql,
     wid: string,
-    amount: number,
+    amount: number | string,
     key: string,
     action: string,
     context: {
@@ -359,6 +360,8 @@ export class Platform {
       uid?: string;
     } = {},
   ) {
+    const units = creditUnits(String(amount));
+    const decimal = formatCredits(units);
     await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
       "credit:" + (context.uid ? "uid:" + context.uid : key),
     ]);
@@ -373,7 +376,7 @@ export class Platform {
     if (prior) {
       requireValue(
         prior.workspace_id === wid &&
-          Number(prior.amount) === amount &&
+          creditUnits(String(prior.amount)) === units &&
           prior.action === action &&
           // Earlier Advanced rows have no actor/note snapshots. Keep their existing
           // retry contract; do not invent historical metadata during a retry.
@@ -390,7 +393,7 @@ export class Platform {
     const wallet = await one(
       sql,
       "UPDATE wallets SET balance=balance+$2 WHERE workspace_id=$1 AND balance+$2>=held RETURNING balance,held",
-      [wid, amount],
+      [wid, decimal],
     );
     requireValue(wallet, 409, "可用积分不足");
     await sql.query(
@@ -401,7 +404,7 @@ export class Platform {
         wid,
         key,
         action,
-        amount,
+        decimal,
         context.actorId ?? null,
         context.note ?? "",
         context.uid ?? null,

@@ -538,15 +538,15 @@ export class OriginalChats {
       );
       requireValue(wallet, 404, "积分账户不存在");
       const amount = Number(price.amount);
+      const held = await one(sql,
+        "UPDATE wallets SET held=held+$2 WHERE workspace_id=$1 AND balance-held >= $2 RETURNING workspace_id",
+        [workspace.id, amount],
+      );
       requireValue(
-        Number(wallet.balance) - Number(wallet.held) >= amount,
+        held,
         409,
         `当前空间积分不足，需要 ${amount} 积分`,
       );
-      await sql.query("UPDATE wallets SET held=held+$2 WHERE workspace_id=$1", [
-        workspace.id,
-        amount,
-      ]);
       await sql.query(
         "INSERT INTO chat_charges VALUES($1,$2,$3,$4,$5,$6,'held',$7)",
         [
@@ -600,7 +600,7 @@ export class OriginalChats {
     sql: Sql,
     turn: any,
     workspace: string,
-    amount: number,
+    amount: string | number,
     action: "reserve" | "spend" | "refund",
     note: string,
     stamp: number,
@@ -671,7 +671,7 @@ export class OriginalChats {
     );
     if (charge?.state === "held") {
       const success = value.state === "complete",
-        amount = Number(charge.amount);
+        amount = String(charge.amount);
       await sql.query(
         "UPDATE wallets SET balance=balance-$2,held=held-$3 WHERE workspace_id=$1",
         [charge.workspace_id, success ? amount : 0, amount],

@@ -1,3 +1,4 @@
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { evaluateBudgetImpact } from "@fumiao/platform/budgets.js";
@@ -37,6 +38,7 @@ export type PrecheckItem = {
   stage: PrecheckStage;
   model: string;
   credits: number;
+  exact_credits: string;
   status: PrecheckHealth;
   issues: string[];
 };
@@ -112,13 +114,13 @@ export class OriginalBatchPrecheck {
       });
       const wallet = await one(
         sql,
-        "SELECT balance, held FROM wallets WHERE workspace_id=$1",
+        "SELECT balance-held AS available FROM wallets WHERE workspace_id=$1",
         [workspace.id],
       );
       const available =
-        Number(wallet?.balance ?? 0) - Number(wallet?.held ?? 0);
+        creditUnits(String(wallet?.available ?? 0));
       let priceRevision = 1;
-      let totalCredits = 0;
+      let totalUnits = 0n;
       const items = [];
       for (const [index, item] of body.items.entries()) {
         const count = item.count ?? 1;
@@ -156,15 +158,15 @@ export class OriginalBatchPrecheck {
               reason: `缺少可用的 ${item.kind} 默认模型`,
             };
         priceRevision = q.revision;
-        const subtotal = q.amount * count;
-        if (q.allowed && q.priced) totalCredits += subtotal;
+        const subtotal = creditUnits(String(q.amount)) * BigInt(count);
+        if (q.allowed && q.priced) totalUnits += subtotal;
         items.push({
           index,
           kind: item.kind,
           model,
           count,
           unit_credits: q.amount,
-          credits: subtotal,
+          credits: Number(formatCredits(subtotal)),
           allowed: q.allowed,
           priced: q.priced,
           ...(q.reason ? { reason: q.reason } : {}),
@@ -173,9 +175,9 @@ export class OriginalBatchPrecheck {
       return {
         price_revision: priceRevision,
         items,
-        total_credits: totalCredits,
-        available_credits: available,
-        sufficient: available >= totalCredits,
+        total_credits: Number(formatCredits(totalUnits)),
+        available_credits: Number(formatCredits(available)),
+        sufficient: available >= totalUnits,
       };
     });
   }
@@ -212,11 +214,11 @@ export class OriginalBatchPrecheck {
       });
       const wallet = await one(
         sql,
-        "SELECT balance, held FROM wallets WHERE workspace_id=$1",
+        "SELECT balance-held AS available FROM wallets WHERE workspace_id=$1",
         [project.workspace_id],
       );
       const availableCredits =
-        Number(wallet?.balance ?? 0) - Number(wallet?.held ?? 0);
+        creditUnits(String(wallet?.available ?? 0));
       const policyRow = await one(
         sql,
         "SELECT price_revision FROM studio_policy",
@@ -282,7 +284,7 @@ export class OriginalBatchPrecheck {
 
           const issues: string[] = [];
           let status: PrecheckHealth = "ready";
-          let credits = 0;
+          let units = 0n;
           let model = "";
 
           if (staleRevision) {
@@ -401,7 +403,7 @@ export class OriginalBatchPrecheck {
                 issues.push(q.reason || "当前模型不可用或未定价");
                 status = "blocked";
               } else {
-                credits = q.amount;
+                units = creditUnits(String(q.amount));
               }
             }
           } else if (stage === "narration") {
@@ -432,7 +434,7 @@ export class OriginalBatchPrecheck {
                 issues.push(q.reason || "音频配音服务尚未配置或连接已停用");
                 status = "blocked";
               } else {
-                credits = q.amount;
+                units = creditUnits(String(q.amount));
                 if (model === "edge-tts") {
                   issues.push("使用内置免费 Edge TTS 兜底引擎（0 积分）");
                   if (status === "ready") status = "warning";
@@ -448,7 +450,7 @@ export class OriginalBatchPrecheck {
               status = "blocked";
             } else {
               // F027 + F010: Quote EACH line using its actual resolved character/explicit voice model!
-              let lineCreditsSum = 0;
+              let lineCreditsSum = 0n;
               const usedModels = new Set<string>();
               let edgeLineCount = 0;
               for (const line of validLines) {
@@ -489,11 +491,11 @@ export class OriginalBatchPrecheck {
                   continue;
                 }
                 usedModels.add(lineModel);
-                lineCreditsSum += q.amount;
+                lineCreditsSum += creditUnits(String(q.amount));
                 if (lineModel === "edge-tts") edgeLineCount++;
               }
               model = [...usedModels].join(", ");
-              credits = lineCreditsSum;
+              units = lineCreditsSum;
               if (status !== "blocked" && edgeLineCount > 0) {
                 issues.push(
                   edgeLineCount === validLines.length
@@ -511,7 +513,8 @@ export class OriginalBatchPrecheck {
             node_type: node.type,
             stage,
             model,
-            credits: status === "blocked" ? 0 : credits,
+            exact_credits: status === "blocked" ? "0" : formatCredits(units),
+            credits: status === "blocked" ? 0 : Number(formatCredits(units)),
             status,
             issues,
           });
@@ -521,7 +524,8 @@ export class OriginalBatchPrecheck {
       const readyCount = items.filter((i) => i.status === "ready").length;
       const warningCount = items.filter((i) => i.status === "warning").length;
       const blockedCount = items.filter((i) => i.status === "blocked").length;
-      const totalCredits = items.reduce((sum, i) => sum + i.credits, 0);
+      const totalUnits = items.reduce((sum, i) => sum + creditUnits(i.exact_credits), 0n);
+      const totalCredits = formatCredits(totalUnits);
       const budgetImpact = await evaluateBudgetImpact(sql, {
         workspaceId: project.workspace_id,
         projectId: String(project.id),
@@ -532,7 +536,7 @@ export class OriginalBatchPrecheck {
         .map((i) => `${i.node_id}:${i.stage}`);
       const executableItems = items
         .filter((i) => i.status !== "blocked")
-        .map((i) => `${i.node_id}:${i.stage}:${i.model}:${i.credits}`)
+        .map((i) => `${i.node_id}:${i.stage}:${i.model}:${i.exact_credits}`)
         .sort();
       const precheckToken = hash(
         JSON.stringify({
@@ -541,7 +545,9 @@ export class OriginalBatchPrecheck {
           request_hash: requestHash,
           revision: Number(project.revision),
           price_revision: priceRevision,
-          total_credits: totalCredits,
+          // Keep integer precheck tickets issued before precision migration verifiable.
+          total_credits: Number.isSafeInteger(Number(totalCredits)) && !totalCredits.includes(".")
+            ? Number(totalCredits) : totalCredits,
           executable: executableItems,
         }),
       );
@@ -561,9 +567,10 @@ export class OriginalBatchPrecheck {
             warning: warningCount,
             blocked: blockedCount,
             runnable: readyCount + warningCount,
-            total_credits: totalCredits,
-            available_credits: availableCredits,
-            sufficient: availableCredits >= totalCredits,
+            total_credits: Number(totalCredits),
+            exact_total_credits: totalCredits,
+            available_credits: Number(formatCredits(availableCredits)),
+            sufficient: availableCredits >= totalUnits,
             budget_blocked: budgetImpact.blocked,
             budget_blocks: budgetImpact.blocks,
             budget_warnings: budgetImpact.warnings,
@@ -598,7 +605,7 @@ export class OriginalBatchPrecheck {
           snapshot.result.price_revision,
           requestHash,
           snapshot.result.executable_keys,
-          snapshot.result.summary.total_credits,
+          snapshot.result.summary.exact_total_credits,
           snapshot.result.summary.budget_blocked,
         ],
       );

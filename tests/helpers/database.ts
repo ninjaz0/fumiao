@@ -81,3 +81,20 @@ export async function databaseFixture(throughMigration?: string) {
     },
   };
 }
+
+// PostgreSQL returns different wire representations for bigint and scaled numeric.
+export function financialRows(table: string, rows: Record<string, any>[]) {
+  const fields: Record<string, string[]> = {
+    jobs: ["price"],
+    wallets: ["balance", "held"],
+    ledger: ["amount", "balance_snapshot", "held_snapshot"],
+  };
+  return rows.map((row) => {
+    const normalized = { ...row };
+    for (const field of fields[table] ?? []) {
+      if (row[field] != null)
+        normalized[field] = String(row[field]).replace(/\.0+$/, "");
+    }
+    return normalized;
+  });
+}

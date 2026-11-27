@@ -31,7 +31,7 @@ export async function acceptTask(
     [key: string]: any;
   },
   fingerprint: string,
-  quote: { amount: number; key: string | null; revision: number | null },
+  quote: { amount: number | string; key: string | null; revision: number | null },
   snapshots: unknown[] = [],
   meta?: AcceptTaskMeta,
 ) {

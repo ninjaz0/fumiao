@@ -1,9 +1,16 @@
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { one } from "@fumiao/platform/db.js";
 import { Operations } from "@fumiao/platform/operations.js";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import { parseBody } from "./validation.js";
 import { reconcileJobFields } from "./wave6-fields.js";
+
+// Studio's existing report values one credit at ten fen. Round once per aggregate.
+function revenueInFen(units: bigint): number {
+  const unitsPerFen = 100_000_000_000n;
+  return Number((units + unitsPerFen / 2n) / unitsPerFen);
+}
 
 /**
  * F005: Admin Observability Dashboard & Uncertain-Job Reconciliation.
@@ -40,7 +47,7 @@ export class OriginalObservability {
         ? "COUNT(*) FILTER (WHERE j.state = 'completed' AND am.upstream_cost_fen IS NULL)"
         : "COUNT(*) FILTER (WHERE j.state = 'completed')";
       const knownRevenueCreditsExpr = hasAudit
-        ? "COALESCE(SUM(CASE WHEN j.state = 'completed' AND am.upstream_cost_fen IS NOT NULL THEN j.price ELSE 0 END), 0)"
+        ? "COALESCE(SUM(CASE WHEN j.state = 'completed' AND am.upstream_cost_fen IS NOT NULL THEN settled.amount ELSE 0 END), 0)"
         : "0";
       const rewriteExpr = hasAudit
         ? "COUNT(*) FILTER (WHERE COALESCE(am.rewrite_attempts, 0) > 0)"
@@ -57,11 +64,11 @@ export class OriginalObservability {
               COUNT(*) FILTER (WHERE j.state = 'failed')::int AS failed,
               COUNT(*) FILTER (WHERE j.state = 'uncertain')::int AS uncertain,
               COUNT(*) FILTER (WHERE j.state = 'cancelled')::int AS cancelled,
-              COALESCE(SUM(CASE WHEN j.state = 'completed' THEN j.price ELSE 0 END), 0)::bigint AS credits_revenue,
+              COALESCE(SUM(CASE WHEN j.state = 'completed' THEN settled.amount ELSE 0 END), 0) AS credits_revenue,
               ${costExpr}::bigint AS upstream_cost_fen,
               ${costKnownExpr}::int AS cost_known_jobs,
               ${costUnknownExpr}::int AS cost_unknown_jobs,
-              ${knownRevenueCreditsExpr}::bigint AS known_cost_revenue_credits,
+              ${knownRevenueCreditsExpr} AS known_cost_revenue_credits,
               ${rewriteExpr}::int AS rewritten_count,
               COALESCE(
                 percentile_cont(0.5) WITHIN GROUP (
@@ -76,6 +83,10 @@ export class OriginalObservability {
                 0
               ) AS p95_seconds
              FROM jobs j
+             LEFT JOIN (
+               SELECT job_id, SUM(amount) AS amount FROM ledger
+                WHERE action='spend' AND job_id IS NOT NULL GROUP BY job_id
+             ) settled ON settled.job_id=j.id
              LEFT JOIN LATERAL (
                SELECT started, finished
                  FROM job_runs
@@ -95,9 +106,9 @@ export class OriginalObservability {
       let completedJobs = 0;
       let failedJobs = 0;
       let uncertainJobs = 0;
-      let totalCreditsRevenue = 0;
+      let totalRevenueUnits = 0n;
       let totalUpstreamCostFen = 0;
-      let totalKnownCostRevenueFen = 0;
+      let totalKnownRevenueUnits = 0n;
       let totalCostKnownJobs = 0;
       let totalCostUnknownJobs = 0;
       let totalRewritten = 0;
@@ -108,13 +119,14 @@ export class OriginalObservability {
         const failed = Number(row.failed);
         const uncertain = Number(row.uncertain);
         const cancelled = Number(row.cancelled);
-        const creditsRevenue = Number(row.credits_revenue);
+        const revenueUnits = creditUnits(String(row.credits_revenue));
         // Studio billing baseline: 1 yuan = 10 credits => 1 credit = 10 fen
-        const revenueFen = creditsRevenue * 10;
+        const revenueFen = revenueInFen(revenueUnits);
         const costKnown = Number(row.cost_known_jobs ?? 0);
         const costUnknown = Number(row.cost_unknown_jobs ?? 0);
         const rawCostFen = Number(row.upstream_cost_fen ?? 0);
-        const knownRevenueFen = Number(row.known_cost_revenue_credits ?? 0) * 10;
+        const knownRevenueUnits = creditUnits(String(row.known_cost_revenue_credits));
+        const knownRevenueFen = revenueInFen(knownRevenueUnits);
         const costStatus: "known" | "partial" | "unknown" =
           completed === 0
             ? "known"
@@ -138,9 +150,9 @@ export class OriginalObservability {
         completedJobs += completed;
         failedJobs += failed;
         uncertainJobs += uncertain;
-        totalCreditsRevenue += creditsRevenue;
+        totalRevenueUnits += revenueUnits;
         totalUpstreamCostFen += rawCostFen;
-        totalKnownCostRevenueFen += knownRevenueFen;
+        totalKnownRevenueUnits += knownRevenueUnits;
         totalCostKnownJobs += costKnown;
         totalCostUnknownJobs += costUnknown;
         totalRewritten += Number(row.rewritten_count ?? 0);
@@ -157,7 +169,8 @@ export class OriginalObservability {
           success_rate: successRate,
           p50_seconds: Math.round(Number(row.p50_seconds || 0) * 100) / 100,
           p95_seconds: Math.round(Number(row.p95_seconds || 0) * 100) / 100,
-          credits_revenue: creditsRevenue,
+          credits_revenue: Number(formatCredits(revenueUnits)),
+          exact: { credits_revenue: formatCredits(revenueUnits) },
           revenue_fen: revenueFen,
           upstream_cost_fen: upstreamCostFen,
           gross_margin_fen: grossMarginFen,
@@ -177,7 +190,7 @@ export class OriginalObservability {
            FROM gpu_nodes`,
       );
 
-      const totalRevenueFen = totalCreditsRevenue * 10;
+      const totalRevenueFen = revenueInFen(totalRevenueUnits);
       const terminalAll = completedJobs + failedJobs + uncertainJobs;
       const totalCostStatus: "known" | "partial" | "unknown" =
         completedJobs === 0
@@ -202,13 +215,14 @@ export class OriginalObservability {
             terminalAll > 0
               ? Math.round((completedJobs / terminalAll) * 1000) / 10
               : 100,
-          credits_revenue: totalCreditsRevenue,
+          credits_revenue: Number(formatCredits(totalRevenueUnits)),
+          exact: { credits_revenue: formatCredits(totalRevenueUnits) },
           revenue_fen: totalRevenueFen,
           upstream_cost_fen:
             totalCostKnownJobs > 0 ? totalUpstreamCostFen : null,
           gross_margin_fen:
             totalCostKnownJobs > 0
-              ? totalKnownCostRevenueFen - totalUpstreamCostFen
+              ? revenueInFen(totalKnownRevenueUnits) - totalUpstreamCostFen
               : null,
           cost_status: totalCostStatus,
           cost_known_jobs: totalCostKnownJobs,

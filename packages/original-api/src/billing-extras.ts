@@ -1,3 +1,4 @@
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { one } from "@fumiao/platform/db.js";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
@@ -110,8 +111,8 @@ function parseRangeBound(raw: string | undefined, endOfDay: boolean): Date | nul
 export function buildLedgerStatementPdf(options: {
   workspaceName: string;
   workspacePublicId: number;
-  balance: number;
-  reserved: number;
+  balance: string;
+  reserved: string;
   generatedAtIso: string;
   rangeLabel?: string;
   totalCount?: number;
@@ -119,26 +120,28 @@ export function buildLedgerStatementPdf(options: {
     id: number;
     createdIso: string;
     action: string;
-    amount: number;
-    balance: number;
-    reserved: number;
+    amount: string;
+    balance: string;
+    reserved: string;
     note: string;
   }>;
 }): Buffer {
   const totalCount = options.totalCount ?? options.rows.length;
-  const totalIn = options.rows
-    .filter((r) => ["recharge", "grant", "adjust"].includes(r.action) && r.amount > 0)
-    .reduce((sum, r) => sum + r.amount, 0);
-  const totalOut = options.rows
-    .filter((r) => r.action === "spend")
-    .reduce((sum, r) => sum + Math.abs(r.amount), 0);
+  let totalIn = 0n;
+  let totalOut = 0n;
+  for (const row of options.rows) {
+    const amount = creditUnits(row.amount);
+    if (["recharge", "grant", "adjust"].includes(row.action) && amount > 0n) totalIn += amount;
+    if (row.action === "spend") totalOut += amount < 0n ? -amount : amount;
+  }
+  const available = formatCredits(creditUnits(options.balance) - creditUnits(options.reserved));
 
   const rangeText = options.rangeLabel || "全部时间";
   const headerLines = [
     "弗淼工作台 · 积分账户对账单 (FUMIAO CREDIT STATEMENT)",
     `工作区：#${options.workspacePublicId} ${options.workspaceName}    统计区间：${rangeText}`,
     `生成时间：${options.generatedAtIso.replace("T", " ").slice(0, 19)} UTC    记录数：${options.rows.length} / 总计 ${totalCount} 条`,
-    `余额快照：总余额 ${options.balance} | 冻结 ${options.reserved} | 可用 ${options.balance - options.reserved} 积分（入账合计 +${totalIn} / 扣费合计 -${totalOut}）`,
+    `余额快照：总余额 ${options.balance} | 冻结 ${options.reserved} | 可用 ${available} 积分（入账合计 +${formatCredits(totalIn)} / 扣费合计 -${formatCredits(totalOut)}）`,
     "----------------------------------------------------------------------------------------------",
     "编号     | 时间(UTC)           | 类型       | 变动积分 | 余额快照 | 备注",
     "----------------------------------------------------------------------------------------------",
@@ -153,10 +156,10 @@ export function buildLedgerStatementPdf(options: {
     const actCol = padRightDisplay(actLabel, 10);
     const signedAmt =
       r.action === "spend"
-        ? `-${Math.abs(r.amount)}`
+        ? `-${r.amount.replace(/^-/, "")}`
         : r.action === "hold"
           ? `(${r.amount})`
-          : r.amount >= 0
+          : !r.amount.startsWith("-")
             ? `+${r.amount}`
             : String(r.amount);
     const amtCol = signedAmt.padStart(8);
@@ -416,7 +419,7 @@ export class OriginalBillingExtras {
         name: String(code.name),
         workspace_id: Number(ws.public_id),
         balance: Number(wallet.balance),
-        available: Number(wallet.balance) - Number(wallet.held),
+        available: Number(formatCredits(creditUnits(String(wallet.balance)) - creditUnits(String(wallet.held)))),
       };
     });
   }
@@ -991,8 +994,8 @@ export class OriginalBillingExtras {
         const pdfBytes = buildLedgerStatementPdf({
           workspaceName: String(ws.name || `工作区 ${ws.public_id}`),
           workspacePublicId: Number(ws.public_id),
-          balance: Number(wallet?.balance ?? 0),
-          reserved: Number(wallet?.held ?? 0),
+          balance: formatCredits(creditUnits(String(wallet?.balance ?? 0))),
+          reserved: formatCredits(creditUnits(String(wallet?.held ?? 0))),
           generatedAtIso: new Date().toISOString(),
           rangeLabel,
           totalCount,
@@ -1000,9 +1003,9 @@ export class OriginalBillingExtras {
             id: Number(r.public_id ?? i + 1),
             createdIso: new Date(r.created_at).toISOString(),
             action: String(r.action),
-            amount: Number(r.amount),
-            balance: Number(r.balance_snapshot ?? 0),
-            reserved: Number(r.held_snapshot ?? 0),
+            amount: formatCredits(creditUnits(String(r.amount))),
+            balance: formatCredits(creditUnits(String(r.balance_snapshot ?? 0))),
+            reserved: formatCredits(creditUnits(String(r.held_snapshot ?? 0))),
             note: String(r.note ?? ""),
           })),
         });
@@ -1035,9 +1038,9 @@ export class OriginalBillingExtras {
             csvCell(r.public_id ?? ""),
             csvCell(new Date(r.created_at).toISOString()),
             csvCell(ACTION_LABELS_ZH[String(r.action)] ?? r.action),
-            csvCell(r.amount),
-            csvCell(r.balance_snapshot ?? ""),
-            csvCell(r.held_snapshot ?? ""),
+            csvCell(formatCredits(creditUnits(String(r.amount)))),
+            csvCell(r.balance_snapshot === null ? "" : formatCredits(creditUnits(String(r.balance_snapshot)))),
+            csvCell(r.held_snapshot === null ? "" : formatCredits(creditUnits(String(r.held_snapshot)))),
             csvCell(r.actor_name),
             csvCell(r.note ?? ""),
           ].join(","),

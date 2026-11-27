@@ -197,7 +197,7 @@ test("F005: admin observability aggregates channel success rate, P50/P95, gross 
     )
   ).rows[0];
 
-  // Seed 2 completed jobs (price 10 each => 200 fen revenue, upstream cost 60 fen => 140 fen gross margin)
+  // Each completed job reserved 10 and spent 9.75. Two costs of 30 fen leave 135 fen of margin.
   // plus 1 uncertain job with active wallet hold to reconcile!
   for (const [idx, durationSec] of [[1, 4], [2, 12]] as const) {
     const jid = randomUUID();
@@ -216,6 +216,11 @@ test("F005: admin observability aggregates channel success rate, P50/P95, gross 
         modelRow.kind,
         `obs-ok-${idx}-${jid}`,
       ],
+    );
+    await f.p.db.query(
+      `INSERT INTO ledger(id,workspace_id,job_id,key,action,amount)
+       VALUES(gen_random_uuid(),$1,$2,'settle:'||$2::uuid,'spend',9.75)`,
+      [f.workspace.id, jid],
     );
     const nowSec = Date.now() / 1000;
     await f.p.db.query(
@@ -266,10 +271,10 @@ test("F005: admin observability aggregates channel success rate, P50/P95, gross 
   assert.equal(summary.totals.total_jobs, 3);
   assert.equal(summary.totals.completed_jobs, 2);
   assert.equal(summary.totals.uncertain_jobs, 1);
-  assert.equal(summary.totals.credits_revenue, 20);
-  assert.equal(summary.totals.revenue_fen, 200);
+  assert.equal(summary.totals.credits_revenue, 19.5);
+  assert.equal(summary.totals.revenue_fen, 195);
   assert.equal(summary.totals.upstream_cost_fen, 60);
-  assert.equal(summary.totals.gross_margin_fen, 140);
+  assert.equal(summary.totals.gross_margin_fen, 135);
   assert.ok(summary.channels[0].p95_seconds >= summary.channels[0].p50_seconds);
 
   const beforeUncertain = await obs.uncertainJobs(f.admin);

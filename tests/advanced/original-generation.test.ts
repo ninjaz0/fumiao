@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
 import sharp from "sharp";
 import { createServer } from "node:http";
-import { databaseFixture } from "../helpers/database.js";
+import { databaseFixture, financialRows } from "../helpers/database.js";
 import { one, migrate } from "@fumiao/platform/db.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { OriginalGeneration } from "@fumiao/original-api/generation.js";
@@ -653,8 +653,8 @@ test("023 leaves accepted jobs and immutable plugin manifests unchanged", async 
     ).rows;
     await migrate(f.db);
     assert.deepEqual(
-      (await f.db.query("SELECT * FROM jobs ORDER BY id")).rows,
-      jobs.map((job) => ({
+      financialRows("jobs", (await f.db.query("SELECT * FROM jobs ORDER BY id")).rows),
+      financialRows("jobs", jobs).map((job) => ({
         ...job,
         original_gpu_ticket: null,
         package_version: null,

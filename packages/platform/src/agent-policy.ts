@@ -1,3 +1,4 @@
+import { creditUnits, formatCredits } from "./credit-amount.js";
 import { one, type Sql } from "./db.js";
 import { DomainError, requireValue } from "./security.js";
 
@@ -49,7 +50,7 @@ export async function hasActiveWorkspaceCapBudget(
 export type AgentActionGuardOptions = {
   projectId?: string | null;
   nodeId?: string | null;
-  amount?: number;
+  amount?: number | string;
   executionKey?: string | null;
   approvedProposalId?: string | null;
 };
@@ -58,7 +59,7 @@ export type VerifiedAgentProposal = {
   proposalId: string;
   executionKey: string;
   nodeId: string | null;
-  amount: number;
+  amount: string;
 };
 
 /**
@@ -127,7 +128,8 @@ export async function enforceAgentPolicyInTx(
   );
 
   const targetNodeId = options.nodeId?.trim() || null;
-  const amount = Math.max(0, Number(options.amount ?? 0));
+  const amount = creditUnits(String(options.amount ?? 0));
+  requireValue(amount >= 0n, 400, "扣费金额不能为负数");
   const execKey = options.executionKey?.trim() || `${targetProjectId}:${targetNodeId ?? "*"}`;
 
   const hasScopeTables = await one(
@@ -136,7 +138,7 @@ export async function enforceAgentPolicyInTx(
             to_regclass('agent_proposal_executions') IS NOT NULL AS execs`,
   );
 
-  let approvedCredits = Math.max(0, Number(proposal.estimated_credits ?? 0));
+  let approvedCredits = creditUnits(String(proposal.estimated_credits ?? 0));
   if (hasScopeTables?.scopes) {
     const scope = await one(
       sql,
@@ -165,7 +167,7 @@ export async function enforceAgentPolicyInTx(
       403,
       "目标节点不在该已批准提案授权的生成范围内",
     );
-    approvedCredits = Math.max(0, Number(scope.approved_credits ?? approvedCredits));
+    approvedCredits = creditUnits(String(scope.approved_credits));
   }
 
   if (hasScopeTables?.execs) {
@@ -181,7 +183,7 @@ export async function enforceAgentPolicyInTx(
         proposalId: String(proposal.id),
         executionKey: execKey,
         nodeId: targetNodeId,
-        amount,
+        amount: formatCredits(amount),
       };
     }
 
@@ -194,17 +196,17 @@ export async function enforceAgentPolicyInTx(
           AND j.state NOT IN ('failed', 'cancelled')`,
       [proposal.id],
     );
-    const used = Number(usedRow?.used ?? 0);
+    const used = creditUnits(String(usedRow?.used ?? 0));
     if (amount > 0 && used + amount > approvedCredits) {
       throw new DomainError(
         403,
-        `已超出该批准提案授权的积分预算（已占用 ${used} + 本次 ${amount} > 已批准 ${approvedCredits} 积分）`,
+        `已超出该批准提案授权的积分预算（已占用 ${formatCredits(used)} + 本次 ${formatCredits(amount)} > 已批准 ${formatCredits(approvedCredits)} 积分）`,
       );
     }
   } else if (amount > 0 && amount > approvedCredits) {
     throw new DomainError(
       403,
-      `已超出该批准提案授权的积分预算（本次 ${amount} > 已批准 ${approvedCredits} 积分）`,
+      `已超出该批准提案授权的积分预算（本次 ${formatCredits(amount)} > 已批准 ${formatCredits(approvedCredits)} 积分）`,
     );
   }
 
@@ -212,7 +214,7 @@ export async function enforceAgentPolicyInTx(
     proposalId: String(proposal.id),
     executionKey: execKey,
     nodeId: targetNodeId,
-    amount,
+    amount: formatCredits(amount),
   };
 }
 

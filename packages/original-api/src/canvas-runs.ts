@@ -1,3 +1,4 @@
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { randomUUID } from "node:crypto";
 import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { Platform } from "@fumiao/platform/platform.js";
@@ -973,7 +974,7 @@ export class OriginalCanvasRuns {
       node_ids: string[];
       stages: PrecheckStage[];
       precheck_token?: string;
-      expected_total_credits?: number;
+      expected_total_credits?: number | string;
       executable_keys?: string[];
     };
     const requestHash = hash(
@@ -1144,7 +1145,7 @@ export class OriginalCanvasRuns {
         [projectUuid, user.id, [...targetsByUid.keys()], dialogueNodes],
       );
       const accepted = new Set<string>();
-      let totalCredits = 0;
+      let totalUnits = 0n;
       for (const row of rows) {
         const target = targetsByUid.get(row.uid);
         if (target) {
@@ -1165,7 +1166,7 @@ export class OriginalCanvasRuns {
           });
           accepted.add(`${node}:dialogue`);
         }
-        totalCredits += Number(row.price);
+        totalUnits += creditUnits(String(row.price));
       }
       for (const key of allowed) {
         if (accepted.has(key)) continue;
@@ -1179,7 +1180,7 @@ export class OriginalCanvasRuns {
       return complete(sql, projectUuid, {
         submitted,
         skipped,
-        total_credits: totalCredits,
+        total_credits: Number(formatCredits(totalUnits)),
       });
     };
 
@@ -1216,7 +1217,7 @@ export class OriginalCanvasRuns {
               plan: [] as ReturnType<typeof expandGroupNodeIds>,
               shotIndexMap: new Map<string, number>(),
               serverAllowedKeys: null as Set<string> | null,
-              serverTotalCredits: null as number | null,
+              serverTotalCredits: null as string | null,
             };
           }
           return {
@@ -1227,7 +1228,7 @@ export class OriginalCanvasRuns {
             plan: [] as ReturnType<typeof expandGroupNodeIds>,
             shotIndexMap: new Map<string, number>(),
             serverAllowedKeys: null as Set<string> | null,
-            serverTotalCredits: null as number | null,
+            serverTotalCredits: null as string | null,
           };
         }
       }
@@ -1243,7 +1244,7 @@ export class OriginalCanvasRuns {
       );
 
       let serverAllowedKeys: Set<string> | null = null;
-      let serverTotalCredits: number | null = null;
+      let serverTotalCredits: string | null = null;
       if (hasTables?.has_tickets) {
         const ticket = await one(
           sql,
@@ -1273,7 +1274,7 @@ export class OriginalCanvasRuns {
             ? ticket.executable_keys.map(String)
             : [],
         );
-        serverTotalCredits = Number(ticket.total_credits ?? 0);
+        serverTotalCredits = formatCredits(creditUnits(String(ticket.total_credits ?? 0)));
       }
 
       return {
@@ -1333,7 +1334,7 @@ export class OriginalCanvasRuns {
         if (
           expectedCredits !== null &&
           expectedCredits !== undefined &&
-          freshPrecheck.summary.total_credits !== expectedCredits
+          freshPrecheck.summary.exact_total_credits !== String(expectedCredits)
         ) {
           requireValue(
             false,

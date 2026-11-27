@@ -8,8 +8,8 @@ export const budgetUpsertFields: Fields = {
   },
   scope_id: { kind: "string", max: 120, optional: true },
   period: { kind: "literal", values: ["daily", "monthly", "total"] },
-  warn_limit: { kind: "integer", min: 0, max: 100_000_000 },
-  cap_limit: { kind: "integer", min: 0, max: 100_000_000 },
+  warn_limit: { kind: "credits", min: 0, max: 100_000_000 },
+  cap_limit: { kind: "credits", min: 0, max: 100_000_000 },
   mode: {
     kind: "literal",
     values: ["observe", "warn", "cap"],

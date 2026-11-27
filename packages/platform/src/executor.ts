@@ -1,3 +1,4 @@
+import { creditUnits } from "./credit-amount.js";
 import {
   hasStudioPackages,
   queuedModelPolicy,
@@ -877,8 +878,8 @@ export class Executor {
     if (!edgeModel) return false;
 
     // Release commercial credit hold atomically before switching to 0-credit Edge TTS
-    const originalPrice = Number(job.price ?? 0);
-    if (originalPrice > 0) {
+    const originalPrice = String(job.price ?? 0);
+    if (creditUnits(originalPrice) > 0n) {
       const released = await one(
         sql,
         "UPDATE wallets SET held = held - $2 WHERE workspace_id = $1 AND held >= $2 RETURNING balance, held",

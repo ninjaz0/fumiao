@@ -251,7 +251,7 @@ export const canvasBatchRunFields: Fields = {
     default: ["image", "video"],
   },
   precheck_token: { kind: "string", max: 128, optional: true },
-  expected_total_credits: { kind: "integer", min: 0, max: 100_000_000, optional: true },
+  expected_total_credits: { kind: "credits", min: 0, max: 100_000_000, optional: true },
   executable_keys: {
     kind: "list",
     item: { kind: "string", min: 1, max: 160 },

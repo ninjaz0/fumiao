@@ -15,7 +15,7 @@ import {
   legacyId,
   type LegacyExport,
 } from "@fumiao/platform/importer.js";
-import { databaseFixture } from "../helpers/database.js";
+import { databaseFixture, financialRows } from "../helpers/database.js";
 
 const nodes = "027_original_node_management.sql";
 const recharge = "027_original_recharge.sql";
@@ -104,7 +104,7 @@ for (const prior of [undefined, nodes, recharge]) {
           [f.p.vault.seal({ pid: "fixture" })],
         );
         const rows = async (table: string) =>
-          (await f.db.query("SELECT * FROM " + table)).rows;
+          financialRows(table, (await f.db.query("SELECT * FROM " + table)).rows);
         const wallets = await rows("wallets");
         const ledger = await rows("ledger");
         const channels = await rows("payment_channels");
@@ -298,7 +298,7 @@ for (const prior of [undefined, pairedAgent, fmworkerRewards]) {
         );
       await rechargeOnce();
       const rows = async (table: string) =>
-        (await f.db.query("SELECT * FROM " + table + " ORDER BY 1")).rows;
+        financialRows(table, (await f.db.query("SELECT * FROM " + table + " ORDER BY 1")).rows);
       const wallet = await rows("wallets");
       const ledger = await rows("ledger");
       const paidOrders = await rows("original_recharge_orders");
@@ -619,7 +619,7 @@ test("PostgreSQL contribution cutover preserves settled history and quarantines 
       return { resource, paired, code };
     });
     const rows = async (table: string) =>
-      (await f.db.query("SELECT * FROM " + table + " ORDER BY 1")).rows;
+      financialRows(table, (await f.db.query("SELECT * FROM " + table + " ORDER BY 1")).rows);
     const before = {
       wallets: await rows("wallets"),
       ledger: await rows("ledger"),
@@ -665,8 +665,8 @@ test("PostgreSQL contribution cutover preserves settled history and quarantines 
     for (const [table, value] of Object.entries(before))
       assert.deepEqual(await rows(table), value, table);
     assert.deepEqual(
-      await one(f.db, "SELECT * FROM jobs WHERE id=$1", [settled]),
-      { ...settledBefore, package_version: null, studio_client_uid: null },
+      financialRows("jobs", [await one(f.db, "SELECT * FROM jobs WHERE id=$1", [settled])])[0],
+      { ...financialRows("jobs", [settledBefore])[0], package_version: null, studio_client_uid: null },
     );
     const ordinary = await one(f.db, "SELECT * FROM gpu_nodes WHERE id=$1", [
       paired,
@@ -862,9 +862,7 @@ test("PostgreSQL contribution cutover preserves settled history and quarantines 
     );
     assert.deepEqual([Number(after.balance), Number(after.held)], [105, 12]);
     assert.deepEqual(
-      await one(f.db, "SELECT * FROM wallets WHERE workspace_id=$1", [
-        contributorWorkspace,
-      ]),
+      (await rows("wallets")).find((w) => w.workspace_id === contributorWorkspace),
       before.wallets.find((w) => w.workspace_id === contributorWorkspace),
     );
     for (const [table, value] of Object.entries(before).filter(([table]) =>
@@ -1062,8 +1060,8 @@ test("upgrade after 031 repairs only missed Flow quarantines and preserves prior
       "running",
     );
     assert.deepEqual((await untouchedJobs()).rows, before.untouched);
-    assert.deepEqual((await balances()).rows, before.balances);
-    assert.deepEqual((await ledger()).rows, before.ledger);
+    assert.deepEqual(financialRows("wallets", (await balances()).rows), financialRows("wallets", before.balances));
+    assert.deepEqual(financialRows("ledger", (await ledger()).rows), financialRows("ledger", before.ledger));
     assert.deepEqual((await historical()).rows, before.historical);
     assert.deepEqual(
       (await f.db.query("SELECT job_id FROM outbox ORDER BY job_id")).rows.map(
@@ -1360,4 +1358,34 @@ test("Pure cutover archives independent earnings and rejects an unresolved claim
   } finally {
     await f.cleanup();
   }
+});
+
+test("055 integer wallet, active fixed-price hold and ledger upgrade and settle exactly", async (t) => {
+  const f = await databaseFixture("055_workspace_script_documents.sql");
+  t.after(() => f.cleanup());
+  const snapshot: LegacyExport = { version: 1, source, tables: {
+    users: [{ id: 7, role: "admin", name: "admin", active: 1 }],
+    workspaces: [{ id: 23, kind: "personal", owner: 7, name: "个人" }],
+    credit_accounts: [{ workspace: 23, balance: 100, reserved: 0 }],
+    jobs: [{ id: 5, workspace: 23, owner: 7, kind: "video", model: "test", status: "done", created: 7 }],
+    credit_charges: [{ job: 5, amount: 5, state: "spent" }],
+    credit_ledger: [{ id: 1, workspace: 23, job: 5, action: "spend", amount: 5, balance: 100, reserved: 0, note: "旧流水", created: 7 }],
+  }};
+  await importLegacy(f.p, snapshot, f.directory);
+  await f.db.query("UPDATE jobs SET state='queued' WHERE public_id=5");
+  await f.db.query("UPDATE wallets SET held=5 WHERE workspace_id=$1", [workspace]);
+  await f.db.query("UPDATE ledger SET action='hold',held_snapshot=5 WHERE workspace_id=$1", [workspace]);
+  await migrate(f.db);
+  const column = await one(f.db, "SELECT numeric_precision,numeric_scale FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='wallets' AND column_name='balance'");
+  assert.deepEqual([column.numeric_precision, column.numeric_scale], [31,12]);
+  await f.db.transaction(async (sql) => {
+    const job = await one(sql, "SELECT * FROM jobs WHERE public_id=5 FOR UPDATE");
+    await f.p.settle(sql, job, "completed", undefined, undefined, undefined, { preserveTiming: true });
+  });
+  const { OriginalCredits } = await import("@fumiao/original-api/credits.js");
+  const credits = new OriginalCredits(f.p);
+  assert.deepEqual((await credits.wallet(f.db, 23)).exact, { balance: "95", reserved: "0", available: "95" });
+  assert.deepEqual((await credits.history(f.db, 23)).map((r) => r.exact), [
+    { amount: "5", balance: "95", reserved: "0" }, { amount: "5", balance: "100", reserved: "5" },
+  ]);
 });

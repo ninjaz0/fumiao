@@ -1,3 +1,4 @@
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { randomUUID } from "node:crypto";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
@@ -537,7 +538,7 @@ export class OriginalCanvasProposals {
         strict: false,
       });
       const affectedSet = new Set(preview.affectedGenNodeIds);
-      let estimatedCredits = 0;
+      let estimatedUnits = 0n;
       for (const node of preview.document.nodes) {
         if (!affectedSet.has(node.id)) continue;
         if (node.type !== "image" && node.type !== "video") continue;
@@ -567,7 +568,7 @@ export class OriginalCanvasProposals {
               },
           { requireConnection: false },
         );
-        if (q.allowed && q.priced) estimatedCredits += q.amount;
+        if (q.allowed && q.priced) estimatedUnits += creditUnits(String(q.amount));
       }
 
       const id = randomUUID();
@@ -585,7 +586,7 @@ export class OriginalCanvasProposals {
           pythonStrip(body.title) || "画布变更提案",
           pythonStrip(body.summary || ""),
           JSON.stringify(preview.ops),
-          estimatedCredits,
+          formatCredits(estimatedUnits),
         ],
       );
       const row = await one(
@@ -637,7 +638,7 @@ export class OriginalCanvasProposals {
       return {
         proposalId: proposal.id as string,
         projectId: String(project.id),
-        estimatedCredits: Number(proposal.estimated_credits ?? 0),
+        estimatedCredits: String(proposal.estimated_credits ?? 0),
         title: canvasText(project.original_title),
         document: patched.document,
         tempMap: patched.tempMap,

@@ -1,3 +1,4 @@
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import {
   computeScopeSpend,
   type BudgetMode,
@@ -104,7 +105,11 @@ export class OriginalBudgets {
           revision: Number(row.revision),
           spent: usage.spent,
           held: usage.held,
-          total_committed: usage.spent + usage.held,
+          total_committed: Number(usage.exact.committed),
+          exact: { ...usage.exact,
+            warn_limit: formatCredits(creditUnits(String(row.warn_limit))),
+            cap_limit: formatCredits(creditUnits(String(row.cap_limit))),
+          },
           updated_at: new Date(row.updated_at).toISOString(),
         });
       }
@@ -122,6 +127,11 @@ export class OriginalBudgets {
         id: String(a.id),
         policy_id: String(a.policy_id),
         project_id: a.project_id ? String(a.project_id) : null,
+        exact: {
+          projected_spend: formatCredits(creditUnits(String(a.projected_spend))),
+          warn_limit: formatCredits(creditUnits(String(a.warn_limit))),
+          cap_limit: formatCredits(creditUnits(String(a.cap_limit))),
+        },
         projected_spend: Number(a.projected_spend),
         warn_limit: Number(a.warn_limit),
         cap_limit: Number(a.cap_limit),
@@ -162,8 +172,8 @@ export class OriginalBudgets {
     const input = parseBody(body, budgetUpsertFields);
     if (
       input.mode === "cap" &&
-      input.cap_limit > 0 &&
-      input.warn_limit > input.cap_limit
+      creditUnits(String(input.cap_limit)) > 0n &&
+      creditUnits(String(input.warn_limit)) > creditUnits(String(input.cap_limit))
     ) {
       requireValue(false, 400, "预警阈值不能高于硬上限");
     }
@@ -228,6 +238,10 @@ export class OriginalBudgets {
           scope_id: String(row.scope_id),
           project_public_id: projectPublicId,
           period: row.period,
+          exact: {
+            warn_limit: formatCredits(creditUnits(String(row.warn_limit))),
+            cap_limit: formatCredits(creditUnits(String(row.cap_limit))),
+          },
           warn_limit: Number(row.warn_limit),
           cap_limit: Number(row.cap_limit),
           mode: row.mode,
