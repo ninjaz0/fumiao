@@ -18,7 +18,7 @@ export class OriginalModelAccess {
   ) {
     this.connections = new ModelAccessConnections(
       identity.p.db,
-      identity.p.vault,
+      identity.p,
       http,
     );
   }

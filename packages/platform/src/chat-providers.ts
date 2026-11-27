@@ -56,6 +56,51 @@ function inheritedKey(
   )
     return { ...provider.credentialFallback, endpoints: undefined };
 }
+/** Read the live catalog's donor and run its currently active adapter's predicate.
+ * This lookup is independent of public ownership of the borrowing chat model.
+ */
+export async function chatCredentialDonor(
+  sql: Sql,
+  access: Pick<Platform, "vault" | "registry">,
+  grant: { model: string; field: string },
+  options: { lock?: boolean; expectedId?: string } = {},
+) {
+  const live = (await hasStudioPackages(sql)) ? " AND NOT c.removed" : "";
+  const candidates = await sql.query(
+    `SELECT c.* FROM studio_catalog model JOIN connections c
+    ON (c.plugin_id,c.plugin_version)=(model.plugin_id,model.plugin_version)
+    WHERE model.id=$1` +
+      live +
+      " ORDER BY c.id" +
+      (options.lock ? " FOR SHARE OF c" : ""),
+    [grant.model],
+  );
+  requireValue(
+    candidates.rows.length <= 1,
+    options.expectedId ? 403 : 503,
+    "原对话备用凭据连接存在歧义",
+  );
+  const donor = candidates.rows[0];
+  if (
+    !donor ||
+    (options.expectedId &&
+      (donor.id !== options.expectedId || donor.sandbox_address_pause))
+  )
+    return;
+  const plugin = await access.registry.resolve(
+    sql,
+    donor.plugin_id,
+    donor.plugin_version,
+  );
+  const config = access.vault.open(donor.config);
+  if (
+    plugin.originalState?.configured(config) &&
+    typeof config[grant.field] === "string"
+  ) {
+    return { id: String(donor.id), key: config[grant.field] as string };
+  }
+}
+
 /** Resolve only the explicitly active catalog version. Credentials stay server-side;
  * inherited image credentials are applied in memory, never copied to another row. */
 export class ChatProviders {
@@ -145,46 +190,14 @@ export class ChatProviders {
         let borrowedFrom: string | undefined;
         const fallback = inheritedKey(plugin, definition, config, !!managed);
         if (!plugin.chatConfigured!(config) && fallback) {
-          const model = await one(
-            sql,
-            "SELECT plugin_id,plugin_version FROM studio_catalog WHERE id=$1",
-            [fallback.model],
-          );
-          if (model) {
-            const candidates = (
-              await sql.query(
-                "SELECT id,config FROM connections WHERE plugin_id=$1 AND plugin_version=$2" +
-                  liveConnections +
-                  " ORDER BY id" +
-                  (lock ? " FOR SHARE" : ""),
-                [model.plugin_id, model.plugin_version],
-              )
-            ).rows;
-            requireValue(
-              candidates.length <= 1,
-              503,
-              "原对话备用凭据连接存在歧义",
-            );
-            if (candidates[0]) {
-              const imagePlugin = await this.p.registry.resolve(
-                  sql,
-                  model.plugin_id,
-                  model.plugin_version,
-                ),
-                value = this.p.vault.open(candidates[0].config);
-              if (
-                imagePlugin.originalState?.configured(value) &&
-                typeof value[fallback.field] === "string"
-              ) {
-                borrowedFrom = candidates[0].id;
-                config = plugin.chatConfigure!(
-                  config,
-                  value[fallback.field] as string,
-                );
-                if (fallback.endpoints)
-                  config.inheritedChatEndpoints = fallback.endpoints;
-              }
-            }
+          const donor = await chatCredentialDonor(sql, this.p, fallback, {
+            lock,
+          });
+          if (donor) {
+            borrowedFrom = donor.id;
+            config = plugin.chatConfigure!(config, donor.key);
+            if (fallback.endpoints)
+              config.inheritedChatEndpoints = fallback.endpoints;
           }
         }
         result.set(provider.id, {

@@ -19,7 +19,12 @@ import {
 } from "./discovery.js";
 
 import { publicationView } from "./published-routes.js";
-import { ChatProviders, type ChatConnection } from "../chat-providers.js";
+import { PluginRegistry } from "../plugins.js";
+import {
+  chatCredentialDonor,
+  ChatProviders,
+  type ChatConnection,
+} from "../chat-providers.js";
 import type { Platform } from "../platform.js";
 
 const purpose = z.enum(["chat", "image", "video"]);
@@ -111,7 +116,9 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 type VideoFormat = z.infer<typeof videoFormat>;
 export type Protocol =
   "openai-chat" | "openai-images" | "openrouter-images" | VideoFormat;
+type Credentials = Vault | Pick<Platform, "vault" | "registry">;
 interface Config {
+  explicit_key?: true;
   base_url: string;
   api_key: string;
   borrowed?: { donor: string; borrower: string; digest: string };
@@ -189,6 +196,28 @@ async function baseUrl(raw: string) {
 function configOf(vault: Vault, sealed: string) {
   return vault.open(sealed) as Config;
 }
+function chatScope(models: string[]): CredentialScope {
+  return { endpoints: ["models", "chat/completions"], upstream_ids: models };
+}
+function effectiveScope(
+  stored: CredentialScope,
+  config: Config,
+  originals: Record<string, unknown> | null,
+) {
+  // Reused credentials keep both the original chat grant and any narrower
+  // stored limits until an administrator explicitly enters a key.
+  if (!originals || config.explicit_key === true) return stored;
+  const models = Object.keys(originals).filter(
+    (id) => stored.upstream_ids === null || stored.upstream_ids.includes(id),
+  );
+  const allowed = chatScope(models);
+  return {
+    endpoints: allowed.endpoints.filter((endpoint) =>
+      stored.endpoints.includes(endpoint),
+    ),
+    upstream_ids: models,
+  };
+}
 function connectionView(row: ConnectionRow, config: Config) {
   return {
     id: row.id,
@@ -199,7 +228,11 @@ function connectionView(row: ConnectionRow, config: Config) {
     directory_url: config.base_url + "/models",
     credentials_configured: !!config.api_key || !!config.borrowed,
     enabled: row.enabled,
-    credential_scope: row.credential_scope,
+    credential_scope: effectiveScope(
+      row.credential_scope,
+      config,
+      row.original_models,
+    ),
     reused_from: row.original_id
       ? {
           id: row.original_id,
@@ -226,26 +259,24 @@ async function writeRevision(
 
 // A borrowed revision contains only references and a digest of the originally
 // authorized key. Replacing or removing that grant affects even a cached client.
-async function currentKey(sql: Sql, vault: Vault, config: Config) {
-  if (!config.borrowed) return config.api_key;
-  const grant = config.borrowed;
+async function borrowedKey(
+  sql: Sql,
+  access: Pick<Platform, "vault" | "registry">,
+  config: Config,
+  grant: NonNullable<Config["borrowed"]>,
+) {
   const row = await one(
     sql,
-    `SELECT donor.config AS donor, borrower.config AS borrower,
-      v.manifest FROM connections donor JOIN connections borrower ON borrower.id=$2
+    `SELECT borrower.config AS borrower,v.manifest FROM connections borrower
       JOIN plugin_versions v ON (v.id,v.version)=(borrower.plugin_id,borrower.plugin_version)
-      WHERE donor.id=$1 AND NOT donor.removed AND NOT borrower.removed
-      AND donor.sandbox_address_pause IS NULL AND borrower.sandbox_address_pause IS NULL
-      AND borrower.plugin_id='compatible-chat'
-      AND EXISTS (SELECT 1 FROM studio_catalog c WHERE c.id='gpt-image-2.6-sunburst'
-                  AND (c.plugin_id,c.plugin_version)=(donor.plugin_id,donor.plugin_version))`,
-    [grant.donor, grant.borrower],
+      WHERE borrower.id=$1 AND NOT borrower.removed AND borrower.sandbox_address_pause IS NULL
+      AND borrower.plugin_id='compatible-chat'`,
+    [grant.borrower],
   );
-  const source = row && vault.open(row.borrower);
+  const source = row && access.vault.open(row.borrower);
   const provider = row?.manifest.chat?.providers?.find(
     (p: { id: string }) => p.id === "openai",
   );
-  const key = row && vault.open(row.donor).apiKey;
   requireValue(
     source?.provider === "openai" &&
       !source.apiKey &&
@@ -259,13 +290,22 @@ async function currentKey(sql: Sql, vault: Vault, config: Config) {
         /\/+$/,
         "",
       ) === config.base_url &&
-      config.base_url === "https://api.openai.com/v1" &&
-      typeof key === "string" &&
-      hash(key) === grant.digest,
+      config.base_url === "https://api.openai.com/v1",
     403,
     "借用凭据的原授权已撤销",
   );
-  return key as string;
+  const donor = await chatCredentialDonor(
+    sql,
+    access,
+    { model: "gpt-image-2.6-sunburst", field: "apiKey" },
+    { expectedId: grant.donor },
+  );
+  requireValue(
+    donor && hash(donor.key) === grant.digest,
+    403,
+    "借用凭据的原授权已撤销",
+  );
+  return donor.key;
 }
 
 export async function originalModelSnapshots(
@@ -320,20 +360,35 @@ export async function reusableConnections(sql: Sql, p: Platform) {
 // The credential stays inside the transport and each request names its granted endpoint.
 export async function resolveConnectionRevision(
   sql: Sql,
-  vault: Vault,
+  credentials: Credentials,
   id: string,
   http: NativeHttp = guardedTransport,
 ) {
   const row = await one(
     sql,
-    "SELECT config,credential_scope FROM model_access_connection_revisions WHERE id=$1",
+    `SELECT r.config,r.credential_scope,reuse.original_models FROM model_access_connection_revisions r
+    LEFT JOIN model_access_reused_connections reuse ON reuse.connection_id=r.connection_id WHERE r.id=$1`,
     [id],
   );
   requireValue(row, 404, "连接修订不存在");
-  const config = configOf(vault, row.config);
-  const scope: CredentialScope = row.credential_scope;
-  const resolvedKey = await currentKey(sql, vault, config);
+  const access =
+    "vault" in credentials
+      ? credentials
+      : { vault: credentials, registry: new PluginRegistry() };
+  const config = configOf(access.vault, row.config);
+  const scope = effectiveScope(
+    row.credential_scope,
+    config,
+    row.original_models,
+  );
+  const grant = config.borrowed;
+  const readKey = () =>
+    grant
+      ? borrowedKey(sql, access, config, grant)
+      : Promise.resolve(config.api_key);
+  const resolvedKey = await readKey();
   return {
+    scope: structuredClone(scope),
     base_url: config.base_url,
     default_video_protocol: config.default_video_protocol,
     containsCredential(text: string) {
@@ -405,11 +460,7 @@ export async function resolveConnectionRevision(
       const url = new URL(config.base_url + "/" + path);
       requirePublicHttps(url);
       const headers: Record<string, string> = {
-        Authorization:
-          "Bearer " +
-          (config.borrowed
-            ? await currentKey(sql, vault, config)
-            : resolvedKey),
+        Authorization: "Bearer " + (await readKey()),
       };
       if (input.content_type) headers["Content-Type"] = input.content_type;
       return http(
@@ -422,11 +473,14 @@ export async function resolveConnectionRevision(
 }
 
 export class ModelAccessConnections {
+  private readonly vault: Vault;
   constructor(
     private db: Database,
-    private vault: Vault,
+    private credentials: Credentials,
     private http?: NativeHttp,
-  ) {}
+  ) {
+    this.vault = "vault" in credentials ? credentials.vault : credentials;
+  }
   async create(value: unknown) {
     const input = parse(createInput, value);
     const address = await baseUrl(input.base_url);
@@ -476,18 +530,14 @@ export class ModelAccessConnections {
         api_key: source.borrowedFrom ? "" : key,
         default_video_protocol: null,
       };
-      let scope = directScope;
+      const scope = chatScope(source.provider.models);
       if (source.borrowedFrom) {
         config.borrowed = {
           donor: source.borrowedFrom,
           borrower: input.connection_id,
           digest: hash(key),
         };
-        scope = {
-          endpoints: ["models", "chat/completions"],
-          upstream_ids: ["gpt-4.1"],
-        };
-        await currentKey(sql, this.vault, config);
+        await borrowedKey(sql, p, config, config.borrowed);
       }
       const id = randomUUID();
       await sql.query(
@@ -534,7 +584,8 @@ export class ModelAccessConnections {
         400,
         "更换服务地址时请重新填写该目的地的密钥",
       );
-      const config = {
+      const config: Config = {
+        explicit_key: input.api_key ? true : saved.explicit_key,
         base_url: address ?? saved.base_url,
         api_key: input.api_key ?? saved.api_key,
         ...(!input.api_key && saved.borrowed
@@ -551,7 +602,9 @@ export class ModelAccessConnections {
         id,
         row.revision + 1,
         config,
-        input.api_key ? directScope : row.credential_scope,
+        input.api_key
+          ? directScope
+          : effectiveScope(row.credential_scope, saved, row.original_models),
       );
       await sql.query(
         "UPDATE connections SET name=$2,enabled=$3,revision=revision+1 WHERE id=$1",
@@ -588,7 +641,7 @@ export class ModelAccessConnections {
     expected(row.revision, input.expected_revision);
     const client = await resolveConnectionRevision(
       this.db,
-      this.vault,
+      this.credentials,
       row.revision_id,
       this.http,
     );

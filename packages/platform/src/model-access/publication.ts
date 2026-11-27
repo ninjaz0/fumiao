@@ -142,7 +142,7 @@ async function publishOne(
   // Draft saves lock their connection first. Keep the same order while publishing.
   const conn = await one(
     sql,
-    `SELECT c.revision,c.enabled,c.removed,r.id,r.credential_scope FROM connections c
+    `SELECT c.revision,c.enabled,c.removed,r.id FROM connections c
     JOIN model_access_connection_revisions r ON r.connection_id=c.id AND r.revision=c.revision
     JOIN model_access_drafts d ON d.connection_id=c.id WHERE d.id=$1 FOR SHARE OF c`,
     [item.draft_id],
@@ -198,13 +198,12 @@ async function publishOne(
     400,
     "请先补齐用途、调用格式、售价及有界参数",
   );
+  const client = await resolveConnectionRevision(sql, p, conn.id);
   requireValue(
-    routeScopeAllows(conn.credential_scope, protocol, draft.upstream_id),
+    routeScopeAllows(client.scope, protocol, draft.upstream_id),
     403,
     "凭据未授权此模型或用途",
   );
-  // Checks revocation on the original grant without contacting the gateway.
-  await resolveConnectionRevision(sql, p.vault, conn.id);
   if (!catalog) {
     const name = item.label ?? draft.upstream_id;
     await sql.query(
@@ -321,7 +320,7 @@ async function activateExisting(
 ) {
   const row = await one(
     sql,
-    `SELECT pub.revision,pub.price_revision_id,r.connection_revision_id,
+    `SELECT pub.revision,pub.price_revision_id,r.connection_revision_id,r.protocol,r.upstream_id,
     c.enabled AND NOT c.removed AS enabled FROM model_access_publications pub
     JOIN model_access_route_revisions r ON r.catalog_id=pub.catalog_id AND r.id=$2
     JOIN connections c ON c.id=r.connection_id
@@ -333,7 +332,16 @@ async function activateExisting(
     409,
     "线路已停止接单或公开模型修订已更新",
   );
-  await resolveConnectionRevision(sql, p.vault, row.connection_revision_id);
+  const client = await resolveConnectionRevision(
+    sql,
+    p,
+    row.connection_revision_id,
+  );
+  requireValue(
+    routeScopeAllows(client.scope, row.protocol, row.upstream_id),
+    403,
+    "凭据未授权此模型或用途",
+  );
   await sql.query(
     "UPDATE model_access_publications SET revision=revision+1,route_revision_id=$2 WHERE catalog_id=$1",
     [item.catalog_id, item.route_revision_id],

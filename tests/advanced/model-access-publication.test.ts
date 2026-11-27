@@ -97,9 +97,33 @@ test("管理员明确上架、关联和切换线路；不同请求竞写及批�
     catalog_id: id,
     expected_revision: 1,
   };
+  // Publication locks by catalog ID. Both IDs already exist, so the valid
+  // standby is always written before the other model's missing price fails.
+  const [firstCatalog, secondCatalog] = [
+    id,
+    separate.data.items[0].catalog_id,
+  ].sort((a, b) => a.localeCompare(b));
+  const beforeRollback = (await call("GET", "")).data.publications;
   assert.equal(
-    (await publish([standby, { ...incomplete, action: "create" }])).status,
+    (
+      await publish([
+        { ...standby, catalog_id: firstCatalog },
+        {
+          ...incomplete,
+          action: "activate",
+          catalog_id: secondCatalog,
+          expected_revision: 1,
+          replace_price: true,
+        },
+      ])
+    ).status,
     400,
+  );
+  assert.deepEqual((await call("GET", "")).data.publications, beforeRollback);
+  assert.equal(
+    (await f.db.query("SELECT 1 FROM models WHERE provider_model='alias'")).rows
+      .length,
+    0,
   );
   const added = await publish([standby]);
   assert.equal(added.status, 200);
@@ -320,7 +344,7 @@ test("旧对话逐个接管，旧价持续到切换，团队策略、借用密�
   };
   const client = await resolveConnectionRevision(
     f.db,
-    f.p.vault,
+    f.p,
     conn.revision_id,
     http,
   );
@@ -358,6 +382,87 @@ test("旧对话逐个接管，旧价持续到切换，团队策略、借用密�
       signal,
     );
   await reply();
+  await t.test(
+    "第二个供钥候选出现后，解析和已取得客户端均拒绝发送",
+    async () => {
+      const duplicate = randomUUID();
+      await f.db.query(
+        `INSERT INTO connections(id,name,plugin_id,plugin_version,config)
+      SELECT $2,'另一个来源',plugin_id,plugin_version,config FROM connections WHERE id=$1`,
+        [f.connection, duplicate],
+      );
+      try {
+        await assert.rejects(reply(), { status: 403 });
+        await assert.rejects(
+          resolveConnectionRevision(f.db, f.p, conn.revision_id, http),
+          { status: 403 },
+        );
+      } finally {
+        await f.db.query("UPDATE connections SET removed=true WHERE id=$1", [
+          duplicate,
+        ]);
+      }
+    },
+  );
+  await t.test(
+    "供钥适配器不再确认配置后，已有密钥摘要不能授权发送",
+    async () => {
+      const donor = await one(
+        f.db,
+        "SELECT plugin_id,plugin_version FROM connections WHERE id=$1",
+        [f.connection],
+      );
+      async function selectDonorVersion(version: string) {
+        await f.db.transaction(async (sql) => {
+          await sql.query(
+            "UPDATE connections SET plugin_version=$2 WHERE id=$1",
+            [f.connection, version],
+          );
+          await sql.query(
+            "UPDATE studio_catalog SET plugin_version=$1 WHERE id='gpt-image-2.6-sunburst'",
+            [version],
+          );
+        });
+      }
+      const { PluginRegistry } = await import("@fumiao/platform/plugins.js");
+      const originalRegistry = f.p.registry;
+      const prior = await originalRegistry.resolve(
+        f.db,
+        donor.plugin_id,
+        donor.plugin_version,
+      );
+      let checked = 0;
+      const upgraded = {
+        ...prior,
+        manifest: { ...prior.manifest, version: "2.0.0" },
+        originalState: {
+          ...prior.originalState!,
+          configured(config: Record<string, unknown>) {
+            checked++;
+            return (
+              prior.originalState!.configured(config) &&
+              config.region === "approved"
+            );
+          },
+        },
+      };
+      f.p.registry = new PluginRegistry([upgraded]);
+      await f.p.registry.install(f.db, upgraded.manifest);
+      await selectDonorVersion(upgraded.manifest.version);
+      try {
+        await assert.rejects(reply(), { status: 403 });
+        await assert.rejects(
+          resolveConnectionRevision(f.db, f.p, conn.revision_id, http),
+          { status: 403 },
+        );
+        assert.equal(checked, 2);
+      } finally {
+        f.p.registry = originalRegistry;
+        await selectDonorVersion(donor.plugin_version);
+      }
+    },
+  );
+  assert.deepEqual(authorizations, ["Bearer " + key]);
   await f.db.query("UPDATE connections SET config=$2 WHERE id=$1", [
     f.connection,
     f.p.vault.seal({ ...f.config, apiKey: "rotated" }),
@@ -452,6 +557,131 @@ test("旧包升级与移除保留单一接管模型及其策略，自有密钥�
       },
     ],
   });
+  const imageDraft = randomUUID();
+  const selected = {
+    purpose: "image",
+    price: "2",
+    upstream_id: "new-image",
+    connection_id: c.id,
+  };
+  const publishImage = async (draftRevision: number) =>
+    api.publish(actor, {
+      uid: randomUUID(),
+      items: [
+        {
+          action: "create",
+          draft_id: imageDraft,
+          draft_revision: draftRevision,
+        },
+      ],
+    });
+  await api.saveDraft(actor, imageDraft, {
+    ...selected,
+    connection_revision: 1,
+    expected_revision: 0,
+  });
+  await assert.rejects(publishImage(1), { status: 403 });
+  const httpCalls: string[] = [];
+  const http = async (url: URL, init: { headers: Record<string, string> }) => {
+    httpCalls.push(url.pathname);
+    assert.equal(init.headers.Authorization, "Bearer explicit-media-key");
+    return {
+      status: 200,
+      contentType: "application/json",
+      body: Buffer.from("{}"),
+    };
+  };
+  const oldClient = await resolveConnectionRevision(
+    f.db,
+    f.p.vault,
+    c.revision_id,
+    http,
+  );
+  const imageRequest = {
+    endpoint: "images/generations",
+    method: "POST",
+    model: "new-image",
+  } as const;
+  await assert.rejects(
+    oldClient.request(imageRequest, AbortSignal.timeout(1000)),
+    { status: 403 },
+  );
+  await assert.rejects(
+    oldClient.request(
+      {
+        endpoint: "chat/completions",
+        method: "POST",
+        model: "other",
+        content_type: "application/json",
+        body: '{"model":"other"}',
+      },
+      AbortSignal.timeout(1000),
+    ),
+    { status: 403 },
+  );
+  assert.deepEqual(httpCalls, []);
+  // A draft deployment might already have persisted the broad initial grant.
+  // Changing the original connection later supplies no evidence of a new grant.
+  const historicalId = randomUUID();
+  await f.db.query(
+    `INSERT INTO model_access_connection_revisions(id,connection_id,revision,config,credential_scope)
+    SELECT $2,connection_id,99,config,$3 FROM model_access_connection_revisions WHERE id=$1`,
+    [
+      c.revision_id,
+      historicalId,
+      JSON.stringify({
+        endpoints: ["models", "chat/completions", "images/generations"],
+        upstream_ids: null,
+      }),
+    ],
+  );
+  await f.db.query(
+    "UPDATE connections SET revision=revision+1,config=$2 WHERE id=$1",
+    [
+      old.id,
+      f.p.vault.seal({
+        provider: "openai",
+        apiKey: "rotated-original",
+        baseUrl: "https://1.1.1.1/v1",
+      }),
+    ],
+  );
+  const unmarked = await resolveConnectionRevision(
+    f.db,
+    f.p,
+    historicalId,
+    http,
+  );
+  assert.deepEqual(unmarked.scope, {
+    endpoints: ["models", "chat/completions"],
+    upstream_ids: ["gpt-4.1"],
+  });
+  await assert.rejects(
+    unmarked.request(imageRequest, AbortSignal.timeout(1000)),
+    { status: 403 },
+  );
+  const replacement = await api.edit(actor, c.id, {
+    expected_revision: 1,
+    api_key: "explicit-media-key",
+  });
+  await api.saveDraft(actor, imageDraft, {
+    ...selected,
+    connection_revision: replacement.revision,
+    expected_revision: 1,
+  });
+  await publishImage(2);
+  const newClient = await resolveConnectionRevision(
+    f.db,
+    f.p.vault,
+    replacement.revision_id,
+    http,
+  );
+  await newClient.request(imageRequest, AbortSignal.timeout(1000));
+  assert.deepEqual(httpCalls, ["/v1/images/generations"]);
+  await assert.rejects(
+    oldClient.request(imageRequest, AbortSignal.timeout(1000)),
+    { status: 403 },
+  );
   const route = await resolvePublishedRoute(f.db, "gpt-4.1");
   const next = JSON.parse(
     await readFile(
