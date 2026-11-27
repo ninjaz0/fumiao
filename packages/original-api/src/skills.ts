@@ -39,6 +39,25 @@ function normalizeSlug(raw: string): string {
   return clean || "skill-" + randomUUID().slice(0, 8);
 }
 
+function unquoteYamlScalar(raw: string): string {
+  const trimmed = raw.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    if (trimmed.startsWith('"')) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (typeof parsed === "string") return parsed;
+      } catch {
+        // Fall through to simple outer-quote strip.
+      }
+    }
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
 function parseSimpleYaml(yamlBlock: string): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   const lines = yamlBlock.split(/\r?\n/);
@@ -51,7 +70,7 @@ function parseSimpleYaml(yamlBlock: string): Record<string, unknown> {
       const arr = Array.isArray(result[currentListKey])
         ? (result[currentListKey] as string[])
         : [];
-      arr.push(listItem[1].trim().replace(/^["']|["']$/g, ""));
+      arr.push(unquoteYamlScalar(listItem[1]));
       result[currentListKey] = arr;
       continue;
     }
@@ -64,15 +83,27 @@ function parseSimpleYaml(yamlBlock: string): Record<string, unknown> {
       result[key] = [];
       currentListKey = key;
     } else if (val.startsWith("[") && val.endsWith("]")) {
-      result[key] = val
-        .slice(1, -1)
-        .split(",")
-        .map((s) => s.trim().replace(/^["']|["']$/g, ""))
-        .filter(Boolean);
+      const inner = val.slice(1, -1).trim();
+      result[key] = inner
+        ? inner
+            .split(",")
+            .map((s) => unquoteYamlScalar(s))
+            .filter(Boolean)
+        : [];
+    } else if (val.startsWith("{") && val.endsWith("}")) {
+      try {
+        const parsedObj: unknown = JSON.parse(val);
+        result[key] =
+          parsedObj && typeof parsedObj === "object"
+            ? parsedObj
+            : unquoteYamlScalar(val);
+      } catch {
+        result[key] = unquoteYamlScalar(val);
+      }
     } else if (val === "true" || val === "false") {
       result[key] = val === "true";
     } else {
-      result[key] = val.replace(/^["']|["']$/g, "");
+      result[key] = unquoteYamlScalar(val);
     }
   }
   return result;
@@ -441,6 +472,18 @@ export class OriginalSkills {
         if (body.description !== undefined)
           nextDesc = pythonStrip(body.description);
         if (body.body_md !== undefined) nextBody = pythonStrip(body.body_md);
+        if (
+          nextFm &&
+          typeof nextFm === "object" &&
+          !Array.isArray(nextFm) &&
+          (body.name !== undefined || body.description !== undefined)
+        ) {
+          nextFm = {
+            ...nextFm,
+            ...(body.name !== undefined ? { name: nextName } : {}),
+            ...(body.description !== undefined ? { description: nextDesc } : {}),
+          };
+        }
       }
       requireValue(nextName && nextBody, 400, "技能名称与正文不能为空");
       const nextEnabled =

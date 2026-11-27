@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Mic, Plus, Trash2, Users, X } from "lucide-react";
-import type { CanvasNode, DialogueLine, Job } from "./types";
+import {
+  resolveEffectiveNarrationModel,
+  type CanvasNode,
+  type DialogueLine,
+  type Job,
+} from "./types";
 
 function parseQuickScript(raw: string): DialogueLine[] {
   const out: DialogueLine[] = [];
@@ -28,12 +33,18 @@ function parseQuickScript(raw: string): DialogueLine[] {
   return out.slice(0, 20);
 }
 
+export { resolveEffectiveNarrationModel };
+
 export function Narration({
   node,
   runs,
   cost,
+  costIndeterminate = false,
   unavailableReason,
+  dialogueUnavailableReason,
+  dialogueLineUnavailableReasons,
   audioModels = [],
+  activeModel,
   onChange,
   onEditStart,
   onEditEnd,
@@ -43,8 +54,12 @@ export function Narration({
   node: CanvasNode;
   runs: Job[];
   cost: number | null;
+  costIndeterminate?: boolean;
   unavailableReason: string;
+  dialogueUnavailableReason?: string;
+  dialogueLineUnavailableReasons?: Record<string, string>;
   audioModels?: { id: string; label: string }[];
+  activeModel?: string;
   onChange: (patch: Partial<CanvasNode>, history?: boolean) => void;
   onEditStart?: () => void;
   onEditEnd?: () => void;
@@ -83,6 +98,20 @@ export function Narration({
   const audioStrategy = node.audio_strategy ?? "replace";
   const origGain = node.original_audio_gain ?? 0.35;
   const lines = node.dialogue_lines ?? [];
+  const requestedModel = node.narration_model?.trim() || "";
+  const requestedModelAvailable = Boolean(
+    requestedModel && audioModels.some((m) => m.id === requestedModel),
+  );
+  const resolvedNarrationModel = resolveEffectiveNarrationModel({
+    requestedModel,
+    activeModel,
+    audioModels,
+  });
+  const isEdgeTts = resolvedNarrationModel === "edge-tts";
+  const effectiveDialogueReason =
+    dialogueUnavailableReason !== undefined
+      ? dialogueUnavailableReason
+      : unavailableReason;
 
   const updateLines = (next: DialogueLine[], history = true) => {
     onChange(
@@ -149,7 +178,7 @@ export function Narration({
             语音引擎
             <select
               aria-label="语音引擎"
-              value={node.narration_model || ""}
+              value={requestedModelAvailable ? requestedModel : ""}
               onChange={(e) =>
                 onChange(
                   { narration_model: e.target.value || undefined },
@@ -233,7 +262,20 @@ export function Narration({
                   <button
                     type="button"
                     className="secondary"
-                    disabled={busy || linePending || !line.text.trim() || !!unavailableReason}
+                    title={
+                      (dialogueLineUnavailableReasons?.[line.id] ??
+                        effectiveDialogueReason) ||
+                      undefined
+                    }
+                    disabled={
+                      busy ||
+                      linePending ||
+                      !line.text.trim() ||
+                      Boolean(
+                        dialogueLineUnavailableReasons?.[line.id] ??
+                          effectiveDialogueReason,
+                      )
+                    }
                     onClick={async () => {
                       onEditEnd?.();
                       setBusy(true);
@@ -346,7 +388,7 @@ export function Narration({
                 disabled={
                   busy ||
                   !lines.some((l) => l.text.trim()) ||
-                  !!unavailableReason
+                  !!effectiveDialogueReason
                 }
                 onClick={async () => {
                   onEditEnd?.();
@@ -366,7 +408,9 @@ export function Narration({
               </button>
             </div>
           </div>
-          {!!unavailableReason && <p role="status">{unavailableReason}</p>}
+          {!!effectiveDialogueReason && (
+            <p role="status">{effectiveDialogueReason}</p>
+          )}
           {error && (
             <p className="error" role="alert">
               {error}
@@ -387,19 +431,21 @@ export function Narration({
               onBlur={() => onEditEnd?.()}
             />
           </label>
-          <label>
-            音色描述
-            <input
-              maxLength={300}
-              value={node.narration_instruction || ""}
-              placeholder="清晰自然的普通话，语速适中"
-              onFocus={() => onEditStart?.()}
-              onChange={(e) =>
-                onChange({ narration_instruction: e.target.value }, false)
-              }
-              onBlur={() => onEditEnd?.()}
-            />
-          </label>
+          {!isEdgeTts && (
+            <label>
+              音色描述
+              <input
+                maxLength={300}
+                value={node.narration_instruction || ""}
+                placeholder="清晰自然的普通话，语速适中"
+                onFocus={() => onEditStart?.()}
+                onChange={(e) =>
+                  onChange({ narration_instruction: e.target.value }, false)
+                }
+                onBlur={() => onEditEnd?.()}
+              />
+            </label>
+          )}
           {job?.status === "done" && job.result && (
             <audio
               aria-label="当前旁白"
@@ -490,7 +536,7 @@ export function Narration({
                 pending ||
                 !node.narration_text?.trim() ||
                 !!unavailableReason ||
-                cost === null
+                (cost === null && !costIndeterminate)
               }
               onClick={async () => {
                 onEditEnd?.();
@@ -510,7 +556,13 @@ export function Narration({
                 ? "旁白生成中"
                 : busy
                   ? "提交中…"
-                  : `${failed ? "重新生成" : "生成旁白"} · ${cost ?? "未定价"}`}
+                  : `${failed ? "重新生成" : "生成旁白"}${
+                      cost !== null
+                        ? ` · ${cost}`
+                        : costIndeterminate
+                          ? ""
+                          : " · 未定价"
+                    }`}
             </button>
           </div>
         </>

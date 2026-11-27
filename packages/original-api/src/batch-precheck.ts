@@ -112,6 +112,9 @@ export class OriginalBatchPrecheck {
       );
       const bindings = await CanvasSubmissionModels.read(sql, {
         strict: false,
+        workspaceId: String(workspace.id),
+        vault: this.p.vault,
+        registry: this.p.registry,
       });
       const wallet = await one(
         sql,
@@ -148,18 +151,33 @@ export class OriginalBatchPrecheck {
           ...(item.image_quality ? { image_quality: item.image_quality } : {}),
           ...(item.ratio ? { ratio: item.ratio } : {}),
         };
-        const q = model
-          ? await this.catalog.quoteReadOnly(sql, model, workspace.id, params, {
-              nativeParams: item.params,
-            })
-          : {
+        const q = !model
+          ? {
               allowed: false,
               priced: false,
               amount: 0,
               key: null,
               revision: priceRevision,
               reason: `缺少可用的 ${item.kind} 默认模型`,
-            };
+            }
+          : item.kind === "audio" &&
+              bindings.isSpeechModel(model) &&
+              !bindings.hasEnabledAudio(model)
+            ? {
+                allowed: false,
+                priced: false,
+                amount: 0,
+                key: null,
+                revision: priceRevision,
+                reason: "音频配音服务尚未配置或连接已停用",
+              }
+            : await this.catalog.quoteReadOnly(
+                sql,
+                model,
+                workspace.id,
+                params,
+                { nativeParams: item.params },
+              );
         priceRevision = q.revision;
         const subtotal =
           creditUnits(String(q.exactAmount ?? q.amount)) * BigInt(count);
@@ -215,6 +233,9 @@ export class OriginalBatchPrecheck {
 
       const bindings = await CanvasSubmissionModels.read(sql, {
         strict: false,
+        workspaceId: String(project.workspace_id),
+        vault: this.p.vault,
+        registry: this.p.registry,
       });
       const wallet = await one(
         sql,
@@ -428,8 +449,12 @@ export class OriginalBatchPrecheck {
             } catch {
               model = "";
             }
-            if (!model) {
-              issues.push("音频配音服务尚未配置");
+            if (!model || !bindings.hasEnabledAudio(model)) {
+              issues.push(
+                model
+                  ? "音频配音服务尚未配置或连接已停用"
+                  : "音频配音服务尚未配置",
+              );
               status = "blocked";
             } else {
               const q = await this.catalog.quoteReadOnly(
@@ -478,9 +503,11 @@ export class OriginalBatchPrecheck {
                 } catch {
                   lineModel = "";
                 }
-                if (!lineModel) {
+                if (!lineModel || !bindings.hasEnabledAudio(lineModel)) {
                   issues.push(
-                    `对白「${line.speaker || line.id}」缺少可用的语音配音服务`,
+                    lineModel
+                      ? `对白「${line.speaker || line.id}」(${lineModel})：音频配音服务尚未配置或连接已停用`
+                      : `对白「${line.speaker || line.id}」缺少可用的语音配音服务`,
                   );
                   status = "blocked";
                   continue;

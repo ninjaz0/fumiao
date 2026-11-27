@@ -1,9 +1,8 @@
 /* Use the Studio theme for both the settings panel and the native invite dialog. */
 .ledger-settings,
 .ledger-invite-sheet {
-  --ledger-rule: color-mix(in srgb, var(--text) 18%, transparent);
-  --ledger-serif:
-    "Songti SC", STSong, "Noto Serif CJK SC", "Noto Serif SC", SimSun, serif;
+  --ledger-rule: color-mix(in srgb, var(--text) 14%, transparent);
+  --ledger-serif: inherit;
   --ledger-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ledger-focus: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus);
 }
@@ -211,8 +210,10 @@
 
 .ledger-invite-heading h2 {
   margin: 0;
-  font: 700 26px/1.3 var(--ledger-serif);
-  letter-spacing: 0.04em;
+  font-size: 21px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
 }
 
 .ledger-invite-heading .invite-intro {
@@ -268,74 +269,69 @@
 .ledger-tally {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 22px 0 0;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
+  gap: 12px;
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .ledger-tally > div {
   min-width: 0;
-  padding: 12px clamp(8px, 2cqi, 18px);
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
 }
 
-.ledger-tally > div + div {
-  border-left: 1px dashed var(--ledger-rule);
-}
 .ledger-tally dt {
   color: var(--secondary);
   font-size: 12px;
+  font-weight: 500;
 }
 
 .ledger-tally dd {
-  margin: 3px 0 0;
-  font: 700 25px/1.3 var(--ledger-serif);
+  margin: 6px 0 0;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
   font-variant-numeric: tabular-nums;
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 
 .ledger-tally dd small {
-  font:
-    400 12px/1.3 system-ui,
-    sans-serif;
+  font-size: 12px;
+  font-weight: 400;
   color: var(--secondary);
 }
 
-.invite-empty.ledger-empty {
+.invite-empty {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: center;
-  gap: 18px;
-  margin-top: 22px;
-  padding: 28px;
-  border: 1px dashed var(--ledger-rule);
-  border-radius: 16px;
-  text-align: left;
-  background: repeating-linear-gradient(
-    -45deg,
-    transparent 0 10px,
-    color-mix(in srgb, var(--line) 28%, transparent) 10px 11px
-  );
+  justify-items: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 32px 20px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: center;
 }
 
-.ledger-empty > svg {
-  width: 100%;
-  max-width: 270px;
-  justify-self: center;
+.invite-empty h3 {
+  margin: 4px 0 0;
+  font-size: 16px;
+  font-weight: 600;
 }
-.invite-empty.ledger-empty h3 {
-  margin: 0;
-  font: 700 23px/1.4 var(--ledger-serif);
-}
-.invite-empty.ledger-empty p {
-  margin: 6px 0 14px;
+.invite-empty p {
+  margin: 0 0 8px;
   color: var(--secondary);
 }
 
 .ledger-guide {
   margin-top: 16px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 10px;
   background: var(--surface);
 }
 
@@ -344,7 +340,7 @@
   align-items: center;
   gap: 7px;
   padding: 11px 14px;
-  border-radius: 14px;
+  border-radius: 10px;
   list-style: none;
   color: var(--secondary);
   cursor: pointer;
@@ -366,31 +362,37 @@
 .ledger-guide ol {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
   margin: 0;
-  padding: 4px 14px 16px;
+  padding: 4px 14px 14px;
   list-style: none;
   counter-reset: invite-step;
 }
 
 .ledger-guide li {
   display: grid;
-  grid-template-rows: auto auto 1fr;
-  gap: 3px;
+  align-content: start;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
   counter-increment: invite-step;
 }
 
 .ledger-guide li::before {
-  display: grid;
+  display: inline-grid;
   place-items: center;
-  width: 27px;
-  height: 27px;
-  margin-bottom: 3px;
-  border: 1px solid var(--text);
-  border-radius: 50%;
-  content: counter(invite-step, cjk-decimal);
-  font-family: var(--ledger-serif);
-  color: var(--text);
+  width: 22px;
+  height: 22px;
+  margin-bottom: 2px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--blue);
+  content: counter(invite-step);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .ledger-guide li span {
@@ -464,91 +466,88 @@
 .ledger-segments input:checked + span small {
   color: var(--text);
 }
-.ledger-ticket-list {
+.invite-card-list {
   display: grid;
   gap: 12px;
 }
 
-.invite-code-row.ledger-ticket {
-  display: grid;
-  grid-template-columns: minmax(195px, 0.78fr) minmax(0, 1.22fr);
-  padding: 0;
+.ledger-settings .settings-content .invite-card-list > .ledger-card + .ledger-card {
+  margin-top: 0;
+}
+
+.invite-code-row.ledger-card {
+  padding: 18px 20px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 10px;
   background: var(--surface);
-  box-shadow: 0 1px 3px var(--line);
 }
 
-.ledger-ticket:not([data-status="valid"]) {
-  background: var(--bg);
-  box-shadow: none;
+.invite-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 
-.ledger-ticket-stub {
-  position: relative;
+.invite-card-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   min-width: 0;
-  padding: 16px 18px;
-  border-right: 1px dashed var(--ledger-rule);
 }
 
-.ledger-ticket-stub::before,
-.ledger-ticket-stub::after {
-  position: absolute;
-  z-index: 1;
-  right: -8px;
-  width: 15px;
-  height: 15px;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: var(--bg);
-  content: "";
-}
-
-.ledger-ticket-stub::before {
-  top: -8px;
-  clip-path: inset(50% 0 0 0);
-}
-.ledger-ticket-stub::after {
-  bottom: -8px;
-  clip-path: inset(0 0 50% 0);
-}
-.ledger-ticket-stub h3 {
+.ledger-settings .settings-content .invite-card-title h3 {
   margin: 0;
   font-size: 15px;
-  overflow-wrap: anywhere;
-}
-.ledger-ticket .invite-code-value {
-  flex-direction: column;
-  align-items: start;
-  gap: 7px;
-}
-
-.ledger-ticket .invite-code-value code {
-  font: 650 clamp(17px, 2.3cqi, 19px) / 1.4 var(--ledger-mono);
-  letter-spacing: 0.055em;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-.ledger-ticket:not([data-status="valid"]) code {
+.invite-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--blue);
+  background: var(--accent-soft);
+}
+
+.invite-status-badge:is([data-status="expired"], [data-status="disabled"]) {
   color: var(--secondary);
-  text-decoration: line-through;
+  background: var(--hover);
 }
 
-.ledger-ticket-details {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  min-width: 0;
-  padding: 15px 16px 9px 20px;
+.invite-code-row .invite-code-value {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
 }
 
-.ledger-facts {
+.invite-code-row .invite-code-value code {
+  font: 600 16px/1.4 var(--ledger-mono);
+  letter-spacing: 0.04em;
+  overflow-wrap: anywhere;
+}
+
+.invite-code-row:not([data-status="valid"]) .invite-code-value code {
+  color: var(--secondary);
+}
+
+.invite-code-row .ledger-facts {
   display: grid;
-  grid-template-columns: 1.15fr 1fr;
-  gap: 8px 12px;
-  margin: 0;
-  padding-right: 56px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 14px 0 0;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--line);
 }
 
 .ledger-facts dt,
@@ -557,60 +556,29 @@
   font-size: 12px;
 }
 .ledger-facts dd {
-  margin: 1px 0 0;
+  margin: 2px 0 0;
+  color: var(--text);
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
 }
 .ledger-facts dd small {
   display: block;
 }
-.ledger-ticket[data-status="expired"] .ledger-facts dd small {
-  color: var(--secondary);
+
+.invite-code-row .invite-code-actions {
+  margin: 0;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.ledger-ticket .ledger-seal {
-  position: absolute;
-  top: 13px;
-  right: 14px;
-  display: grid;
-  place-items: center;
-  width: 51px;
-  height: 51px;
-  padding: 0;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-  outline: 1px solid currentColor;
-  outline-offset: -6px;
-  color: var(--text);
-  background: transparent;
-  font: 700 15px/1 var(--ledger-serif);
-  rotate: -12deg;
-}
-
-.ledger-ticket[data-status="expired"] .ledger-seal {
-  color: var(--secondary);
-  border-style: dashed;
-  rotate: 8deg;
-}
-.ledger-ticket[data-status="disabled"] .ledger-seal {
-  color: var(--secondary);
-  rotate: -4deg;
-}
-.ledger-ticket:not([data-status="valid"]) .ledger-seal {
-  font-size: 12px;
-}
-.ledger-ticket .invite-code-actions {
-  padding-top: 5px;
-  border-top: 1px solid var(--line);
-}
-.ledger-ticket .ledger-button {
-  min-height: 30px;
+.invite-code-row .ledger-button {
+  min-height: 32px;
 }
 
 .ledger-no-results {
   padding: 24px 14px;
-  border: 1px dashed var(--ledger-rule);
-  border-radius: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
   text-align: center;
 }
 
@@ -724,7 +692,7 @@
   border: 0;
 }
 .ledger-settings .credit-summary strong {
-  font-family: var(--ledger-serif);
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 .ledger-settings .recharge-info {
@@ -750,15 +718,7 @@
     width: 100%;
   }
   .ledger-tally {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .ledger-tally > div:last-child {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    grid-column: 1 / -1;
-    border-left: 0;
-    border-top: 1px dashed var(--ledger-rule);
+    grid-template-columns: 1fr;
   }
 }
 @container settings-ledger (max-width: 760px) {
@@ -820,41 +780,11 @@
 }
 
 @container settings-content (max-width: 590px) {
-  .ledger-ticket-details {
-    position: static;
+  .invite-code-row .ledger-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .ledger-facts {
-    padding-right: 0;
-  }
-  .invite-code-row.ledger-ticket {
-    position: relative;
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .ledger-ticket-stub {
-    padding-right: 78px;
-    border-right: 0;
-    border-bottom: 1px dashed var(--ledger-rule);
-  }
-  .ledger-ticket-stub::before,
-  .ledger-ticket-stub::after {
-    top: auto;
-    bottom: -8px;
-  }
-  .ledger-ticket-stub::before {
-    left: -8px;
-    clip-path: inset(0 0 0 50%);
-  }
-  .ledger-ticket-stub::after {
-    clip-path: inset(0 50% 0 0);
-  }
-  .invite-empty.ledger-empty {
-    grid-template-columns: 1fr;
-    padding: 16px;
-    gap: 4px;
-    text-align: center;
-  }
-  .ledger-empty > svg {
-    max-width: 200px;
+  .invite-empty {
+    padding: 24px 16px;
   }
   .ledger-guide ol {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -866,16 +796,11 @@
     flex: 1 0 100%;
     max-width: none;
   }
-  .ledger-guide ol {
+  .invite-code-row .ledger-facts {
     grid-template-columns: 1fr;
   }
-  .ledger-guide li {
-    grid-template-columns: 28px 1fr;
-    grid-template-rows: auto auto;
-    column-gap: 9px;
-  }
-  .ledger-guide li::before {
-    grid-row: span 2;
+  .ledger-guide ol {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -915,8 +840,10 @@
 
 #modal.ledger-invite-sheet h2 {
   margin: 2px 0 0;
-  font: 700 24px/1.35 var(--ledger-serif);
-  letter-spacing: 0.04em;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
 }
 
 .ledger-sheet-fields {
@@ -929,27 +856,29 @@
   padding: 15px 20px;
 }
 
-.ledger-ticket-preview {
+.invite-form-preview {
   display: grid;
   gap: 4px;
-  padding: 10px 12px;
-  border: 1px dashed var(--ledger-rule);
+  padding: 12px 14px;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--surface);
+  background: var(--bg);
   overflow-wrap: anywhere;
 }
 
-.ledger-ticket-preview small {
-  color: var(--text);
+.invite-form-preview small {
+  color: var(--secondary);
 }
-.ledger-ticket-preview strong {
-  font: 700 17px/1.4 var(--ledger-serif);
+.invite-form-preview strong {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
 }
-.ledger-ticket-preview code {
+.invite-form-preview code {
   font-family: var(--ledger-mono);
   color: var(--secondary);
 }
-.ledger-ticket-preview ul {
+.invite-form-preview ul {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -957,14 +886,15 @@
   padding: 0;
   list-style: none;
 }
-.ledger-ticket-preview li {
-  padding: 0 6px;
+.invite-form-preview li {
+  padding: 1px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
+  background: var(--surface);
   color: var(--secondary);
   font-size: 12px;
 }
-.ledger-ticket-preview li.is-invalid {
+.invite-form-preview li.is-invalid {
   border-color: var(--danger);
   color: var(--danger);
 }

@@ -1,15 +1,27 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  BookOpen,
   ChevronDown,
   ChevronRight,
   Clapperboard,
   Film,
   FolderOpen,
   Layers,
+  Pencil,
   Plus,
   Trash2,
 } from "lucide-react";
 import { api, workspaceURL } from "./api";
+import {
+  applyLoadedSeriesListToBibleSession,
+  formatBibleText,
+  openSeriesBibleSession,
+  parseBibleDraft,
+  resolveSeriesBibleSaveOutcome,
+  submitSeriesBibleSession,
+  type BibleEditMode,
+  type SeriesBibleEditorSession,
+} from "./series-bible";
 
 export type SeriesScene = {
   id: string;
@@ -84,9 +96,14 @@ export function SeriesTree({ workspace }: { workspace: string }) {
   const [expandedSeries, setExpandedSeries] = useState<Set<string>>(() => new Set());
   const [expandedSeasons, setExpandedSeasons] = useState<Set<string>>(() => new Set());
   const [expandedEpisodes, setExpandedEpisodes] = useState<Set<string>>(() => new Set());
+  const [expandedBibles, setExpandedBibles] = useState<Set<string>>(() => new Set());
+  const [bibleSession, setBibleSession] =
+    useState<SeriesBibleEditorSession | null>(null);
   const [creatingSeries, setCreatingSeries] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newSynopsis, setNewSynopsis] = useState("");
+  const [newBible, setNewBible] = useState("");
+  const [newBibleMode, setNewBibleMode] = useState<BibleEditMode>("notes");
   const [addingEpFor, setAddingEpFor] = useState<string | null>(null);
   const [epSeason, setEpSeason] = useState(1);
   const [epNo, setEpNo] = useState(1);
@@ -101,28 +118,34 @@ export function SeriesTree({ workspace }: { workspace: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await api<{ series: SeriesItem[] }>(workspace, "/api/series");
-      setSeriesList(res.series);
-      setExpandedSeries((prev) => {
-        if (prev.size > 0 || !res.series.length) return prev;
-        return new Set([res.series[0].id]);
-      });
-      setExpandedSeasons((prev) => {
-        if (prev.size > 0 || !res.series.length) return prev;
-        const first = res.series[0];
-        const seasons = groupEpisodesBySeason(first);
-        return new Set(seasons.map((sn) => `${first.id}:s${sn.season_no}`));
-      });
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [workspace]);
+  const load = useCallback(
+    async (preserveError = false) => {
+      setLoading(true);
+      if (!preserveError) setError("");
+      try {
+        const res = await api<{ series: SeriesItem[] }>(workspace, "/api/series");
+        setSeriesList(res.series);
+        setBibleSession((prev) =>
+          applyLoadedSeriesListToBibleSession(prev, res.series),
+        );
+        setExpandedSeries((prev) => {
+          if (prev.size > 0 || !res.series.length) return prev;
+          return new Set([res.series[0].id]);
+        });
+        setExpandedSeasons((prev) => {
+          if (prev.size > 0 || !res.series.length) return prev;
+          const first = res.series[0];
+          const seasons = groupEpisodesBySeason(first);
+          return new Set(seasons.map((sn) => `${first.id}:s${sn.season_no}`));
+        });
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [workspace],
+  );
 
   useEffect(() => {
     void load();
@@ -145,17 +168,58 @@ export function SeriesTree({ workspace }: { workspace: string }) {
     setBusy(true);
     setError("");
     try {
+      const biblePayload = parseBibleDraft(newBible, newBibleMode, {
+        allowEmpty: true,
+      });
       const created = await api<SeriesItem>(workspace, "/api/series", {
         title: newTitle.trim(),
         synopsis: newSynopsis.trim(),
+        ...(Object.keys(biblePayload).length > 0 ? { bible: biblePayload } : {}),
       });
       setNewTitle("");
       setNewSynopsis("");
+      setNewBible("");
+      setNewBibleMode("notes");
       setCreatingSeries(false);
       setExpandedSeries((prev) => new Set([...prev, created.id]));
       await load();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveSeriesBible = async () => {
+    const submitted = bibleSession;
+    if (!submitted) return;
+    setBusy(true);
+    setError("");
+    try {
+      const outcome = await submitSeriesBibleSession(
+        submitted,
+        (seriesId, payload) =>
+          api<SeriesItem>(
+            workspace,
+            `/api/series/${seriesId}`,
+            payload,
+            "PUT",
+          ),
+      );
+      setBibleSession((current) =>
+        resolveSeriesBibleSaveOutcome(current, submitted, outcome),
+      );
+      if (!outcome.ok) {
+        setError(outcome.error);
+        if (outcome.status === 409) {
+          await load(true);
+        }
+        return;
+      }
+      if (Object.keys(outcome.nextBible).length > 0) {
+        setExpandedBibles((prev) => new Set([...prev, submitted.seriesId]));
+      }
+      await load();
     } finally {
       setBusy(false);
     }
@@ -261,12 +325,21 @@ export function SeriesTree({ workspace }: { workspace: string }) {
     }
   };
 
+  const isCollapsedEmpty = seriesList.length === 0 && !creatingSeries;
+
   return (
-    <section className="fm-series-panel" aria-label="多集剧集项目树">
+    <section
+      className={"fm-series-panel" + (isCollapsedEmpty ? " is-collapsed" : "")}
+      aria-label="多集剧集项目树"
+    >
       <div className="fm-series-head">
         <h2>
-          <Clapperboard size={18} />
-          剧集项目树（项目 → 季 → 集 → 场）
+          <Clapperboard size={isCollapsedEmpty ? 16 : 18} />
+          {loading && isCollapsedEmpty
+            ? "剧集分集管理 · 加载中…"
+            : seriesList.length === 0
+              ? "剧集分集管理 · 0 部剧集"
+              : `剧集分集管理 · ${seriesList.length} 部剧集`}
         </h2>
         <button
           type="button"
@@ -295,12 +368,54 @@ export function SeriesTree({ workspace }: { workspace: string }) {
             onChange={(e) => setNewTitle(e.target.value)}
           />
           <textarea
-            aria-label="剧集梗概与世界观"
+            aria-label="剧集梗概"
             rows={2}
             maxLength={4000}
-            placeholder="填写核心设定与世界观，建分集/分场时自动同步到画布设定便签…"
+            placeholder="填写核心故事梗概与主线脉络…"
             value={newSynopsis}
             onChange={(e) => setNewSynopsis(e.target.value)}
+          />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span style={{ fontSize: 12, opacity: 0.8 }}>世界观输入模式</span>
+            <div style={{ display: "inline-flex", gap: 6 }}>
+              <button
+                type="button"
+                className={newBibleMode === "notes" ? "primary" : "secondary"}
+                aria-pressed={newBibleMode === "notes"}
+                onClick={() => setNewBibleMode("notes")}
+              >
+                纯文本设定
+              </button>
+              <button
+                type="button"
+                className={
+                  newBibleMode === "structured" ? "primary" : "secondary"
+                }
+                aria-pressed={newBibleMode === "structured"}
+                onClick={() => setNewBibleMode("structured")}
+              >
+                结构化 JSON
+              </button>
+            </div>
+          </div>
+          <textarea
+            aria-label="世界观设定"
+            rows={2}
+            maxLength={4000}
+            placeholder={
+              newBibleMode === "structured"
+                ? '输入合法 JSON 对象，例如：{"era": "2088", "style": "赛博霓虹"}'
+                : "填写世界观、视觉风格与角色设定，建分集/分场时自动同步到画布设定便签…"
+            }
+            value={newBible}
+            onChange={(e) => setNewBible(e.target.value)}
           />
           <div className="fm-series-form-actions">
             <button
@@ -322,16 +437,16 @@ export function SeriesTree({ workspace }: { workspace: string }) {
         </div>
       )}
 
-      {loading ? (
+      {isCollapsedEmpty ? null : loading ? (
         <p className="fm-series-muted">正在加载剧集树…</p>
-      ) : seriesList.length === 0 ? (
-        <p className="fm-series-muted">
-          按「剧集 → 季 → 分集 → 分场」四级结构管理长片与短剧，每集/每场均可独立绑定画布。
-        </p>
-      ) : (
+      ) : seriesList.length === 0 ? null : (
         <div className="fm-series-list">
           {seriesList.map((s) => {
             const open = expandedSeries.has(s.id);
+            const bibleText = formatBibleText(s.bible);
+            const hasBible = bibleText.length > 0;
+            const isEditingThisBible = bibleSession?.seriesId === s.id;
+            const bibleOpen = expandedBibles.has(s.id) || isEditingThisBible;
             const seasons = groupEpisodesBySeason(s);
             const maxSeason = seasons.reduce(
               (m, sn) => Math.max(m, sn.season_no),
@@ -420,6 +535,158 @@ export function SeriesTree({ workspace }: { workspace: string }) {
                     {s.synopsis && (
                       <p className="fm-series-synopsis">{s.synopsis}</p>
                     )}
+                    <div className="fm-series-bible">
+                      <div className="fm-series-bible-head">
+                        <button
+                          type="button"
+                          className="fm-series-toggle"
+                          aria-expanded={bibleOpen}
+                          onClick={() => toggleSet(setExpandedBibles, s.id)}
+                        >
+                          {bibleOpen ? (
+                            <ChevronDown size={14} />
+                          ) : (
+                            <ChevronRight size={14} />
+                          )}
+                          <BookOpen size={14} />
+                          <strong>世界观设定</strong>
+                          <span>{hasBible ? "已配置" : "未填写"}</span>
+                        </button>
+                        {!isEditingThisBible && (
+                          <button
+                            type="button"
+                            className="secondary"
+                            disabled={busy}
+                            onClick={() => {
+                              setError("");
+                              setBibleSession(openSeriesBibleSession(s));
+                              setExpandedBibles(
+                                (prev) => new Set([...prev, s.id]),
+                              );
+                            }}
+                          >
+                            <Pencil size={13} />
+                            {hasBible ? "编辑设定" : "填写设定"}
+                          </button>
+                        )}
+                      </div>
+                      {isEditingThisBible && bibleSession ? (
+                        <div className="fm-series-bible-editor">
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: 8,
+                            }}
+                          >
+                            <span style={{ fontSize: 12, opacity: 0.8 }}>
+                              编辑模式（基准版本 v{bibleSession.expectedRevision}）
+                            </span>
+                            <div style={{ display: "inline-flex", gap: 6 }}>
+                              <button
+                                type="button"
+                                className={
+                                  bibleSession.mode === "notes"
+                                    ? "primary"
+                                    : "secondary"
+                                }
+                                aria-pressed={bibleSession.mode === "notes"}
+                                disabled={busy}
+                                onClick={() =>
+                                  setBibleSession((prev) =>
+                                    prev ? { ...prev, mode: "notes" } : prev,
+                                  )
+                                }
+                              >
+                                纯文本设定
+                              </button>
+                              <button
+                                type="button"
+                                className={
+                                  bibleSession.mode === "structured"
+                                    ? "primary"
+                                    : "secondary"
+                                }
+                                aria-pressed={
+                                  bibleSession.mode === "structured"
+                                }
+                                disabled={busy}
+                                onClick={() =>
+                                  setBibleSession((prev) =>
+                                    prev
+                                      ? { ...prev, mode: "structured" }
+                                      : prev,
+                                  )
+                                }
+                              >
+                                结构化 JSON
+                              </button>
+                            </div>
+                          </div>
+                          <textarea
+                            aria-label="编辑世界观设定"
+                            rows={3}
+                            maxLength={4000}
+                            readOnly={busy}
+                            aria-readonly={busy || undefined}
+                            placeholder={
+                              bibleSession.mode === "structured"
+                                ? '输入合法 JSON 对象，例如：{"era": "2088", "style": "赛博霓虹"}'
+                                : "填写时代背景、视觉风格与角色设定，新建分集/分场画布时自动注入设定便签…"
+                            }
+                            value={bibleSession.draft}
+                            onChange={(e) => {
+                              if (busy) return;
+                              const nextDraft = e.target.value;
+                              setBibleSession((prev) =>
+                                prev ? { ...prev, draft: nextDraft } : prev,
+                              );
+                            }}
+                          />
+                          <div className="fm-series-form-actions">
+                            {bibleSession.conflicted && (
+                              <button
+                                type="button"
+                                className="secondary"
+                                disabled={busy}
+                                onClick={() => {
+                                  setError("");
+                                  setBibleSession(openSeriesBibleSession(s));
+                                }}
+                              >
+                                加载最新设定 (v{s.revision})
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={busy}
+                              onClick={() => {
+                                setError("");
+                                setBibleSession(null);
+                              }}
+                            >
+                              取消
+                            </button>
+                            <button
+                              type="button"
+                              className="primary"
+                              disabled={busy}
+                              onClick={() => void saveSeriesBible()}
+                            >
+                              保存设定
+                            </button>
+                          </div>
+                        </div>
+                      ) : bibleOpen ? (
+                        <pre className="fm-series-bible-content">
+                          {hasBible
+                            ? bibleText
+                            : "暂未填写世界观设定，点击「填写设定」补充后，新建分集与分场会自动同步。"}
+                        </pre>
+                      ) : null}
+                    </div>
                     {addingEpFor === s.id && (
                       <div className="fm-ep-form">
                         <label>
@@ -673,7 +940,7 @@ export function SeriesTree({ workspace }: { workspace: string }) {
 
                                         {isAddingScene && (
                                           <div
-                                            className="fm-ep-form"
+                                            className="fm-ep-form fm-scene-form"
                                             style={{ marginLeft: 22 }}
                                           >
                                             <label>
