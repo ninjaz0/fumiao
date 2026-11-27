@@ -180,16 +180,32 @@ async function setupNative(
     tools?: boolean;
     json?: boolean;
     credential?: string;
+    outputParameter?: "max_completion_tokens";
   } = {},
 ) {
   const f = await chatsFixture();
   t.after(f.cleanup);
-  const api = new OriginalModelAccess(f.identity);
+  const api = new OriginalModelAccess(f.identity, async () => ({
+    status: 200,
+    contentType: "application/json",
+    body: Buffer.from(
+      JSON.stringify({
+        data: [
+          {
+            id: "gateway-model",
+            supported_parameters: [options.outputParameter, "tools"],
+          },
+        ],
+      }),
+    ),
+  }));
   const conn = await api.create(f.admin, {
     base_url: "https://1.1.1.1/chat",
     api_key: options.credential ?? "synthetic-only",
   });
   const draft_id = randomUUID();
+  if (options.outputParameter)
+    await api.discover(f.admin, conn.id, { expected_revision: 1 });
   const prices = options.free
     ? { input: "0", output: "0" }
     : { input: "100", output: "400", cache_read: "20" };
@@ -211,8 +227,71 @@ async function setupNative(
   });
   return { ...f, model: published.items[0].catalog_id };
 }
+test("工作区可用的原生对话线路决定选择、报价和新回合，已受理回合可按原 UID 查询", async (t) => {
+  const f = await setupNative(t);
+  const call = (method: string, path: string, data?: unknown) =>
+    f.request(method, path, data, 1);
+  const model = f.model;
+  const api = new OriginalModelAccess(f.identity);
+  const conn = await api.create(f.admin, { base_url: "https://1.1.1.1/standby", api_key: "synthetic-standby" });
+  const draftId = randomUUID();
+  await api.saveDraft(f.admin, draftId, { connection_id: conn.id, connection_revision: 1, expected_revision: 0,
+    upstream_id: "other-chat", purpose: "chat" });
+  await api.publish(f.admin, { uid: randomUUID(), items: [{ draft_id: draftId, draft_revision: 1,
+    action: "standby", catalog_id: model, expected_revision: 1 }] });
+  const standby = await one(f.db, "SELECT id,model_id FROM model_access_route_revisions WHERE draft_id=$1", [draftId]);
+  const cid = (await f.chats.create(f.member, { model })).conversation.id;
+  const fresh = (await f.chats.create(f.member, { model })).conversation;
+  const input = { model, text: "测试一轮" };
+  const quote = await f.chats.quote(f.member, { ...input, cid });
+  const body = { ...input, ...quote, uid: randomUUID(), expected_revision: 1 };
+  const accepted = await f.chats.send(f.member, cid, body);
+  const next = {
+    ...input,
+    ...(await f.chats.quote(f.member, { ...input, cid: fresh.id })),
+    expected_revision: fresh.revision,
+    uid: randomUUID(),
+  };
+  await f.db.query(
+    `INSERT INTO model_permissions(workspace_id,model_id,enabled)
+     SELECT $1,r.model_id,false FROM model_access_route_revisions r WHERE r.id=$2`,
+    [f.memberSpace.id, quote.route_revision],
+  );
+  const config = await call("GET", "/api/chat/config");
+  assert.equal(config.status, 200);
+  assert.equal(Object.hasOwn(config.body.models, model), false);
+  assert.equal(
+    (await call("POST", "/api/chat/quote", { ...input, cid: fresh.id })).status,
+    403,
+  );
+  assert.equal(
+    (await call("POST", "/api/chats/" + fresh.id + "/messages", next)).status,
+    403,
+  );
+  assert.equal(
+    (await f.chats.send(f.member, cid, body)).accepted_turn,
+    accepted.accepted_turn,
+  );
+  assert.equal((await f.db.query("SELECT id FROM chat_turns")).rows.length, 1);
+  assert.equal(
+    (await f.db.query("SELECT turn_id FROM chat_charges")).rows.length,
+    1,
+  );
+  await f.db.query("INSERT INTO model_permissions(workspace_id,model_id,enabled) VALUES($1,$2,false)",
+    [f.workspace.id, standby.model_id]);
+  await assert.rejects(api.trial(f.admin, standby.id, {
+    uid: randomUUID(), workspace: Number(f.workspace.public_id), route_revision: standby.id,
+    price_revision: quote.price_revision, prompt: "备用线路",
+  }, false), { status: 403 });
+  assert.ok((await f.chats.quote(f.admin, input)).max_output_tokens);
+});
+
 test("工具轮次使用冻结技能和真实工具结果，缺失回执按次免收，自动标题由平台支付", async (t) => {
-  const f = await setupNative(t, { tools: true, json: true });
+  const f = await setupNative(t, {
+    tools: true,
+    json: true,
+    outputParameter: "max_completion_tokens",
+  });
   const created = await f.request("POST", "/api/canvases", {
     title: "验收画布",
   });
@@ -266,6 +345,13 @@ test("工具轮次使用冻结技能和真实工具结果，缺失回执按次�
     nativeHttp: async (_url, init) => {
       const p = JSON.parse(String(init.body));
       payloads.push(p);
+      if ("max_tokens" in p || !(p.max_completion_tokens > 0)) {
+        return {
+          status: 400,
+          contentType: "application/json",
+          body: Buffer.from("{}"),
+        };
+      }
       let message: any,
         reason = "stop",
         usage: unknown;
@@ -290,7 +376,7 @@ test("工具轮次使用冻结技能和真实工具结果，缺失回执按次�
       } else if (payloads.length === 2) {
         assert.equal(p.messages.at(-1).role, "tool");
         assert.ok(JSON.parse(p.messages.at(-1).content).ok);
-        assert.ok(p.max_tokens < payloads[0].max_tokens);
+        assert.ok(p.max_completion_tokens < payloads[0].max_completion_tokens);
         message = { content: "工具完成" };
         usage = rawUsage;
       } else {
@@ -319,6 +405,8 @@ test("工具轮次使用冻结技能和真实工具结果，缺失回执按次�
   );
   assert.equal(snapshot.conversation.title, "分镜标题");
   assert.equal(payloads.length, 3);
+  assert.equal(payloads[0].max_completion_tokens, quote.max_output_tokens);
+  assert.equal(payloads[2].max_completion_tokens, 64);
   const bill = (await f.chats.bills(f.admin, conversation.id)).bills[0];
   assert.equal(bill.charged, "0.64");
   assert.equal(bill.calls.length, 2);

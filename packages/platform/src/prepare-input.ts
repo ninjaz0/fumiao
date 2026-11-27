@@ -1,3 +1,4 @@
+import { imageOutputFormat } from "./model-access/image-formats.js";
 import { imageReferenceLimits, isImageControl } from "./model-access/media-form.js";
 import { prepareVideoParameters } from "./model-access/video-parameters.js";
 import { z } from "zod";
@@ -125,13 +126,17 @@ export function prepareImageParameters(
   referenceCount: number,
 ) {
   const caps = route.capabilities;
-  const fields: Record<string, unknown> = {};
+  const format = imageOutputFormat(caps, raw.output_format);
+  const fields: Record<string, unknown> = format
+    ? { output_format: format }
+    : {};
   const options: Record<string, string[] | undefined> = {
     size: caps.sizes,
     resolution: caps.resolutions,
     aspect_ratio: caps.aspect_ratios,
   };
   for (const [name, value] of Object.entries(raw)) {
+    if (name === "output_format") continue;
     const choices = options[name];
     const def = Object.hasOwn(caps.definitions ?? {}, name)
       ? caps.definitions![name]

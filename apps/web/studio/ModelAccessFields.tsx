@@ -156,6 +156,12 @@ export function CapabilityFields({
       )}
       {row.purpose === "image" && (
         <>
+          {declared?.definitions?.output_format?.type === "enum" && (
+            <small>
+              目录声明的输出格式 ·{" "}
+              {declared.definitions.output_format.values.join(" / ")}
+            </small>
+          )}
           {field("minRefs", "最少参考图", undefined, true)}
           {field("maxRefs", "最多参考图", undefined, true)}
           {router && (

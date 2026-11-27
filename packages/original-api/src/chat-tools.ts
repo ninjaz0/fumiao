@@ -384,6 +384,7 @@ export async function executeChatTool(
         status: created.status,
         base_revision: created.base_revision,
         estimated_credits: created.estimated_credits,
+        exact_estimated_credits: created.exact_estimated_credits,
         title: created.title,
         summary: created.summary,
         ops_count: ops.length,

@@ -32,6 +32,8 @@ export interface ModelParameters {
   output_modalities?: string[];
   context_length?: number;
   max_completion_tokens?: number;
+  output_token_parameter?: "max_tokens" | "max_completion_tokens";
+  output_format_default?: string;
 }
 export interface ModelCandidate {
   upstream_id: string;

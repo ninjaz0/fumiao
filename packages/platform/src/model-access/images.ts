@@ -1,4 +1,5 @@
-import { DefiniteSubmissionFailure } from "./submission-failure.js";
+import { imageOutputFormat } from "./image-formats.js";
+import { DefiniteSubmissionFailure, uncertainSubmissionStatus } from "./submission-failure.js";
 import { ArtifactValidationError } from "@fumiao/plugin-sdk/preparation.js";
 import { one } from "../db.js";
 import type { Platform } from "../platform.js";
@@ -49,8 +50,13 @@ async function submitImages(
     "凭据未授权此模型",
   );
   const references = await readReferences(p, job);
+  const format = imageOutputFormat(
+    route.capabilities,
+    job.input.params.output_format,
+  );
   const fields = {
     ...job.input.params,
+    ...(format && { output_format: format }),
     model: route.upstreamId,
     prompt: job.input.prompt,
   };
@@ -97,7 +103,7 @@ async function submitImages(
   );
   if (response.status < 200 || response.status >= 300) {
     await discard(response.body);
-    if (response.status >= 500 || response.status === 408)
+    if (uncertainSubmissionStatus(response.status))
       throw new Error("提交结果待核查");
     throw new DefiniteImageFailure();
   }

@@ -17,7 +17,7 @@
 - 单价最多 6 位小数，钱包及流水精确到 12 位。每轮都有账单，实扣以发送前的授权上限为限。人民币金额继续用分。
 - 受理后换线、调价、停接新单或进程重启时，按原快照完成并只结算一次。接管旧兼容对话连接需由管理员填新价格并明确切换，保留已有模型 ID、权限和历史金额。
 - 列目录、存草稿和发布可产生只读上游请求。真实试用须由管理员从有生成权限的工作区主动发起。凭据留在服务端，继承密钥遵守原目的地与用途。
-- 工作目录沿用 T3 分配的 worktree。依赖、包边界、固定验收实例和 PR 流程遵循 [项目开发指南](../../../AGENTS.md)。实现开始时执行 `pnpm install --frozen-lockfile`，媒体用例需要 `pnpm images:prepare`。
+- 工作目录沿用 T3 分配的 worktree。依赖、包边界和 PR 流程遵循 [项目开发指南](../../../AGENTS.md)。本功能使用独立验收实例 `fumiao-model-access-acceptance`，使用专属环境配置和数据卷。实现开始时执行 `pnpm install --frozen-lockfile`，媒体用例需要 `pnpm images:prepare`。
 
 ## Review Focus
 
@@ -199,4 +199,4 @@
 - [ ] 在 Studio 报价与提交中传递线路/售价修订，换线后刷新有效选项和报价。画布保存不因线路收窄而改写旧参数；生成与批量预检在具体节点提示新时长。批量报价、钱包和导出用精确金额，覆盖旧余额、已有回执及在途老任务。按工作区验证私有下载与 Range。
 - [ ] 在隔离库验证从 `055_workspace_script_documents.sql` 升级及一致备份恢复，包含 PG、私有素材、密钥和旧任务快照。发布顺序为先迁移、使所有接单 Worker 能解析新旧来源，再启用内置模型上架。真实上游验收分别记录成功生成、首帧传递和取片，仅在已有授权测试凭据和额度时执行；记录实际覆盖的网关。
 - [ ] 运行 `pnpm lint`、`pnpm typecheck`、`pnpm typecheck:web`、`pnpm test`、`pnpm build`、`pnpm test:studio`、`pnpm test:studio:replicas` 和 `pnpm test:studio:restore`。真实并发用例使用隔离的 `TEST_DATABASE_URL` 和 `TEST_REDIS_URL`。在 worktree 的 Docker 环境从管理员和成员路径复测，然后执行 `python3 scripts/worktree.py down` 与 `python3 scripts/worktree.py status` 核对清理结果。提交 `feat: 接入创作台画布并验证模型切换恢复`。
-- [ ] 用最终 SHA 的干净 checkout 更新固定 `fumiao-acceptance`，复用该实例原配置及卷。在 `http://localhost:3000/studio` 复测并交付验收地址、SHA、实扣明细与恢复结果。负责人验收通过后按仓库流程提 PR，生产发布由负责人决定。
+- [ ] 从已验证 SHA 的干净 checkout 更新独立验收实例 `fumiao-model-access-acceptance`，沿用该实例的专属配置和卷。在 `http://model-access.localhost:3011/studio` 复测并交付验收地址、SHA、实扣明细与恢复结果。负责人验收通过后按仓库流程提 PR，生产发布由负责人决定。

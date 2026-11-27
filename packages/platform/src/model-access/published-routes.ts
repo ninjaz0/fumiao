@@ -1,3 +1,4 @@
+import { imageCapabilities } from "./image-formats.js";
 import { videoCapabilities } from "./video-parameters.js";
 import { creditUnits, formatCredits } from "../credit-amount.js";
 import { one, type Sql } from "../db.js";
@@ -27,6 +28,16 @@ export function publishedPrice(row: Record<string, any>): PublishedPrice {
       cache_write: row.cache_write === null ? null : decimal(row.cache_write),
     };
   return { kind: row.purpose, unit: decimal(row.unit) };
+}
+// All callers bind the workspace as $1 and select the exact route revision as r.
+export const publishedRouteAccessSql = `studio_model_allowed(r.catalog_id,$1) AND NOT EXISTS (
+  SELECT 1 FROM model_permissions mp WHERE mp.workspace_id=$1 AND mp.model_id=r.model_id AND NOT mp.enabled)`;
+
+export async function requirePublishedRouteAccess(sql: Sql, route: FrozenModelRoute, workspace: string) {
+  const allowed = await one(sql,
+    `SELECT 1 FROM model_access_route_revisions r WHERE r.id=$2 AND ${publishedRouteAccessSql}`,
+    [workspace, route.routeRevisionId]);
+  requireValue(allowed, 403, "当前空间未开放该模型");
 }
 const routeSql = `SELECT p.revision,p.price_revision_id,r.*,s.unit,s.input,s.output,s.cache_read,s.cache_write,
   c.enabled AND NOT c.removed AS enabled FROM model_access_publications p
@@ -68,7 +79,7 @@ export async function resolvePublishedRoute(
     capabilities:
       row.purpose === "video"
         ? videoCapabilities(row.protocol, row.capabilities)
-        : row.capabilities,
+        : row.purpose === "image" ? imageCapabilities(row.capabilities) : row.capabilities,
     priceRevisionId: row.price_revision_id,
     price: publishedPrice(row),
   };
@@ -128,6 +139,8 @@ export async function publicationView(sql: Sql) {
         route.protocol,
         route.capabilities,
       );
+    else if (route.protocol === "openai-images" || route.protocol === "openrouter-images")
+      route.capabilities = imageCapabilities(route.capabilities);
     const group = byCatalog.get(route.catalog_id);
     if (group) group.push(route);
     else byCatalog.set(route.catalog_id, [route]);

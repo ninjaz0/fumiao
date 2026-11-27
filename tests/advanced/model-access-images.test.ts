@@ -12,6 +12,8 @@ async function fixture(
   t: test.TestContext,
   router = false,
   throughMigration?: string,
+  outputFormats?: string[],
+  defaultFormat?: string,
 ) {
   const f = await chatsFixture(throughMigration);
   t.after(f.cleanup);
@@ -19,23 +21,44 @@ async function fixture(
     "INSERT INTO studio_plugin_profile(mode) VALUES('compatible') ON CONFLICT DO NOTHING",
   );
   const api = new OriginalModelAccess(f.identity);
-  const c = new ModelAccessConnections(f.db, f.p, async () => ({
+  const c = new ModelAccessConnections(f.db, f.p, async (url) => ({
     status: 200,
     contentType: "application/json",
     body: Buffer.from(
       JSON.stringify({
-        data: [
-          {
-            id: "upstream-image",
-            architecture: { output_modalities: ["image"] },
-            supported_parameters: {
-              n: { type: "range", min: 1, max: 2 },
-              quality: { type: "enum", values: ["high"] },
-              size: { type: "enum", values: ["768x768"] },
-              input_references: { type: "range", min: 0, max: 1 },
-            },
-          },
-        ],
+        data:
+          outputFormats && url.pathname.endsWith("/videos/models")
+            ? []
+            : [
+                {
+                  id: "upstream-image",
+                  architecture: { output_modalities: ["image"] },
+                  supported_parameters: {
+                    ...(outputFormats && {
+                      output_format: {
+                        type: "enum",
+                        values: outputFormats,
+                        ...(defaultFormat && { default: defaultFormat }),
+                      },
+                    }),
+                    n: { type: "range", min: 1, max: 2 },
+                    quality: { type: "enum", values: ["high"] },
+                    size: { type: "enum", values: ["768x768"] },
+                    input_references: { type: "range", min: 0, max: 1 },
+                  },
+                },
+                ...(outputFormats
+                  ? [
+                      {
+                        id: "vector",
+                        architecture: { output_modalities: ["image"] },
+                        supported_parameters: {
+                          output_format: { type: "enum", values: ["svg"] },
+                        },
+                      },
+                    ]
+                  : []),
+              ],
       }),
     ),
   }));
@@ -99,6 +122,144 @@ test("成员状态公开当前线路的画布和创作表单", async (t) => {
   assert.equal(form.references.max, 1);
 });
 
+test("目录声明的图片格式和本机可交付格式共同决定上架、表单、报价与订单编码", async (t) => {
+  const f = await fixture(t, true, undefined, ["gif", "JPG", "webp"], "gif");
+  const draftId = randomUUID();
+  const { draft: svg } = await f.c.saveDraft(draftId, {
+    expected_revision: 0,
+    connection_id: f.conn.id,
+    connection_revision: 1,
+    upstream_id: "vector",
+    price: "1",
+  });
+  assert.equal(svg.status, "draft");
+  assert.ok(svg.missing.includes("output_format"));
+  const api = new OriginalModelAccess(f.identity);
+  await assert.rejects(
+    api.publish(f.admin, {
+      uid: randomUUID(),
+      items: [{ draft_id: draftId, draft_revision: 1, action: "create" }],
+    }),
+    { status: 400 },
+  );
+  const view = await api.view(f.admin);
+  const raw = view.discoveries.find(c => c.connection_id === f.conn.id)!.candidates;
+  assert.equal(raw.find(c => c.upstream_id === "upstream-image")?.parameters.output_format_default, "gif");
+  assert.equal(view.drafts.find(d => d.upstream_id === "upstream-image")?.parameters.output_format_default, "JPG");
+  assert.equal(view.publications.find(p => p.catalog_id === f.model)?.routes[0].capabilities.output_format_default, "JPG");
+  const original = view.discoveries
+    .find((c) => c.connection_id === f.conn.id)!
+    .candidates.find((c) => c.upstream_id === "vector")!;
+  assert.deepEqual(original.parameters.definitions?.output_format, {
+    type: "enum",
+    values: ["svg"],
+  });
+  const state = (await f.request("/api/state")).body;
+  assert.deepEqual(state.model_forms[f.model].fields.output_format.enum, [
+    "jpeg",
+    "webp",
+  ]);
+  const input = {
+    kind: "image",
+    model: f.model,
+    prompt: "生成",
+    params: { n: 1 },
+  };
+  const invalid = { ...input, params: { output_format: "gif" } };
+  assert.equal((await f.request("/api/estimate", invalid)).status, 400);
+  assert.equal(
+    (
+      await f.request("/api/image-jobs", {
+        ...invalid,
+        uid: randomUUID(),
+        price_revision: state.pricing.revision,
+      })
+    ).status,
+    400,
+  );
+  assert.equal((await f.db.query("SELECT id FROM jobs")).rows.length, 0);
+  for (const [requested, wire] of [
+    [undefined, "JPG"],
+    ["image/jpeg", "JPG"],
+    ["webp", "webp"],
+  ]) {
+    const params = { n: 1, ...(requested && { output_format: requested }) };
+    const quote = await f.request("/api/estimate", { ...input, params });
+    assert.equal(quote.status, 200, JSON.stringify(quote.body));
+    const order = await f.request("/api/image-jobs", {
+      model: f.model,
+      prompt: "生成",
+      params,
+      uid: randomUUID(),
+      price_revision: state.pricing.revision,
+    });
+    assert.equal(order.status, 200, JSON.stringify(order.body));
+    const job = await one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [
+      order.body.id,
+    ]);
+    const seen: unknown[] = [];
+    const bytes =
+      wire === "webp"
+        ? await sharp(await samplePng())
+            .webp()
+            .toBuffer()
+        : await sharp(await samplePng())
+            .jpeg()
+            .toBuffer();
+    await new Executor(f.p, async (_url, init) => {
+      seen.push(JSON.parse(String(init.body)).output_format);
+      return imageResponse(bytes);
+    }).execute(job.id);
+    assert.deepEqual(seen, [wire]);
+    assert.equal(
+      (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [job.id])).state,
+      "completed",
+    );
+  }
+});
+
+test("旧目录产生的仅矢量备用线路继续留档，不能切换为接单线路", async (t) => {
+  const f = await fixture(t);
+  const id = randomUUID();
+  const caps = { names: ["output_format"], definitions: { output_format: { type: "enum", values: ["svg"] } } };
+  await f.db.query(`INSERT INTO model_access_route_revisions
+    (id,catalog_id,model_id,connection_id,upstream_id,connection_revision_id,draft_id,draft_revision,purpose,protocol,executor_version,capabilities)
+    SELECT $1,catalog_id,model_id,connection_id,upstream_id,connection_revision_id,draft_id,draft_revision+1,purpose,protocol,executor_version,$2
+    FROM model_access_route_revisions WHERE catalog_id=$3`, [id, JSON.stringify(caps), f.model]);
+  const api = new OriginalModelAccess(f.identity);
+  await assert.rejects(api.publish(f.admin, { uid: randomUUID(), items: [{
+    action: "activate", expected_revision: 1, catalog_id: f.model, route_revision_id: id,
+  }] }), { status: 400 });
+  assert.deepEqual((await one(f.db, "SELECT capabilities FROM model_access_route_revisions WHERE id=$1", [id])).capabilities, caps);
+});
+
+test("目录中明确的图片默认格式仅在双方都支持时使用，保留未能确认的限制", async (t) => {
+  const f = await fixture(
+    t,
+    true,
+    undefined,
+    ["gif", "JPG", "webp"],
+    "image/webp",
+  );
+  const form = (await f.request("/api/state")).body.model_forms[f.model];
+  assert.equal(form.fields.output_format?.default, "webp");
+  const job = await imageJob(f);
+  assert.equal(job.input.params.output_format, "webp");
+  const { imageOutputFormat } =
+    await import("@fumiao/platform/model-access/image-formats.js");
+  assert.equal(imageOutputFormat({ names: ["output_format"] }), undefined);
+  assert.equal(
+    imageOutputFormat({ names: ["output_format"] }, "image/jpeg"),
+    "jpeg",
+  );
+  assert.throws(() =>
+    imageOutputFormat({
+      names: ["other"],
+      unconfirmed_parameters: ["output_format"],
+    }),
+  );
+});
+
 test("真实成员报价接口接受已保存的原生图片画质", async (t) => {
   const f = await fixture(t);
   const { body: state } = await f.request("/api/state");
@@ -138,6 +299,120 @@ test("画布候选确认的是全部候选总价，分镜脚本文档信息不�
   assert.equal(accepted.body.exact_credits, "1");
   assert.deepEqual((await post("1")).body, accepted.body);
   assert.deepEqual((await f.db.query("SELECT input->'params' AS params FROM jobs WHERE catalog_id=$1", [f.model])).rows, [{ params: { n: 2 } }, { params: { n: 2 } }]);
+});
+
+test("原生画布提案的逐张报价、审批上限、预检与提交使用同一精确金额", async (t) => {
+  const f = await fixture(t);
+  const api = new OriginalModelAccess(f.identity);
+  const { OriginalCanvases } = await import("@fumiao/original-api/canvases.js");
+  const { OriginalCanvasRuns } =
+    await import("@fumiao/original-api/canvas-runs.js");
+  const { OriginalAgentPolicies } =
+    await import("@fumiao/original-api/proposals.js");
+  await new OriginalAgentPolicies(f.p).set(f.member, {
+    execution_policy: "propose_and_confirm",
+  });
+  const canvases = new OriginalCanvases(f.p);
+  for (const [index, n, exact] of [
+    [0, 2, "0.5"],
+    [1, 1, "12345678901.123457"],
+    [2, 2, "24691357802.246914"],
+  ] as const) {
+    if (index === 1) {
+      await api.publish(f.admin, {
+        uid: randomUUID(),
+        items: [
+          {
+            action: "price",
+            catalog_id: f.model,
+            expected_revision: 1,
+            price: { kind: "image", unit: "12345678901.123457" },
+          },
+        ],
+      });
+      await f.db.query(
+        "UPDATE wallets SET balance=100000000000 WHERE workspace_id=$1",
+        [f.memberSpace.id],
+      );
+    }
+    const canvas = await canvases.create(f.member, { title: "提案" });
+    await canvases.save(f.member, canvas.id, {
+      expected_revision: 1,
+      title: "提案",
+      document: {
+        nodes: [
+          {
+            id: "draw",
+            type: "image",
+            x: 0,
+            y: 0,
+            prompt: "初稿",
+            params: { model: f.model },
+            extra_params: { n, script_doc_id: "story" },
+          },
+        ],
+        edges: [],
+      },
+    });
+    const path = "/api/canvases/" + canvas.id;
+    const proposal = await f.request(path + "/proposals", {
+      title: "更新镜头",
+      base_revision: 2,
+      operations: [
+        { op: "update_node", id: "draw", patch: { prompt: "两次修改" } },
+        { op: "update_node", id: "draw", patch: { title: "同一镜头" } },
+      ],
+    });
+    assert.equal(proposal.status, 200, JSON.stringify(proposal.body));
+    assert.equal(proposal.body.estimated_credits, Number(exact));
+    assert.equal(proposal.body.exact_estimated_credits, exact);
+    const applied = await f.request(
+      path + "/proposals/" + proposal.body.id + "/apply",
+      { expected_revision: 2 },
+    );
+    assert.equal(applied.status, 200, JSON.stringify(applied.body));
+    const scope = await one(
+      f.db,
+      `SELECT trim_scale(s.approved_credits)::text AS cap FROM agent_proposal_scopes s
+      JOIN canvas_proposals p ON p.id=s.proposal_id WHERE p.public_id=$1`,
+      [proposal.body.id],
+    );
+    assert.equal(scope.cap, exact);
+    const pre = await f.request(path + "/batch-precheck", {
+      node_ids: ["draw"],
+      stages: ["image"],
+    });
+    assert.equal(pre.body.summary.exact_total_credits, exact);
+    const item = pre.body.items[0];
+    const actor = {
+      ...f.member,
+      agentAction: {
+        source: "mcp" as const,
+        approvedProposalId: proposal.body.id,
+      },
+    };
+    const args = {
+      expected_revision: 3,
+      uid: randomUUID(),
+      price_revision: pre.body.price_revision,
+      route_revision: item.route_revision,
+      price_revision_id: item.price_revision_id,
+      max_charge: exact,
+    };
+    const runs = new OriginalCanvasRuns(f.p);
+    const order = await runs.generate(actor, canvas.id, "draw", args);
+    assert.equal(
+      (await runs.generate(actor, canvas.id, "draw", args)).id,
+      order.id,
+    );
+    const execution = await one(
+      f.db,
+      `SELECT trim_scale(j.price)::text AS cap,trim_scale(e.amount)::text AS authorized
+      FROM jobs j JOIN agent_proposal_executions e ON e.job_id=j.id WHERE j.public_id=$1`,
+      [order.id],
+    );
+    assert.deepEqual(execution, { cap: exact, authorized: exact });
+  }
 });
 
 test("普通创作的报价绑定线路、售价和最高扣款，重试复用已受理请求", async (t) => {
@@ -1065,6 +1340,36 @@ for (const quota of ["both", "stage", "commit"])
       assert.equal(done.bytes, null);
     },
   );
+
+test("图片创建返回 303 后保留唯一预留与人工核查，重启不发送新单", async (t) => {
+  const f = await fixture(t);
+  const job = await imageJob(f);
+  const calls: string[] = [];
+  const transport = async (url: URL, init: { method: string }) => {
+    calls.push(init.method + " " + url.href);
+    return {
+      status: 303,
+      contentType: "application/json",
+      body: Buffer.from("{}"),
+      headers: { location: "https://1.0.0.1/accepted" },
+    };
+  };
+  await new Executor(f.p, transport).execute(job.id);
+  const restarted = new Executor(f.p, transport);
+  await restarted.recover();
+  await restarted.execute(job.id);
+  assert.deepEqual(
+    await one(f.db, "SELECT state,request_uncertain FROM jobs WHERE id=$1", [
+      job.id,
+    ]),
+    { state: "uncertain", request_uncertain: true },
+  );
+  assert.equal(
+    Number((await f.p.wallet(f.member, job.workspace_id)).held),
+    0.25,
+  );
+  assert.deepEqual(calls, ["POST https://1.1.1.1/v1/images/generations"]);
+});
 
 test("发送前中断、明确拒绝和完整无效回执均释放预留", async (t) => {
   const f = await fixture(t);

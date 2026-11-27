@@ -32,6 +32,17 @@ export interface DeclaredParameters {
   output_modalities?: string[];
   context_length?: number;
   max_completion_tokens?: number;
+  output_format_default?: string;
+  output_token_parameter?: "max_tokens" | "max_completion_tokens";
+}
+export function chatOutputParameter(caps: DeclaredParameters) {
+  return (
+    caps.output_token_parameter ??
+    (caps.names?.includes("max_completion_tokens") &&
+    !caps.names.includes("max_tokens")
+      ? "max_completion_tokens"
+      : "max_tokens")
+  );
 }
 interface Entry {
   upstream_id: string;
@@ -153,16 +164,26 @@ function declaredOptions(
   const names: string[] = [];
   const unconfirmed: string[] = [];
   const definitions: Record<string, Descriptor> = Object.create(null);
+  let outputFormatDefault: string | undefined;
   for (const [key, raw] of Object.entries(value).slice(0, 128)) {
     if (!safeText(key, 128) || containsCredential(key)) continue;
     names.push(key);
-    const descriptor = parameterDefinition(raw, containsCredential);
+    let constraint = raw;
+    if (key === "output_format" && Object.hasOwn(obj(raw), "default")) {
+      const { default: preferred, ...rest } = obj(raw);
+      // The default is a hint. Keep every other restriction on this enum.
+      if (safeText(preferred, 128) && !containsCredential(preferred))
+        outputFormatDefault = preferred;
+      constraint = rest;
+    }
+    const descriptor = parameterDefinition(constraint, containsCredential);
     if (descriptor) definitions[key] = descriptor;
     else unconfirmed.push(key);
   }
   return {
     names,
     definitions: { ...definitions },
+    ...(outputFormatDefault && { output_format_default: outputFormatDefault }),
     ...(unconfirmed.length ? { unconfirmed_parameters: unconfirmed } : {}),
   };
 }

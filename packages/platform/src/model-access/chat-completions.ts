@@ -1,3 +1,5 @@
+import { chatOutputParameter } from "./discovery.js";
+import type { FrozenModelRoute } from "./publication.js";
 import {
   ChatReplyError,
   type ChatChunk,
@@ -63,7 +65,7 @@ async function* events(
 }
 export async function* chatCompletion(
   client: Client,
-  model: string,
+  route: FrozenModelRoute,
   messages: ChatMessage[],
   tools: ModelTool[],
   maxTokens: number,
@@ -72,6 +74,7 @@ export async function* chatCompletion(
   record?: (usage: ChatCallUsage) => void,
   output = client.createOutputGuard(),
 ): AsyncGenerator<ChatChunk> {
+  const model = route.upstreamId;
   const res = await client.request(
     {
       endpoint: "chat/completions",
@@ -81,7 +84,7 @@ export async function* chatCompletion(
       body: JSON.stringify({
         model,
         messages,
-        max_tokens: maxTokens,
+        [chatOutputParameter(route.capabilities)]: maxTokens,
         stream,
         ...(stream ? { stream_options: { include_usage: true } } : {}),
         ...(tools.length ? { tools } : {}),

@@ -1,3 +1,4 @@
+import { publishedRouteAccessSql } from "@fumiao/platform/model-access/published-routes.js";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
 import { hasModelAccess } from "@fumiao/platform/studio-plugin-profile.js";
 import { ChatProviders } from "@fumiao/platform/chat-providers.js";
@@ -32,11 +33,14 @@ export class OriginalChatSettings {
         }
       }
       if (await hasModelAccess(sql)) {
-        const native =
-          await sql.query(`SELECT c.id, c.descriptor, c.display_label
+        const native = await sql.query(
+          `SELECT c.id, c.descriptor, c.display_label
           FROM model_access_publications p JOIN studio_catalog c ON c.id=p.catalog_id
           JOIN model_access_route_revisions r ON r.id=p.route_revision_id JOIN connections s ON s.id=r.connection_id
-          WHERE p.purpose='chat' AND s.enabled AND NOT s.removed ORDER BY c.position,c.id`);
+          WHERE p.purpose='chat' AND s.enabled AND NOT s.removed
+          AND ${publishedRouteAccessSql} ORDER BY c.position,c.id`,
+          [workspace.id],
+        );
         for (const row of native.rows)
           if (flags[row.id]) {
             models[row.id] = {

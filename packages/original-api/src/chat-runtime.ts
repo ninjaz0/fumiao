@@ -162,7 +162,7 @@ export class ChatRuntime {
               );
             return chatCompletion(
               client,
-              route.upstreamId,
+              route,
               request.messages,
               request.tools ?? [],
               max_output_tokens,
@@ -189,7 +189,7 @@ export class ChatRuntime {
             ];
             for await (const chunk of chatCompletion(
               client,
-              route.upstreamId,
+              route,
               messages,
               [],
               Math.min(64, route.capabilities.max_completion_tokens ?? 64),

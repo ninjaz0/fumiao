@@ -1,3 +1,4 @@
+import { defaultImageFormat, imageFormats } from "./image-formats.js";
 import type { FormField, ModelForm } from "@fumiao/plugin-sdk/model-form.js";
 import type { FrozenModelRoute } from "./publication.js";
 import { videoCapabilities } from "./video-parameters.js";
@@ -93,6 +94,12 @@ export function mediaModelForm(
           maximum: def.max,
         });
       } else if (def?.type === "boolean") field.type = "boolean";
+      if (name === "output_format") {
+        const formats = imageFormats(caps);
+        field.type = "string";
+        field.enum = [...(formats?.keys() ?? [])];
+        if (formats) field.default = defaultImageFormat(caps, formats);
+      }
       if (name === "n") {
         field.minimum = Math.max(1, field.minimum ?? 1);
         field.maximum = Math.min(16, field.maximum ?? 16);
@@ -106,6 +113,20 @@ export function mediaModelForm(
       }
       fields[name] = field;
     }
+  }
+  if (route.purpose === "video" && fields.size) {
+    const alternatives = ["resolution", "aspect_ratio"].filter(
+      (name) => fields[name],
+    );
+    if (alternatives.length)
+      form.mutuallyExclusive = {
+        field: "size",
+        alternatives,
+        hint:
+          "尺寸与" +
+          alternatives.map((name) => fields[name].title).join("、") +
+          "只能选一组。切换前请将已选项改为默认。",
+      };
   }
   return form;
 }

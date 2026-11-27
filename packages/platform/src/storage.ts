@@ -98,7 +98,18 @@ export class DiskStorage implements Storage {
     signal?: AbortSignal,
   ) {
     const stream = createReadStream(this.path(key), { start, end, signal });
-    await once(stream, "open");
+    try {
+      await once(stream, "open");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        try {
+          await stat(this.directory);
+        } catch (cause) {
+          throw new Error("本地媒体存储目录暂不可用", { cause });
+        }
+      }
+      throw error;
+    }
     return stream;
   }
   async stat(key: string) {

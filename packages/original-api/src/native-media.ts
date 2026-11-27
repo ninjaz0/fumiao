@@ -1,3 +1,4 @@
+import { requirePublishedRouteAccess } from "@fumiao/platform/model-access/published-routes.js";
 import { randomUUID } from "node:crypto";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
 import type { OriginalDraft } from "@fumiao/plugin-sdk/index.js";
@@ -58,13 +59,7 @@ export async function prepareNativeMedia(
       workspace,
     ]);
   }
-  const model = await one(
-    sql,
-    `SELECT m.id FROM models m WHERE m.id=$1 AND studio_model_allowed($2,$3)
-    AND NOT EXISTS(SELECT 1 FROM model_permissions mp WHERE mp.model_id=m.id AND mp.workspace_id=$3 AND NOT mp.enabled)`,
-    [route.modelId, route.catalogId, workspace],
-  );
-  requireValue(model, 403, "当前空间未开放该模型");
+  await requirePublishedRouteAccess(sql, route, workspace);
   const client = await resolveConnectionRevision(
     sql,
     p,

@@ -1,3 +1,4 @@
+import { requirePublishedRouteAccess } from "@fumiao/platform/model-access/published-routes.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import {
   chatContext,
@@ -61,6 +62,7 @@ export async function prepareNativeChat(
     409,
     "当前线路不支持对话",
   );
+  await requirePublishedRouteAccess(sql, route, workspace);
   const client = await resolveConnectionRevision(
     sql,
     p,

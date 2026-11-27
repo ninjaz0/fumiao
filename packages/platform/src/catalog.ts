@@ -1,3 +1,4 @@
+import { requirePublishedRouteAccess } from "./model-access/published-routes.js";
 import { creditUnits, formatCredits } from "./credit-amount.js";
 import { prepareMediaParameters } from "./prepare-input.js";
 import {
@@ -570,13 +571,7 @@ export class StudioCatalog {
           409,
           "该线路不支持媒体估价",
         );
-        const access = await one(
-          sql,
-          `SELECT studio_model_allowed($1,$2) AND NOT EXISTS (
-          SELECT 1 FROM model_permissions WHERE workspace_id=$2 AND model_id=$3 AND NOT enabled) AS ok`,
-          [modelId, workspace, route.modelId],
-        );
-        requireValue(access.ok, 403, "当前空间未开放该模型");
+        await requirePublishedRouteAccess(sql, route, workspace);
         const { count } = prepareMediaParameters(
           route,
           {

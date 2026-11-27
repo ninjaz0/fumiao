@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -409,6 +409,80 @@ for (const protocol of ["new-api-videos", "openrouter-videos"] as const) {
   }
 }
 
+for (const refresh of ["fresh", "repeated"]) {
+  test("重启后从原视频任务刷新签名地址并有界验收 " + refresh, async (t) => {
+    const f = await fixture(t, "openrouter-videos");
+    const { job } = await f.admit();
+    const { bytes } = await video(t, 7.8);
+    const fresh = "https://1.0.0.1/renewed";
+    let polls = 0,
+      posts = 0,
+      downloads = 0;
+    const http: HttpTransport<string | Uint8Array> = async (url, init) => {
+      if (init.method === "POST") {
+        posts++;
+        assert.equal(url.href, origin + "/videos");
+        return json({ id: remote, polling_url: polling });
+      }
+      if (url.href === polling) {
+        assert.equal(init.headers.Authorization, "Bearer synthetic-video-key");
+        polls++;
+        return json({
+          id: remote,
+          status: "completed",
+          urls: [polls > 1 && refresh === "fresh" ? fresh : signed],
+        });
+      }
+      assert.deepEqual(init.headers, {});
+      assert.ok([signed, fresh].includes(url.href));
+      downloads++;
+      if (downloads === 1) return json({}, 503);
+      return url.href === signed
+        ? json({}, 403)
+        : { status: 200, contentType: "video/mp4", body: bytes };
+    };
+    await f.wake(job.id, http);
+    const persisted = await f.wake(job.id, http);
+    assert.equal(persisted.receipt.signed, signed);
+    await f.publish(f.model);
+    await f.c.edit(f.conn.id, { expected_revision: 1, enabled: false });
+    let state = await f.wake(job.id, http);
+    assert.equal(state.state, "finalizing");
+    assert.equal(
+      Number((await f.p.wallet(f.member, f.memberSpace.id)).held),
+      24,
+    );
+    for (let i = 0; i < 10 && state.state === "finalizing"; i++)
+      state = await f.wake(job.id, http);
+    await f.wake(job.id, http);
+    assert.equal(posts, 1);
+    assert.ok(polls >= 2 && polls <= 4, "有限次重新查询原任务");
+    assert.equal(state.state, refresh === "fresh" ? "completed" : "failed");
+    assert.equal(
+      Number((await f.p.wallet(f.member, f.memberSpace.id)).held),
+      0,
+    );
+    const ledger = await f.db.query(
+      "SELECT action,amount::float8 AS amount FROM ledger WHERE job_id=$1 AND action IN ('spend','refund')",
+      [job.id],
+    );
+    assert.deepEqual(
+      ledger.rows,
+      refresh === "fresh"
+        ? [{ action: "spend", amount: 23.4 }]
+        : [{ action: "refund", amount: 24 }],
+    );
+    if (refresh === "fresh") {
+      const asset = await one(
+        f.db,
+        "SELECT * FROM assets WHERE id=$1 AND workspace_id=$2",
+        [state.result.assets[0], f.memberSpace.id],
+      );
+      assert.deepEqual(await f.p.storage.read(asset.object_key), bytes);
+    }
+  });
+}
+
 test("视频首段可完整解码但文件截断，零交付零实扣", async (t) => {
   const f = await fixture(t, "new-api-videos");
   const { job } = await f.admit();
@@ -624,6 +698,26 @@ for (const legacyChild of [false, true])
         pre.items.every((item) => item.status !== "blocked"),
         JSON.stringify(pre.items),
       );
+      if (!legacyChild) {
+        const proposal = await f.request(
+          "/api/canvases/" + canvas.id + "/proposals",
+          {
+            base_revision: 2,
+            title: "父子镜头",
+            operations: ["child", "parent"].map((id) => ({
+              op: "update_node",
+              id,
+              patch: { prompt: "更新镜头" },
+            })),
+          },
+        );
+        assert.equal(proposal.status, 200, JSON.stringify(proposal.body));
+        assert.equal(proposal.body.estimated_credits, 48);
+        assert.equal(
+          proposal.body.exact_estimated_credits,
+          pre.summary.exact_total_credits,
+        );
+      }
       const singleQuote = async (refs: string[], count = 1) => (await f.request("/api/quotes/batch", {
         items: [{ kind: "video", model: childModel, params: { seconds: 8 }, count, refs, canvas_tail: { project: canvas.id, parent: "parent" } }],
       })).body.items[0];
@@ -712,6 +806,54 @@ for (const legacyChild of [false, true])
       }
     },
   );
+
+test("成员和画布视频表单标出尺寸与分辨率画幅的互斥关系，并保留已保存的冲突供修改", async (t) => {
+  const f = await fixture(t, "openrouter-videos");
+  await f.db.query(
+    "INSERT INTO studio_plugin_profile(mode) VALUES('compatible') ON CONFLICT DO NOTHING",
+  );
+  const { evaluateFormConstraints, formError } =
+    await import("@fumiao/plugin-sdk/model-form.js");
+  const state = (await f.request("/api/state")).body;
+  const form = state.model_forms[f.model];
+  const dims = { seconds: 8, size: "160x96" };
+  const ratio = { seconds: 8, resolution: "720p", aspect_ratio: "16:9" };
+  const both = { ...ratio, ...dims };
+  assert.equal(formError(form, dims), "");
+  assert.equal(formError(form, ratio), "");
+  assert.match(formError(form, both), /尺寸/);
+  const withSize = evaluateFormConstraints(form, dims);
+  assert.ok(
+    withSize.fields.resolution.disabled &&
+      withSize.fields.aspect_ratio.disabled,
+  );
+  const saved = evaluateFormConstraints(form, both);
+  assert.ok(
+    !saved.fields.size.disabled && !saved.fields.resolution.disabled,
+    "旧值可逐个手动改回默认",
+  );
+  const narrowed = evaluateFormConstraints(form, {
+    seconds: 8,
+    size: "1920x1080",
+  });
+  assert.ok(narrowed.fields.resolution.disabled);
+  for (const [params, status] of [
+    [dims, 200],
+    [ratio, 200],
+    [both, 400],
+  ] as const) {
+    assert.equal(
+      (
+        await f.request("/api/estimate", {
+          kind: "video",
+          model: f.model,
+          params,
+        })
+      ).status,
+      status,
+    );
+  }
+});
 
 test("画布保留三十秒与换线前的八秒草稿，重新生成提示节点和可用时长", async (t) => {
   const f = await fixture(t, "new-api-videos");
@@ -1093,6 +1235,58 @@ test("查询正文中断可恢复，完整无效 JSON 释放预留，创建响�
   assert.equal((await f.wake(lost.id, bad)).state, "uncertain");
   assert.equal(creates, 2);
   assert.equal(Number((await f.p.wallet(f.member, f.memberSpace.id)).held), 24);
+});
+
+test("整个本地媒体目录暂时离线时保留尾帧子单，恢复后按原单继续", async (t) => {
+  const f = await fixture(t, "new-api-videos");
+  const { job: parent } = await f.admit();
+  const { bytes } = await video(t, 7.8);
+  const http: HttpTransport<string | Uint8Array> = async (url, init) => {
+    if (init.method === "POST") return json({ id: remote });
+    if (url.href === polling) return json({ id: remote, status: "completed" });
+    return { status: 200, contentType: "video/mp4", body: bytes };
+  };
+  await f.wake(parent.id, http);
+  assert.equal((await f.wake(parent.id, http)).state, "completed");
+  const { job: child } = await f.admit();
+  await f.db.query(
+    "INSERT INTO job_tail_chains(parent_job_id,child_job_id) VALUES($1,$2)",
+    [parent.id, child.id],
+  );
+  await rename(f.directory, f.directory + "-offline");
+  try {
+    await new Executor(f.p).recover();
+    const waiting = await one(
+      f.db,
+      "SELECT state,request_retry_at FROM jobs WHERE id=$1",
+      [child.id],
+    );
+    assert.equal(waiting.state, "queued");
+    assert.ok(waiting.request_retry_at);
+    assert.equal(
+      Number((await f.p.wallet(f.member, f.memberSpace.id)).held),
+      24,
+    );
+  } finally {
+    await rename(f.directory + "-offline", f.directory);
+  }
+  await f.db.query("UPDATE jobs SET request_retry_at=NULL WHERE id=$1", [
+    child.id,
+  ]);
+  await new Executor(f.p).recover();
+  assert.equal(
+    (await one(f.db, "SELECT input FROM jobs WHERE id=$1", [child.id])).input
+      .references.length,
+    1,
+  );
+  assert.equal(
+    (
+      await f.db.query("SELECT 1 FROM job_tail_chains WHERE child_job_id=$1", [
+        child.id,
+      ])
+    ).rows.length,
+    0,
+  );
 });
 
 test("尾帧永久缺失释放子单，超过一轮上限的暂时故障让出健康工作区", async (t) => {

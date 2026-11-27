@@ -1,3 +1,4 @@
+import { imageCapabilities, imageFormats } from "./image-formats.js";
 import { videoCapabilities } from "./video-parameters.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -878,10 +879,14 @@ function draftSelection(
   const effective: typeof parameters =
     kind === "video" && protocol
       ? videoCapabilities(protocol, parameters)
-      : parameters;
+      : kind === "image"
+        ? imageCapabilities(parameters)
+        : parameters;
   const reasons: string[] = [];
   if (!kind) reasons.push("purpose");
   if (!protocol) reasons.push("protocol");
+  if (kind === "image" && imageFormats(effective)?.size === 0)
+    reasons.push("output_format");
   const prices = input.chat_prices;
   if (
     kind === "chat"

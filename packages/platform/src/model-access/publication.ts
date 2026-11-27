@@ -1,3 +1,5 @@
+import { imageCapabilities, imageFormats } from "./image-formats.js";
+import { chatOutputParameter } from "./discovery.js";
 import { videoCapabilities } from "./video-parameters.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -236,7 +238,11 @@ async function publishOne(
     "请先补齐用途、调用格式、售价及有界参数",
   );
   const capabilities =
-    purpose === "video" ? videoCapabilities(protocol, parameters) : parameters;
+    purpose === "video"
+      ? videoCapabilities(protocol, parameters)
+      : purpose === "image"
+        ? imageCapabilities(parameters)
+        : { ...parameters, output_token_parameter: chatOutputParameter(parameters) };
   requireValue(
     purpose !== "video" ||
       ((capabilities.durations?.length || capabilities.duration_range) &&
@@ -245,6 +251,11 @@ async function publishOne(
           capabilities.frame_images?.includes("first_frame"))),
     400,
     "请先补齐可执行的视频参数",
+  );
+  requireValue(
+    purpose !== "image" || imageFormats(capabilities)?.size !== 0,
+    400,
+    "此线路没有可交付的图片格式",
   );
   const client = await resolveConnectionRevision(sql, p, conn.id);
   requireValue(
@@ -365,7 +376,7 @@ async function activateExisting(
 ) {
   const row = await one(
     sql,
-    `SELECT pub.revision,pub.price_revision_id,r.connection_revision_id,r.protocol,r.upstream_id,
+    `SELECT pub.revision,pub.price_revision_id,r.connection_revision_id,r.protocol,r.upstream_id,r.purpose,r.capabilities,
     c.enabled AND NOT c.removed AS enabled FROM model_access_publications pub
     JOIN model_access_route_revisions r ON r.catalog_id=pub.catalog_id AND r.id=$2
     JOIN connections c ON c.id=r.connection_id
@@ -377,6 +388,8 @@ async function activateExisting(
     409,
     "线路已停止接单或公开模型修订已更新",
   );
+  requireValue(row.purpose !== "image" || imageFormats(row.capabilities)?.size !== 0,
+    400, "此线路没有可交付的图片格式");
   const client = await resolveConnectionRevision(
     sql,
     p,

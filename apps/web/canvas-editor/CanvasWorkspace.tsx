@@ -4689,6 +4689,7 @@ export function CanvasWorkspace({
           {generationBlock && (
             <div className="composer-message">
               <span role="status">{generationBlock}</span>
+              {nativeMedia && nativeQuote.retryable && <button type="button" onClick={nativeQuote.refresh}>重新报价</button>}
               {generationBlock === "当前空间积分不足" && <button onClick={openCredits}>去充值</button>}
             </div>
           )}

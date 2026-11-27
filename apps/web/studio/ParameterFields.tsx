@@ -134,6 +134,9 @@ export function ParameterFields({
           </label>
         );
       })}
+      {form.mutuallyExclusive && (
+        <span className="parameter-constraint-hint">{form.mutuallyExclusive.hint}</span>
+      )}
       {keepHistorical && Object.keys(values).filter(name => !Object.hasOwn(form.fields, name)).map(name =>
         <button type="button" className="parameter-button" key={name} onClick={() => edit(name, undefined)}>
           移除旧参数 {name}（{String(values[name])}）

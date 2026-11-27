@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import type { MediaQuote } from "../studio/state";
 
-type Quote = { authorization?: MediaQuote; error?: string };
+type Quote = {
+  authorization?: MediaQuote;
+  error?: string;
+  retryable?: boolean;
+};
 type Item = {
   kind: string;
   model: string;
@@ -18,8 +22,19 @@ export function useMediaQuote(
   revision: number,
   parentRun?: { id: number; status: string; result: string | null },
 ) {
+  const [attempt, setAttempt] = useState(0);
   const request = item && JSON.stringify({ items: [item] });
-  const key = request && JSON.stringify([workspace, revision, request, parentRun?.id, parentRun?.status, parentRun?.result]);
+  const key =
+    request &&
+    JSON.stringify([
+      workspace,
+      revision,
+      request,
+      parentRun?.id,
+      parentRun?.status,
+      parentRun?.result,
+      attempt,
+    ]);
   const [result, setResult] = useState<Quote & { key: string }>();
   useEffect(() => {
     if (!key || !request) return;
@@ -55,7 +70,15 @@ export function useMediaQuote(
               : { error: item?.reason || "无法取得当前线路报价" };
           if (live) setResult({ key, ...quote });
         } catch (error) {
-          if (live) setResult({ key, error: (error as Error).message });
+          if (live)
+            setResult({
+              key,
+              error: (error as Error).message,
+              retryable:
+                !(error instanceof ApiError) ||
+                error.status >= 500 ||
+                [408, 425, 429].includes(error.status),
+            });
         }
       })();
     }, 160);
@@ -64,5 +87,8 @@ export function useMediaQuote(
       clearTimeout(timer);
     };
   }, [request, key]);
-  return result?.key === key ? result : undefined;
+  return {
+    ...(result?.key === key ? result : undefined),
+    refresh: () => setAttempt((n) => n + 1),
+  };
 }

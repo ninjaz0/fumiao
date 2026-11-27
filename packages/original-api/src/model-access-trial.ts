@@ -90,12 +90,6 @@ export async function modelRouteTrial(
       409,
       "线路版本或模型售价已更新，请重新报价",
     );
-    const allowed = await one(
-      sql,
-      `SELECT studio_model_allowed($1,$2) AND NOT EXISTS (SELECT 1 FROM model_permissions WHERE model_id=$3 AND workspace_id=$2 AND NOT enabled) AS ok`,
-      [route.catalogId, workspace.id, route.modelId],
-    );
-    requireValue(allowed.ok, 403, "当前空间未开放该模型");
     const { uid, prompt, params, refs } = body;
     const common = {
       route_revision: id,

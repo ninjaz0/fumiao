@@ -31,6 +31,7 @@ const missingLabels: Record<string, string> = {
   first_frame: "首帧设置",
   upscale_only: "仅支持超分",
   price: "售价",
+  output_format: "线路需提供 PNG、JPEG 或 WebP 图片",
 };
 const changeLabels = {
   added: "新增",

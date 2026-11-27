@@ -1,4 +1,4 @@
-import { DefiniteSubmissionFailure } from "./submission-failure.js";
+import { DefiniteSubmissionFailure, uncertainSubmissionStatus } from "./submission-failure.js";
 import { ArtifactValidationError } from "@fumiao/plugin-sdk/preparation.js";
 import { one, type Sql } from "../db.js";
 import type { Platform } from "../platform.js";
@@ -22,7 +22,15 @@ import {
 } from "./media-delivery.js";
 
 type Client = Awaited<ReturnType<typeof submissionClient>>;
-type VideoReceipt = { id: string; index?: number; signed?: string };
+type VideoReceipt = {
+  id: string;
+  index?: number;
+  signed?: string;
+  refreshes?: number;
+  refreshPending?: true;
+};
+const maxSignedRefreshes = 3;
+class ExpiredSignedVideo extends Error {}
 type Job = Record<string, any>;
 const terminalFailure = ["failed", "cancelled", "canceled", "expired"];
 class InvalidVideo extends Error {}
@@ -90,10 +98,9 @@ async function jsonResponse(
   if (response.status < 200 || response.status >= 300) {
     await discard(response.body);
     if (
-      response.status >= 500 ||
-      (submitting && response.status >= 300 && response.status < 400) ||
-      response.status === 408 ||
-      (!submitting && [425, 429].includes(response.status))
+      submitting
+        ? uncertainSubmissionStatus(response.status)
+        : response.status >= 500 || [408, 425, 429].includes(response.status)
     )
       throw new Error("上游暂不可用");
     if (submitting) throw new DefiniteSubmissionFailure();
@@ -316,6 +323,8 @@ async function finalize(
       await discard(response.body);
       if (response.status >= 500 || [408, 425, 429].includes(response.status))
         throw new Error("取片暂不可用");
+      if (receipt.signed && [400, 401, 403, 404, 410].includes(response.status))
+        throw new ExpiredSignedVideo();
       throw new InvalidVideo();
     }
     const bytes = await readBody(response.body, 64 << 20, signal);
@@ -343,6 +352,14 @@ async function retry(sql: Sql, current: Job) {
       finalizing ? "等待重试视频验收" : "等待查询上游视频",
       finalizing ? "5 seconds" : "30 seconds",
     ],
+  );
+}
+
+async function saveVideoReceipt(p: Platform, job: Job, receipt: VideoReceipt) {
+  return one(
+    p.db,
+    "UPDATE jobs SET receipt=$3,state='finalizing' WHERE id=$1 AND lease_token=$2 RETURNING id",
+    [job.id, job.lease_token, JSON.stringify(receipt)],
   );
 }
 
@@ -378,25 +395,47 @@ export async function executeNativeVideos(
       return;
     }
     let receipt: VideoReceipt | null = job.receipt;
-    if (!receipt) {
-      receipt = await pollVideo(client, job, router, signal);
-      if (!receipt) {
+    if (!receipt || receipt.refreshPending) {
+      let refreshes = receipt?.refreshes ?? 0;
+      if (receipt?.refreshPending) {
+        if (receipt.id !== job.remote_id || refreshes >= maxSignedRefreshes)
+          throw new InvalidVideo();
+        // Count before the GET so a restart cannot reset an expired link's refresh budget.
+        if (
+          !(await saveVideoReceipt(p, job, {
+            ...receipt,
+            refreshes: ++refreshes,
+          }))
+        )
+          return;
+      }
+      const completed = await pollVideo(client, job, router, signal);
+      if (!completed) {
         await p.db.transaction(async (sql) => {
           const current = await leased(sql, job);
           if (current) await retry(sql, current);
         });
         return;
       }
-      if (
-        !(await one(
-          p.db,
-          "UPDATE jobs SET receipt=$3,state='finalizing' WHERE id=$1 AND lease_token=$2 RETURNING id",
-          [job.id, job.lease_token, JSON.stringify(receipt)],
-        ))
-      )
-        return;
+      receipt = { ...completed, ...(refreshes ? { refreshes } : {}) };
+      if (!(await saveVideoReceipt(p, job, receipt))) return;
     }
-    await finalize(p, job, client, receipt, http, signal);
+    try {
+      await finalize(p, job, client, receipt, http, signal);
+    } catch (error) {
+      if (!(error instanceof ExpiredSignedVideo)) throw error;
+      const refreshes = receipt.refreshes ?? 0;
+      if (refreshes >= maxSignedRefreshes) throw new InvalidVideo();
+      await p.db.transaction(async (sql) => {
+        const current = await leased(sql, job);
+        if (!current) return;
+        await sql.query("UPDATE jobs SET receipt=$2 WHERE id=$1", [
+          job.id,
+          JSON.stringify({ id: receipt.id, refreshes, refreshPending: true }),
+        ]);
+        await retry(sql, current);
+      });
+    }
   } catch (error) {
     await p.db.transaction(async (sql) => {
       const current = await leased(sql, job);
