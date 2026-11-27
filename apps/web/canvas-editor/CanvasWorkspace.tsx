@@ -1,3 +1,4 @@
+import { canvasShotOrder, tailParentNode } from "@fumiao/plugin-sdk/canvas-ports";
 import { creditUnits } from "@fumiao/plugin-sdk/credit-amount.js";
 import { ParameterFields } from "../studio/ParameterFields";
 import { useMediaQuote } from "./useMediaQuote";
@@ -2691,10 +2692,19 @@ export function CanvasWorkspace({
     (entry): entry is [string, string | number | boolean] => !entry[0].startsWith("script_") && ["number", "string", "boolean"].includes(typeof entry[1]),
   ));
   if (single?.type === "video") nativeValues.seconds = Number(nativeValues.seconds ?? single.params.seconds);
+  const parentShot = single?.type === "video" && single.tail_inherited && tailParentNode(doc.value.document, single.id);
+  const quoteRefs = new Set(referenceMedia.filter((id): id is string => Boolean(id)));
+  if (single?.generation_mode === "first_last_frame") {
+    for (const frame of [single.params.h3?.first_frame, single.params.h3?.last_frame]) if (frame) quoteRefs.add(frame);
+  } else if (single?.generation_mode === "omni_ref") {
+    for (const ref of single.params.h3_refs ?? []) quoteRefs.add(ref);
+  }
+  const parentRun = parentShot ? runsByNode.get(parentShot)?.find(run => run.kind === "video") : undefined;
   const nativeQuote = useMediaQuote(nativeMedia && single ? {
     kind: single.type, model: selectedModel, params: nativeValues, count: candidateCount,
-    reference_count: referenceMedia.filter(Boolean).length + Number(Boolean(single.tail_inherited && shotIds.indexOf(single.id) > 0)),
-  } : null, studio.workspace_id, studio.pricing.revision);
+    refs: [...quoteRefs],
+    ...(parentShot && { canvas_tail: { project: project.id, parent: parentShot } }),
+  } : null, studio.workspace_id, studio.pricing.revision, parentRun);
   const creditPrice = nativeMedia ? nativeQuote?.authorization?.max_charge : studio.pricing?.items.find(p=>p.key===selectedModel+'|'+creditTier)?.amount;
   const candidateCost = creditPrice == null ? null : nativeMedia ? String(creditPrice) : Number(creditPrice) * candidateCount;
   const availableCredits = studio.credits.exact?.available ?? String(studio.credits.available);
@@ -3219,18 +3229,24 @@ export function CanvasWorkspace({
           }
         : null,
     };
-    doc.change((d) => ({
-      ...d,
-      document: {
-        ...d.document,
-        nodes: [...d.document.nodes, imgNode, vidNode],
-        edges: [
-          ...d.document.edges,
-          { id: crypto.randomUUID(), source: imgNode.id, target: vidNode.id },
-        ],
-        shots: [...(d.document.shots ?? []), vidNode.id],
-      },
-    }));
+    doc.change((d) => {
+      const shots = [...canvasShotOrder(d.document)];
+      const sourceIndex = shots.indexOf(source.id);
+      if (sourceIndex < 0) shots.push(source.id, vidNode.id);
+      else shots.splice(sourceIndex + 1, 0, vidNode.id);
+      return {
+        ...d,
+        document: {
+          ...d.document,
+          nodes: [...d.document.nodes, imgNode, vidNode],
+          edges: [
+            ...d.document.edges,
+            { id: crypto.randomUUID(), source: imgNode.id, target: vidNode.id },
+          ],
+          shots,
+        },
+      };
+    });
     notify(
       continuation.switched
         ? `已抽取尾帧并用 ${continuation.label} 创建续接镜头`

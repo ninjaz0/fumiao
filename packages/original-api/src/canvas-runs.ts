@@ -1,6 +1,6 @@
 import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { randomUUID } from "node:crypto";
-import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
+import { canvasShotOrder, canvasSourceKind, tailParentNode } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
@@ -35,17 +35,16 @@ import {
   canvasBytes,
   canvasMediaParameters,
   canvasDocumentJson,
-  tailParentNode,
   canvasText,
   parseCanvasRunJson,
 } from "./canvas-values.js";
 import { OriginalCanvases, canvasConflict } from "./canvases.js";
 import { OriginalGeneration } from "./generation.js";
-import { nativeOutputIndex } from "./library.js";
+import { activeCanvasJobStates, readCanvasTail } from "./canvas-tail.js";
 import { OriginalState } from "./state.js";
 
 const namespaceUrl = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
-const active = ["queued", "dispatching", "running", "finalizing", "uncertain"];
+
 import { isBgmMusicModel } from "@fumiao/plugin-sdk/speech-routing.js";
 
 /** F030: Compiles structured 6-dimension director cinematography spec into clean prompt text. */
@@ -211,7 +210,7 @@ export class OriginalCanvasRuns {
       sql,
       `SELECT 1 FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
       WHERE l.project_id=$1 AND l.node=$2 AND j.state=ANY($3::text[]) AND j.deleted_at IS NULL LIMIT 1`,
-      [project, node, active],
+      [project, node, activeCanvasJobStates],
     ));
   }
   private async link(
@@ -401,80 +400,26 @@ export class OriginalCanvasRuns {
     if (node.type === "video" && node.tail_inherited) {
       const prevNodeId = tailParentNode(doc, nid);
       if (prevNodeId) {
-        const prevJob = await one(
-          sql,
-          `SELECT j.id, j.state,
-                  (SELECT a.id FROM job_assets ja JOIN assets a ON a.id=ja.asset_id
-                    WHERE ja.job_id=j.id AND ja.role='output' AND a.state='ready'
-                    ORDER BY ${nativeOutputIndex},a.created_at ASC LIMIT 1) AS output_asset_id
-             FROM canvas_job_links l
-             JOIN jobs j ON j.id = l.job_id
-            WHERE l.project_id = $1 AND l.node = $2 AND j.kind = 'video' AND j.deleted_at IS NULL
-            ORDER BY l.id DESC
-            LIMIT 1`,
-          [p.id, prevNodeId],
-        );
-        if (prevJob && active.includes(String(prevJob.state))) {
-          pendingTailParentJobId = String(prevJob.id);
-        } else if (
-          prevJob &&
-          prevJob.state === "completed" &&
-          prevJob.output_asset_id &&
-          !native?.first_frame
-        ) {
-          const srcAsset = await one(
-            sql,
-            "SELECT id, public_id, object_key FROM assets WHERE id=$1 AND state='ready'",
-            [prevJob.output_asset_id],
-          );
-          if (srcAsset) {
-            const existingTail = await one(
-              sql,
-              `SELECT public_id FROM assets
-                WHERE workspace_id=$1 AND state='ready'
-                  AND metadata->>'derivation'='tail_frame'
-                  AND metadata->>'derived_from'=$2
-                ORDER BY created_at DESC LIMIT 1`,
-              [p.workspace_id, String(srcAsset.public_id)],
-            );
-            let tailPublicId = existingTail
-              ? String(existingTail.public_id)
-              : "";
-            if (!tailPublicId) {
-              try {
-                const extracted = await createTailFrameAsset(
-                  this.p,
-                  sql,
-                  user.id,
-                  String(p.workspace_id),
-                  {
-                    id: String(srcAsset.id),
-                    public_id: String(srcAsset.public_id),
-                    object_key: String(srcAsset.object_key),
-                  },
-                  AbortSignal.timeout(30_000),
-                );
-                tailPublicId = extracted.public_id;
-              } catch {
-                // Keep submission resilient if source asset bytes are unavailable in a mock fixture.
-              }
+        const frameRefs = node.generation_mode === "first_last_frame"
+          ? [params.h3?.first_frame, params.h3?.last_frame].filter((id): id is string => Boolean(id))
+          : node.generation_mode === "omni_ref" ? params.h3_refs : [];
+        const tail = await readCanvasTail(sql, p.id, p.workspace_id, prevNodeId, [...refs, ...frameRefs], node.asset_packs.map(pack => pack.id));
+        if (tail?.state === "pending") {
+          pendingTailParentJobId = tail.job;
+        } else if (tail?.state === "completed" && !native?.first_frame) {
+          let frame = tail.frame;
+          if (!frame) {
+            try {
+              frame = (await createTailFrameAsset(this.p, sql, user.id, p.workspace_id, tail.source, AbortSignal.timeout(30_000))).public_id;
+            } catch {
+              requireValue(!builtin, 409, "未能提取上游镜头的尾帧");
+              // Legacy plugins can generate without an optional inherited frame.
             }
-            if (tailPublicId) {
-              if (rule?.nativeH3) {
-                native = {
-                  ...(native ?? {
-                    mode: "frames" as const,
-                    first_frame: null,
-                    last_frame: null,
-                    video_audio: [],
-                  }),
-                  mode: "frames",
-                  first_frame: tailPublicId,
-                };
-              } else if (!refs.includes(tailPublicId)) {
-                refs = [tailPublicId, ...refs];
-              }
-            }
+          }
+          if (frame && rule?.nativeH3) {
+            native = { ...(native ?? {last_frame:null, video_audio:[]}), mode:"frames", first_frame:frame };
+          } else if (frame && !refs.includes(frame)) {
+            refs = [frame, ...refs];
           }
         }
       }
@@ -1136,13 +1081,7 @@ export class OriginalCanvasRuns {
       const doc = parseCanvasDocument(canvasDocumentJson(p.document));
       const targets = expandGroupNodeIds(doc.nodes, body.node_ids);
       requireValue(targets.length > 0, 400, "未找到可执行的节点");
-      const fallbackVideoOrder = doc.nodes
-        .filter((n) => n.type === "video")
-        .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
-        .map((n) => n.id);
-      const effectiveShots = doc.shots?.length
-        ? doc.shots
-        : fallbackVideoOrder;
+      const effectiveShots = canvasShotOrder(doc);
       return {
         plan: targets,
         shotIndexMap: new Map<string, number>(

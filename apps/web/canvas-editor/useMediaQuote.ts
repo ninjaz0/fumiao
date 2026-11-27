@@ -7,7 +7,8 @@ type Item = {
   kind: string;
   model: string;
   params: Record<string, unknown>;
-  reference_count: number;
+  refs: string[];
+  canvas_tail?: { project: string; parent: string };
   count: number;
 };
 
@@ -15,9 +16,10 @@ export function useMediaQuote(
   item: Item | null,
   workspace: number,
   revision: number,
+  parentRun?: { id: number; status: string; result: string | null },
 ) {
   const request = item && JSON.stringify({ items: [item] });
-  const key = request && JSON.stringify([workspace, revision, request]);
+  const key = request && JSON.stringify([workspace, revision, request, parentRun?.id, parentRun?.status, parentRun?.result]);
   const [result, setResult] = useState<Quote & { key: string }>();
   useEffect(() => {
     if (!key || !request) return;

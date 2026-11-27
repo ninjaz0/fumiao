@@ -730,7 +730,7 @@ export function normalizeParams(state: StudioState, draft: Draft, preserveNative
     flowSourceJob: null,
     params: form?.parameterObject ? values : undefined,
     ratio: String(values.ratio ?? draft.ratio),
-    quality: String(values.quality ?? draft.quality),
+    quality: native ? draft.quality : String(values.quality ?? draft.quality),
     seconds: String(values.seconds ?? draft.seconds),
     resolution: String(values.resolution ?? draft.resolution),
     imageQuality: String(values.image_quality ?? draft.imageQuality),
@@ -1546,15 +1546,15 @@ export function flowIssue(
     : "";
 }
 
-export function estimateBody(state: StudioState, session: DraftSession) {
+export function estimateBody(state: StudioState, session: Pick<DraftSession, "draft" | "refs">) {
   const { draft } = session;
+  const model = selectedModel(draft);
+  if (publishedMedia(state, model))
+    return { kind: draft.kind, model, params: draft.params ?? {}, refs: packReferences(session) };
   const audio = draft.kind === "audio";
   return {
     kind: draft.kind,
-    model: selectedModel(draft),
-    ...(state.pricing?.published?.some((entry) => entry.model === selectedModel(draft))
-      ? { params: draft.params ?? {} }
-      : {}),
+    model,
     ratio: draft.ratio,
     quality: Number(draft.quality),
     seconds: Number(draft.seconds),

@@ -16,6 +16,7 @@ import {
   chooseModel,
   composerFeedback,
   generationRequest,
+  estimateBody,
   H3,
   hasDraftPacks,
   imageToVideoDraft,
@@ -1629,4 +1630,22 @@ test("有效线路报价失败时沿用网关原因，保留已保存的创作�
   assert.equal(restored.draft.params?.seconds, 8);
   assert.equal(restored.draft.prompt, "历史镜头");
   assert.match(composerFeedback(state, restored, { quoteError: "当前线路可选 4 秒" }).submitReason, /4 秒/);
+});
+
+test("原生图片草稿恢复和历史重发以字符串质量报价", (t) => {
+  t.after(installFakeEnv().restore);
+  const base = makeState(), model = "native-image";
+  const state = makeState({ studio_plugins: true, model_access: { [model]: true },
+    images: { ...base.images, models: { [model]: model }, default_model: model },
+    pricing: { revision: 8, items: [], published: [{model, price:{kind:"image", unit:"0.25"}}] },
+    model_forms: { [model]: { parameterObject:true, fields:{ quality:{ type:"string", enum:["high"]} }, tiers:[], references:{min:0,max:1} } },
+  });
+  const session = readDraft(state);
+  session.draft = { ...session.draft, kind:"image", model, prompt:"保留画质", params:{quality:"high"} };
+  writeDraft(state, session);
+  const restored = readDraft(state);
+  const history = loadJob(state, restored, { id:8, kind:"image", model, params:{quality:"high"}, prompt:"保留画质", refs:[] } as unknown as Job);
+  for (const source of [restored, history]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(estimateBody(state, source))), {kind:"image", model, params:{quality:"high"}, refs:[]});
+  }
 });

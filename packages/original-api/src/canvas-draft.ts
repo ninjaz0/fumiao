@@ -268,6 +268,8 @@ export const canvasGridCropFields: Fields = {
   col: { ...integer(0), min: 0, max: 2 },
 };
 export const batchQuoteItemFields: Fields = {
+  refs: { kind: "list", item: media, max: 12, optional: true },
+  canvas_tail: { ...object({ project: media, parent: identifier }), optional: true },
   reference_count: { ...integer(), min: 0, max: 12, optional: true },
   params: { kind: "dictionary", optional: true },
   kind: literal(["image", "video", "audio"]),

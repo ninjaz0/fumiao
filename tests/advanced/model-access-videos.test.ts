@@ -624,8 +624,16 @@ for (const legacyChild of [false, true])
         pre.items.every((item) => item.status !== "blocked"),
         JSON.stringify(pre.items),
       );
-      const parent = await order("parent"),
-        child = await order("child");
+      const singleQuote = async (refs: string[], count = 1) => (await f.request("/api/quotes/batch", {
+        items: [{ kind: "video", model: childModel, params: { seconds: 8 }, count, refs, canvas_tail: { project: canvas.id, parent: "parent" } }],
+      })).body.items[0];
+      if (!legacyChild) assert.equal((await singleQuote([])).allowed, false, "尚无父任务");
+      const parent = await order("parent");
+      if (!legacyChild) {
+        assert.equal((await singleQuote([])).allowed, true, "排队中父任务将提供一帧");
+        assert.equal((await singleQuote(["a".repeat(32)])).allowed, false, "显式图片和未产生的尾帧是两个输入");
+      }
+      const child = await order("child");
       assert.ok(
         await one(
           f.db,
@@ -681,6 +689,26 @@ for (const legacyChild of [false, true])
         assert.equal(ready.input.tailParentJobId, parent.id);
         assert.equal((await f.wake(child.id, http)).state, "running");
         assert.equal(childSubmissions, 1);
+        const asset = await one(f.db, "SELECT public_id FROM assets WHERE id=$1", [ready.input.references[0]]);
+        const ref = String(asset.public_id);
+        assert.equal((await singleQuote([ref], 2)).exact_credits, "48", "两组候选分别使用同一帧");
+        assert.equal((await singleQuote(["a".repeat(32)])).allowed, false, "不同图片仍额外占一个输入");
+        const next = node("next", childModel, true);
+        const picture = {id:"picture", type:"image", x:100, y:0, media_id:ref, use_media:true};
+        const extended = await canvases.save(f.member, canvas.id, {
+          title: "续接首帧", expected_revision: 2,
+          document: {nodes:[node("parent", f.model, false), next, picture], edges:[{id:"ref",source:"picture",target:"next"}]},
+        });
+        assert.ok(!extended.document.shots?.length);
+        const checked = await new OriginalBatchPrecheck(f.p).precheckCanvas(f.member, canvas.id, {node_ids:["next"],stages:["video"]});
+        assert.equal(checked.items[0].status, "ready", JSON.stringify(checked.items));
+        const regenerateBoth = await new OriginalBatchPrecheck(f.p).precheckCanvas(f.member, canvas.id, {node_ids:["next","parent"],stages:["video"]});
+        assert.equal(regenerateBoth.items.find(i => i.node_id === "next")?.status, "blocked", "父镜头重新生成时，新的待提取首帧与现有首帧不同");
+        const nextOrder = await f.request(`/api/canvases/${canvas.id}/nodes/next/candidates`, {uid: randomUUID(), expected_revision:extended.revision, price_revision:checked.price_revision, route_revision:checked.items[0].route_revision, price_revision_id:checked.items[0].price_revision_id,max_charge:"24",count:1});
+        assert.equal(nextOrder.status, 200, JSON.stringify(nextOrder.body));
+        const orderInput = await one(f.db, "SELECT input FROM jobs WHERE public_id=$1", [nextOrder.body.ids[0]]);
+        assert.deepEqual(orderInput.input.references, [ready.input.references[0]]);
+
       }
     },
   );

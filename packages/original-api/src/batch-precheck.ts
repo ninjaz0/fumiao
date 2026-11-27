@@ -1,5 +1,5 @@
 import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
-import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
+import { canvasShotOrder, canvasSourceKind, tailParentNode } from "@fumiao/plugin-sdk/canvas-ports.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { evaluateBudgetImpact } from "@fumiao/platform/budgets.js";
 import type { Platform } from "@fumiao/platform/platform.js";
@@ -17,16 +17,10 @@ import {
   parseCanvasDocument,
   type CanvasNode,
 } from "./canvas-draft.js";
-import { canvasMediaParameters, canvasDocumentJson, tailParentNode } from "./canvas-values.js";
+import { canvasMediaParameters, canvasDocumentJson } from "./canvas-values.js";
 import { parseBody } from "./validation.js";
 
-const ACTIVE_STATES = [
-  "queued",
-  "dispatching",
-  "running",
-  "finalizing",
-  "uncertain",
-];
+import { activeCanvasJobStates, readCanvasTail, withTailCount } from "./canvas-tail.js";
 
 export type PrecheckStage = "image" | "video" | "narration" | "dialogue";
 export type PrecheckHealth = "ready" | "warning" | "blocked";
@@ -101,6 +95,8 @@ export class OriginalBatchPrecheck {
         ratio?: string;
         count?: number;
         reference_count?: number;
+        refs?: string[];
+        canvas_tail?: { project: string; parent: string };
         params?: Record<string, unknown>;
       }[];
     };
@@ -154,6 +150,14 @@ export class OriginalBatchPrecheck {
           ...(item.image_quality ? { image_quality: item.image_quality } : {}),
           ...(item.ratio ? { ratio: item.ratio } : {}),
         };
+        let referenceCount = item.refs ? new Set(item.refs).size : item.reference_count;
+        if (item.canvas_tail) {
+          const project = await this.canvases.project(sql, user, item.canvas_tail.project);
+          requireValue(project.workspace_id === workspace.id, 404, "画布不存在");
+          const refs = new Set(item.refs ?? []);
+          const tail = await readCanvasTail(sql, project.id, workspace.id, item.canvas_tail.parent, [...refs]);
+          referenceCount = withTailCount(refs, tail);
+        }
         const q = !model
           ? {
               allowed: false,
@@ -179,7 +183,7 @@ export class OriginalBatchPrecheck {
                 model,
                 workspace.id,
                 params,
-                { kind: item.kind, nativeParams: item.params, referenceCount: item.reference_count },
+                { kind: item.kind, nativeParams: item.params, referenceCount },
               );
         if (item.seconds !== undefined && (item.seconds < 0 || item.seconds > 15))
           requireValue(await one(sql, "SELECT 1 FROM studio_catalog WHERE id=$1 AND plugin_id IS NULL AND descriptor->>'kind'='video'", [model]), 422, "镜头时长超出范围");
@@ -269,7 +273,7 @@ export class OriginalBatchPrecheck {
           `SELECT DISTINCT l.node FROM canvas_job_links l
            JOIN jobs j ON j.id = l.job_id AND j.deleted_at IS NULL
            WHERE l.project_id=$1 AND j.state = ANY($2::text[])`,
-          [project.id, ACTIVE_STATES],
+          [project.id, activeCanvasJobStates],
         )
       ).rows;
       const busyNodes = new Set(busyRows.map((r) => r.node));
@@ -280,12 +284,13 @@ export class OriginalBatchPrecheck {
       ];
       const livePackRevisions = new Map<
         string,
-        { revision: number; name: string; assetsCount: number }
+        { revision: number; name: string; media: string[] }
       >();
       if (packPublicIds.length) {
         const pRows = (
           await sql.query(
-            `SELECT d.public_id, d.title, d.revision, d.body, d.pack_text
+            `SELECT d.public_id, d.title, d.revision, d.pack_text,
+             ARRAY(SELECT a.public_id FROM jsonb_array_elements_text(d.body->'assets') AS ids(id) JOIN assets a ON a.id=ids.id::uuid) AS media
              FROM documents d
              LEFT JOIN asset_pack_meta m ON m.pack_id=d.id
              WHERE d.public_id = ANY($1::text[]) AND d.kind='pack' AND NOT d.deleted
@@ -297,9 +302,7 @@ export class OriginalBatchPrecheck {
           livePackRevisions.set(r.public_id, {
             revision: Number(r.revision),
             name: r.pack_text?.name ?? r.title,
-            assetsCount: Array.isArray(r.body?.assets)
-              ? r.body.assets.length
-              : 0,
+            media: r.media,
           });
         }
       }
@@ -307,7 +310,12 @@ export class OriginalBatchPrecheck {
       const items: PrecheckItem[] = [];
       const stages = [...new Set(body.stages)];
 
-      for (const node of targets) {
+      const shotOrder = new Map(canvasShotOrder(doc).map((id, i) => [id, i]));
+      const plannedVideos = new Set<string>();
+      // Evaluate parent video stages in dispatch order, then restore the request's display order.
+      const executionOrder = [...targets].sort((a, b) =>
+        (shotOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (shotOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+      for (const node of executionOrder) {
         for (const stage of stages) {
           if (stage === "image" && node.type !== "image") continue;
           if (stage === "video" && node.type !== "video") continue;
@@ -334,7 +342,7 @@ export class OriginalBatchPrecheck {
               status = "blocked";
             }
             const connectedTexts: string[] = [];
-            let connectedImageCount = 0;
+            const refIds = new Set<string>();
             for (const edge of doc.edges) {
               if (edge.target !== node.id) continue;
               const src = nodesById.get(edge.source);
@@ -349,12 +357,12 @@ export class OriginalBatchPrecheck {
                   connectedTexts.push(txt);
                 }
               } else if (srcKind === "image") {
-                connectedImageCount++;
-                const media = await this.canvases.mediaForNode(
+                const media = src.extension ? src.extension.result?.[edge.sourcePort ?? ""] : await this.canvases.mediaForNode(
                   sql,
                   project.id,
                   src,
                 );
+                refIds.add(media || "pending:" + src.id + ":" + (edge.sourcePort ?? ""));
                 if (!media) {
                   // If upstream image is also being run in this batch, warn instead of hard block!
                   if (
@@ -384,24 +392,26 @@ export class OriginalBatchPrecheck {
               status = "blocked";
             }
 
-            let packImageCount = 0;
+
             for (const sel of node.asset_packs) {
               const live = livePackRevisions.get(sel.id);
               if (!live) {
                 issues.push(`绑定的素材包已删除或不可访问 (${sel.id.slice(0, 6)})`);
                 status = "blocked";
               } else {
-                packImageCount += live.assetsCount;
+                for (const ref of live.media) refIds.add(ref);
                 if (live.revision !== sel.revision) {
                   issues.push(`素材包「${live.name}」已有新版本，请重新选择`);
                   status = "blocked";
                 }
               }
             }
-            const totalRefs =
-              connectedImageCount +
-              packImageCount +
-              (node.params.h3_refs?.length ?? 0);
+            for (const ref of node.params.h3_refs ?? []) refIds.add(ref);
+            if (node.generation_mode === "first_last_frame") {
+              for (const frame of [node.params.h3?.first_frame, node.params.h3?.last_frame])
+                if (frame) refIds.add(frame);
+            }
+            const totalRefs = refIds.size;
             if (totalRefs > 9) {
               issues.push(`参考图片合计 ${totalRefs} 张，超过上限 9 张`);
               status = "blocked";
@@ -421,12 +431,8 @@ export class OriginalBatchPrecheck {
             if (model) {
               const tailNodeId =
                 stage === "video" && node.tail_inherited && tailParentNode(doc, node.id);
-              const tailNode = tailNodeId && nodesById.get(tailNodeId);
-              const tailReference = tailNode && (
-                busyNodes.has(tailNode.id) ||
-                targets.some((target) => target.id === tailNode.id) ||
-                await this.canvases.mediaForNode(sql, project.id, tailNode)
-              );
+              const planned = Boolean(tailNodeId && plannedVideos.has(tailNodeId));
+              const tail = tailNodeId && !planned ? await readCanvasTail(sql, project.id, project.workspace_id, tailNodeId, [...refIds]) : null;
               const q = await this.catalog.quoteReadOnly(
                 sql,
                 model,
@@ -445,7 +451,7 @@ export class OriginalBatchPrecheck {
                 {
                   kind: stage,
                   nativeParams: canvasMediaParameters(node.extra_params),
-                  referenceCount: totalRefs + Number(Boolean(tailReference)),
+                  referenceCount: withTailCount(refIds, tail) + Number(Boolean(planned)),
                 },
               );
               if (!q.allowed || !q.priced) {
@@ -563,6 +569,7 @@ export class OriginalBatchPrecheck {
             }
           }
 
+          if (stage === "video" && status !== "blocked") plannedVideos.add(node.id);
           items.push({
             node_id: node.id,
             title: node.title || node.id,
@@ -578,6 +585,8 @@ export class OriginalBatchPrecheck {
         }
       }
 
+      const targetOrder = new Map(targets.map((node, i) => [node.id, i]));
+      items.sort((a,b) => targetOrder.get(a.node_id)! - targetOrder.get(b.node_id)!);
       const readyCount = items.filter((i) => i.status === "ready").length;
       const warningCount = items.filter((i) => i.status === "warning").length;
       const blockedCount = items.filter((i) => i.status === "blocked").length;

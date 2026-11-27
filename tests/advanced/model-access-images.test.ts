@@ -30,6 +30,7 @@ async function fixture(
             architecture: { output_modalities: ["image"] },
             supported_parameters: {
               n: { type: "range", min: 1, max: 2 },
+              quality: { type: "enum", values: ["high"] },
               size: { type: "enum", values: ["768x768"] },
               input_references: { type: "range", min: 0, max: 1 },
             },
@@ -96,6 +97,23 @@ test("成员状态公开当前线路的画布和创作表单", async (t) => {
   assert.equal(form.fields.n.default, 1);
   assert.equal(form.fields.n.maximum, 2);
   assert.equal(form.references.max, 1);
+});
+
+test("真实成员报价接口接受已保存的原生图片画质", async (t) => {
+  const f = await fixture(t);
+  const { body: state } = await f.request("/api/state");
+  const { estimateBody, normalizeParams } = await import("../../apps/web/studio/state.js");
+  const draft = normalizeParams(state, {
+    kind: "image", model: f.model, videoModel: "", audioModel: "", prompt: "画质",
+    // Persisted by the old creator before upgrading.
+    quality: "high", imageQuality: "medium", params: { quality: "high", n: 2 },
+    ratio: "16:9", resolution: "1K", seconds: "5", sampling_steps: 20, seed: "", fast_mode: false,
+    voiceDescription: "",
+  }, true);
+  const body = estimateBody(state, { draft, refs: [] });
+  const response = await f.request("/api/estimate", JSON.parse(JSON.stringify(body)));
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.equal(response.body.max_charge, "0.5");
 });
 
 test("画布候选确认的是全部候选总价，分镜脚本文档信息不属于上游参数", async (t) => {
