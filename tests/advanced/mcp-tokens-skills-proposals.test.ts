@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { deflateRawSync } from "node:zlib";
 import test from "node:test";
 import { chatContext } from "@fumiao/platform/chat-context.js";
@@ -525,4 +526,19 @@ test("PR #223 Item 9: SkillEditorCard states 64 KiB SKILL.md and 256 KiB ZIP lim
   } finally {
     await f.cleanup();
   }
+});
+
+test("PR #223 Round 3 Item 4: SkillEditorCard locks textarea and cancel button during in-flight save while preserving draft on error", async () => {
+  const cardSrc = await readFile(
+    "apps/web/studio/SkillEditorCard.tsx",
+    "utf8",
+  );
+  assert.match(cardSrc, /readOnly=\{busy\}/);
+  assert.match(cardSrc, /if \(!busy\) setRawMd\(e\.target\.value\)/);
+  assert.match(cardSrc, /disabled=\{busy\}[\s\S]{0,120}取消/);
+  // Save failure path only records error without clearing editing or rawMd
+  assert.match(
+    cardSrc,
+    /setEditing\(null\);\s*await load\(\);\s*\} catch \(e\) \{\s*setError\(\(e as Error\)\.message\);\s*\}/,
+  );
 });

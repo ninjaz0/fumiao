@@ -2,6 +2,7 @@
 
 .canvas-workspace {
   --fm-agent-width: 0px;
+  --fm-subbar-offset: 0px;
 }
 
 .canvas-workspace .canvas-header {
@@ -132,7 +133,7 @@
 /* Main Document Workspace Shell */
 .fm-doc-workspace {
   position: absolute;
-  top: 66px;
+  top: max(66px, var(--fm-workspace-top, 56px));
   left: 0;
   right: var(--fm-agent-width, 0px);
   bottom: 0;
@@ -1854,17 +1855,23 @@
 }
 
 @media (max-width: 1480px) {
+  .canvas-workspace:has(.fm-floating-agent.is-docked) {
+    --fm-subbar-offset: 46px;
+  }
   .canvas-workspace:has(.fm-floating-agent.is-docked) .fm-surface-switcher {
     top: calc(var(--fm-header-bottom, 62px) + 6px);
     left: calc((100% - var(--fm-agent-width, 0px)) / 2);
     transform: translateX(-50%);
   }
   .canvas-workspace:has(.fm-floating-agent.is-docked) .fm-doc-workspace {
-    top: calc(var(--fm-header-bottom, 62px) + 46px);
+    top: var(--fm-workspace-top, calc(var(--fm-header-bottom, 62px) + 46px));
   }
 }
 
 @media (max-width: 1180px) {
+  .canvas-workspace {
+    --fm-subbar-offset: 46px;
+  }
   .fm-surface-switcher,
   .canvas-workspace:has(.fm-floating-agent.is-docked) .fm-surface-switcher {
     position: absolute;
@@ -1874,16 +1881,17 @@
     z-index: 22;
   }
   .fm-doc-workspace {
-    top: calc(var(--fm-header-bottom, 62px) + 46px);
+    top: var(--fm-workspace-top, calc(var(--fm-header-bottom, 62px) + 46px));
   }
 }
 
 @media (max-width: 760px) {
   .canvas-workspace {
     --fm-agent-width: 0px !important;
+    --fm-subbar-offset: 46px;
   }
   .fm-doc-workspace {
-    top: calc(var(--fm-header-bottom, 62px) + 46px);
+    top: var(--fm-workspace-top, calc(var(--fm-header-bottom, 62px) + 46px));
     right: 0;
     flex-direction: column;
   }
@@ -1909,13 +1917,15 @@
   }
   .fm-floating-agent.is-docked {
     width: min(380px, 100vw) !important;
-    top: var(--fm-header-bottom, 56px);
+    top: var(--fm-workspace-top, calc(var(--fm-header-bottom, 56px) + 46px));
   }
   .fm-floating-agent.is-floating {
     max-width: calc(100vw - 16px) !important;
     right: 8px !important;
     bottom: 8px !important;
-    max-height: calc(100dvh - var(--fm-header-bottom, 56px) - 16px) !important;
+    max-height: calc(
+      100dvh - var(--fm-workspace-top, calc(var(--fm-header-bottom, 56px) + 46px)) - 16px
+    ) !important;
   }
   .fm-floating-agent-tabs > button {
     padding: 4px 8px;
@@ -1944,5 +1954,12 @@
   .fm-rich-screenplay,
   .fm-source-textarea {
     padding-bottom: 54px;
+  }
+}
+
+@media (max-width: 560px) {
+  .canvas-workspace[data-surface="canvas"][data-composer-open="true"] .fm-surface-switcher {
+    left: 12px;
+    transform: none;
   }
 }

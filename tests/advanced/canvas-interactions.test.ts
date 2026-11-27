@@ -1258,3 +1258,187 @@ test("PR #223 Item 8: resolveEffectiveNarrationModel hides 音色描述 when nod
     "tts-1",
   );
 });
+
+test("PR #223 Round 3 Item 2: resolveCanvasSpeechModels and quoteCanvasSpeechPlan honor authoritative server list, portable speech models, defaultModelIds, BGM exclusion, and distinct explicit models across narration, single-line dialogue, and batch dialogue", async () => {
+  const typesMod = (await import("../../apps/web/canvas-editor/types.js")) as Record<
+    string,
+    any
+  >;
+  assert.equal(typeof typesMod.resolveCanvasSpeechModels, "function");
+  assert.equal(typeof typesMod.quoteCanvasSpeechPlan, "function");
+
+  const studioFixture = {
+    canvas_speech_models: [
+      "custom-default-tts",
+      "tts-1",
+      "gpt-4o-mini-tts",
+      "portable-v3-tts",
+      "edge-tts",
+    ],
+    canvas_speech_default_models: ["custom-default-tts"],
+    model_forms: {
+      "tts-1": { canvas: true },
+      "gpt-4o-mini-tts": { canvas: true },
+      "portable-v3-tts": { canvas: false },
+      "custom-default-tts": { canvas: true },
+      "edge-tts": { canvas: true },
+      "bgm-v1": { canvas: true },
+    },
+    model_catalog: {
+      "custom-default-tts": { kind: "audio", label: "插件声明默认语音" },
+      "tts-1": { kind: "audio", label: "OpenAI TTS-1" },
+      "gpt-4o-mini-tts": { kind: "audio", label: "GPT-4o Mini TTS" },
+      "portable-v3-tts": { kind: "audio", label: "便携远程语音 v3" },
+      "edge-tts": { kind: "audio", label: "Edge 免费语音" },
+      "bgm-v1": { kind: "audio", label: "BGM 配乐", provider: "bgm-generator" },
+    },
+    model_access: {
+      "custom-default-tts": true,
+      "tts-1": true,
+      "gpt-4o-mini-tts": true,
+      "portable-v3-tts": true,
+      "edge-tts": true,
+      "bgm-v1": true,
+    },
+    model_policy: { revision: 1, enabled: {} },
+    credits: { available: 2, reserved: 0 },
+    pricing: {
+      revision: 1,
+      items: [
+        { key: "custom-default-tts|standard", amount: 1 },
+        { key: "tts-1|standard", amount: 2 },
+        { key: "gpt-4o-mini-tts|expressive", amount: 3 },
+        { key: "portable-v3-tts|standard", amount: 2 },
+        { key: "edge-tts|free", amount: 0 },
+        { key: "bgm-v1|standard", amount: 10 },
+      ],
+    },
+  };
+
+  const models = typesMod.resolveCanvasSpeechModels(studioFixture);
+  assert.deepEqual(
+    models.map((m: { id: string }) => m.id),
+    [
+      "custom-default-tts",
+      "tts-1",
+      "gpt-4o-mini-tts",
+      "portable-v3-tts",
+      "edge-tts",
+    ],
+  );
+
+  // Authoritative server canvas_speech_models must NOT be second-guessed by local model_access / model_forms
+  const authoritativeOnly = typesMod.resolveCanvasSpeechModels({
+    canvas_speech_models: ["remote-v2-speech", "edge-tts"],
+    model_catalog: {
+      "remote-v2-speech": { kind: "audio", label: "远程语音 v2" },
+      "edge-tts": { kind: "audio", label: "Edge 免费语音" },
+    },
+    model_access: {
+      "remote-v2-speech": false,
+      "edge-tts": true,
+    },
+    model_policy: { revision: 1, enabled: {} },
+  });
+  assert.deepEqual(
+    authoritativeOnly.map((m: { id: string }) => m.id),
+    ["remote-v2-speech", "edge-tts"],
+  );
+
+  const autoPlan = typesMod.quoteCanvasSpeechPlan({
+    studio: studioFixture,
+    node: {
+      id: "n1",
+      type: "video",
+      narration_text: "自动默认模型测试",
+      dialogue_lines: [{ id: "d1", speaker: "甲", text: "台词" }],
+    },
+    packs: [],
+  });
+  assert.equal(autoPlan.narration.activeModel, "custom-default-tts");
+  assert.equal(autoPlan.narration.cost, 1);
+  assert.equal(autoPlan.narration.unavailableReason, "");
+  assert.equal(autoPlan.dialogue.batchCost, 1);
+  assert.equal(autoPlan.dialogue.unavailableReason, "");
+
+  const mixedPlan = typesMod.quoteCanvasSpeechPlan({
+    studio: studioFixture,
+    node: {
+      id: "n2",
+      type: "video",
+      narration_model: "gpt-4o-mini-tts",
+      narration_text: "旁白显式 3 积分",
+      dialogue_lines: [
+        { id: "l1", speaker: "林墨", text: "角色声线 2 积分" },
+        { id: "l2", speaker: "路人", text: "免费 Edge 0 积分", model: "edge-tts" },
+        { id: "l3", speaker: "旁观", text: "便携语音 2 积分", model: "portable-v3-tts" },
+      ],
+    },
+    packs: [
+      {
+        id: "pack-linmo",
+        name: "林墨",
+        purpose: "subject",
+        voice_profile: { model: "tts-1", voice_id: "alloy" },
+      },
+    ],
+  });
+  assert.equal(mixedPlan.narration.activeModel, "gpt-4o-mini-tts");
+  assert.equal(mixedPlan.narration.cost, 3);
+  assert.equal(mixedPlan.narration.unavailableReason, "当前空间积分不足");
+  assert.equal(mixedPlan.dialogue.lineReasons.l1, "");
+  assert.equal(mixedPlan.dialogue.lineReasons.l2, "");
+  assert.equal(mixedPlan.dialogue.lineReasons.l3, "");
+  assert.equal(mixedPlan.dialogue.batchCost, 4);
+  assert.equal(mixedPlan.dialogue.unavailableReason, "当前空间积分不足");
+});
+
+test("PR #223 Round 3 Item 3: resolveCanvasWorkspaceTop reserves dedicated sub-header band when surface switcher stacks below header and keeps storyboard dock unobstructed", async () => {
+  const typesMod = (await import("../../apps/web/canvas-editor/types.js")) as Record<
+    string,
+    any
+  >;
+  assert.equal(typeof typesMod.resolveCanvasWorkspaceTop, "function");
+
+  assert.deepEqual(
+    typesMod.resolveCanvasWorkspaceTop({
+      rootTop: 0,
+      headerBottom: 58,
+      switcherTop: 14,
+      switcherBottom: 50,
+      switcherHeight: 36,
+    }),
+    { headerBottom: 58, workspaceTop: 58 },
+  );
+
+  assert.deepEqual(
+    typesMod.resolveCanvasWorkspaceTop({
+      rootTop: 0,
+      headerBottom: 58,
+      switcherTop: 64,
+      switcherBottom: 100,
+      switcherHeight: 36,
+    }),
+    { headerBottom: 58, workspaceTop: 106 },
+  );
+
+  assert.deepEqual(
+    typesMod.resolveCanvasWorkspaceTop({
+      rootTop: 0,
+      headerBottom: 104,
+      switcherTop: 110,
+      switcherBottom: 146,
+      switcherHeight: 36,
+    }),
+    { headerBottom: 104, workspaceTop: 152 },
+  );
+
+  const overridesCss = await readFile(
+    join(process.cwd(), "apps/web/canvas-editor/canvas-overrides.css"),
+    "utf8",
+  );
+  assert.match(
+    overridesCss,
+    /\.fm-docked-storyboard\s*\{[\s\S]*?top:\s*var\(\s*--fm-workspace-top,/,
+  );
+});

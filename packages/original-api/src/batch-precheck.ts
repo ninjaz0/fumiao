@@ -111,6 +111,7 @@ export class OriginalBatchPrecheck {
         strict: false,
         workspaceId: String(workspace.id),
         vault: this.p.vault,
+        registry: this.p.registry,
       });
       const wallet = await one(
         sql,
@@ -147,16 +148,32 @@ export class OriginalBatchPrecheck {
           ...(item.image_quality ? { image_quality: item.image_quality } : {}),
           ...(item.ratio ? { ratio: item.ratio } : {}),
         };
-        const q = model
-          ? await this.catalog.quoteReadOnly(sql, model, workspace.id, params)
-          : {
+        const q = !model
+          ? {
               allowed: false,
               priced: false,
               amount: 0,
               key: null,
               revision: priceRevision,
               reason: `缺少可用的 ${item.kind} 默认模型`,
-            };
+            }
+          : item.kind === "audio" &&
+              bindings.isSpeechModel(model) &&
+              !bindings.hasEnabledAudio(model)
+            ? {
+                allowed: false,
+                priced: false,
+                amount: 0,
+                key: null,
+                revision: priceRevision,
+                reason: "音频配音服务尚未配置或连接已停用",
+              }
+            : await this.catalog.quoteReadOnly(
+                sql,
+                model,
+                workspace.id,
+                params,
+              );
         priceRevision = q.revision;
         const subtotal = q.amount * count;
         if (q.allowed && q.priced) totalCredits += subtotal;
@@ -213,6 +230,7 @@ export class OriginalBatchPrecheck {
         strict: false,
         workspaceId: String(project.workspace_id),
         vault: this.p.vault,
+        registry: this.p.registry,
       });
       const wallet = await one(
         sql,

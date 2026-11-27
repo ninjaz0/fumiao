@@ -59,6 +59,7 @@ export function SkillEditorCard({ workspace }: { workspace: number }) {
   }, [load]);
 
   const saveSkill = async () => {
+    if (!editing || busy) return;
     setBusy(true);
     setError("");
     setNotice("");
@@ -71,7 +72,7 @@ export function SkillEditorCard({ workspace }: { workspace: number }) {
           "POST",
         );
         setNotice("已导入新技能包，启用后将自动注入工作区对话与外部 MCP 上下文");
-      } else if (editing) {
+      } else {
         await api(
           String(workspace),
           "/api/skills/" + encodeURIComponent(editing.id),
@@ -243,6 +244,7 @@ export function SkillEditorCard({ workspace }: { workspace: number }) {
             rows={14}
             aria-label="SKILL.md 内容"
             value={rawMd}
+            readOnly={busy}
             style={{
               width: "100%",
               boxSizing: "border-box",
@@ -250,12 +252,15 @@ export function SkillEditorCard({ workspace }: { workspace: number }) {
                 "var(--ledger-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
               fontSize: 12,
             }}
-            onChange={(e) => setRawMd(e.target.value)}
+            onChange={(e) => {
+              if (!busy) setRawMd(e.target.value);
+            }}
           />
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button
               type="button"
               className="secondary"
+              disabled={busy}
               onClick={() => setEditing(null)}
             >
               取消

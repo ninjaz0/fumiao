@@ -335,6 +335,64 @@ try {
     );
     await agentPanel.getByRole("button", { name: "停靠到右侧" }).click();
     await agentPanel.getByRole("button", { name: "关闭 Agent 提案箱" }).click();
+
+    // 1a-bis (PR #223 Round 3 Item 3): Verify .fm-surface-switcher ("画布 | 文档") is NEVER occluded by .fm-docked-storyboard in BOTH "镜头列表" and "分屏" across wrapped 375x812, <=1180px (1080x800 no Agent), and 1440x900 with docked Agent!
+    const assertStoryboardClearsSwitcherAndRoundTrips = async (label: string) => {
+      for (const modeLabel of ["镜头列表", "分屏"] as const) {
+        await page
+          .locator(".fm-view-switch")
+          .getByRole("button", { name: modeLabel, exact: true })
+          .click();
+        const storyboard = page.locator(".fm-docked-storyboard");
+        await expect(storyboard).toBeVisible();
+        const hd = await page.locator(".canvas-header").boundingBox();
+        const sw = await page.locator(".fm-surface-switcher").boundingBox();
+        const sb = await storyboard.boundingBox();
+        assert.ok(hd && sw && sb);
+        assert.ok(
+          sw.y >= hd.y + hd.height - 2,
+          `${label} (${modeLabel}): switcher y (${sw.y}) must sit below header (${hd.y + hd.height})`,
+        );
+        assert.ok(
+          sb.y >= sw.y + sw.height - 1,
+          `${label} (${modeLabel}): storyboard top (${sb.y}) must clear switcher bottom (${sw.y + sw.height})`,
+        );
+        // Real mouse click (no force) switching 画布 -> 文档 -> 画布 while in 镜头列表 / 分屏
+        await page
+          .locator(".fm-surface-switcher")
+          .getByRole("tab", { name: "文档", exact: true })
+          .click();
+        await expect(page.locator(".fm-doc-workspace")).toBeVisible();
+        await page
+          .locator(".fm-surface-switcher")
+          .getByRole("tab", { name: "画布", exact: true })
+          .click();
+        await expect(storyboard).toBeVisible();
+      }
+    };
+
+    // (i) 375x812 wrapped header
+    await assertStoryboardClearsSwitcherAndRoundTrips("375x812 wrapped");
+
+    // (ii) 1080x800 (<= 1180px without Agent)
+    await page.setViewportSize({ width: 1080, height: 800 });
+    await assertStoryboardClearsSwitcherAndRoundTrips("1080x800 <=1180px no-agent");
+
+    // (iii) 1440x900 WITH docked Agent
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByRole("button", { name: "AI 创作助手" }).first().click();
+    const docked1440 = page.locator(".fm-floating-agent.is-docked");
+    await expect(docked1440).toBeVisible();
+    await assertStoryboardClearsSwitcherAndRoundTrips("1440x900 with docked Agent");
+    const sw1440 = await page.locator(".fm-surface-switcher").boundingBox();
+    const ag1440 = await docked1440.boundingBox();
+    assert.ok(sw1440 && ag1440 && sw1440.x + sw1440.width <= ag1440.x - 4);
+    await docked1440.getByRole("button", { name: "关闭 Agent 提案箱" }).click();
+    await page
+      .locator(".fm-view-switch")
+      .getByRole("button", { name: "画布", exact: true })
+      .click();
+
     await page.getByRole("tab", { name: "文档" }).click();
 
     await page.setViewportSize({ width: 1360, height: 860 });

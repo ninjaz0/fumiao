@@ -110,7 +110,7 @@
 
 @media (max-width: 760px) {
   /* Prevent header global-tools / view-switch from ever overlapping the top-left Studio logo on narrow viewports (e.g. 320x568). */
-  .canvas-header {
+  .canvas-workspace .canvas-header {
     height: auto;
     min-height: 52px;
     flex-wrap: wrap;
@@ -754,9 +754,11 @@ button[aria-expanded="true"] > .fm-ui-chevron {
   .fm-cine-popover.fm-cine-side-top,
   .fm-cine-popover.fm-cine-side-bottom,
   .fm-cine-popover.fm-cine-side-viewport {
-    top: calc(var(--fm-header-bottom, 60px) + 8px);
+    top: calc(var(--fm-workspace-top, var(--fm-header-bottom, 60px)) + 8px);
     bottom: auto;
-    max-height: calc(100dvh - var(--fm-header-bottom, 60px) - 20px);
+    max-height: calc(
+      100dvh - var(--fm-workspace-top, var(--fm-header-bottom, 60px)) - 20px
+    );
   }
 }
 .fm-cine-head {
@@ -1043,7 +1045,10 @@ button[aria-expanded="true"] > .fm-ui-chevron {
 }
 .fm-docked-storyboard {
   position: fixed;
-  top: 56px;
+  top: var(
+    --fm-workspace-top,
+    calc(var(--fm-header-bottom, 56px) + var(--fm-subbar-offset, 0px))
+  );
   right: 0;
   bottom: 0;
   width: min(520px, 46vw);

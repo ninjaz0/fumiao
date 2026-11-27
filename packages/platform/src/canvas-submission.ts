@@ -1,9 +1,12 @@
-import type { CanvasSubmissionRule } from "@fumiao/plugin-sdk/index.js";
+import type {
+  CanvasSubmissionRule,
+  ProviderPlugin,
+} from "@fumiao/plugin-sdk/index.js";
 import {
   isBgmMusicModel,
   pickSpeechAudioModel,
 } from "@fumiao/plugin-sdk/speech-routing.js";
-import type { Sql } from "./db.js";
+import { one, type Sql } from "./db.js";
 import { validator } from "./plugins.js";
 import { requireValue } from "./security.js";
 import { hasStudioPackages, listedStudioCatalog } from "./studio-plugin-profile.js";
@@ -12,6 +15,9 @@ export interface ReadCanvasSubmissionOptions {
   strict?: boolean;
   workspaceId?: string | null;
   vault?: { open(value: string): Record<string, unknown> };
+  registry?: {
+    resolve(sql: Sql, id: string, version: string): Promise<ProviderPlugin>;
+  };
 }
 
 export class CanvasSubmissionModels {
@@ -58,13 +64,17 @@ export class CanvasSubmissionModels {
     const speechModelIds = new Set<string>();
     const policyAllowedSpeechDefaults = new Set<string>();
     const manifestByCatalogId = new Map<string, any>();
+    const pluginRefByCatalogId = new Map<
+      string,
+      { pluginId: string; pluginVersion: string; kind: string }
+    >();
 
     for (const r of rows) {
       let rule = r.policy?.models?.find(
         (m: CanvasSubmissionRule) => m.model === r.id && m.kind === r.kind,
       );
       if (!rule && r.kind === "audio") {
-        // Commercial/local audio plugins (e.g. OpenAI TTS / Piper / CosyVoice) can be selected on canvas directly.
+        // Commercial/local/portable audio plugins (including v2/v3 without canvasSubmission) can be selected on canvas directly.
         rule = { model: r.id, kind: "audio", defaultForKind: false };
       }
       if (!rule) {
@@ -73,6 +83,11 @@ export class CanvasSubmissionModels {
       }
       rules.set(r.id, rule);
       manifestByCatalogId.set(r.id, r.manifest);
+      pluginRefByCatalogId.set(r.id, {
+        pluginId: String(r.plugin_id),
+        pluginVersion: String(r.plugin_version),
+        kind: String(r.kind),
+      });
       if (r.kind === "audio" && !isBgmMusicModel(r.id, r.descriptor)) {
         speechModelIds.add(r.id);
         if (rule.defaultForKind && r.policy_allowed) {
@@ -121,19 +136,66 @@ export class CanvasSubmissionModels {
     }
 
     const enabledConnections = new Set<string>();
+    const pluginCache = new Map<string, ProviderPlugin>();
+    let cachedImageEnabled: boolean | undefined;
+
     for (const [cid, configs] of byCatalogId) {
       if (configs.length !== 1) continue;
       const manifest = manifestByCatalogId.get(cid);
-      if (
-        options?.vault &&
-        manifest?.originalSubmission?.version >= 2 &&
-        manifest?.configSchema
-      ) {
-        try {
-          const opened = options.vault.open(configs[0]);
-          if (!validator.validate(manifest.configSchema, opened)) continue;
-        } catch {
-          continue;
+      const pluginRef = pluginRefByCatalogId.get(cid);
+      const isSpeech = speechModelIds.has(cid);
+      if (options?.vault) {
+        if (isSpeech) {
+          let opened: Record<string, unknown>;
+          try {
+            opened = options.vault.open(configs[0]);
+          } catch {
+            continue;
+          }
+          if (
+            (manifest?.originalSubmission?.version ?? 0) >= 2 &&
+            manifest?.configSchema &&
+            !validator.validate(manifest.configSchema, opened)
+          ) {
+            continue;
+          }
+          if (manifest?.requestLifecycle?.requireConfigured) {
+            if (manifest.originalState && options.registry && pluginRef) {
+              const cacheKey = `${pluginRef.pluginId}@${pluginRef.pluginVersion}`;
+              let plugin = pluginCache.get(cacheKey);
+              if (!plugin) {
+                plugin = await options.registry.resolve(
+                  sql,
+                  pluginRef.pluginId,
+                  pluginRef.pluginVersion,
+                );
+                pluginCache.set(cacheKey, plugin);
+              }
+              if (!plugin.originalState?.configured(opened)) continue;
+              if (manifest.originalState.requiresImageEnabled) {
+                if (cachedImageEnabled === undefined) {
+                  const settingsRow = await one(
+                    sql,
+                    "SELECT image_enabled FROM original_state_settings",
+                  );
+                  cachedImageEnabled = Boolean(settingsRow?.image_enabled);
+                }
+                if (!cachedImageEnabled) continue;
+              }
+            } else if (!opened.baseUrl || !opened.apiKey) {
+              continue;
+            }
+          }
+        } else if (
+          manifest?.originalSubmission?.version >= 2 &&
+          manifest?.configSchema
+        ) {
+          try {
+            const opened = options.vault.open(configs[0]);
+            if (!validator.validate(manifest.configSchema, opened)) continue;
+          } catch {
+            continue;
+          }
         }
       }
       enabledConnections.add(cid);
@@ -165,6 +227,16 @@ export class CanvasSubmissionModels {
     );
   }
 
+  speechDefaultModelIds(): string[] {
+    return [...this.rules.values()]
+      .filter((r) => this.speechModelIds.has(r.model) && r.defaultForKind)
+      .map((r) => r.model);
+  }
+
+  isSpeechModel(modelId: string): boolean {
+    return this.speechModelIds.has(modelId);
+  }
+
   hasEnabledAudio(modelId: string): boolean {
     return (
       this.speechModelIds.has(modelId) && this.enabledConnections.has(modelId)
@@ -172,9 +244,7 @@ export class CanvasSubmissionModels {
   }
 
   resolveAudio(preferredModel?: string) {
-    const defaultIds = [...this.rules.values()]
-      .filter((r) => this.speechModelIds.has(r.model) && r.defaultForKind)
-      .map((r) => r.model);
+    const defaultIds = this.speechDefaultModelIds();
     const chosen = pickSpeechAudioModel({
       preferredModel,
       availableSpeechIds: this.availableSpeechModels(),

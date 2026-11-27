@@ -114,6 +114,9 @@ import {
   resolveCinePopoverPlacement,
   resolveNextShotContinuation,
   reconcileCanvasRightDocks,
+  resolveCanvasWorkspaceTop,
+  resolveCanvasSpeechModels,
+  quoteCanvasSpeechPlan,
   linkedValue,
   type CanvasClipboard,
   type CanvasNode,
@@ -137,10 +140,7 @@ import { Composition } from "./Composition";
 import { AssetPacks, type Pack } from "./AssetPacks";
 import { CinematographyPanel } from "./CinematographyPanel";
 import { OptionSelect, SegmentedOptions } from "./OptionSelect";
-import {
-  isBgmMusicModel,
-  pickSpeechAudioModel,
-} from "@fumiao/plugin-sdk/speech-routing";
+import { isBgmMusicModel } from "@fumiao/plugin-sdk/speech-routing";
 import {
   GENERATION_MODE_OPTIONS,
   GRID_LAYOUT_OPTIONS,
@@ -836,6 +836,7 @@ export function CanvasWorkspace({
   } | null>(null);
   const [retryingLeave, setRetryingLeave] = useState(false);
   const [headerBottom, setHeaderBottom] = useState(60);
+  const [workspaceTop, setWorkspaceTop] = useState(60);
   const leaveInFlight = useRef(false);
   const [activeTextNodes,setActiveTextNodes]=useState<string[]>([]);
   const textApplyQueue=useRef<Promise<void>>(Promise.resolve());
@@ -2694,23 +2695,57 @@ export function CanvasWorkspace({
     event.stopPropagation();
     generate();
   };
-  useEffect(() => {
+  const measureTopChrome = useCallback(() => {
     const root = workspaceRef.current;
     const headerEl = root?.querySelector<HTMLElement>(".canvas-header");
     if (!root || !headerEl) return;
-    const measure = () => {
-      const rootRect = root.getBoundingClientRect();
-      const rect = headerEl.getBoundingClientRect();
-      const next = Math.max(52, Math.ceil(rect.bottom - rootRect.top));
-      setHeaderBottom((prev) => (prev === next ? prev : next));
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const obs = new ResizeObserver(measure);
+    const switcherEl = root.querySelector<HTMLElement>(".fm-surface-switcher");
+    const toolsEl = headerEl.querySelector<HTMLElement>(".global-tools");
+    const headingEl = headerEl.querySelector<HTMLElement>(".project-heading");
+    const rootRect = root.getBoundingClientRect();
+    const headerRect = headerEl.getBoundingClientRect();
+    const effectiveHeaderBottom = Math.max(
+      headerRect.bottom,
+      toolsEl?.getBoundingClientRect().bottom ?? 0,
+      headingEl?.getBoundingClientRect().bottom ?? 0,
+    );
+    const swRect = switcherEl?.getBoundingClientRect();
+    const resolved = resolveCanvasWorkspaceTop({
+      rootTop: rootRect.top,
+      headerBottom: effectiveHeaderBottom,
+      switcherTop: swRect?.top ?? null,
+      switcherBottom: swRect?.bottom ?? null,
+      switcherHeight: swRect?.height ?? null,
+    });
+    setHeaderBottom((prev) =>
+      prev === resolved.headerBottom ? prev : resolved.headerBottom,
+    );
+    setWorkspaceTop((prev) =>
+      prev === resolved.workspaceTop ? prev : resolved.workspaceTop,
+    );
+  }, []);
+  useLayoutEffect(() => {
+    measureTopChrome();
+  }, [
+    measureTopChrome,
+    headerBottom,
+    agentDockedWidth,
+    windowSize.w,
+    windowSize.h,
+    surface,
+    viewMode,
+  ]);
+  useEffect(() => {
+    const root = workspaceRef.current;
+    const headerEl = root?.querySelector<HTMLElement>(".canvas-header");
+    const switcherEl = root?.querySelector<HTMLElement>(".fm-surface-switcher");
+    if (!root || !headerEl || typeof ResizeObserver === "undefined") return;
+    const obs = new ResizeObserver(measureTopChrome);
     obs.observe(headerEl);
+    if (switcherEl) obs.observe(switcherEl);
     obs.observe(root);
     return () => obs.disconnect();
-  }, []);
+  }, [measureTopChrome]);
 
   const downloadLocalBackup = (baseDraft: {
     title: string;
@@ -3014,12 +3049,7 @@ export function CanvasWorkspace({
   const availableAudioModels = Object.entries(studio.model_catalog)
     .filter(([id, spec]) => spec.kind === "audio" && availableModel(id))
     .map(([id, spec]) => ({ id, label: spec.label || id }));
-  const availableSpeechModels = availableAudioModels.filter(
-    (m) =>
-      !isBgmMusicModel(m.id, studio.model_catalog[m.id]) &&
-      (!Array.isArray(studio.canvas_speech_models) ||
-        studio.canvas_speech_models.includes(m.id)),
-  );
+  const availableSpeechModels = resolveCanvasSpeechModels(studio);
   const bgmModels = availableAudioModels.filter((m) =>
     isBgmMusicModel(m.id, studio.model_catalog[m.id]),
   );
@@ -3136,32 +3166,21 @@ export function CanvasWorkspace({
   const renderShotNarration = (shot: { id: string }) => {
     const node = doc.value.document.nodes.find((n) => n.id === shot.id);
     if (!node) return null;
-    const preferred = node.narration_model?.trim();
-    const activeAudio = pickSpeechAudioModel({
-      preferredModel: preferred,
-      availableSpeechIds: availableSpeechModels.map((m) => m.id),
+    const speechPlan = quoteCanvasSpeechPlan({
+      studio,
+      node,
+      packs: availablePacks,
     });
-    const priceItem = activeAudio
-      ? studio.pricing.items.find((p) => p.key.startsWith(activeAudio + "|"))
-      : undefined;
-    const price = !activeAudio
-      ? null
-      : (priceItem?.amount ?? (activeAudio === "edge-tts" ? 0 : null));
-    const unavailableReason = !activeAudio
-      ? "当前空间未开放语音模型"
-      : price === null
-        ? "语音生成尚未定价"
-        : studio.credits.available < price
-          ? "当前空间积分不足"
-          : "";
     return (
       <Narration
         node={node}
         runs={runs}
-        cost={price}
-        unavailableReason={unavailableReason}
+        cost={speechPlan.narration.cost}
+        unavailableReason={speechPlan.narration.unavailableReason}
+        dialogueUnavailableReason={speechPlan.dialogue.unavailableReason}
+        dialogueLineUnavailableReasons={speechPlan.dialogue.lineReasons}
         audioModels={availableSpeechModels}
-        activeModel={activeAudio}
+        activeModel={speechPlan.narration.activeModel}
         onEditStart={doc.begin}
         onEditEnd={doc.end}
         onChange={(patch, history) => edit(shot.id, patch, history)}
@@ -3236,6 +3255,7 @@ export function CanvasWorkspace({
         {
           "--fm-agent-width": `${agentDockedWidth}px`,
           "--fm-header-bottom": `${headerBottom}px`,
+          "--fm-workspace-top": `${workspaceTop}px`,
         } as React.CSSProperties
       }
       tabIndex={-1}
@@ -4159,7 +4179,7 @@ export function CanvasWorkspace({
               anchorNode={single}
               panelHeight={panelHeight}
               windowSize={windowSize}
-              headerBottom={headerBottom}
+              headerBottom={workspaceTop}
               viewMode={viewMode}
               agentDock={agentDock}
               agentDockedWidth={agentDockedWidth}

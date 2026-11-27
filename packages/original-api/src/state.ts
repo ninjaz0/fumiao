@@ -118,6 +118,12 @@ export class OriginalState {
           const rawProfile = identity.profile(actor);
           const includeJobs = !isToken || tokenScopes.has("job:read");
           const includeAssets = !isToken || tokenScopes.has("asset:read");
+          const canvasSpeechBindings = await CanvasSubmissionModels.read(sql, {
+            strict: false,
+            workspaceId: workspace.id,
+            vault: this.p.vault,
+            registry: this.p.registry,
+          });
           const out: Record<string, any> = {
             ...(plugins.profile ? { studio_plugins: true } : {}),
             server_time: stamp,
@@ -162,13 +168,9 @@ export class OriginalState {
                 ? await records.nodes(sql, actor, stamp)
                 : [],
             canvas_nodes: await canvasNodeEntries(sql),
-            canvas_speech_models: (
-              await CanvasSubmissionModels.read(sql, {
-                strict: false,
-                workspaceId: workspace.id,
-                vault: this.p.vault,
-              })
-            ).availableSpeechModels(),
+            canvas_speech_models: canvasSpeechBindings.availableSpeechModels(),
+            canvas_speech_default_models:
+              canvasSpeechBindings.speechDefaultModelIds(),
             plugin_actions: isToken ? [] : await resourceMenus(sql, actor),
             plugin_importers: isToken ? [] : await importersFor(sql, actor),
             plugin_pages: pages.filter((page) => !page.placement),

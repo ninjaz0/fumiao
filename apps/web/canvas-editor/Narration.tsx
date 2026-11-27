@@ -40,6 +40,8 @@ export function Narration({
   runs,
   cost,
   unavailableReason,
+  dialogueUnavailableReason,
+  dialogueLineUnavailableReasons,
   audioModels = [],
   activeModel,
   onChange,
@@ -52,6 +54,8 @@ export function Narration({
   runs: Job[];
   cost: number | null;
   unavailableReason: string;
+  dialogueUnavailableReason?: string;
+  dialogueLineUnavailableReasons?: Record<string, string>;
   audioModels?: { id: string; label: string }[];
   activeModel?: string;
   onChange: (patch: Partial<CanvasNode>, history?: boolean) => void;
@@ -102,6 +106,10 @@ export function Narration({
     audioModels,
   });
   const isEdgeTts = resolvedNarrationModel === "edge-tts";
+  const effectiveDialogueReason =
+    dialogueUnavailableReason !== undefined
+      ? dialogueUnavailableReason
+      : unavailableReason;
 
   const updateLines = (next: DialogueLine[], history = true) => {
     onChange(
@@ -252,7 +260,20 @@ export function Narration({
                   <button
                     type="button"
                     className="secondary"
-                    disabled={busy || linePending || !line.text.trim() || !!unavailableReason}
+                    title={
+                      (dialogueLineUnavailableReasons?.[line.id] ??
+                        effectiveDialogueReason) ||
+                      undefined
+                    }
+                    disabled={
+                      busy ||
+                      linePending ||
+                      !line.text.trim() ||
+                      Boolean(
+                        dialogueLineUnavailableReasons?.[line.id] ??
+                          effectiveDialogueReason,
+                      )
+                    }
                     onClick={async () => {
                       onEditEnd?.();
                       setBusy(true);
@@ -365,7 +386,7 @@ export function Narration({
                 disabled={
                   busy ||
                   !lines.some((l) => l.text.trim()) ||
-                  !!unavailableReason
+                  !!effectiveDialogueReason
                 }
                 onClick={async () => {
                   onEditEnd?.();
@@ -385,7 +406,9 @@ export function Narration({
               </button>
             </div>
           </div>
-          {!!unavailableReason && <p role="status">{unavailableReason}</p>}
+          {!!effectiveDialogueReason && (
+            <p role="status">{effectiveDialogueReason}</p>
+          )}
           {error && (
             <p className="error" role="alert">
               {error}
