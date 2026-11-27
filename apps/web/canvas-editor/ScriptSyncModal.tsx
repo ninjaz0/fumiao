@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import {
   Check,
+  ArrowDown,
+  ArrowUp,
   Clapperboard,
   Film,
   Image as ImageIcon,
@@ -11,11 +13,27 @@ import {
 } from "lucide-react";
 import {
   detectAmbiguousShotMatches,
+  directorSyncPreview,
+  nodeHasOutputOrActiveRun,
+  type DirectorSyncOptions,
   type ScriptAnchorLink,
   type ScriptBreakdown,
   type ScriptSyncOptions,
+  type ScriptSyncDestination,
 } from "./script-fusion";
 import type { CanvasGenerationMode, Doc, Job } from "./types";
+
+const directorFieldLabels: Record<string, string> = {
+  title: "标题", prompt: "镜头说明", narration: "旁白", seconds: "时长",
+  dialogues: "对白", shot_size: "景别", camera_angle: "机位", camera_movement: "运镜",
+  lighting: "光影", lens: "镜头", mood: "情绪",
+};
+
+function formatDirectorField(field: string, value: string): string {
+  if (field !== "dialogues") return value || "空";
+  const lines = JSON.parse(value) as [string, string][];
+  return lines.map(([speaker, text]) => `${speaker}：${text}`).join(" / ") || "空";
+}
 
 export function ScriptSyncModal({
   canvasDoc,
@@ -25,6 +43,8 @@ export function ScriptSyncModal({
   existingLinks,
   defaultVideoModel,
   defaultImageModel,
+  director = false,
+  onOpenAssistant,
   onSync,
   onClose,
 }: {
@@ -35,9 +55,12 @@ export function ScriptSyncModal({
   existingLinks: Record<string, ScriptAnchorLink>;
   defaultVideoModel: string;
   defaultImageModel: string;
+  director?: boolean;
+  onOpenAssistant: () => void;
   onSync: (
     options: ScriptSyncOptions,
-    switchAfterSync: boolean,
+    destination: ScriptSyncDestination,
+    directorOptions?: Omit<DirectorSyncOptions, "scriptRevision">,
   ) => Promise<void>;
   onClose: () => void;
 }) {
@@ -47,9 +70,25 @@ export function ScriptSyncModal({
   const [gridLayout, setGridLayout] = useState<"2x2" | "3x3">("3x3");
   const [tailChain, setTailChain] = useState(true);
   const [ratio, setRatio] = useState<"9:16" | "16:9" | "1:1">("9:16");
-  const [selectedAnchors, setSelectedAnchors] = useState<Set<string>>(
-    () => new Set(breakdown.shots.map((s) => s.anchor)),
+  const [bindings, setBindings] = useState<NonNullable<DirectorSyncOptions["bindings"]>>({});
+  const [choices, setChoices] = useState<NonNullable<DirectorSyncOptions["choices"]>>({});
+  const [prompts, setPrompts] = useState<Record<string, string>>({});
+  const directorRows = useMemo(
+    () => director ? directorSyncPreview(canvasDoc, breakdown, { runs, runsKnown, bindings }) : [],
+    [director, canvasDoc, breakdown, runs, runsKnown, bindings],
   );
+  const previous = canvasDoc.director?.script_id === breakdown.docId ? canvasDoc.director : undefined;
+  const [selectedAnchors, setSelectedAnchors] = useState<Set<string>>(() => new Set(
+    director
+      ? directorRows.filter((row) => !row.unresolved && (!row.nodeId || !previous || previous.shot_ids.includes(row.nodeId))).map((row) => row.anchor)
+      : breakdown.shots.map((shot) => shot.anchor),
+  ));
+  const [requestedOrder, setRequestedOrder] = useState<string[] | null>(null);
+  const defaultOrder = useMemo(() => {
+    const anchors = new Map(directorRows.flatMap((row) => row.nodeId ? [[row.nodeId, row.anchor]] : []));
+    return [...new Set([...(canvasDoc.shots ?? []).flatMap((id) => anchors.get(id) ?? []), ...breakdown.shots.map((shot) => shot.anchor)])];
+  }, [breakdown.shots, canvasDoc.shots, directorRows]);
+  const order = requestedOrder ?? defaultOrder;
   // Keyed by existingVideoNodeId -> "__keep_separate__" | targetAnchor
   const [ambiguousDecisions, setAmbiguousDecisions] = useState<
     Record<string, string>
@@ -59,14 +98,14 @@ export function ScriptSyncModal({
 
   const ambiguousMediaNodes = useMemo(
     () =>
-      detectAmbiguousShotMatches(
+      director ? [] : detectAmbiguousShotMatches(
         canvasDoc,
         breakdown,
         [...selectedAnchors],
         runs,
         runsKnown,
       ),
-    [canvasDoc, breakdown, selectedAnchors, runs, runsKnown],
+    [director, canvasDoc, breakdown, selectedAnchors, runs, runsKnown],
   );
 
   const hasUnresolvedAmbiguity = useMemo(
@@ -93,17 +132,28 @@ export function ScriptSyncModal({
     for (const shot of breakdown.shots) {
       if (!selectedAnchors.has(shot.anchor)) continue;
       totalSeconds += shot.seconds;
-      if (existingLinks[shot.anchor]) updateCount++;
+      if (director ? directorRows.find((row) => row.anchor === shot.anchor)?.nodeId : existingLinks[shot.anchor]) updateCount++;
       else newCount++;
     }
     return { newCount, updateCount, totalSeconds };
-  }, [breakdown.shots, existingLinks, selectedAnchors]);
+  }, [breakdown.shots, director, directorRows, existingLinks, selectedAnchors]);
 
-  const submit = async (switchAfterSync: boolean) => {
+  const submit = async (destination: ScriptSyncDestination) => {
     if (hasUnresolvedAmbiguity) {
       setError(
         "请先确认上方已出片视频节点的归属方式（选择保留原节点独立或绑定到指定镜号）",
       );
+      return;
+    }
+    const participating = directorRows.filter((row) => selectedAnchors.has(row.anchor));
+    if (participating.some((row) => row.unresolved)) {
+      setError("请先确认本集镜头的归属。");
+      return;
+    }
+    if (participating.some((row) => row.missingBaseline.some((field) =>
+      !choices[row.anchor]?.[field] && !(field === "prompt" && Object.hasOwn(prompts, row.anchor)),
+    ))) {
+      setError("请选择没有同步基线的字段如何处理。");
       return;
     }
     const explicitBindings: Record<string, string> = {};
@@ -127,7 +177,8 @@ export function ScriptSyncModal({
           selectedAnchors: [...selectedAnchors],
           explicitNodeBindings: explicitBindings,
         },
-        switchAfterSync,
+        destination,
+        director ? { bindings, choices, prompts, order } : undefined,
       );
       onClose();
     } catch (e) {
@@ -142,7 +193,7 @@ export function ScriptSyncModal({
       className="fm-modal-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="从剧本拆解并同步至画布"
+      aria-label={director ? "确认本集分镜" : "从剧本拆解并同步至画布"}
       onClick={(e) => {
         if (e.target === e.currentTarget && !busy) onClose();
       }}
@@ -152,10 +203,10 @@ export function ScriptSyncModal({
           <div>
             <h2>
               <Clapperboard size={18} />
-              剧本 ↔ 画布智能融合同步
+              {director ? "确认本集分镜" : "剧本 ↔ 画布智能融合同步"}
             </h2>
             <p>
-              从「{breakdown.docPath}」自动识别角色/场景参考卡与镜头节点链；已生成的视频素材将无损保留。
+              {director ? `勾选「${breakdown.docPath}」中纳入本集的镜头，并确认剧本和画布之间的差异。` : `从「${breakdown.docPath}」自动识别角色/场景参考卡与镜头节点链；已生成的视频素材将无损保留。`}
             </p>
           </div>
           <button
@@ -220,9 +271,9 @@ export function ScriptSyncModal({
               disabled={busy}
               onChange={(e) => setIncludeAssets(e.target.checked)}
             />
-            <span>同步角色/场景参考图节点并自动连线 ({breakdown.assets.length})</span>
+            <span>{director ? "为新镜头建立角色和场景参考连线" : "同步角色/场景参考图节点并自动连线"} ({breakdown.assets.length})</span>
           </label>
-          <label className="fm-sync-checkbox">
+          {!director && <label className="fm-sync-checkbox">
             <input
               type="checkbox"
               checked={tailChain}
@@ -230,7 +281,7 @@ export function ScriptSyncModal({
               onChange={(e) => setTailChain(e.target.checked)}
             />
             <span>开启跨镜尾帧衔接标记</span>
-          </label>
+          </label>}
         </div>
 
         <div className="fm-script-sync-body">
@@ -365,6 +416,85 @@ export function ScriptSyncModal({
             {breakdown.shots.length === 0 ? (
               <div className="fm-sync-empty">
                 当前文档尚未包含可拆解的场次或动作/台词段落。可使用工具栏插入「+ 场次 S01」「+ △动作」或「+ 角色对白」后再同步。
+                {director && <div className="fm-director-actions">
+                  <button type="button" className="secondary" onClick={onClose}>返回编辑剧本</button>
+                  <button type="button" className="secondary" onClick={onOpenAssistant}>打开创作助手</button>
+                </div>}
+              </div>
+            ) : director ? (
+              <div className="fm-sync-shot-list">
+                {order.map((anchor, index) => {
+                  const shot = breakdown.shots.find((item) => item.anchor === anchor);
+                  const row = directorRows.find((item) => item.anchor === anchor);
+                  if (!shot || !row) return null;
+                  const checked = selectedAnchors.has(anchor);
+                  const move = (offset: number) => setRequestedOrder((current) => {
+                    const next = [...(current ?? order)];
+                    [next[index], next[index + offset]] = [next[index + offset], next[index]];
+                    return next;
+                  });
+                  return (
+                    <article key={anchor} className={`fm-sync-shot-card fm-director-sync-shot${checked ? " selected" : ""}`}>
+                      <div className="fm-sync-shot-title">
+                        <label><input type="checkbox" checked={checked} disabled={busy} onChange={() => toggleAnchor(anchor)} /> 纳入本集</label>
+                        <strong>{shot.title}</strong>
+                        <span className="fm-sync-state">{row.unresolved ? "待确认归属" : row.nodeId ? "已有画布镜头" : "新建镜头"}</span>
+                        <button type="button" className="icon-button" aria-label={`上移 ${anchor}`} disabled={busy || index === 0} onClick={() => move(-1)}><ArrowUp size={14} /></button>
+                        <button type="button" className="icon-button" aria-label={`下移 ${anchor}`} disabled={busy || index === order.length - 1} onClick={() => move(1)}><ArrowDown size={14} /></button>
+                      </div>
+                      {row.candidates.length > 0 && <label>
+                        正式镜头
+                        <select value={bindings[anchor] === null ? "new" : bindings[anchor] ?? ""} disabled={busy} onChange={(event) => {
+                          const decision = event.target.value;
+                          setBindings((current) => ({ ...current, [anchor]: decision === "new" ? null : decision }));
+                          setChoices((current) => ({ ...current, [anchor]: {} }));
+                        }}>
+                          <option value="">请选择归属</option>
+                          <option value="new">新建镜头，保留旧节点</option>
+                          {row.candidates.map((node) => <option key={node.id} value={node.id} disabled={Object.entries(bindings).some(([other, id]) => other !== anchor && id === node.id)}>
+                            {node.title} · {nodeHasOutputOrActiveRun(node, runs) ? "有成片或任务" : "无成片"} · {node.id.slice(-8)}
+                          </option>)}
+                        </select>
+                      </label>}
+                      {[...row.changes.takeScript, ...row.changes.preserve, ...row.changes.conflicts].map((field) => {
+                        const conflict = row.changes.conflicts.includes(field);
+                        const required = row.missingBaseline.includes(field);
+                        return (
+                          <div key={field} className="fm-director-sync-diff">
+                            <strong>{directorFieldLabels[field]}</strong>
+                            <span>剧本 · {formatDirectorField(field, row.incoming[field])}</span>
+                            <span>画布 · {formatDirectorField(field, row.current[field])}</span>
+                            {conflict ? (
+                              <select aria-label={`${anchor} ${directorFieldLabels[field]}处理方式`} value={choices[anchor]?.[field] ?? (required ? "" : "preserve")} disabled={busy} onChange={(event) => {
+                                const value = event.target.value === "script" ? "script" : "preserve";
+                                setChoices((current) => ({ ...current, [anchor]: { ...current[anchor], [field]: value } }));
+                              }}>
+                                {required && <option value="" disabled>无同步基线，请选择</option>}
+                                <option value="preserve">保留画布修改</option>
+                                <option value="script">采用剧本内容</option>
+                              </select>
+                            ) : <small>{row.changes.takeScript.includes(field) ? "采用剧本更新" : "保留画布修改"}</small>}
+                          </div>
+                        );
+                      })}
+                      <label>
+                        {anchor} 镜头说明
+                        <textarea maxLength={12000} rows={2} disabled={busy || !checked || row.unresolved} value={prompts[anchor] ?? (
+                          row.nodeId && !row.changes.takeScript.includes("prompt") && choices[anchor]?.prompt !== "script" ? row.current.prompt : shot.prompt
+                        )} onChange={(event) => setPrompts((current) => ({ ...current, [anchor]: event.target.value }))} />
+                      </label>
+                      {Object.hasOwn(prompts, anchor) && <button type="button" className="secondary" disabled={busy} onClick={() => setPrompts((current) => {
+                        const next = { ...current };
+                        delete next[anchor];
+                        return next;
+                      })}>撤销说明修改</button>}
+                    </article>
+                  );
+                })}
+                {previous?.shot_ids.filter((id) => !directorRows.some((row) => selectedAnchors.has(row.anchor) && row.nodeId === id))
+                  .map((id) => canvasDoc.nodes.find((node) => node.id === id && node.extra_params?.script_doc_id === breakdown.docId))
+                  .filter((node) => node !== undefined)
+                  .map((node) => <p className="fm-sync-empty" key={node.id}>移出本集 · {node.title}（仍可在画布使用）</p>)}
               </div>
             ) : (
               <div className="fm-sync-shot-list">
@@ -446,7 +576,7 @@ export function ScriptSyncModal({
             >
               取消
             </button>
-            <button
+            {!director && <button
               type="button"
               className="secondary"
               disabled={
@@ -454,23 +584,23 @@ export function ScriptSyncModal({
                 (selectedAnchors.size === 0 &&
                   (!includeAssets || breakdown.assets.length === 0))
               }
-              onClick={() => void submit(false)}
+              onClick={() => void submit("document")}
             >
               <Check size={15} />
               仅同步留在文档
-            </button>
+            </button>}
             <button
               type="button"
               className="primary"
               disabled={
                 busy ||
-                (selectedAnchors.size === 0 &&
-                  (!includeAssets || breakdown.assets.length === 0))
+                (director ? breakdown.shots.length === 0 || (selectedAnchors.size === 0 && !previous) :
+                  selectedAnchors.size === 0 && (!includeAssets || breakdown.assets.length === 0))
               }
-              onClick={() => void submit(true)}
+              onClick={() => void submit(director ? "director" : "canvas")}
             >
               <Sparkles size={15} />
-              {busy ? "正在落图…" : "一键落图并查看画布"}
+              {busy ? "正在落图…" : director ? "保存并进入导演台" : "一键落图并查看画布"}
             </button>
           </div>
         </footer>

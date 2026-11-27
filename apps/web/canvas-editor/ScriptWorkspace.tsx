@@ -63,18 +63,24 @@ import {
 import {
   buildPersistedScriptDraftForSession,
   computeScriptDescendantsSignature,
+  directorSyncPreview,
   extractScriptAnchorsMap,
   parseScriptBreakdown,
   reconcileLoadedScriptDraft,
   reconcileRenamedOpenScriptSession,
   resolvePreferredShotIdLines,
+  scriptSourceJump,
+  stampDirectorScriptShotIds,
   stampScriptShotIds,
   stripShotCommentMarkers,
   syncScriptBreakdownToCanvas,
+  syncDirectorBreakdownToCanvas,
+  type DirectorSyncOptions,
   type ExportedUnsavedScript,
   type PersistedScriptDraftRecord,
   type ScriptAnchorLink,
   type ScriptSyncOptions,
+  type ScriptSyncDestination,
 } from "./script-fusion";
 import { ScriptSyncModal } from "./ScriptSyncModal";
 import { WorkspaceSearchModal } from "./WorkspaceSearchModal";
@@ -473,12 +479,16 @@ type ScriptWorkspaceProps = {
     anchor?: string;
     shotId?: string;
     line?: number;
+    directorPreview?: boolean;
     seq: number;
   } | null;
   onActiveScriptChange?: (
     activeScript: { id: string; path: string; body_md: string } | null,
   ) => void;
   onChangeCanvasDoc: (updater: (current: Doc) => Doc) => void;
+  flushCanvas: () => Promise<number>;
+  onOpenDirector: (request: { docId: string; nodeId?: string }) => void;
+  onOpenAssistant: () => void;
   onEditCanvasNode: (
     nodeId: string,
     patch: Partial<CanvasNode>,
@@ -511,6 +521,9 @@ export const ScriptWorkspace = forwardRef<
     externalOpenRequest,
     onActiveScriptChange,
     onChangeCanvasDoc,
+    flushCanvas,
+    onOpenDirector,
+    onOpenAssistant,
     onEditCanvasNode,
     onFocusCanvasNode,
     onSwitchToCanvas,
@@ -584,7 +597,8 @@ export const ScriptWorkspace = forwardRef<
   const [focusedPane, setFocusedPane] = useState<"left" | "right">("left");
 
   // Modals
-  const [syncModalDocId, setSyncModalDocId] = useState<string | null>(null);
+  const [syncRequest, setSyncRequest] = useState<{ docId: string; director?: boolean } | null>(null);
+  const syncModalDocId = syncRequest?.docId;
   const [workspaceSearchOpen, setWorkspaceSearchOpen] = useState(false);
 
   const ensureScriptLoaded = useCallback(
@@ -814,8 +828,8 @@ export const ScriptWorkspace = forwardRef<
     handledReqSeq.current = externalOpenRequest.seq;
     void scriptApi
       .get(externalOpenRequest.docId)
-      .then((detail) =>
-        openScriptTab(
+      .then(async (detail) => {
+        await openScriptTab(
           { id: detail.id, name: detail.name, path: detail.path },
           {
             pane: "left",
@@ -823,8 +837,9 @@ export const ScriptWorkspace = forwardRef<
             targetAnchor: externalOpenRequest.anchor,
             targetShotId: externalOpenRequest.shotId,
           },
-        ),
-      )
+        );
+        if (externalOpenRequest.directorPreview) setSyncRequest({ docId: detail.id, director: true });
+      })
       .catch((e) =>
         onNotify(e instanceof Error ? e.message : "无法打开关联剧本文档"),
       );
@@ -1794,7 +1809,8 @@ export const ScriptWorkspace = forwardRef<
 
   const handleApplyScriptSync = async (
     options: ScriptSyncOptions,
-    switchAfterSync: boolean,
+    destination: ScriptSyncDestination,
+    directorOptions?: Omit<DirectorSyncOptions, "scriptRevision">,
   ) => {
     if (!syncModalDocId || !syncModalState) return;
     const curSession = sessionsRef.current[syncModalDocId];
@@ -1804,21 +1820,43 @@ export const ScriptWorkspace = forwardRef<
       ? await ensureFreshRuns()
       : { runs, runsKnown };
 
-    const preferredLines = resolvePreferredShotIdLines(
+    if (directorOptions && sessionsRef.current[syncModalDocId]?.draftBody !== curSession.draftBody) {
+      throw new Error("剧本有新的本地修改，请重新打开预览确认分镜。");
+    }
+
+    const preferredLines = directorOptions ? Object.fromEntries(directorSyncPreview(canvasDoc, syncModalState.breakdown, {
+      ...runsSnapshot,
+      bindings: directorOptions.bindings,
+    }).flatMap((row) => {
+      const node = canvasDoc.nodes.find((item) => item.id === row.nodeId);
+      const shot = syncModalState.breakdown.shots.find((item) => item.anchor === row.anchor);
+      const stableId = node && scriptSourceJump(node)?.shotId;
+      return stableId && shot ? [[stableId, shot.lineStart]] : [];
+    })) : resolvePreferredShotIdLines(
       canvasDoc,
       syncModalState.breakdown,
       options.explicitNodeBindings ?? {},
       runsSnapshot.runs,
       runsSnapshot.runsKnown,
     );
-    const stamped = stampScriptShotIds(curSession.draftBody, preferredLines);
+    const stamped = directorOptions
+      ? stampDirectorScriptShotIds(curSession.draftBody, syncModalState.breakdown, preferredLines)
+      : stampScriptShotIds(curSession.draftBody, preferredLines);
     if (stamped.changed) {
       updateScriptDraft(syncModalDocId, stamped.markdown, false);
     }
-    await flushScript(syncModalDocId, { throwOnError: true });
+    try {
+      await flushScript(syncModalDocId, { throwOnError: true });
+    } catch (error) {
+      if (!directorOptions) throw error;
+      throw new Error(`剧本保存失败。${error instanceof Error ? error.message : "请重试。"}`);
+    }
 
     const syncedBody =
       sessionsRef.current[syncModalDocId]?.draftBody ?? stamped.markdown;
+    if (directorOptions && syncedBody !== (stamped.changed ? stamped.markdown : curSession.draftBody)) {
+      throw new Error("剧本已保存，但预览后内容有变化，请重新打开预览确认。");
+    }
     const freshBreakdown = parseScriptBreakdown(syncedBody, {
       docId: syncModalDocId,
       docPath: curSession.detail.path,
@@ -1827,13 +1865,13 @@ export const ScriptWorkspace = forwardRef<
     let focusTargets: string[] = [];
     let createdCount = 0;
     let updatedCount = 0;
+    const syncOptions = { ...options, ...runsSnapshot };
+    const scriptRevision = sessionsRef.current[syncModalDocId]?.revision ?? curSession.revision;
 
     onChangeCanvasDoc((current) => {
-      const synced = syncScriptBreakdownToCanvas(current, freshBreakdown, {
-        ...options,
-        runs: runsSnapshot.runs,
-        runsKnown: runsSnapshot.runsKnown,
-      });
+      const synced = directorOptions
+        ? syncDirectorBreakdownToCanvas(current, freshBreakdown, { ...syncOptions, ...directorOptions, scriptRevision })
+        : syncScriptBreakdownToCanvas(current, freshBreakdown, syncOptions);
       focusTargets =
         synced.shotNodeIds.length > 0
           ? synced.shotNodeIds
@@ -1843,10 +1881,19 @@ export const ScriptWorkspace = forwardRef<
       return synced.document;
     });
 
+    if (destination === "director") {
+      try {
+        await flushCanvas();
+      } catch (error) {
+        throw new Error(`剧本已保存，画布保存失败。本集改动已保留为画布草稿。${error instanceof Error ? error.message : "请重试。"}`);
+      }
+      onOpenDirector({ docId: syncModalDocId });
+      return;
+    }
     onNotify(
       `已融合同步至画布：新增 ${createdCount} 个节点，更新 ${updatedCount} 个节点`,
     );
-    if (switchAfterSync) {
+    if (destination === "canvas") {
       onSwitchToCanvas(focusTargets);
     }
   };
@@ -2386,7 +2433,8 @@ export const ScriptWorkspace = forwardRef<
                   }));
                 }}
                 onOverwriteScriptConflict={overwriteScriptConflict}
-                onOpenSyncModal={(docId) => setSyncModalDocId(docId)}
+                onOpenSyncModal={(docId, director) => setSyncRequest({ docId, director })}
+                onOpenDirector={onOpenDirector}
                 onEditCanvasNode={onEditCanvasNode}
                 onFocusCanvasNode={onFocusCanvasNode}
                 onOpenNodeInSplit={(nodeId) => {
@@ -2491,7 +2539,8 @@ export const ScriptWorkspace = forwardRef<
                     }));
                   }}
                   onOverwriteScriptConflict={overwriteScriptConflict}
-                  onOpenSyncModal={(docId) => setSyncModalDocId(docId)}
+                  onOpenSyncModal={(docId, director) => setSyncRequest({ docId, director })}
+                onOpenDirector={onOpenDirector}
                   onEditCanvasNode={onEditCanvasNode}
                   onFocusCanvasNode={onFocusCanvasNode}
                   onOpenNodeInSplit={(nodeId) => {
@@ -2588,8 +2637,13 @@ export const ScriptWorkspace = forwardRef<
           existingLinks={syncModalState.links}
           defaultVideoModel={defaultVideoModel}
           defaultImageModel={defaultImageModel}
+          director={syncRequest?.director}
+          onOpenAssistant={() => {
+            setSyncRequest(null);
+            onOpenAssistant();
+          }}
           onSync={handleApplyScriptSync}
-          onClose={() => setSyncModalDocId(null)}
+          onClose={() => setSyncRequest(null)}
         />
       )}
 
@@ -2778,6 +2832,7 @@ function EditorPaneBody({
   onReloadScript,
   onOverwriteScriptConflict,
   onOpenSyncModal,
+  onOpenDirector,
   onEditCanvasNode,
   onFocusCanvasNode,
   onOpenNodeInSplit,
@@ -2803,7 +2858,8 @@ function EditorPaneBody({
   ) => Promise<void>;
   onReloadScript: (docId: string) => Promise<void>;
   onOverwriteScriptConflict: (docId: string) => Promise<void>;
-  onOpenSyncModal: (docId: string) => void;
+  onOpenSyncModal: (docId: string, director?: boolean) => void;
+  onOpenDirector: (request: { docId: string; nodeId?: string }) => void;
   onEditCanvasNode: (
     nodeId: string,
     patch: Partial<CanvasNode>,
@@ -2866,6 +2922,8 @@ function EditorPaneBody({
       onReload={() => onReloadScript(tab.docId)}
       onOverwriteConflict={() => onOverwriteScriptConflict(tab.docId)}
       onOpenSync={() => onOpenSyncModal(tab.docId)}
+      onOpenDirectorSync={() => onOpenSyncModal(tab.docId, true)}
+      onOpenDirectorShot={(nodeId) => onOpenDirector({ docId: tab.docId, nodeId })}
       onFocusCanvasNode={onFocusCanvasNode}
       onOpenNodeInSplit={onOpenNodeInSplit}
       onAssetUploaded={onAssetUploaded}
@@ -2890,6 +2948,8 @@ function MarkdownScriptEditor({
   onReload,
   onOverwriteConflict,
   onOpenSync,
+  onOpenDirectorSync,
+  onOpenDirectorShot,
   onFocusCanvasNode,
   onOpenNodeInSplit,
   onAssetUploaded,
@@ -2910,6 +2970,8 @@ function MarkdownScriptEditor({
   onReload: () => Promise<void>;
   onOverwriteConflict: () => Promise<void>;
   onOpenSync: () => void;
+  onOpenDirectorSync: () => void;
+  onOpenDirectorShot: (nodeId: string) => void;
   onFocusCanvasNode: (nodeId: string) => void;
   onOpenNodeInSplit: (nodeId: string) => void;
   onAssetUploaded: (asset: { id: string; w: number; h: number }) => void;
@@ -3231,6 +3293,9 @@ function MarkdownScriptEditor({
               </strong>
             )}
           </span>
+          <button type="button" className="secondary" onClick={onOpenDirectorSync}>
+            {canvasDoc.director?.script_id === session.detail.id ? "更新本集分镜" : "用于本集制作"}
+          </button>
           <button
             type="button"
             className="primary fm-sync-canvas-btn"
@@ -3683,6 +3748,12 @@ function MarkdownScriptEditor({
                               <Crosshair size={12} />
                               画布聚焦 {linkedShot.hasMedia ? "· 已出片" : ""}
                             </button>
+                            {canvasDoc.director?.script_id === session.detail.id &&
+                              canvasDoc.director.shot_ids.includes(linkedShot.videoNodeId) && (
+                                <button type="button" className="fm-canvas-jump-pill secondary" onClick={() => onOpenDirectorShot(linkedShot.videoNodeId)}>
+                                  在导演台查看
+                                </button>
+                              )}
                             <button
                               type="button"
                               className="fm-canvas-jump-pill secondary"
@@ -3800,22 +3871,11 @@ function CanvasNodeDocumentEditor({
     .filter((n): n is CanvasNode => Boolean(n));
 
   const isTextKind = node.type === "text" || node.type === "sticky";
-  const scriptDocId =
-    typeof node.extra_params?.script_doc_id === "string"
-      ? node.extra_params.script_doc_id
-      : null;
-  const scriptAnchor =
-    typeof node.extra_params?.script_anchor === "string"
-      ? node.extra_params.script_anchor
-      : null;
-  const scriptShotId =
-    typeof node.extra_params?.script_shot_id === "string"
-      ? node.extra_params.script_shot_id
-      : null;
-  const scriptLine =
-    typeof node.extra_params?.script_line === "number"
-      ? node.extra_params.script_line
-      : undefined;
+  const source = scriptSourceJump(node);
+  const scriptDocId = source?.docId;
+  const scriptAnchor = source?.anchor;
+  const scriptShotId = source?.shotId;
+  const scriptLine = source?.line;
 
   const updateCine = (patch: Partial<CinematographySpec>) => {
     onEditNode(node.id, {

@@ -1,4 +1,5 @@
 import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports";
+import type { DirectorProduction } from "@fumiao/web-compat/director.js";
 import {
   defaults,
   newNode,
@@ -75,6 +76,66 @@ export type ScriptSyncOptions = {
   runs?: Job[];
   runsKnown?: boolean;
 };
+
+export type ScriptSyncDestination = "document" | "canvas" | "director";
+
+export type DirectorSyncOptions = {
+  scriptRevision: number;
+  bindings?: Record<string, string | null>;
+  choices?: Record<string, Record<string, "preserve" | "script">>;
+  prompts?: Record<string, string>;
+  order?: string[];
+};
+
+export function directorSourceChanges(
+  base: Readonly<Record<string, string>>,
+  current: Readonly<Record<string, string>>,
+  incoming: Readonly<Record<string, string>>,
+): { takeScript: string[]; preserve: string[]; conflicts: string[] } {
+  const takeScript: string[] = [], preserve: string[] = [], conflicts: string[] = [];
+  for (const key of new Set([...Object.keys(current), ...Object.keys(incoming)])) {
+    if (current[key] === incoming[key]) continue;
+    if (!Object.hasOwn(base, key)) conflicts.push(key);
+    else if (current[key] === base[key]) takeScript.push(key);
+    else if (incoming[key] === base[key]) preserve.push(key);
+    else conflicts.push(key);
+  }
+  return { takeScript, preserve, conflicts };
+}
+
+export function scriptSourceJump(node: CanvasNode): {
+  docId: string;
+  anchor?: string;
+  shotId?: string;
+  line?: number;
+} | null {
+  const extra = node.extra_params;
+  if (!extra) return null;
+  const prefix = typeof extra.script_doc_id === "string" ? "script_" : "script_source_";
+  const docId = extra[`${prefix}doc_id`];
+  if (typeof docId !== "string" || !docId) return null;
+  const anchor = extra[`${prefix}anchor`], shotId = extra[`${prefix}shot_id`], line = extra[`${prefix}line`];
+  return {
+    docId,
+    anchor: typeof anchor === "string" ? anchor : undefined,
+    shotId: typeof shotId === "string" ? shotId : undefined,
+    line: typeof line === "number" ? line : undefined,
+  };
+}
+
+export function detachScriptShotClaim(node: CanvasNode): CanvasNode {
+  const source = scriptSourceJump(node);
+  if (!source?.anchor || !node.extra_params?.script_doc_id) return node;
+  const extra = { ...node.extra_params };
+  for (const key of ["doc_id", "doc_path", "anchor", "shot_id", "line", "fingerprint", "action_sig", "scene_code", "managed_edges", "role"]) {
+    delete extra[`script_${key}`];
+  }
+  extra.script_source_doc_id = source.docId;
+  extra.script_source_anchor = source.anchor;
+  if (source.shotId) extra.script_source_shot_id = source.shotId;
+  if (source.line !== undefined) extra.script_source_line = source.line;
+  return { ...node, extra_params: extra };
+}
 
 const ACTIVE_RUN_STATUSES = new Set([
   "queued",
@@ -162,6 +223,7 @@ function normalizeSig(text: string): string {
 export function stampScriptShotIds(
   markdown: string,
   preferredLineByShotId: Record<string, number> = {},
+  recognizedShotLines?: ReadonlySet<number>,
 ): {
   markdown: string;
   changed: boolean;
@@ -184,8 +246,9 @@ export function stampScriptShotIds(
     const lineNum = i + 1;
     const trimmed = lines[i].trim();
     const match = trimmed.match(SHOT_COMMENT_SINGLE_RE);
+    const isShotStart = /^[△▲]/.test(trimmed) || recognizedShotLines?.has(lineNum);
 
-    if (match && !/^[△▲]/.test(trimmed)) {
+    if (match && !isShotStart) {
       const id = match[1];
       if ((idCounts.get(id) ?? 0) > 1) {
         const preferredLine = preferredLineByShotId[id];
@@ -212,10 +275,13 @@ export function stampScriptShotIds(
       continue;
     }
 
-    if (/^[△▲]/.test(trimmed)) {
+    if (isShotStart) {
       if (!match && !pendingIdForNextBeat) {
         const shotUid = `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
-        out.push(`${lines[i]} <!-- fm-shot:${shotUid} -->`);
+        const marker = `<!-- fm-shot:${shotUid} -->`;
+        out.push(trimmed.startsWith("|") && trimmed.endsWith("|")
+          ? lines[i].replace(/\|(\s*)$/, ` ${marker} |$1`)
+          : `${lines[i]} ${marker}`);
         changed = true;
       } else if (match) {
         const id = match[1];
@@ -251,6 +317,14 @@ export function stampScriptShotIds(
     out.push(lines[i]);
   }
   return { markdown: out.join("\n"), changed };
+}
+
+export function stampDirectorScriptShotIds(
+  markdown: string,
+  breakdown: ScriptBreakdown,
+  preferredLineByShotId?: Record<string, number>,
+) {
+  return stampScriptShotIds(markdown, preferredLineByShotId, new Set(breakdown.shots.map((shot) => shot.lineStart)));
 }
 
 export function resolvePreferredShotIdLines(
@@ -611,7 +685,7 @@ export function parseScriptBreakdown(
 
     // Markdown table row in shotlist: | 01 | S01 | 特写 / 缓推 | 5s | 画面... | 台词... |
     if (raw.startsWith("|") && raw.endsWith("|")) {
-      const cells = raw
+      const cells = stripShotCommentMarkers(raw)
         .slice(1, -1)
         .split("|")
         .map((c) => c.trim());
@@ -641,6 +715,7 @@ export function parseScriptBreakdown(
         const dlgCell = cells[5] || "";
         const dlgMatch = dlgCell.match(/^([^：:()（）]{1,20})[：:]\s*(.+)$/);
         currentBeat = {
+          shotId: raw.match(SHOT_COMMENT_SINGLE_RE)?.[1] || pendingCommentShotId,
           actions: [visual],
           dialogues: dlgMatch
             ? [{ speaker: dlgMatch[1].trim(), text: dlgMatch[2].trim() }]
@@ -649,6 +724,7 @@ export function parseScriptBreakdown(
           lineEnd: lineNo,
           explicitSeconds: secMatch ? Number(secMatch[1]) : undefined,
         };
+        pendingCommentShotId = undefined;
         flushBeat();
         continue;
       }
@@ -758,7 +834,7 @@ export function parseScriptBreakdown(
     }
 
     // Dialogue line: "齐夏：手机和证件都被收走了..." (excluding metadata bullets like "规格：...")
-    const dialogueMatch = raw.match(
+    const dialogueMatch = stripShotCommentMarkers(raw).trim().match(
       /^([^：:*#\-|<>]{1,18})[：:]\s*[“"「]?(.+?)[”"」]?$/,
     );
     if (
@@ -775,11 +851,13 @@ export function parseScriptBreakdown(
         registerAsset("character", "", speaker, "", lineNo);
         if (!currentBeat) {
           currentBeat = {
+            shotId: raw.match(SHOT_COMMENT_SINGLE_RE)?.[1] || pendingCommentShotId,
             actions: [],
             dialogues: [],
             lineStart: lineNo,
             lineEnd: lineNo,
           };
+          pendingCommentShotId = undefined;
         }
         currentBeat.dialogues.push({
           speaker: speaker.slice(0, 40),
@@ -807,16 +885,22 @@ export function parseScriptBreakdown(
   };
 }
 
+type DirectorMerge = {
+  nodeId?: string;
+  write: ReadonlySet<string>;
+};
+
 export function syncScriptBreakdownToCanvas(
   doc: Doc,
   breakdown: ScriptBreakdown,
   options: ScriptSyncOptions = {},
+  directorMerge?: ReadonlyMap<string, DirectorMerge>,
 ): ScriptSyncResult {
   const includeAssets = options.includeAssets ?? true;
   const generationMode = options.generationMode ?? "first_last_frame";
   const isGridPreview = generationMode === "grid_preview";
   const gridLayout = options.gridLayout ?? "3x3";
-  const tailChain = options.tailChain ?? true;
+  const tailChain = !directorMerge && (options.tailChain ?? true);
   const ratio = options.ratio ?? "16:9";
   const videoModel = options.videoModel ?? "MiniMax H3";
   const imageModel = options.imageModel ?? "";
@@ -998,7 +1082,9 @@ export function syncScriptBreakdownToCanvas(
   };
 
   // Compute binding plan across the full breakdown so partial selection never shifts scene positions
-  const bindingPlan = computeShotBindingPlan(
+  const bindingPlan = directorMerge ? {
+    anchorToVideoId: new Map([...directorMerge].flatMap(([anchor, entry]) => entry.nodeId ? [[anchor, entry.nodeId]] : [])),
+  } : computeShotBindingPlan(
     nextNodes,
     breakdown.docId,
     breakdown.shots,
@@ -1050,6 +1136,7 @@ export function syncScriptBreakdownToCanvas(
 
   // 2. Sync Shot Chains (Text Prompt Node + Optional Grid Image + Video Shot Node)
   activeShots.forEach((shot, index) => {
+    const merge = directorMerge?.get(shot.anchor);
     const dialogueLines: DialogueLine[] = shot.dialogues.map((d, dIdx) => ({
       id: `dlg_${sanitizeIdPart(shot.anchor)}_${dIdx + 1}`,
       speaker: d.speaker.slice(0, 40),
@@ -1082,6 +1169,61 @@ export function syncScriptBreakdownToCanvas(
           ? shot.shotId
           : prevShotId || shot.shotId;
       const effectiveShotId = allocateUniqueShotId(preferredShotId);
+
+      if (merge) {
+        const text = directorPromptNode(doc, existingVideo);
+        if (merge.write.has("prompt")) {
+          const existingPrompt = nextNodes.find((node) => node.id === text?.id);
+          if (existingPrompt && !existingVideo.prompt.trim()) {
+            existingPrompt.text = shot.prompt;
+            updatedNodeIds.push(existingPrompt.id);
+          } else existingVideo.prompt = shot.prompt;
+        }
+        if (merge.write.has("title")) existingVideo.title = shot.title;
+        if (merge.write.has("narration")) existingVideo.narration_text = shot.narration;
+        if (merge.write.has("seconds")) existingVideo.params.seconds = shot.seconds;
+        if (merge.write.has("dialogues")) {
+          const previous = [...(existingVideo.dialogue_lines ?? [])];
+          const reusedIds = new Set<string>();
+          existingVideo.dialogue_lines = dialogueLines.map((line) => {
+            const same = previous.find((entry) =>
+              !reusedIds.has(entry.id) && entry.speaker === line.speaker && entry.text === line.text,
+            );
+            if (same) {
+              reusedIds.add(same.id);
+              return same;
+            }
+            return { ...line, id: `dlg_${crypto.randomUUID().slice(0, 12)}` };
+          });
+        }
+        for (const key of directorCinematographyFields) {
+          if (merge.write.has(key)) {
+            existingVideo.cinematography = { ...existingVideo.cinematography, [key]: shot.cinematography[key] };
+          }
+        }
+        const source = {
+          script_doc_id: breakdown.docId,
+          script_doc_path: breakdown.docPath,
+          script_shot_id: effectiveShotId,
+          script_anchor: shot.anchor,
+          script_line: shot.lineStart,
+        };
+        existingVideo.extra_params = {
+          ...existingVideo.extra_params,
+          ...source,
+          script_fingerprint: shot.fingerprint,
+          script_action_sig: shot.actionSig,
+          script_scene_code: shot.sceneCode,
+        };
+        if (text) {
+          const nextText = nextNodes.find((node) => node.id === text.id)!;
+          nextText.extra_params = { ...nextText.extra_params, ...source };
+        }
+        updatedNodeIds.push(existingVideo.id);
+        shotNodeIds.push(existingVideo.id);
+        anchorToNodeId[shot.anchor] = existingVideo.id;
+        return;
+      }
 
       let existingText = nextNodes.find(
         (n) =>
@@ -1399,7 +1541,9 @@ export function syncScriptBreakdownToCanvas(
     videoNode.dialogue_lines = dialogueLines;
     videoNode.cinematography = shot.cinematography;
     videoNode.generation_mode = isGridPreview ? "first_frame" : generationMode;
-    if (tailChain && index > 0) {
+    if (directorMerge) {
+      videoNode.tail_inherited = false;
+    } else if (tailChain && index > 0) {
       videoNode.tail_inherited = true;
     }
     videoNode.params = {
@@ -1453,7 +1597,9 @@ export function syncScriptBreakdownToCanvas(
   // next to their script neighbors; full sync orders this script's shots in script sequence in-place.
   const isPartialSync = activeShots.length < breakdown.shots.length;
   let orderedShots: string[];
-  if (isPartialSync) {
+  if (directorMerge) {
+    orderedShots = [...new Set([...nextShots, ...shotNodeIds])].slice(0, 200);
+  } else if (isPartialSync) {
     const merged = [...nextShots];
     const resolveKnownVideoId = (anchor: string): string | undefined =>
       anchorToNodeId[anchor] ?? bindingPlan.anchorToVideoId.get(anchor);
@@ -1711,6 +1857,183 @@ function computeShotBindingPlan(
     (v) => !claimedVideoIds.has(v.id) && mayHaveOutputOrActiveRun(v),
   );
   return { anchorToVideoId, unmatchedMediaNodes };
+}
+
+const directorCinematographyFields = ["shot_size", "camera_angle", "camera_movement", "lighting", "lens", "mood"] as const;
+
+function directorPromptNode(doc: Doc, video: CanvasNode): CanvasNode | undefined {
+  const connected = new Set(doc.edges.filter((edge) => edge.target === video.id).map((edge) => edge.source));
+  for (const edge of doc.edges) {
+    if (connected.has(edge.target) && doc.nodes.some((node) =>
+      node.id === edge.target && node.extra_params?.script_role === "grid_preview",
+    )) connected.add(edge.source);
+  }
+  const source = scriptSourceJump(video);
+  return doc.nodes.find((node) => node.type === "text" && connected.has(node.id) &&
+    node.extra_params?.script_doc_id === source?.docId && Boolean(source?.docId) &&
+    (source?.shotId ? node.extra_params?.script_shot_id === source.shotId : node.extra_params?.script_anchor === source?.anchor),
+  );
+}
+
+function directorScriptFields(shot: ScriptExtractedShot): Record<string, string> {
+  return {
+    title: shot.title,
+    prompt: shot.prompt,
+    narration: shot.narration,
+    seconds: String(shot.seconds),
+    dialogues: JSON.stringify(shot.dialogues.map(({ speaker, text }) => [speaker.slice(0, 40), text.slice(0, 300)])),
+    ...Object.fromEntries(directorCinematographyFields.map((key) => [key, shot.cinematography[key] ?? ""])),
+  };
+}
+
+export function directorShotDescription(doc: Doc, video: CanvasNode): string {
+  return video.prompt.trim() ? video.prompt : directorPromptNode(doc, video)?.text ?? "";
+}
+
+function directorCanvasFields(doc: Doc, video: CanvasNode): Record<string, string> {
+  return {
+    title: video.title,
+    prompt: directorShotDescription(doc, video),
+    narration: video.narration_text ?? "",
+    seconds: String(video.params.seconds),
+    dialogues: JSON.stringify((video.dialogue_lines ?? []).map(({ speaker, text }) => [speaker, text])),
+    ...Object.fromEntries(directorCinematographyFields.map((key) => [key, video.cinematography?.[key] ?? ""])),
+  };
+}
+
+const directorFieldDigests = (fields: Record<string, string>) =>
+  Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, sha256HexUtf8(value)]));
+
+export function directorSyncPreview(
+  doc: Doc,
+  breakdown: ScriptBreakdown,
+  options: Pick<ScriptSyncOptions, "runs" | "runsKnown"> & Pick<DirectorSyncOptions, "bindings"> = {},
+) {
+  const videos = doc.nodes.filter((node) =>
+    node.type === "video" && node.extra_params?.script_doc_id === breakdown.docId,
+  );
+  const duplicateClaims = new Map(breakdown.shots.map((shot) => {
+    const candidates = videos.filter((node) => {
+      const stableId = node.extra_params?.script_shot_id;
+      if (shot.shotId && stableId === shot.shotId) return true;
+      // When a different stable ID occurs in the current script, the old anchor can
+      // simply be stale because the script changed positions.
+      const moved = stableId && breakdown.shots.some((item) => item.shotId === stableId);
+      return !moved && node.extra_params?.script_anchor === shot.anchor;
+    });
+    return [shot.anchor, candidates.length > 1 ? candidates : []];
+  }));
+  const disputedIds = new Set([...duplicateClaims.values()].flatMap((candidates) => candidates.map((node) => node.id)));
+  const eligible = doc.nodes.filter((node) => !disputedIds.has(node.id));
+  const { anchorToVideoId, unmatchedMediaNodes } = computeShotBindingPlan(
+    eligible, breakdown.docId, breakdown.shots, {}, options.runs, options.runsKnown,
+  );
+  const savedStates = doc.director?.script_id === breakdown.docId ? doc.director.shots : undefined;
+  return breakdown.shots.map((shot) => {
+    const automatic = anchorToVideoId.get(shot.anchor);
+    const direct = duplicateClaims.get(shot.anchor) ?? [];
+    const ambiguous = automatic ? [] : unmatchedMediaNodes.filter((node) =>
+      node.extra_params?.script_anchor === shot.anchor ||
+      node.extra_params?.script_scene_code === shot.sceneCode ||
+      scriptSourceJump(node)?.anchor?.split("-")[0] === shot.sceneCode,
+    );
+    const candidates = [...new Set([...direct, ...ambiguous])];
+    const binding = options.bindings?.[shot.anchor];
+    const chosen = candidates.find((node) => node.id === binding);
+    const node = chosen ?? (candidates.length ? undefined : videos.find((item) => item.id === automatic));
+    const base = savedStates?.find((entry) => entry.node_id === node?.id)?.source ?? {};
+    const incoming = directorScriptFields(shot);
+    const current = node ? directorCanvasFields(doc, node) : {};
+    const changes = node
+      ? directorSourceChanges(base, directorFieldDigests(current), directorFieldDigests(incoming))
+      : { takeScript: [], preserve: [], conflicts: [] };
+    return {
+      anchor: shot.anchor,
+      nodeId: node?.id,
+      candidates,
+      duplicateClaims: direct.map((item) => item.id),
+      unresolved: candidates.length > 0 && binding !== null && !chosen,
+      current,
+      incoming,
+      changes,
+      missingBaseline: changes.conflicts.filter((key) => !Object.hasOwn(base, key)),
+    };
+  });
+}
+
+// Preserve the occupied positions of excluded and unrelated shots.
+export function reorderDirectorShots(shots: readonly string[], order: readonly string[]): string[] {
+  const members = new Set(order);
+  let index = 0;
+  return shots.map((id) => members.has(id) ? order[index++] : id);
+}
+
+export function syncDirectorBreakdownToCanvas(
+  doc: Doc,
+  breakdown: ScriptBreakdown,
+  options: ScriptSyncOptions & DirectorSyncOptions,
+): ScriptSyncResult {
+  const preview = directorSyncPreview(doc, breakdown, options);
+  const selected = new Set(options.selectedAnchors ?? breakdown.shots.map((shot) => shot.anchor));
+  const selectedRows = preview.filter((row) => selected.has(row.anchor));
+  const matched = selectedRows.flatMap((row) => row.nodeId ? [row.nodeId] : []);
+  if (selectedRows.some((row) => row.unresolved) || new Set(matched).size !== matched.length) {
+    throw new Error("请先确认各镜头的归属，同一个节点只能绑定一镜。");
+  }
+  const merge = new Map(selectedRows.map((row) => {
+    const choices = options.choices?.[row.anchor];
+    if (row.missingBaseline.some((key) => !choices?.[key] && !(key === "prompt" && Object.hasOwn(options.prompts ?? {}, row.anchor)))) {
+      throw new Error("请先选择没有同步基线的差异如何处理。");
+    }
+    const write = new Set([...row.changes.takeScript, ...row.changes.conflicts.filter((key) => choices?.[key] === "script")]);
+    if (Object.hasOwn(options.prompts ?? {}, row.anchor)) write.add("prompt");
+    return [row.anchor, { nodeId: row.nodeId, write }];
+  }));
+  const detached = new Set(selectedRows.flatMap((row) => row.duplicateClaims).filter((id) => !matched.includes(id)));
+  const result = syncScriptBreakdownToCanvas({
+    ...doc,
+    nodes: doc.nodes.map((node) => detached.has(node.id) ? detachScriptShotClaim(node) : node),
+  }, {
+    ...breakdown,
+    shots: breakdown.shots.map((shot) => ({ ...shot, prompt: options.prompts?.[shot.anchor] ?? shot.prompt })),
+  }, options, merge);
+  if (result.shotNodeIds.length !== selected.size || result.shotNodeIds.some((id) => !result.document.shots?.includes(id))) {
+    throw new Error("画布或镜头列表已达上限，请减少本次纳入的镜头。");
+  }
+  const previous = doc.director?.script_id === breakdown.docId ? doc.director : undefined;
+  const currentIds = new Set(result.shotNodeIds);
+  const manualMemberIds = (previous?.shot_ids ?? []).filter((id) => {
+    const node = doc.nodes.find((item) => item.id === id);
+    return node?.type === "video" && node.extra_params?.script_doc_id !== breakdown.docId && result.document.shots?.includes(id);
+  });
+  const memberIds = [...currentIds, ...manualMemberIds.filter((id) => !currentIds.has(id))];
+  const incomingByNode = new Map(selectedRows.map((row) => [result.anchorToNodeId[row.anchor], row]));
+  const production: DirectorProduction = {
+    script_id: breakdown.docId,
+    script_revision: options.scriptRevision,
+    shot_ids: memberIds,
+    shots: memberIds.map((id) => {
+      const row = incomingByNode.get(id);
+      const prior = previous?.shots?.find((item) => item.node_id === id);
+      if (!row) return prior ?? { node_id: id };
+      const source = directorFieldDigests(row.incoming);
+      const state = { ...prior, node_id: id, source };
+      if (row.nodeId && merge.get(row.anchor)?.write.size) delete state.story_basis;
+      return state;
+    }),
+  };
+  const order = result.document.shots ?? [];
+  const scopedBefore = order.filter((id) => memberIds.includes(id));
+  const requested = (options.order ?? []).map((anchor) => result.anchorToNodeId[anchor]).filter(Boolean);
+  const scriptedOrder = [...new Set([...requested, ...scopedBefore.filter((id) => currentIds.has(id))])];
+  const nextOrder = reorderDirectorShots(order, scriptedOrder);
+  const scopedAfter = nextOrder.filter((id) => memberIds.includes(id));
+  const priorOrder = (doc.shots ?? []).filter((id) => previous?.shot_ids.includes(id));
+  if (previous?.order_basis && JSON.stringify(priorOrder) === JSON.stringify(scopedAfter)) {
+    production.order_basis = previous.order_basis;
+  }
+  result.document = { ...result.document, shots: nextOrder, director: production };
+  return result;
 }
 
 export function detectAmbiguousShotMatches(

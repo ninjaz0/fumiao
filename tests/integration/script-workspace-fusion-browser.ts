@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { chromium, expect, type Browser } from "@playwright/test";
+import { directorBasis, directorShotIds } from "../../packages/web-compat/src/director.js";
 import { newNode, type Project } from "../../apps/web/canvas-editor/types.js";
 
 const externalOrigin = process.env.STUDIO_TEST_ORIGIN;
@@ -678,6 +679,46 @@ try {
     );
     await expect(highlightedBeat).toBeVisible();
 
+    await page.getByRole("button", { name: "用于本集制作" }).click();
+    const directorSync = page.getByRole("dialog", { name: "确认本集分镜" });
+    await expect(directorSync).toBeVisible();
+    await directorSync.getByRole("button", { name: "保存并进入导演台" }).click();
+    const directorTab = page.getByRole("tab", { name: "导演台" });
+    await expect(directorTab).toHaveAttribute("aria-selected", "true");
+    const director = page.getByRole("region", { name: "导演台" });
+    await director.getByRole("button", { name: /^S01-02/ }).click();
+    await expect(director.getByRole("heading", { name: "确认分镜" })).toBeVisible();
+    await director.getByRole("button", { name: "保存并确认顺序" }).click();
+    await expect(director.getByRole("button", { name: "顺序已确认" })).toBeDisabled();
+    await director.getByRole("button", { name: "定位画布", exact: true }).click();
+    await expect(secondShotNode).toHaveClass(/selected/);
+    const savedProduction: Project = await (
+      await context.request.get(`/api/canvases/${canvasA.id}`, { headers })
+    ).json();
+    const episode = savedProduction.document.director;
+    assert.ok(episode);
+    assert.equal(episode.script_id, docA.id);
+    assert.equal(episode.order_basis, await directorBasis(directorShotIds(savedProduction.document.shots ?? [], episode)));
+    const secondId = await secondShotNode.getAttribute("data-id");
+    assert.ok(secondId && savedProduction.document.director?.shot_ids.includes(secondId));
+    assert.ok(savedProduction.document.edges.some((edge) => edge.source === s02Grid.id && edge.target === secondId));
+    const assetImage = page.locator(`.react-flow__node[data-id="${s02Grid.id}"]`);
+    await assetImage.click();
+    await expect(assetImage).toHaveClass(/selected/);
+    await directorTab.click();
+    await expect(director.getByRole("button", { name: /^S01-02/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(director.getByRole("heading", { name: "确认分镜" })).toBeVisible();
+    await page.setViewportSize({ width: 375, height: 812 });
+    await expect(director.getByRole("heading", { name: "确认分镜" })).toBeVisible();
+    await expect.poll(async () => {
+      const switcher = await page.locator(".fm-surface-switcher").boundingBox();
+      const desk = await director.boundingBox();
+      return Boolean(switcher && desk && desk.y >= switcher.y + switcher.height - 2);
+    }).toBe(true);
+    await page.setViewportSize({ width: 1360, height: 860 });
+    await director.getByRole("button", { name: "在文档中编辑" }).click();
+    await expect(highlightedBeat).toBeVisible();
+
     // Switch to Source mode, open S01-02 video node in right split, jump again, and ensure typing does NOT reset cursor
     await page.getByRole("button", { name: "原文", exact: true }).click();
     const videoNodeTreeRow = page
@@ -913,8 +954,36 @@ try {
     assert.match(serverDocAfter2Reopens.body_md, /> 协作者远端备注/);
     assert.doesNotMatch(serverDocAfter2Reopens.body_md, new RegExp(conflictMarker));
 
+    // A second session advances the canvas revision before a new episode is synced.
+    // The script must already be committed when the canvas PUT conflicts, and the local episode must stay recoverable.
+    await page.getByRole("treeitem").filter({ hasText: fileBName }).dblclick();
+    await expect(page.getByRole("tab", { selected: true }).filter({ hasText: fileBName })).toBeVisible();
+    const beforeDirectorConflict: Project = await (
+      await context.request.get(`/api/canvases/${canvasA.id}`, { headers })
+    ).json();
+    const competingSave = await context.request.put(`/api/canvases/${canvasA.id}/document`, {
+      headers,
+      data: { title: `${beforeDirectorConflict.title}·协作者`, document: beforeDirectorConflict.document, expected_revision: beforeDirectorConflict.revision },
+    });
+    assert.equal(competingSave.status(), 200, await competingSave.text());
+    await page.getByRole("button", { name: "用于本集制作" }).click();
+    await expect(directorSync).toBeVisible();
+    const directorCanvasConflict = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().includes(`/api/canvases/${canvasA.id}/document`));
+    await directorSync.getByRole("button", { name: "保存并进入导演台" }).click();
+    assert.equal((await directorCanvasConflict).status(), 409);
+    await expect(directorSync.getByRole("alert")).toContainText("剧本已保存，画布保存失败");
+    await expect(page.getByRole("tab", { name: "文档", exact: true })).toHaveAttribute("aria-selected", "true");
+    const stampedDocB = await (await context.request.get(`/api/workspace/scripts/${docB.id}`, { headers })).json();
+    assert.match(stampedDocB.body_md, /<!-- fm-shot:sh_[a-f0-9]+ -->/);
+    const recoveredEpisode = await page.evaluate(({ id }) => {
+      const key = Object.keys(localStorage).find((item) => item.startsWith("fm-canvas-") && item.includes(id));
+      return key ? JSON.parse(localStorage.getItem(key) ?? "null")?.draft?.document?.director : null;
+    }, { id: canvasA.id });
+    assert.equal(recoveredEpisode?.script_id, docB.id);
+    assert.equal(recoveredEpisode?.script_revision, stampedDocB.revision);
+
     console.log(
-      "PASS script-workspace-fusion-browser: <=760px layout, directory-rename child alignment, slow-search invalidation, draft-safe search/replace, rich+source jump, and 2x close/reopen conflict retention verified",
+      "PASS script-workspace-fusion-browser: mobile layout, directory rename, search and replace, rich and source jumps, director navigation and order, and script and director draft conflict recovery",
     );
     await page.close();
   } finally {

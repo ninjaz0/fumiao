@@ -188,7 +188,8 @@ export function draftEquals(a: Draft, b: Draft): boolean {
     da.edges.length !== db.edges.length ||
     da.loudnorm !== db.loudnorm ||
     da.bgm_applied_job !== db.bgm_applied_job ||
-    !shallowJobValueEqual(da.bgm ?? null, db.bgm ?? null)
+    !shallowJobValueEqual(da.bgm ?? null, db.bgm ?? null) ||
+    !shallowJobValueEqual(da.director, db.director)
   ) {
     return false;
   }

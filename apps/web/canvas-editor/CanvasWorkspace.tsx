@@ -1,4 +1,5 @@
 import type { CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
+import { directorBasis, directorShotIds } from "@fumiao/web-compat/director.js";
 import { PluginNodeForm, PluginNodePorts, PluginNodeOutputs } from "./PluginNode";
 import {
   evaluateFormConstraints,
@@ -114,6 +115,7 @@ import {
   linkedValue,
   type CanvasClipboard,
   type CanvasNode,
+  type Doc,
   type Kind,
   type Project,
   type Job,
@@ -143,6 +145,7 @@ import { GridCropModal } from "./GridCropModal";
 import { PrecheckCostModal } from "./PrecheckCostModal";
 import { ReferencePromptInput } from "./ReferencePromptInput";
 import { FloatingCanvasAgent } from "./FloatingCanvasAgent";
+import { DirectorDesk } from "./DirectorDesk";
 import {
   ScriptWorkspace,
   type ScriptWorkspaceHandle,
@@ -151,7 +154,9 @@ import { scriptApi, type WorkspaceCanvasSummary } from "./script-api";
 import {
   buildCanvasLocalBackup,
   createCanvasRunsTracker,
+  detachScriptShotClaim,
   resolveChatReplaceTarget,
+  scriptSourceJump,
 } from "./script-fusion";
 import { SkillEditorModal } from "./SkillEditorModal";
 import { captureFrame } from "./videoFrame";
@@ -817,7 +822,9 @@ export function CanvasWorkspace({
   } | null>(null);
   const [showCinePanel, setShowCinePanel] = useState(false);
   const [pendingBgmJobId, setPendingBgmJobId] = useState<number | null>(null);
-  const [surface, setSurface] = useState<"canvas" | "document">("canvas");
+  const [surface, setSurface] = useState<"canvas" | "document" | "director">("canvas");
+  const [directorShotId, setDirectorShotId] = useState<string | null>(null);
+  const [directorMounted, setDirectorMounted] = useState(false);
   const [scriptWorkspaceMounted, setScriptWorkspaceMounted] = useState(false);
   const [agentDock, setAgentDock] = useState(false);
   const [agentTab, setAgentTab] = useState<"chat" | "proposals">("chat");
@@ -833,8 +840,46 @@ export function CanvasWorkspace({
     anchor?: string;
     shotId?: string;
     line?: number;
+    directorPreview?: boolean;
     seq: number;
   } | null>(null);
+  const openScript = (request?: Omit<NonNullable<typeof scriptJumpReq>, "seq">) => {
+    setScriptWorkspaceMounted(true);
+    setSurface("document");
+    if (request) setScriptJumpReq((previous) => ({ ...request, seq: (previous?.seq ?? 0) + 1 }));
+  };
+  const openDirector = (request?: { docId: string; nodeId?: string }) => {
+    const current = doc.ref.current.document;
+    const production = current.director;
+    if (production && (!request || production.script_id === request.docId)) {
+      const members = directorShotIds(current.shots ?? [], production);
+      setDirectorShotId((previous) => {
+        const target = request?.nodeId ?? previous;
+        return target && members.includes(target) ? target : members[0] ?? null;
+      });
+    }
+    setDirectorMounted(true);
+    setSurface("director");
+  };
+  const openCanvasNode = (nodeId: string) => {
+    setSurface("canvas");
+    selectOne(nodeId);
+    requestAnimationFrame(() => focusNodes([nodeId]));
+  };
+  const changeDirectorDocument = (updater: (current: Doc) => Doc) => {
+    doc.change((draft) => ({ ...draft, document: updater(draft.document) }));
+  };
+  const confirmDirectorOrder = async () => {
+    const current = doc.ref.current.document;
+    const production = current.director;
+    if (!production) return;
+    const basis = await directorBasis(directorShotIds(current.shots ?? [], production));
+    changeDirectorDocument((latest) => {
+      if (latest !== current) throw new Error("片单已更新，请重新确认顺序。");
+      return { ...latest, director: { ...production, order_basis: basis } };
+    });
+    await doc.flush();
+  };
   const [projectCanvases, setProjectCanvases] = useState<
     WorkspaceCanvasSummary[]
   >([]);
@@ -1949,7 +1994,7 @@ export function CanvasWorkspace({
       source.nodes.map((n) => [n.id, crypto.randomUUID()]),
     );
     const copied = source.nodes.map((n) => ({
-      ...structuredClone(n),
+      ...detachScriptShotClaim(structuredClone(n)),
       id: mapping.get(n.id)!,
       x: n.x + dx,
       y: n.y + dy,
@@ -2075,7 +2120,7 @@ export function CanvasWorkspace({
       )
         return;
       if (
-        surface === "document" ||
+        surface !== "canvas" ||
         targetEl?.closest?.(".fm-doc-workspace,.fm-floating-agent")
       ) {
         if (e.key === "Escape") {
@@ -3306,7 +3351,7 @@ export function CanvasWorkspace({
       <div
         className="fm-surface-switcher"
         role="tablist"
-        aria-label="画布与剧本文档切换"
+        aria-label="画布、文档与导演台"
       >
         <button
           type="button"
@@ -3323,13 +3368,14 @@ export function CanvasWorkspace({
           role="tab"
           aria-selected={surface === "document"}
           className={surface === "document" ? "active" : ""}
-          onClick={() => {
-            setScriptWorkspaceMounted(true);
-            setSurface("document");
-          }}
+          onClick={() => openScript()}
         >
           <BookOpen size={14} />
           文档
+        </button>
+        <button type="button" role="tab" aria-selected={surface === "director"} className={surface === "director" ? "active" : ""} onClick={() => openDirector()}>
+          <Clapperboard size={14} />
+          导演台
         </button>
       </div>
       {selected.length >= 2 && (
@@ -3545,37 +3591,20 @@ export function CanvasWorkspace({
             label="聚焦节点"
             onClick={() => focusNodes([single.id])}
           />
-          {typeof single.extra_params?.script_doc_id === "string" &&
-            Boolean(single.extra_params.script_doc_id) && (
-              <IconButton
-                icon={BookOpen}
-                label="查看源剧本"
-                onClick={() => {
-                  const docId = String(single.extra_params!.script_doc_id);
-                  const line =
-                    typeof single.extra_params?.script_line === "number"
-                      ? single.extra_params.script_line
-                      : undefined;
-                  const anchor =
-                    typeof single.extra_params?.script_anchor === "string"
-                      ? single.extra_params.script_anchor
-                      : undefined;
-                  const shotId =
-                    typeof single.extra_params?.script_shot_id === "string"
-                      ? single.extra_params.script_shot_id
-                      : undefined;
-                  setScriptWorkspaceMounted(true);
-                  setSurface("document");
-                  setScriptJumpReq((prev) => ({
-                    docId,
-                    anchor,
-                    shotId,
-                    line,
-                    seq: (prev?.seq ?? 0) + 1,
-                  }));
-                }}
-              />
-            )}
+          {scriptSourceJump(single) && (
+            <IconButton
+              icon={BookOpen}
+              label="查看源剧本"
+              onClick={() => {
+                const request = scriptSourceJump(single);
+                if (request) openScript(request);
+              }}
+            />
+          )}
+          {doc.value.document.director?.shot_ids.includes(single.id) && (
+            <IconButton icon={Clapperboard} label="在导演台查看"
+              onClick={() => openDirector({ docId: doc.value.document.director!.script_id, nodeId: single.id })} />
+          )}
           <span className="menu-trigger">
             <IconButton
               icon={Palette}
@@ -5280,6 +5309,23 @@ export function CanvasWorkspace({
           />
         </Modal>
       )}
+      {directorMounted && (
+        <DirectorDesk
+          active={surface === "director"}
+          document={doc.value.document}
+          activeShotId={directorShotId}
+          onSelectShot={setDirectorShotId}
+          onChooseScript={() => openScript(activeScript ? { docId: activeScript.id, directorPreview: true } : undefined)}
+          onEditSource={openScript}
+          onUpdateScript={(docId) => openScript({ docId, directorPreview: true })}
+          onFocusCanvas={(nodeId) => {
+            if (viewMode === "list") setViewMode("split");
+            openCanvasNode(nodeId);
+          }}
+          onChangeDocument={changeDirectorDocument}
+          onConfirmOrder={confirmDirectorOrder}
+        />
+      )}
       {(surface === "document" || scriptWorkspaceMounted) && (
         <ScriptWorkspace
           ref={scriptWorkspaceRef}
@@ -5297,17 +5343,17 @@ export function CanvasWorkspace({
           defaultImageModel={defaultImageModel}
           externalOpenRequest={scriptJumpReq}
           onActiveScriptChange={setActiveScript}
-          onChangeCanvasDoc={(updater) =>
-            doc.change((d) => ({ ...d, document: updater(d.document) }))
-          }
+          onChangeCanvasDoc={changeDirectorDocument}
+          flushCanvas={doc.flush}
+          onOpenDirector={openDirector}
+          onOpenAssistant={() => {
+            setAgentTab("chat");
+            setAgentDock(true);
+          }}
           onEditCanvasNode={(nodeId, patch, history) =>
             edit(nodeId, patch, history)
           }
-          onFocusCanvasNode={(nodeId) => {
-            setSurface("canvas");
-            selectOne(nodeId);
-            requestAnimationFrame(() => focusNodes([nodeId]));
-          }}
+          onFocusCanvasNode={openCanvasNode}
           onSwitchToCanvas={(focusIds) => {
             setSurface("canvas");
             if (focusIds?.length) {
