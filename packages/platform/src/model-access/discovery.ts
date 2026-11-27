@@ -64,6 +64,22 @@ const safeText = (v: unknown, limit = 512): v is string =>
   v.trim() === v &&
   !/[\u0000-\u001f\u007f]/.test(v);
 type ContainsCredential = (text: string) => boolean;
+const decimalNotation = new Intl.NumberFormat("en-US", {
+  useGrouping: false,
+  maximumSignificantDigits: 21,
+});
+function safeNumber(
+  value: unknown,
+  containsCredential: ContainsCredential,
+): value is number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return false;
+  const text = String(value);
+  // JSONB expands scientific notation on disk; check both persisted and wire spellings.
+  return (
+    !containsCredential(text) &&
+    (!text.includes("e") || !containsCredential(decimalNotation.format(value)))
+  );
+}
 function strings(value: unknown, containsCredential: ContainsCredential) {
   if (!Array.isArray(value)) return undefined;
   return value
@@ -73,18 +89,39 @@ function strings(value: unknown, containsCredential: ContainsCredential) {
     )
     .slice(0, 128);
 }
+const descriptorFields = new Map<string, readonly string[]>([
+  ["enum", ["type", "values"]],
+  ["range", ["type", "min", "max"]],
+  ["boolean", ["type"]],
+]);
 function parameterDefinition(
   value: unknown,
   containsCredential: ContainsCredential,
 ): Descriptor | undefined {
   const item = obj(value);
+  if (!Array.isArray(value)) {
+    const fields =
+      typeof item.type === "string"
+        ? descriptorFields.get(item.type)
+        : undefined;
+    if (
+      !fields ||
+      Object.keys(item).some((key) => {
+        if (
+          (key === "description" || key === "title") &&
+          typeof item[key] === "string"
+        )
+          return false;
+        return !fields.includes(key);
+      })
+    )
+      return;
+  }
   if (item.type === "boolean") return { type: "boolean" };
   if (
     item.type === "range" &&
-    typeof item.min === "number" &&
-    typeof item.max === "number" &&
-    Number.isFinite(item.min) &&
-    Number.isFinite(item.max) &&
+    safeNumber(item.min, containsCredential) &&
+    safeNumber(item.max, containsCredential) &&
     item.min <= item.max
   )
     return { type: "range", min: item.min, max: item.max };
@@ -100,7 +137,7 @@ function parameterDefinition(
     !options.every(
       (v) =>
         (safeText(v, 128) && !containsCredential(v)) ||
-        (typeof v === "number" && Number.isFinite(v)),
+        safeNumber(v, containsCredential),
     )
   )
     return;
@@ -171,17 +208,26 @@ function parseEntry(
   };
   const limit = obj(row.top_provider).max_completion_tokens;
   if (
-    typeof row.context_length === "number" &&
+    safeNumber(row.context_length, containsCredential) &&
     Number.isSafeInteger(row.context_length) &&
     row.context_length > 0
   )
     parameters.context_length = row.context_length;
-  if (typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0)
+  if (
+    safeNumber(limit, containsCredential) &&
+    Number.isSafeInteger(limit) &&
+    limit > 0
+  )
     parameters.max_completion_tokens = limit;
   if (Array.isArray(row.supported_durations)) {
     parameters.durations = [
       ...new Set(
-        row.supported_durations.filter((d) => Number.isSafeInteger(d) && d > 0),
+        row.supported_durations.filter(
+          (d) =>
+            safeNumber(d, containsCredential) &&
+            Number.isSafeInteger(d) &&
+            d > 0,
+        ),
       ),
     ].slice(0, 256);
     parameters.automatic_duration = row.supported_durations.includes(-1);

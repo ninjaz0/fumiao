@@ -853,3 +853,123 @@ test("草稿有效参数排除仍待确认的目录约束", async (t) => {
   assert.deepEqual(draft.parameters.unconfirmed_parameters, ["seed"]);
   assert.equal(draft.parameters.definitions?.seed, undefined);
 });
+
+test("全数字 Bearer 密钥反射到上游数值时不会存入目录", async (t) => {
+  const { ModelAccessConnections } =
+    await import("@fumiao/platform/model-access/connections.js");
+  const f = await databaseFixture();
+  t.after(f.cleanup);
+  const key = "13579";
+  const numeric = Number(key);
+  const service = new ModelAccessConnections(f.db, f.p.vault, async () => ({
+    status: 200,
+    contentType: "application/json",
+    body: Buffer.from(
+      JSON.stringify({
+        data: [
+          {
+            id: "usable",
+            output_modalities: ["text"],
+            supported_parameters: {
+              plain: [numeric],
+              exponential: [1.3579e22],
+              wrapped: { type: "enum", values: [10 * numeric + 2] },
+              bounded: { type: "range", min: 0, max: numeric },
+              safe: { type: "enum", values: [3, 4] },
+            },
+            context_length: numeric,
+            top_provider: { max_completion_tokens: numeric },
+            supported_durations: [4, numeric],
+          },
+        ],
+      }),
+    ),
+  }));
+  const conn = await service.create({
+    base_url: "https://1.1.1.1/v1",
+    api_key: key,
+  });
+  const result = await service.discover(conn.id, { expected_revision: 1 });
+  const candidate = result.candidates[0];
+  assert.equal(candidate.upstream_id, "usable");
+  assert.deepEqual(candidate.parameters.definitions, {
+    safe: { type: "enum", values: [3, 4] },
+  });
+  assert.deepEqual(
+    candidate.parameters.unconfirmed_parameters?.slice().sort(),
+    ["bounded", "exponential", "plain", "wrapped"],
+  );
+  assert.deepEqual(candidate.parameters.durations, [4]);
+  assert.equal(candidate.parameters.context_length, undefined);
+  assert.equal(candidate.parameters.max_completion_tokens, undefined);
+  const row = (
+    await f.db.query(
+      "SELECT snapshots::text,candidates::text FROM model_access_discoveries WHERE connection_revision_id=$1",
+      [conn.revision_id],
+    )
+  ).rows[0];
+  for (const value of [
+    row.snapshots,
+    row.candidates,
+    result.candidates,
+    (await service.view()).discoveries[0].candidates,
+  ])
+    assert.equal(JSON.stringify(value).includes(key), false);
+
+  const single = await service.create({
+    base_url: "https://1.1.1.1/v1",
+    api_key: "1",
+  });
+  const one = await service.discover(single.id, { expected_revision: 1 });
+  assert.equal(one.revision, 1);
+  assert.equal(one.candidates[0].upstream_id, "usable");
+});
+
+test("额外的范围步长、枚举和布尔约束留待确认，说明文本保留原有能力", async () => {
+  const { discoverModels } =
+    await import("@fumiao/platform/model-access/discovery.js");
+  const values = {
+    stepped: { type: "range", min: 1, max: 9, step: 2 },
+    conditional: {
+      type: "enum",
+      values: ["small", "large"],
+      if: { size: "large" },
+    },
+    onlyFalse: { type: "boolean", const: false },
+    count: { type: "range", min: 1, max: 4, description: "Output count" },
+    quality: { type: "enum", values: ["low", "high"], title: "Quality" },
+    audio: { type: "boolean" },
+  };
+  const result = await discoverModels(
+    "https://1.1.1.1/v1",
+    async () => ({
+      status: 200,
+      contentType: "application/json",
+      body: Buffer.from(
+        JSON.stringify({
+          data: [
+            {
+              id: "clip",
+              output_modalities: ["video"],
+              supported_durations: [4],
+              supported_parameters: values,
+            },
+          ],
+        }),
+      ),
+    }),
+    () => false,
+  );
+  const item = result.candidates[0];
+  assert.deepEqual(item.parameters.definitions, {
+    count: { type: "range", min: 1, max: 4 },
+    quality: { type: "enum", values: ["low", "high"] },
+    audio: { type: "boolean" },
+  });
+  assert.deepEqual(item.parameters.unconfirmed_parameters?.slice().sort(), [
+    "conditional",
+    "onlyFalse",
+    "stepped",
+  ]);
+  assert.equal(item.metadata_status, "needs_confirmation");
+});
