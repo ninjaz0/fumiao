@@ -615,10 +615,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       )
         closeMenu();
     };
+    const rail = shell.current?.querySelector(".side");
+    const railResize = new ResizeObserver(positionMenu);
+    if (rail) railResize.observe(rail);
     window.addEventListener("resize", positionMenu);
     document.addEventListener("pointerdown", outside);
     document.addEventListener("scroll", positionMenu, true);
     return () => {
+      railResize.disconnect();
       window.removeEventListener("resize", positionMenu);
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("scroll", positionMenu, true);

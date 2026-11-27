@@ -339,20 +339,46 @@
   font-weight: 500;
 }
 
-/* Layout commits once when the navigation rail changes width. */
+.shell {
+  --rail-duration: 240ms;
+  --rail-ease: cubic-bezier(0.28, 0.42, 0.28, 1);
+  --rail-motion: var(--rail-duration) var(--rail-ease);
+  --rail-label-duration: 150ms;
+  --rail-label-delay: 56ms;
+}
+.shell.collapsed {
+  --rail-duration: 190ms;
+  --rail-label-duration: 90ms;
+  --rail-label-delay: 0ms;
+}
 .shell.collapsed .side,
 .shell .side {
-  transition: background-color var(--motion-feedback) var(--motion-ease);
+  transition:
+    width var(--rail-motion),
+    min-width var(--rail-motion),
+    background-color var(--rail-motion);
 }
+/* Fixed work surfaces follow the width of the rail on desktop. */
 .shell :is(.floating-composer, .detail-view),
 .shell.collapsed :is(.floating-composer, .detail-view) {
-  transition: none;
+  transition: left var(--rail-motion);
 }
 .side :is(.nav-label, .brand > span) {
-  transition: opacity var(--motion-feedback) var(--motion-ease);
+  translate: 0 0;
+  transition:
+    opacity var(--rail-label-duration) var(--motion-ease) var(--rail-label-delay),
+    translate var(--rail-label-duration) var(--motion-ease) var(--rail-label-delay),
+    visibility var(--rail-label-duration) linear var(--rail-label-delay);
+}
+.collapsed .side :is(.nav-label, .brand > span) {
+  translate: -4px 0;
 }
 
 @media (max-width: 760px) {
+  .shell :is(.floating-composer, .detail-view),
+  .shell.collapsed :is(.floating-composer, .detail-view) {
+    transition: none;
+  }
   .shell > .rail-backdrop {
     position: fixed;
     inset: 0 0 0 64px;
@@ -361,17 +387,18 @@
     opacity: 0;
     pointer-events: none;
     transition:
-      opacity var(--motion-exit) var(--motion-ease),
-      display var(--motion-exit) allow-discrete;
+      left var(--rail-motion),
+      opacity var(--rail-motion),
+      display var(--rail-duration) allow-discrete;
   }
-  .shell:not(.collapsed) > .rail-backdrop {
-    inset-inline-start: 64px;
+  .shell:not(.collapsed) > button.rail-backdrop {
+    left: 240px;
     opacity: 1;
     pointer-events: auto;
-    transition-duration: var(--motion-feedback);
   }
   @starting-style {
-    .shell:not(.collapsed) > .rail-backdrop {
+    .shell:not(.collapsed) > button.rail-backdrop {
+      left: 64px;
       opacity: 0;
     }
   }
