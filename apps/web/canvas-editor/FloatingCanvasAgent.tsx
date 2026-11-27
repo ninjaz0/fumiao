@@ -1,7 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useState } from "react";
 import {
   AtSign,
-  BookOpen,
   FileText,
   Layers,
   MessageSquare,
@@ -40,7 +39,7 @@ export function FloatingCanvasAgent({
   getCanvasRevision,
   onApplyChatToCanvas,
   onApproveProposal,
-  onOpenSkills,
+  onPendingCountChange,
   onNotify,
 }: {
   visible: boolean;
@@ -70,7 +69,7 @@ export function FloatingCanvasAgent({
     options?: ApplyOptions,
   ) => Promise<void>;
   onApproveProposal: (proposalId: string) => Promise<{ conflict?: string }>;
-  onOpenSkills: () => void;
+  onPendingCountChange?: (count: number) => void;
   onNotify: (msg: string) => void;
 }) {
   const [docked, setDocked] = useState(true);
@@ -85,7 +84,7 @@ export function FloatingCanvasAgent({
     { key: string; kind: "script" | "node"; id: string; label: string; snippet: string }[]
   >([]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onDockedWidthChange(visible && docked ? width : 0);
   }, [visible, docked, width, onDockedWidthChange]);
 
@@ -226,15 +225,6 @@ export function FloatingCanvasAgent({
         </div>
 
         <div className="fm-floating-agent-btns">
-          <button
-            type="button"
-            className="icon-button"
-            title="管理工作区 SKILL.md 技能包"
-            aria-label="Skills"
-            onClick={onOpenSkills}
-          >
-            <BookOpen size={15} />
-          </button>
           <button
             type="button"
             className="icon-button"
@@ -437,7 +427,7 @@ export function FloatingCanvasAgent({
             projectId={projectId}
             canEditPolicy={canEditPolicy}
             onApproveProposal={onApproveProposal}
-            onOpenSkills={onOpenSkills}
+            onPendingCountChange={onPendingCountChange}
             onClose={onClose}
           />
         </div>

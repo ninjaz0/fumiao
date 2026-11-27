@@ -17,7 +17,6 @@ export const adminSettingsTabs = [
 
 const settingsTabs = [
   "profile",
-  "general",
   "credits",
   "budgets",
   "apiTokens",
@@ -40,13 +39,13 @@ export function resolvePluginTab(
   if (tab === "gpu") {
     if (!pages && hasLegacyPanel) return "gpu";
     const first = pages?.find((page) => page.legacy);
-    return first ? pluginTab(first) : "general";
+    return first ? pluginTab(first) : "profile";
   }
   if (
     tab.startsWith("plugin:") &&
     !pages?.some((page) => pluginTab(page) === tab)
   )
-    return "general";
+    return "profile";
   return tab;
 }
 export type ExtensionTab = `extension/${string}/${string}`;

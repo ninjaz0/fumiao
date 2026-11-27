@@ -491,7 +491,6 @@ export default function ProjectList({
             {workspaceName ? `「${workspaceName}」` : "可访问的工作区"}。
           </p>
         )}
-        <SeriesTree workspace={workspace} />
         <div className="project-list-heading">
           <h1>画布</h1>
           <PluginImport
@@ -517,6 +516,7 @@ export default function ProjectList({
             {opening?.kind === "create" ? "正在新建…" : "新建画布"}
           </button>
         </div>
+        <SeriesTree workspace={workspace} />
         <div className="canvas-list-toolbar">
           <div>
             {(projects.length > 0 || search) && (

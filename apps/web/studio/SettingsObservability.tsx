@@ -137,8 +137,7 @@ export function SettingsObservability({
         <div>
           <h2>运营可观测大盘</h2>
           <p className="console-description">
-            监控全平台渠道成功率、P50/P95 耗时、营收与上游成本毛利，并支持对异常{" "}
-            <code>uncertain</code> 任务一键人工核对退款。
+            监控全平台渠道成功率、P50/P95 耗时、营收与上游成本毛利，并支持对状态未确认的异常任务一键人工核对退款。
           </p>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
@@ -212,9 +211,8 @@ export function SettingsObservability({
               </small>
             </div>
             <div className="ledger-card">
-              <small>安全改写 / 在线 GPU</small>
+              <small>在线 GPU 节点</small>
               <div style={{ fontSize: 22, fontWeight: 700 }}>
-                {summary.totals.rewritten_jobs} /{" "}
                 {summary.totals.online_gpu_nodes}
               </div>
               <small>已配对 GPU 共 {summary.totals.total_gpu_nodes} 台</small>
@@ -290,7 +288,7 @@ export function SettingsObservability({
       )}
 
       <section className="ledger-card">
-        <h3>待人工核对任务（uncertain · {uncertain.length}）</h3>
+        <h3>待人工核对任务（{uncertain.length}）</h3>
         {uncertain.length === 0 ? (
           <p className="console-description">当前无滞留的未确认任务。</p>
         ) : (
@@ -319,6 +317,7 @@ export function SettingsObservability({
                 </div>
                 <button
                   type="button"
+                  className="secondary"
                   disabled={reconciling === j.id}
                   onClick={() => void reconcile(j.id)}
                 >

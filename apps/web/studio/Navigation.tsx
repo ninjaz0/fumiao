@@ -8,14 +8,14 @@ import {
   type StudioState,
 } from "./state";
 
-const nav = [
+export const primaryDestinations = [
   ["home", "创作", "create"],
   ["canvas", "画布", "canvas"],
   ["chat", "对话", "chat"],
   ["library", "资产", "library"],
   ["queue", "任务队列", "queue"],
 ] as const;
-export type Destination = (typeof nav)[number][0] | PluginPageEntry["key"];
+export type Destination = (typeof primaryDestinations)[number][0] | PluginPageEntry["key"];
 export type SidebarMenu = "workspaces" | "account";
 export type Menu = SidebarMenu | "detail-more";
 
@@ -74,7 +74,7 @@ export function Sidebar({
   const space = state.workspaces.find(({ id }) => id === state.workspace_id)!;
   const name = displayName(state.me);
   const destinations = [
-    ...nav,
+    ...primaryDestinations,
     ...(state.studio_pages ?? []).map(p => [p.key, p.title, p.icon] as const),
     ...(page === "settings" ? [["settings", "设置", "settings"] as const] : []),
   ];

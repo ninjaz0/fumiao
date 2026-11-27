@@ -93,43 +93,6 @@
     border-color: color-mix(in srgb, var(--text) 18%, transparent);
   }
 }
-.mobile-asset-composer .asset-composer-toggle {
-  display: none;
-}
-@media (max-width: 760px) {
-  .assets-view:has(+ .mobile-asset-composer:not([hidden])) {
-    padding-bottom: 72px;
-  }
-  .assets-view:has(+ .mobile-asset-composer[data-expanded="true"]:not([hidden])) {
-    padding-bottom: 16px;
-  }
-  .mobile-asset-composer:not([data-expanded="true"]) {
-    pointer-events: none;
-  }
-  .mobile-asset-composer:not([data-expanded="true"]) #asset-composer-panel {
-    display: none;
-  }
-  .mobile-asset-composer[data-expanded="true"] {
-    position: static;
-    margin: 0 16px 12px;
-  }
-  .mobile-asset-composer .asset-composer-toggle {
-    display: block;
-    min-height: 44px;
-    margin-left: auto;
-    padding: 0 14px;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    color: var(--text);
-    background: var(--composer);
-    box-shadow: 0 1px 8px rgb(0 0 0 / 8%);
-    pointer-events: auto;
-  }
-  .mobile-asset-composer[data-expanded="true"] .asset-composer-toggle {
-    margin-bottom: 8px;
-  }
-}
-
 /* 页面标题与空状态 */
 .page-heading {
   gap: 12px;
@@ -288,25 +251,6 @@
   color: var(--danger);
   font-size: 13px;
 }
-@media (max-width: 760px) {
-  #modal.asset-preview-modal {
-    padding: 20px;
-  }
-  .preview-dialog .h3-media-preview video {
-    max-height: min(44dvh, 340px);
-  }
-}
-@media (max-width: 560px) {
-  .asset-actions {
-    right: 6px;
-    gap: 3px;
-  }
-  .asset-actions button,
-  .asset-actions a {
-    width: 26px;
-    height: 26px;
-  }
-}
 
 /* 对话无可用模型空态引导 */
 .fm-chat-empty-actions {
@@ -339,70 +283,48 @@
   font-weight: 500;
 }
 
-.shell {
-  --rail-duration: 240ms;
-  --rail-ease: cubic-bezier(0.28, 0.42, 0.28, 1);
-  --rail-motion: var(--rail-duration) var(--rail-ease);
-  --rail-label-duration: 150ms;
-  --rail-label-delay: 56ms;
-}
-.shell.collapsed {
-  --rail-duration: 190ms;
-  --rail-label-duration: 90ms;
-  --rail-label-delay: 0ms;
-}
-.shell.collapsed .side,
-.shell .side {
-  transition:
-    width var(--rail-motion),
-    min-width var(--rail-motion),
-    background-color var(--rail-motion);
-}
-/* Fixed work surfaces follow the width of the rail on desktop. */
-.shell :is(.floating-composer, .detail-view),
-.shell.collapsed :is(.floating-composer, .detail-view) {
-  transition: left var(--rail-motion);
-}
-.side :is(.nav-label, .brand > span) {
-  translate: 0 0;
-  transition:
-    opacity var(--rail-label-duration) var(--motion-ease) var(--rail-label-delay),
-    translate var(--rail-label-duration) var(--motion-ease) var(--rail-label-delay),
-    visibility var(--rail-label-duration) linear var(--rail-label-delay);
-}
-.collapsed .side :is(.nav-label, .brand > span) {
-  translate: -4px 0;
-}
-
-@media (max-width: 760px) {
-  .shell :is(.floating-composer, .detail-view),
-  .shell.collapsed :is(.floating-composer, .detail-view) {
-    transition: none;
+@media (min-width: 761px) {
+  .shell {
+    --rail-duration: 240ms;
+    --rail-ease: cubic-bezier(0.28, 0.42, 0.28, 1);
+    --rail-motion: var(--rail-duration) var(--rail-ease);
+    --rail-label-duration: 150ms;
+    --rail-label-delay: 56ms;
   }
-  .shell > .rail-backdrop {
-    position: fixed;
-    inset: 0 0 0 64px;
-    z-index: 19;
-    background: rgb(0 0 0 / 22%);
-    opacity: 0;
-    pointer-events: none;
+  .shell.collapsed {
+    --rail-duration: 190ms;
+    --rail-label-duration: 90ms;
+    --rail-label-delay: 0ms;
+  }
+  #app .shell.collapsed .side,
+  #app .shell .side {
     transition:
-      left var(--rail-motion),
-      opacity var(--rail-motion),
-      display var(--rail-duration) allow-discrete;
+      width var(--rail-motion),
+      min-width var(--rail-motion),
+      background-color var(--rail-motion);
   }
-  .shell:not(.collapsed) > button.rail-backdrop {
-    left: 240px;
-    opacity: 1;
-    pointer-events: auto;
+  /* Fixed work surfaces follow the width of the rail on desktop. */
+  #app .shell :is(.floating-composer, .detail-view),
+  #app .shell.collapsed :is(.floating-composer, .detail-view) {
+    transition: left var(--rail-motion);
   }
-  @starting-style {
-    .shell:not(.collapsed) > button.rail-backdrop {
-      left: 64px;
-      opacity: 0;
-    }
+  #app .side :is(.nav-label, .brand > span) {
+    translate: 0 0;
+    transition:
+      opacity var(--rail-label-duration) var(--motion-ease) var(--rail-label-delay),
+      translate var(--rail-label-duration) var(--motion-ease) var(--rail-label-delay),
+      visibility var(--rail-label-duration) linear var(--rail-label-delay);
+  }
+  #app .collapsed .side :is(.nav-label, .brand > span) {
+    translate: -4px 0;
+  }
+  #app .side .collapse-button {
+    transition:
+      opacity var(--rail-label-duration) var(--motion-ease) var(--rail-label-delay),
+      visibility var(--rail-label-duration) linear var(--rail-label-delay);
   }
 }
+/* The phone drawer and its backdrop live in studio-mobile.css. */
 
 #popover.popover {
   opacity: 0;
@@ -468,14 +390,6 @@ html #toast.visible {
 
 .detail-view :is(.video-stage, .audio-stage) > :is(.player, .detail-audio, .result-pending) {
   animation: fm-reveal var(--motion-enter) var(--motion-ease);
-}
-.mobile-asset-composer[data-expanded="true"] #asset-composer-panel {
-  transition: opacity var(--motion-feedback) var(--motion-ease);
-}
-@starting-style {
-  .mobile-asset-composer[data-expanded="true"] #asset-composer-panel {
-    opacity: 0;
-  }
 }
 .inline-reference > video,
 .inline-reference > .h3-audio-thumb {

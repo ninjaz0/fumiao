@@ -155,7 +155,8 @@ async function checkMobileSidebar(page: Page) {
   const viewport = page.viewportSize()!;
   await page.setViewportSize({ width: 375, height: 667 });
   const sidebar = page.locator(".side");
-  const expand = sidebar.getByRole("button", { name: "展开侧边栏" });
+  const expand = page.getByRole("button", { name: "打开导航" });
+  const railExpand = sidebar.getByRole("button", { name: "展开侧边栏" });
   const collapse = sidebar.getByRole("button", { name: "收起侧边栏" });
   const brand = sidebar.getByRole("button", { name: "去首页" });
   const account = sidebar.getByRole("button", { name: "账户" });
@@ -168,7 +169,10 @@ async function checkMobileSidebar(page: Page) {
     });
 
   await expect(expand).toBeVisible();
-  await settings(page);
+  // The drawer is off screen while closed; the top bar opens the account menu.
+  await page.locator(".mobile-account").click();
+  await page.locator('#popover [data-nav="settings"]').click();
+  await expect(page.locator(".settings-title h1")).toHaveText("设置");
   await setTab(page, "plugins");
   await expand.focus();
   await page.keyboard.press("Enter");
@@ -196,7 +200,7 @@ async function checkMobileSidebar(page: Page) {
       afterShiftTab: "账户",
       workspaceInert: true,
       closedOnEscape: true,
-      afterEscape: "展开侧边栏",
+      afterEscape: "打开导航",
     });
   await expect(workspace).toHaveJSProperty("inert", false);
 
@@ -221,7 +225,7 @@ async function checkMobileSidebar(page: Page) {
   await expect(expand).toBeFocused();
   await expect(workspace).toHaveJSProperty("inert", false);
   await page.setViewportSize(viewport);
-  await expand.click();
+  await railExpand.click();
   await page.keyboard.press("Escape");
   await expect(collapse).toBeVisible();
   await expect(workspace).toHaveJSProperty("inert", false);
@@ -819,7 +823,7 @@ export async function studioBrowser(
         page.waitForRequest((r) => new URL(r.url()).pathname === "/api/settings/prices" && r.method() === "PUT"),
         savePrice.click(),
       ]);
-      await setTab(page, "general");
+      await setTab(page, "profile");
       await setTab(page, "prices");
       await expect(priceInput).toHaveValue("10");
       await priceInput.fill("7");
@@ -827,7 +831,7 @@ export async function studioBrowser(
       releaseSave();
     }
     await expect(page.locator("#toast")).toHaveText("价格已保存");
-    await setTab(page, "general");
+    await setTab(page, "profile");
     await setTab(page, "prices");
     await expect(priceInput).toHaveValue("7");
     await expect(page.getByText("有未保存的修改", { exact: true })).toBeVisible();

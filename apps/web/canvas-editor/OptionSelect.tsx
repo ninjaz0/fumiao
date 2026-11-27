@@ -1,6 +1,14 @@
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { Check, ChevronDown, type LucideIcon } from "lucide-react";
 import type { SelectChoice } from "./composer-options";
+import { resolveOptionMenuFloatingRect } from "./types";
 
 export function OptionSelect<T extends string = string>({
   ariaLabel,
@@ -28,6 +36,8 @@ export function OptionSelect<T extends string = string>({
   variant?: "chip" | "field";
 }) {
   const [open, setOpen] = useState(false);
+  const [floatingStyle, setFloatingStyle] = useState<React.CSSProperties>({});
+  const [resolvedDir, setResolvedDir] = useState<"down" | "up">(direction);
   const listboxId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -37,14 +47,99 @@ export function OptionSelect<T extends string = string>({
     if (disabled) setOpen(false);
   }, [disabled]);
 
+  const updateFloatingPosition = useCallback(() => {
+    const trigger = buttonRef.current;
+    if (!trigger || typeof window === "undefined") return;
+    const rect = trigger.getBoundingClientRect();
+    const menuEl = menuRef.current;
+    const measuredWidth =
+      menuEl && menuEl.offsetWidth > 0 ? menuEl.offsetWidth : undefined;
+    const floating = resolveOptionMenuFloatingRect({
+      triggerRect: rect,
+      windowWidth: window.innerWidth,
+      windowHeight: window.innerHeight,
+      preferredDirection: direction,
+      align,
+      menuWidth: measuredWidth,
+    });
+    setResolvedDir(floating.direction);
+    setFloatingStyle({
+      position: "fixed",
+      left: floating.left,
+      right: "auto",
+      top: floating.top ?? "auto",
+      bottom: floating.bottom ?? "auto",
+      minWidth: floating.minWidth,
+      maxHeight: floating.maxHeight,
+    });
+  }, [align, direction]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updateFloatingPosition();
+    // Re-measure once menu width is laid out (and adjust if an ancestor sets a transformed containing block)
+    const menuEl = menuRef.current;
+    const trigger = buttonRef.current;
+    if (menuEl && trigger && typeof window !== "undefined") {
+      const floating = resolveOptionMenuFloatingRect({
+        triggerRect: trigger.getBoundingClientRect(),
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+        preferredDirection: direction,
+        align,
+        menuWidth: menuEl.offsetWidth || undefined,
+      });
+      menuEl.style.left = `${floating.left}px`;
+      menuEl.style.right = "auto";
+      menuEl.style.minWidth = `${floating.minWidth}px`;
+      menuEl.style.maxHeight = `${floating.maxHeight}px`;
+      if (floating.direction === "up") {
+        menuEl.style.top = "auto";
+        menuEl.style.bottom = `${floating.bottom!}px`;
+      } else {
+        menuEl.style.bottom = "auto";
+        menuEl.style.top = `${floating.top!}px`;
+      }
+      const actual = menuEl.getBoundingClientRect();
+      const dx = actual.left - floating.left;
+      if (Math.abs(dx) > 1) {
+        menuEl.style.left = `${Math.round(floating.left - dx)}px`;
+      }
+      if (floating.direction === "down" && floating.top !== undefined) {
+        const dy = actual.top - floating.top;
+        if (Math.abs(dy) > 1) {
+          menuEl.style.top = `${Math.round(floating.top - dy)}px`;
+        }
+      } else if (floating.direction === "up" && floating.bottom !== undefined) {
+        const expectedBottomEdge = window.innerHeight - floating.bottom;
+        const dy = actual.bottom - expectedBottomEdge;
+        if (Math.abs(dy) > 1) {
+          menuEl.style.bottom = `${Math.round(floating.bottom + dy)}px`;
+        }
+      }
+    }
+  }, [open, options.length, align, direction, updateFloatingPosition]);
+
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: PointerEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) {
-        setOpen(false);
+      const target = event.target as Node | null;
+      if (
+        target &&
+        (wrapRef.current?.contains(target) || menuRef.current?.contains(target))
+      ) {
+        return;
       }
+      setOpen(false);
+    };
+    const handleScroll = (event: Event) => {
+      const target = event.target as Node | null;
+      if (target && menuRef.current?.contains(target)) return;
+      updateFloatingPosition();
     };
     document.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("resize", updateFloatingPosition);
+    window.addEventListener("scroll", handleScroll, true);
     (
       menuRef.current?.querySelector<HTMLButtonElement>(
         '[aria-selected="true"]:not(:disabled)',
@@ -56,8 +151,10 @@ export function OptionSelect<T extends string = string>({
     )?.focus();
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("resize", updateFloatingPosition);
+      window.removeEventListener("scroll", handleScroll, true);
     };
-  }, [open]);
+  }, [open, updateFloatingPosition]);
 
   const handleBlur = (event: React.FocusEvent<HTMLDivElement>) => {
     const nextFocused = event.relatedTarget as Node | null;
@@ -114,7 +211,8 @@ export function OptionSelect<T extends string = string>({
   const menuClass = [
     "cv-menu",
     "fm-option-menu",
-    direction === "up" ? "fm-option-up" : "",
+    "fm-option-fixed",
+    resolvedDir === "up" ? "fm-option-up" : "",
     align === "right" ? "fm-option-right" : "",
   ]
     .filter(Boolean)
@@ -170,6 +268,7 @@ export function OptionSelect<T extends string = string>({
           id={listboxId}
           ref={menuRef}
           className={menuClass}
+          style={floatingStyle}
           role="listbox"
           aria-label={ariaLabel}
           tabIndex={-1}
