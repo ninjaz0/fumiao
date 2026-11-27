@@ -14,6 +14,23 @@ function formatYamlScalar(value: unknown): string {
   return str;
 }
 
+function normalizeFrontmatterName(
+  rawName: unknown,
+  fallbackSlug: string,
+): string {
+  const candidate =
+    typeof rawName === "string" && rawName.trim()
+      ? rawName.trim()
+      : fallbackSlug || "未命名技能";
+  return candidate.slice(0, 80);
+}
+
+function normalizeFrontmatterDescription(rawDescription: unknown): string {
+  return typeof rawDescription === "string"
+    ? rawDescription.trim().slice(0, 400)
+    : "";
+}
+
 export function serializeSkillMarkdown(skill: {
   name: string;
   slug: string;
@@ -28,12 +45,18 @@ export function serializeSkillMarkdown(skill: {
       ? skill.frontmatter
       : {};
 
-  const rawName = fm.name !== undefined ? fm.name : skill.name;
+  const rawName =
+    fm.name !== undefined &&
+    normalizeFrontmatterName(fm.name, skill.slug) === skill.name
+      ? fm.name
+      : skill.name;
   const rawSlug = fm.slug !== undefined ? fm.slug : skill.slug;
+  const currentDescription = skill.description ?? "";
   const rawDescription =
-    fm.description !== undefined
+    fm.description !== undefined &&
+    normalizeFrontmatterDescription(fm.description) === currentDescription
       ? fm.description
-      : skill.description || undefined;
+      : currentDescription || undefined;
 
   const orderedEntries: [string, unknown][] = [
     ["name", rawName],

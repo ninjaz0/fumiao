@@ -523,6 +523,86 @@ test("PR #223 Item 9: SkillEditorCard states 64 KiB SKILL.md and 256 KiB ZIP lim
     assert.match(jsonSerialized, /name: JSON 创建技能/);
     assert.match(jsonSerialized, /slug: json-created-skill/);
     assert.match(jsonSerialized, /description: 无原始 YAML 时使用展示字段填充/);
+
+    // Pre-upgrade compatibility: legacy structured PUT updated top-level workspace_skills.name/description
+    // without rewriting frontmatter.name/description (including clearing description to "").
+    // Editing ONLY body_md via serializeSkillMarkdown -> skills.update({ raw_md }) must keep the updated
+    // top-level name/description (and cleared description) while preserving extra frontmatter like aliases!
+    const legacySkill = await skills.create(
+      f.admin,
+      {
+        enabled: true,
+        raw_md: [
+          "---",
+          "name: Old title",
+          "description: Old summary",
+          "aliases:",
+          "  - retained",
+          "---",
+          "",
+          "Old body",
+        ].join("\n"),
+      },
+      ws,
+    );
+    // Simulate pre-upgrade `main` structured PUT updating only top-level columns while leaving import-time frontmatter untouched
+    await f.p.db.query(
+      `UPDATE workspace_skills
+          SET name = $2, description = $3, revision = revision + 1
+        WHERE public_id = $1`,
+      [legacySkill.id, "New title", "New summary"],
+    );
+    const legacyListed = (await skills.list(f.admin, ws)).skills.find(
+      (s) => s.id === legacySkill.id,
+    )!;
+    assert.equal(legacyListed.name, "New title");
+    assert.equal(legacyListed.description, "New summary");
+    assert.equal(legacyListed.frontmatter.name, "Old title");
+    assert.equal(legacyListed.frontmatter.description, "Old summary");
+
+    const legacyBodyEditedMd = serializeSkillMarkdown(legacyListed).replace(
+      "Old body",
+      "New body",
+    );
+    const savedLegacy = await skills.update(f.admin, legacySkill.id, {
+      expected_revision: legacyListed.revision,
+      raw_md: legacyBodyEditedMd,
+    });
+    assert.equal(savedLegacy.name, "New title");
+    assert.equal(savedLegacy.description, "New summary");
+    assert.equal(savedLegacy.body_md, "New body");
+    assert.deepEqual(savedLegacy.frontmatter.aliases, ["retained"]);
+
+    // Also verify historical description cleared via pre-upgrade structured PUT (`description = ''` while stale frontmatter.description remained)
+    await f.p.db.query(
+      `UPDATE workspace_skills
+          SET description = '', frontmatter = $2::jsonb, revision = revision + 1
+        WHERE public_id = $1`,
+      [
+        legacySkill.id,
+        JSON.stringify({
+          name: "New title",
+          description: "Old summary",
+          aliases: ["retained"],
+        }),
+      ],
+    );
+    const clearedListed = (await skills.list(f.admin, ws)).skills.find(
+      (s) => s.id === legacySkill.id,
+    )!;
+    const clearedBodyEditedMd = serializeSkillMarkdown(clearedListed).replace(
+      "New body",
+      "Body after cleared summary",
+    );
+    const savedCleared = await skills.update(f.admin, legacySkill.id, {
+      expected_revision: clearedListed.revision,
+      raw_md: clearedBodyEditedMd,
+    });
+    assert.equal(savedCleared.name, "New title");
+    assert.equal(savedCleared.description, "");
+    assert.equal(savedCleared.body_md, "Body after cleared summary");
+    assert.equal(savedCleared.frontmatter.description, undefined);
+    assert.deepEqual(savedCleared.frontmatter.aliases, ["retained"]);
   } finally {
     await f.cleanup();
   }
