@@ -16,6 +16,7 @@ export function PrecheckCostModal({
   nodeIds,
   title = "批量生成预检与积分确认",
   initialStages = ["image", "video"],
+  lockedStages = false,
   onSubmitted,
   onClose,
 }: {
@@ -25,6 +26,7 @@ export function PrecheckCostModal({
   nodeIds: string[];
   title?: string;
   initialStages?: PrecheckStage[];
+  lockedStages?: boolean;
   onSubmitted: (result: {
     submitted: { node: string; stage: PrecheckStage; job_id: number; line_id?: string }[];
     skipped: { node: string; stage: PrecheckStage; reason: string; line_id?: string }[];
@@ -173,7 +175,7 @@ export function PrecheckCostModal({
 
   return (
     <div className="fm-precheck" aria-label={title}>
-      <div className="fm-precheck-stages" role="group" aria-label="选择执行阶段">
+      {!lockedStages && <div className="fm-precheck-stages" role="group" aria-label="选择执行阶段">
         <span>勾选重跑环节：</span>
         {STAGE_LABELS.map((s) => (
           <label key={s.id} className="fm-precheck-stage-pill">
@@ -185,7 +187,7 @@ export function PrecheckCostModal({
             <span>{s.label}</span>
           </label>
         ))}
-      </div>
+      </div>}
 
       {error && (
         <p className="error" role="alert">

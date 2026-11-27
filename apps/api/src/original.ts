@@ -358,6 +358,14 @@ class OriginalApi {
   ) {
     return this.batchPrecheck.precheckCanvas(req.actor, key, body);
   }
+  @Get("api/canvases/:key/nodes/:node/director-inputs")
+  directorShotInputs(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("node") node: string,
+  ) {
+    return this.batchPrecheck.directorInputs(req.actor, key, node);
+  }
   @Post("api/canvases/:key/batch-runs")
   @HttpCode(200)
   runCanvasBatch(

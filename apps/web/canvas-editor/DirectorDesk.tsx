@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, BookOpen, Crosshair, ListVideo, Plus, X } from "lucide-react";
-import { directorBasis, directorShotIds } from "@fumiao/web-compat/director.js";
+import { canvasTailSourceId, directorBasis, directorShotIds, type DirectorShotInputs } from "@fumiao/web-compat/director.js";
 import { scriptApi, type ScriptDocumentDetail } from "./script-api";
 import {
   directorShotDescription,
@@ -9,12 +9,16 @@ import {
   reorderDirectorShots,
   scriptSourceJump,
 } from "./script-fusion";
-import type { Doc } from "./types";
+import type { Pack } from "./AssetPacks";
+import { linkedValue, type CanvasEdge, type Doc, type Job } from "./types";
 
 type DirectorDeskProps = {
   document: Doc;
   active: boolean;
   canvasSaved: boolean;
+  revision: number;
+  runs: Job[];
+  packs: Pack[];
   activeShotId: string | null;
   onSelectShot: (nodeId: string) => void;
   onChooseScript: () => void;
@@ -23,12 +27,23 @@ type DirectorDeskProps = {
   onFocusCanvas: (nodeId: string) => void;
   onChangeDocument: (updater: (current: Doc) => Doc) => void;
   onConfirmOrder: () => Promise<void>;
+  onReadInputs: (nodeId: string) => Promise<DirectorShotInputs>;
+  onConfirmShot: (nodeId: string, field: "story_basis" | "material_basis", basis: string) => Promise<void>;
+  onChooseImage: (nodeId: string | null, shotId: string | null) => void;
+  onPinImage: (edge: CanvasEdge, media: string) => void;
+  onAddImage: (shotId: string) => void;
+  onPrecheckImage: (nodeId: string) => Promise<void>;
+  onChoosePack: (nodeId: string) => void;
+  onFixTailFrame: (sourceId: string, nodeId: string) => Promise<void>;
 };
 
 export function DirectorDesk({
   document,
   active,
   canvasSaved,
+  revision,
+  runs,
+  packs,
   activeShotId,
   onSelectShot,
   onChooseScript,
@@ -37,6 +52,14 @@ export function DirectorDesk({
   onFocusCanvas,
   onChangeDocument,
   onConfirmOrder,
+  onReadInputs,
+  onConfirmShot,
+  onChooseImage,
+  onPinImage,
+  onAddImage,
+  onPrecheckImage,
+  onChoosePack,
+  onFixTailFrame,
 }: DirectorDeskProps) {
   const production = document.director;
   const order = production ? directorShotIds(document.shots ?? [], production) : [];
@@ -51,7 +74,40 @@ export function DirectorDesk({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [confirmedOrder, setConfirmedOrder] = useState<string>();
+  const [inputState, setInputState] = useState<{ nodeId: string; revision: number; value?: DirectorShotInputs; error?: string }>();
   const orderKey = JSON.stringify(order);
+  const nodeId = node?.id;
+  const inspected = canvasSaved && inputState?.nodeId === nodeId && inputState?.revision === revision ? inputState : undefined;
+  const inputs = inspected?.value;
+
+  useEffect(() => {
+    if (!active || !canvasSaved || !nodeId) return;
+    let current = true;
+    let reading = false;
+    const read = async () => {
+      if (reading || globalThis.document.hidden) return;
+      reading = true;
+      try {
+        const value = await onReadInputs(nodeId);
+        if (current) setInputState(value.revision === revision
+          ? { nodeId, revision, value }
+          : { nodeId, revision, error: "画布已有新版本，请重新载入。" });
+      } catch (cause) {
+        if (current) setInputState({ nodeId, revision, error: (cause as Error).message });
+      } finally {
+        reading = false;
+      }
+    };
+    const refresh = () => void read();
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      current = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [active, canvasSaved, nodeId, onReadInputs, revision]);
 
   useEffect(() => {
     if (!active || !sourceId) return;
@@ -135,11 +191,11 @@ export function DirectorDesk({
       setError((cause as Error).message);
     }
   };
-  const confirmOrder = async () => {
+  const apply = async (action: () => void | Promise<void>) => {
     setPending(true);
     setError("");
     try {
-      await onConfirmOrder();
+      await action();
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -149,6 +205,26 @@ export function DirectorDesk({
 
   const activeIndex = order.indexOf(node?.id ?? "");
   const orderConfirmed = canvasSaved && !error && Boolean(production?.order_basis && production.order_basis === confirmedOrder);
+  const savedState = production?.shots?.find((shot) => shot.node_id === nodeId);
+  const storyConfirmed = Boolean(inputs?.story_basis && inputs.story_basis === savedState?.story_basis);
+  const materialConfirmed = Boolean(inputs?.material_basis && inputs.material_basis === savedState?.material_basis);
+  const tailSource = node?.tail_inherited && videoNodes.find((item) => item.id === canvasTailSourceId(document, node.id));
+  const imageRefs = document.edges.flatMap((edge) => {
+    if (edge.target !== nodeId) return [];
+    const source = document.nodes.find((item) => item.id === edge.source);
+    if (!source) return [];
+    const { kind, value } = linkedValue(source, edge, runs);
+    if (kind !== "image") return [];
+    const affected = videoNodes.filter((shot) => order.includes(shot.id) && document.edges.some((item) =>
+      item.source === edge.source && item.sourcePort === edge.sourcePort && item.target === shot.id,
+    ));
+    return [{ edge, source, media: value, affected, fixed: !source.extension && (source.use_media || source.active_job) }];
+  });
+  const selectedPacks = (node?.asset_packs ?? []).map((binding) => {
+    const pack = packs.find((item) => item.id === binding.id);
+    const affected = videoNodes.filter((shot) => order.includes(shot.id) && shot.asset_packs?.some((item) => item.id === binding.id));
+    return { binding, pack, affected };
+  });
 
   return (
     <section className="fm-director-desk" aria-label="导演台" hidden={!active}>
@@ -189,7 +265,7 @@ export function DirectorDesk({
             <div className="fm-director-actions">
               <button type="button" className="secondary" disabled={pending || activeIndex <= 0} onClick={() => changeOrder(-1)}><ArrowUp size={14} /> 上移</button>
               <button type="button" className="secondary" disabled={pending || activeIndex < 0 || activeIndex === order.length - 1} onClick={() => changeOrder(1)}><ArrowDown size={14} /> 下移</button>
-              <button type="button" className="primary" disabled={!order.length || pending || orderConfirmed} onClick={() => void confirmOrder()}>
+              <button type="button" className="primary" disabled={!order.length || pending || orderConfirmed} onClick={() => void apply(onConfirmOrder)}>
                 {pending ? "正在保存" : orderConfirmed ? "顺序已确认" : "保存并确认顺序"}
               </button>
             </div>
@@ -215,11 +291,79 @@ export function DirectorDesk({
                 </div>
                 <section className="fm-director-card">
                   <h4>镜头说明</h4>
-                  <p>{directorShotDescription(document, node) || "尚未填写镜头说明。"}</p>
+                  <p>{(inputs?.description ?? directorShotDescription(document, node)) || "尚未填写镜头说明。"}</p>
                   {shotDiff?.changes.preserve.length ? <p className="fm-director-note">本镜保留了画布修改。</p> : null}
                   {shotDiff && (shotDiff.changes.conflicts.length > 0 || shotDiff.changes.takeScript.length > 0) &&
                     <p className="fm-director-note">剧本与画布有新的差异，可在更新预览中选择采用的内容。</p>}
-                  {node.tail_inherited && <p className="fm-director-note">本镜开启了自动尾帧继承，可到画布调整。</p>}
+                  <button type="button" className="secondary" disabled={!inputs?.story_basis || pending || storyConfirmed}
+                    onClick={() => inputs?.story_basis && void apply(() => onConfirmShot(node.id, "story_basis", inputs.story_basis!))}>
+                    {storyConfirmed ? "分镜已确认" : savedState?.story_basis && inputs ? "分镜已更新，重新确认" : "确认分镜"}
+                  </button>
+                </section>
+                <section className="fm-director-card">
+                  <h4>确认素材</h4>
+                  {inspected?.error && <p role="alert">{inspected.error}</p>}
+                  {!inspected && <p className="fm-director-note">{canvasSaved ? "正在检查生成素材…" : "画布保存后检查生成素材。"}</p>}
+                  {node.tail_inherited && <div>
+                    <p>自动尾帧来源：{tailSource ? tailSource.title : "没有可用的上一镜"}。关闭自动继承后可确认素材。</p>
+                    <div className="fm-director-actions">
+                      {tailSource && <button type="button" className="secondary" disabled={pending} onClick={() => void apply(() => onFixTailFrame(tailSource.id, node.id))}>固定尾帧为首帧</button>}
+                      <button type="button" className="secondary" disabled={pending} onClick={() => onChangeDocument((current) => ({
+                        ...current,
+                        nodes: current.nodes.map((item) => item.id === node.id ? { ...item, tail_inherited: false } : item),
+                      }))}>关闭自动尾帧</button>
+                    </div>
+                  </div>}
+                  {imageRefs.length > 0 && <ul className="fm-director-materials">
+                    {imageRefs.map(({ edge, source, media, fixed, affected }) => <li key={edge.id}>
+                      {media && <img src={`/media/${media}?variant=thumb`} alt="" loading="lazy" />}
+                      <div>
+                        <strong>{source.title}</strong>
+                        <small>{media ? fixed ? "已固定" : "待选定" : "缺图"}{affected.length > 1 && ` · 关联镜头 ${affected.map((shot) => shot.title).join("、")}`}</small>
+                        <div className="fm-director-actions">
+                          {media && !fixed && <button type="button" className="secondary" onClick={() => void apply(() => onPinImage(edge, media))}>固定此图</button>}
+                          {!source.extension && <button type="button" className="secondary" onClick={() => onChooseImage(source.id, null)}>{media ? "替换图片" : "选择或上传图片"}</button>}
+                          {!source.extension && <button type="button" className="secondary" disabled={pending} onClick={() => void apply(() => onPrecheckImage(source.id))}>预检参考图</button>}
+                          <button type="button" className="secondary" onClick={() => onFocusCanvas(source.id)}>定位素材节点</button>
+                        </div>
+                      </div>
+                    </li>)}
+                  </ul>}
+                  {selectedPacks.length > 0 && <ul className="fm-director-materials">
+                    {selectedPacks.map(({ binding, pack, affected }) => <li key={binding.id}>
+                      <div>
+                        <strong>{pack?.name || `素材包 ${binding.id.slice(0, 6)}`}</strong>
+                        <small>{!pack ? "缺失" : binding.revision !== pack.revision ? `待更新至版本 ${pack.revision}` : `已绑定版本 ${binding.revision}`}{affected.length > 1 && ` · 关联镜头 ${affected.map((shot) => shot.title).join("、")}`}</small>
+                      </div>
+                    </li>)}
+                  </ul>}
+                  {inputs && inputs.references.length > 0 && <div className="fm-director-effective">
+                    <p>生成使用的参考素材顺序</p>
+                    <ol>
+                      {inputs.references.map(({ id, mime }) => <li key={id}>
+                        {mime.startsWith("image/") ? <img src={`/media/${id}?variant=thumb`} alt="参考图" loading="lazy" /> : <a href={`/media/${id}`} target="_blank" rel="noreferrer">{mime.startsWith("video/") ? "参考视频" : "参考音频"}</a>}
+                      </li>)}
+                    </ol>
+                  </div>}
+                  {inputs && !inputs.references.length && !imageRefs.length && !selectedPacks.length && <p className="fm-director-note">本镜未绑定参考图。</p>}
+                  {inputs?.voices.map(({ speaker, model, voice, pack_id, rate, pitch, instruction }, index) => (
+                    <p key={index}>{[
+                      speaker, packs.find((pack) => pack.id === pack_id)?.name, model, voice,
+                      rate && `语速 ${rate}`, pitch && `音高 ${pitch}`, instruction,
+                    ].filter(Boolean).join(" · ")}</p>
+                  ))}
+                  {inputs && <ul className="fm-director-issues">
+                    {[...new Set([...inputs.visual_issues, ...inputs.material_issues])].map((issue) => <li key={issue}>{issue}</li>)}
+                  </ul>}
+                  <div className="fm-director-actions">
+                    <button type="button" className="secondary" disabled={pending} onClick={() => onChooseImage(null, node.id)}>添加参考图</button>
+                    <button type="button" className="secondary" disabled={pending} onClick={() => void apply(() => onAddImage(node.id))}>新建生图节点</button>
+                    <button type="button" className="secondary" disabled={pending} onClick={() => onChoosePack(node.id)}>素材包</button>
+                    <button type="button" className="primary" disabled={!inputs?.material_basis || pending || materialConfirmed}
+                      onClick={() => inputs?.material_basis && void apply(() => onConfirmShot(node.id, "material_basis", inputs.material_basis!))}>
+                      {materialConfirmed ? "素材已确认" : savedState?.material_basis && inputs ? "素材已变更，重新确认" : "确认素材"}
+                    </button>
+                  </div>
                 </section>
                 <section className="fm-director-card">
                   <h4>剧本原文</h4>

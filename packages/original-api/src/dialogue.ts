@@ -1,5 +1,9 @@
 import type { Sql } from "@fumiao/platform/db.js";
 import type { PackVoiceProfile } from "@fumiao/platform/packs.js";
+import type { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
+import { requireValue } from "@fumiao/platform/security.js";
+import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
+import type { DialogueLine } from "./canvas-draft.js";
 
 export interface ParsedDialogueLine {
   speaker: string;
@@ -125,5 +129,32 @@ export async function resolveSpeakerVoice(
     rate: profile?.rate,
     pitch: profile?.pitch,
     emotion: profile?.emotion,
+  };
+}
+
+export async function resolveDialogueInput(
+  sql: Sql,
+  workspaceId: string,
+  line: DialogueLine,
+  bindings: CanvasSubmissionModels,
+) {
+  const prompt = pythonStrip(line.text);
+  requireValue(prompt, 400, "对白台词不能为空");
+  const voice = await resolveSpeakerVoice(sql, workspaceId, line);
+  const params = {
+    ...(voice.voiceId ? { voice: voice.voiceId } : {}),
+    ...(voice.rate ? { rate: voice.rate } : {}),
+    ...(voice.pitch ? { pitch: voice.pitch } : {}),
+    ...(voice.instruction ? { instruction: voice.instruction } : {}),
+  };
+  return {
+    line,
+    voice,
+    payload: {
+      model: bindings.resolveAudio(voice.model),
+      prompt,
+      instruction: voice.instruction,
+      ...(Object.keys(params).length ? { params } : {}),
+    },
   };
 }

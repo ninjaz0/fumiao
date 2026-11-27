@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { chromium, expect, type Browser } from "@playwright/test";
+import { chromium, expect, type Browser, type Locator } from "@playwright/test";
+import sharp from "sharp";
 import { directorBasis, directorShotIds } from "../../packages/web-compat/src/director.js";
 import { newNode, type Project } from "../../apps/web/canvas-editor/types.js";
 
@@ -708,6 +709,47 @@ try {
     await directorTab.click();
     await expect(director.getByRole("button", { name: /^S01-02/ })).toHaveAttribute("aria-pressed", "true");
     await expect(director.getByRole("heading", { name: "确认分镜" })).toBeVisible();
+    if (await director.getByRole("button", { name: "关闭自动尾帧" }).isVisible()) {
+      await expect(director.getByText(/自动尾帧来源：S01-01/)).toBeVisible();
+      await director.getByRole("button", { name: "关闭自动尾帧" }).click();
+    }
+    await director.getByRole("button", { name: "确认分镜", exact: true }).click();
+    await expect(director.getByRole("button", { name: "分镜已确认" })).toBeDisabled();
+    const material = director.locator(".fm-director-materials li").filter({ hasText: s02Grid.title });
+    await expect(material).toContainText("缺图");
+    await material.getByRole("button", { name: "预检参考图" }).click();
+    const quote = page.getByRole("dialog", { name: /参考图预检/ });
+    await expect(quote).toBeVisible();
+    await expect(quote.getByRole("group", { name: "选择执行阶段" })).toHaveCount(0);
+    await quote.getByRole("button", { name: "关闭" }).click();
+
+    const uploadReference = async (slot: Locator, button: string, background: string) => {
+      await slot.getByRole("button", { name: button }).click();
+      const library = page.getByRole("dialog", { name: "资产库" });
+      const [chooser] = await Promise.all([
+        page.waitForEvent("filechooser"),
+        library.getByRole("button", { name: "上传图片", exact: true }).click(),
+      ]);
+      const buffer = await sharp({ create: { width: 320, height: 240, channels: 3, background } }).png().toBuffer();
+      await chooser.setFiles({ name: "director-reference.png", mimeType: "image/png", buffer });
+    };
+    await uploadReference(material, "选择或上传图片", "#214566");
+    await expect(material).toContainText("已固定");
+    const missing = director.locator(".fm-director-materials li").filter({ hasText: "缺图" });
+    const missingCount = await missing.count();
+    assert.ok(missingCount > 0, "the shot has shared material slots in addition to the grid reference");
+    await expect(director.getByRole("button", { name: "确认素材", exact: true })).toBeDisabled();
+    for (let i = missingCount; i > 0; i--) {
+      await uploadReference(missing.first(), "选择或上传图片", "#568956");
+      await expect(missing).toHaveCount(i - 1);
+    }
+    await director.getByRole("button", { name: "确认素材", exact: true }).click();
+    await expect(director.getByRole("button", { name: "素材已确认" })).toBeDisabled();
+    const firstImage = await material.locator("img").getAttribute("src");
+    await uploadReference(material, "替换图片", "#ae4a55");
+    await expect(material.locator("img")).not.toHaveAttribute("src", firstImage!);
+    await expect(director.getByRole("button", { name: "素材已变更，重新确认" })).toBeEnabled();
+    await expect(director.getByRole("button", { name: "分镜已确认" })).toBeDisabled();
     await page.setViewportSize({ width: 375, height: 812 });
     await expect(director.getByRole("heading", { name: "确认分镜" })).toBeVisible();
     await expect.poll(async () => {

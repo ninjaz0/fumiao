@@ -162,6 +162,7 @@ test("episode export freezes adopted shots in canvas order", async () => {
       active_job: 901,
       media_id: trial.public_id,
       narration_text: "不用旁白",
+      tail_inherited: true,
       dialogue_lines: [
         { id: "line", speaker: "林默", text: "你好。😀!", audio_job: 900 },
       ],

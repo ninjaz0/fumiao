@@ -1,5 +1,5 @@
 import type { CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
-import { directorBasis, directorShotIds } from "@fumiao/web-compat/director.js";
+import { canvasTailSourceId, directorBasis, directorShotIds, type DirectorShotInputs } from "@fumiao/web-compat/director.js";
 import { PluginNodeForm, PluginNodePorts, PluginNodeOutputs } from "./PluginNode";
 import {
   evaluateFormConstraints,
@@ -113,6 +113,7 @@ import {
   hasCanvasSelectionToolbar,
   resolveBatchShots,
   linkedValue,
+  type CanvasEdge,
   type CanvasClipboard,
   type CanvasNode,
   type Doc,
@@ -814,6 +815,7 @@ export function CanvasWorkspace({
     nodeIds: string[];
     title?: string;
     stages?: PrecheckStage[];
+    lockedStages?: boolean;
   } | null>(null);
   const [gridCropTarget, setGridCropTarget] = useState<{
     nodeId: string;
@@ -880,6 +882,28 @@ export function CanvasWorkspace({
     });
     await doc.flush();
   };
+  const readDirectorInputs = useCallback((nodeId: string) => api<DirectorShotInputs>(
+    `/api/canvases/${project.id}/nodes/${encodeURIComponent(nodeId)}/director-inputs`,
+  ), [project.id]);
+  const confirmDirectorShot = async (nodeId: string, field: "story_basis" | "material_basis", reviewedBasis: string) => {
+    const revision = await doc.flush();
+    const current = doc.ref.current.document;
+    const inputs = await readDirectorInputs(nodeId);
+    if (inputs.revision !== revision || inputs[field] !== reviewedBasis) {
+      throw new Error("镜头的确认依据已更新，请检查后重新确认。");
+    }
+    changeDirectorDocument((latest) => {
+      const director = latest.director;
+      if (latest !== current || !director?.shot_ids.includes(nodeId)) throw new Error("本集镜头已更新，请重新确认。");
+      const previous = director.shots?.find((shot) => shot.node_id === nodeId);
+      const state = { ...previous, node_id: nodeId, [field]: reviewedBasis };
+      const shots = previous
+        ? director.shots?.map((shot) => shot.node_id === nodeId ? state : shot)
+        : [...(director.shots ?? []), state];
+      return { ...latest, director: { ...director, shots } };
+    });
+    await doc.flush();
+  };
   const [projectCanvases, setProjectCanvases] = useState<
     WorkspaceCanvasSummary[]
   >([]);
@@ -895,9 +919,10 @@ export function CanvasWorkspace({
   }, [menu]);
   const [aiStoryboard, setAiStoryboard] = useState(false);
   const [packPicker, setPackPicker] = useState<string | null>(null);
+  const [directorPickerShot, setDirectorPickerShot] = useState<string | null>(null);
   const [packMedia, setPackMedia] = useState<Record<string,string[]>>({});
   const [availablePacks, setAvailablePacks] = useState<Pack[]>([]);
-  useEffect(()=>{let active=true;void api<{packs:Pack[]}>('/api/asset-packs').then(data=>{if(active){setAvailablePacks(data.packs);setPackMedia(Object.fromEntries(data.packs.map((p)=> [p.id,p.media])))}}).catch(()=>{});return()=>{active=false}},[project.id]);
+  useEffect(()=>{let active=true;void api<{packs:Pack[]}>('/api/asset-packs').then(data=>{if(active){setAvailablePacks(data.packs);setPackMedia(Object.fromEntries(data.packs.map((p)=> [p.id,p.media])))}}).catch(()=>{});return()=>{active=false}},[project.id, surface]);
   const [candidateCount, setCandidateCount] = useState<1 | 2>(1);
   const [confirmCandidates, setConfirmCandidates] = useState(false);
   const [compareNode, setCompareNode] = useState<string | null>(null);
@@ -924,7 +949,7 @@ export function CanvasWorkspace({
     fileRef = useRef<HTMLInputElement>(null),
     modelButtonRef = useRef<HTMLButtonElement>(null),
     modelMenuRef = useRef<HTMLDivElement>(null),
-    fileTarget = useRef<string | null>(null),
+    fileTarget = useRef<string | { shotId: string } | null>(null),
     clipboard = useRef<CanvasClipboard | null>(null),
     dragging = useRef(false);
   runsRef.current = runs;
@@ -2225,10 +2250,76 @@ export function CanvasWorkspace({
         })),
     ];
   }, [studio]);
+  const addDirectorImage = (
+    shotId: string,
+    media?: { id: string; title: string; w?: number; h?: number },
+    replaceEdge?: string,
+  ) => {
+    const document = doc.ref.current.document;
+    const shot = document.nodes.find((node) => node.id === shotId && node.type === "video");
+    if (!shot || !document.director?.shot_ids.includes(shotId)) throw new Error("本集镜头已移除。");
+    if (document.nodes.length >= 200 || (!replaceEdge && document.edges.length >= 600)) {
+      throw new Error("画布节点或连线已达上限，请先整理画布。");
+    }
+    const height = media?.w && media.h ? Math.max(160, Math.min(480, 320 * media.h / media.w)) : 240;
+    const position = freePosition(document.nodes, shot.x - 400, shot.y, 320, height);
+    const node = {
+      ...newNode("image", position.x, position.y, 1),
+      title: media?.title.slice(0, 80) || "参考图",
+      height,
+      ...(media ? { media_id: media.id, use_media: true } : {}),
+    };
+    const edge = { id: replaceEdge ?? crypto.randomUUID(), source: node.id, target: shotId };
+    const nodes = [...document.nodes, node];
+    const reason = connectionError({ ...document, nodes, edges: document.edges.filter((item) => item.id !== replaceEdge) }, node.id, shotId);
+    if (reason) throw new Error(reason);
+    const edges = replaceEdge
+      ? document.edges.map((item) => item.id === replaceEdge ? edge : item)
+      : [...document.edges, edge];
+    changeDirectorDocument((current) => ({ ...current, nodes, edges }));
+    return node;
+  };
+  const openImagePicker = (nodeId: string | null, shotId: string | null = null) => {
+    setDirectorPickerShot(shotId);
+    setPickerTarget(nodeId);
+    setAssetType("image");
+    setAssetSelection(new Set());
+    setPanel("assets");
+  };
+  const pinDirectorImage = (edge: CanvasEdge, media: string) => {
+    const document = doc.ref.current.document;
+    const link = document.edges.find((item) => item.id === edge.id);
+    const source = document.nodes.find((item) => item.id === link?.source);
+    if (!link || !source || linkedValue(source, link, runsRef.current).value !== media) {
+      throw new Error("参考图已更新，请检查后重新选择。");
+    }
+    if (source.extension) {
+      addDirectorImage(link.target, { id: media, title: source.title }, link.id);
+    } else {
+      edit(source.id, { use_media: true, media_id: media, active_job: null });
+    }
+  };
+  const precheckDirectorImage = async (nodeId: string) => {
+    await doc.flush();
+    const node = doc.ref.current.document.nodes.find((item) => item.id === nodeId && item.type === "image");
+    if (!node) throw new Error("参考图节点已移除。");
+    setPrecheckTarget({ nodeIds: [nodeId], title: `参考图预检 · ${node.title}`, stages: ["image"], lockedStages: true });
+  };
   const importAssets = () => {
     const assets = assetItems.filter((a) => assetSelection.has(a.id));
     if (!assets.length) return;
-    if (doc.ref.current.document.nodes.length + assets.length > 200) {
+    if (directorPickerShot) {
+      try {
+        addDirectorImage(directorPickerShot, assets[0]);
+        setPanel(null);
+        setDirectorPickerShot(null);
+        setAssetSelection(new Set());
+      } catch (cause) {
+        notify((cause as Error).message);
+      }
+      return;
+    }
+    if (!pickerTarget && doc.ref.current.document.nodes.length + assets.length > 200) {
       notify("每张画布最多 200 个节点");
       return;
     }
@@ -2283,7 +2374,7 @@ export function CanvasWorkspace({
     setPickerTarget(null);
     setAssetSelection(new Set());
   };
-  const uploadFiles = async (files: File[], target: string | null = null) => {
+  const uploadFiles = async (files: File[], target: typeof fileTarget.current = null) => {
     if (progress !== null) return;
     setProgress(0);
     try {
@@ -2296,7 +2387,7 @@ export function CanvasWorkspace({
           notify("每张图片不能超过 16 MB");
           continue;
         }
-        if (doc.ref.current.document.nodes.length >= 200)
+        if (typeof target !== "string" && doc.ref.current.document.nodes.length >= 200)
           throw new Error("每张画布最多 200 个节点");
         const asset = await upload(file, setProgress);
         if (asset.first_frame) notify("动态图或多页图片已按首帧导入");
@@ -2305,7 +2396,7 @@ export function CanvasWorkspace({
           ...s,
           assets: [{ ...asset, owner: s.me.id }, ...s.assets],
         }));
-        if (target)
+        if (typeof target === "string")
           edit(target, {
             media_id: asset.id,
             active_job: null,
@@ -2313,7 +2404,9 @@ export function CanvasWorkspace({
             width: 360,
             height: Math.max(160, Math.min(480, (360 * asset.h) / asset.w)),
           });
-        else {
+        else if (target) {
+          addDirectorImage(target.shotId, { ...asset, title: file.name });
+        } else {
           const n = add("image");
           if (n)
             edit(n.id, {
@@ -2323,6 +2416,7 @@ export function CanvasWorkspace({
               height: Math.max(160, Math.min(480, (360 * asset.h) / asset.w)),
             });
         }
+        if (typeof target === "object" && target) break;
         target = null;
       }
     } catch (e) {
@@ -2402,6 +2496,17 @@ export function CanvasWorkspace({
   const h3Frames=h3Native&&h3Options.mode==="frames";
   const h3Ids=[...new Set([...linkedReferenceMedia,...(single?.params.h3_refs||[])])].filter((k):k is string=>Boolean(k));
   const referenceMedia = [...new Set([...(h3Frames?[h3Options.first_frame,h3Options.last_frame].filter(Boolean):h3Native?h3Ids:linkedReferenceMedia),...(single?.asset_packs||[]).flatMap(p=>packMedia[p.id]||[])])];
+  const packTargetNode = packPicker && nodeById.get(packPicker);
+  const packTargetMedia = !packTargetNode || packTargetNode.id === single?.id ? referenceMedia : [
+    ...doc.value.document.edges.flatMap((edge) => {
+      const source = nodeById.get(edge.source);
+      if (!source || edge.target !== packTargetNode.id) return [];
+      const link = linkedValue(source, edge, runs);
+      return link.kind === "image" && link.value ? [link.value] : [];
+    }),
+    ...(packTargetNode.params.h3_refs ?? []),
+    ...(packTargetNode.asset_packs ?? []).flatMap((pack) => packMedia[pack.id] ?? []),
+  ];
   const importPack = async (pack:Pack, images?:string[]) => {
     const latest:Studio = await api('/api/state');
     const document = doc.ref.current.document;
@@ -2432,6 +2537,7 @@ export function CanvasWorkspace({
       if(added.length)doc.change(d=>({...d,document:{...d.document,nodes:[...d.document.nodes,...added],edges:[...d.document.edges,...added.map(n=>({id:crypto.randomUUID(),source:n.id,target:target.id}))]}}));
     }else{
       setPackMedia(m=>({...m,[pack.id]:pack.media}));
+      setAvailablePacks((packs) => [...packs.filter((item) => item.id !== pack.id), pack]);
       edit(target.id,{asset_packs:[...keptPacks,{id:pack.id,revision:pack.revision}]});
     }
     setPackPicker(null);
@@ -2928,6 +3034,24 @@ export function CanvasWorkspace({
     if (closeModal) setShotList(false);
     selectOne(vidNode.id);
     focusNodes([vidNode.id]);
+  };
+  const fixDirectorTailFrame = async (sourceId: string, nodeId: string) => {
+    await doc.flush();
+    const res = await api<{ asset_id: string }>(`/api/canvases/${project.id}/nodes/${encodeURIComponent(sourceId)}/tail-frame`, {});
+    const document = doc.ref.current.document;
+    const node = document.nodes.find((item) => item.id === nodeId);
+    if (!node?.tail_inherited || canvasTailSourceId(document, nodeId) !== sourceId || !document.director?.shot_ids.includes(nodeId)) {
+      throw new Error("自动尾帧来源已更新，请重新选择。");
+    }
+    edit(nodeId, {
+      tail_inherited: false,
+      generation_mode: "first_last_frame",
+      params: {
+        ...node.params,
+        h3: { ...node.params.h3, mode: "frames", first_frame: res.asset_id, video_audio: [] },
+      },
+    });
+    await doc.flush();
   };
   const renderShotNarration = (shot: { id: string }) => {
     const node = doc.value.document.nodes.find((n) => n.id === shot.id);
@@ -3533,6 +3657,7 @@ export function CanvasWorkspace({
           label="资产库"
           onClick={() => {
             setPickerTarget(null);
+            setDirectorPickerShot(null);
             setAssetType("all");
             setAssetSelection(new Set());
             setPanel("assets");
@@ -3628,12 +3753,7 @@ export function CanvasWorkspace({
             <IconButton
               icon={RefreshCw}
               label="替换内容"
-              onClick={() => {
-                setPickerTarget(single.id);
-                setAssetType("image");
-                setAssetSelection(new Set());
-                setPanel("assets");
-              }}
+              onClick={() => openImagePicker(single.id)}
             />
           )}
           {completedVersions.length > 0 && (
@@ -4601,13 +4721,14 @@ export function CanvasWorkspace({
           wide
           onClose={() => {
             setPanel(null);
+            setDirectorPickerShot(null);
             setAssetSelection(new Set());
           }}
         >
           <div className="picker-filter">
             <div>
               {(["all", "image", "video"] as const)
-                .filter((t) => !pickerTarget || t === "image")
+                .filter((t) => (!pickerTarget && !directorPickerShot) || t === "image")
                 .map((t) => (
                   <button
                     className={assetType === t ? "active" : ""}
@@ -4621,9 +4742,10 @@ export function CanvasWorkspace({
             <button
               className="secondary"
               onClick={() => {
-                fileTarget.current = pickerTarget;
+                fileTarget.current = directorPickerShot ? { shotId: directorPickerShot } : pickerTarget;
                 fileRef.current?.click();
                 setPanel(null);
+                setDirectorPickerShot(null);
               }}
             >
               <Upload size={16} />
@@ -4642,7 +4764,7 @@ export function CanvasWorkspace({
                   key={a.id}
                   onClick={() =>
                     setAssetSelection((current) => {
-                      const set = pickerTarget
+                      const set = pickerTarget || directorPickerShot
                         ? new Set<string>()
                         : new Set(current);
                       if (current.has(a.id)) set.delete(a.id);
@@ -4678,7 +4800,7 @@ export function CanvasWorkspace({
               disabled={!assetSelection.size}
               onClick={importAssets}
             >
-              {pickerTarget ? "替换内容" : "添加到画布"}
+              {pickerTarget ? "替换内容" : directorPickerShot ? "用作参考图" : "添加到画布"}
             </button>
           </div>
         </Modal>
@@ -4920,7 +5042,7 @@ export function CanvasWorkspace({
       {packPicker && <Modal title="素材包" wide onClose={() => setPackPicker(null)}>
         <AssetPacks workspace={project.workspace} userId={studio.me.id} admin={studio.me.role === 'admin'}
           selected={doc.value.document.nodes.find(n=>n.id===packPicker)?.asset_packs || []}
-          imageRefs={referenceMedia.filter((id):id is string=>Boolean(id))}
+          imageRefs={packTargetMedia.filter((id):id is string=>Boolean(id))}
           onImportImages={(ids,pack)=>importPack(pack,ids)} onImportPack={pack=>importPack(pack)}
           onRemovePack={id=>{const target=doc.ref.current.document.nodes.find(n=>n.id===packPicker);if(target)edit(target.id,{asset_packs:(target.asset_packs||[]).filter(p=>p.id!==id)});setPackPicker(null);}} />
       </Modal>}
@@ -5172,6 +5294,7 @@ export function CanvasWorkspace({
             nodeIds={precheckTarget.nodeIds}
             title={precheckTarget.title}
             initialStages={precheckTarget.stages}
+            lockedStages={precheckTarget.lockedStages}
             onSubmitted={async (res) => {
               // F010/F027 (#9): Write back submitted narration_pending & dialogue_lines[].audio_pending
               // so completed batch audio jobs promote cleanly for playback and storyboard export.
@@ -5313,7 +5436,10 @@ export function CanvasWorkspace({
         <DirectorDesk
           active={surface === "director"}
           canvasSaved={doc.status === "saved"}
+          revision={doc.revision.current}
           document={doc.value.document}
+          runs={runs}
+          packs={availablePacks}
           activeShotId={directorShotId}
           onSelectShot={setDirectorShotId}
           onChooseScript={() => openScript(activeScript ? { docId: activeScript.id, directorPreview: true } : undefined)}
@@ -5325,6 +5451,18 @@ export function CanvasWorkspace({
           }}
           onChangeDocument={changeDirectorDocument}
           onConfirmOrder={confirmDirectorOrder}
+          onReadInputs={readDirectorInputs}
+          onConfirmShot={confirmDirectorShot}
+          onChooseImage={openImagePicker}
+          onPinImage={pinDirectorImage}
+          onAddImage={(nodeId) => {
+            const image = addDirectorImage(nodeId);
+            if (viewMode === "list") setViewMode("split");
+            openCanvasNode(image.id);
+          }}
+          onPrecheckImage={precheckDirectorImage}
+          onChoosePack={setPackPicker}
+          onFixTailFrame={fixDirectorTailFrame}
         />
       )}
       {(surface === "document" || scriptWorkspaceMounted) && (

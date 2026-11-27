@@ -114,6 +114,48 @@
   border-inline-start: 2px solid var(--cv-line);
 }
 
+.fm-director-materials,
+.fm-director-effective ol {
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+}
+
+.fm-director-materials li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--cv-line);
+}
+
+.fm-director-materials li > div { min-width: 0; }
+
+.fm-director-materials img,
+.fm-director-effective img {
+  display: block;
+  width: 76px;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--cv-hover);
+}
+
+.fm-director-materials small {
+  display: block;
+  margin: 4px 0;
+  color: var(--cv-muted);
+  overflow-wrap: anywhere;
+}
+
+.fm-director-effective ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fm-director-issues:empty { display: none; }
+
 .fm-director-join {
   margin-top: 12px;
 }

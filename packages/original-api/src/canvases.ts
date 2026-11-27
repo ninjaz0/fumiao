@@ -44,6 +44,24 @@ const selectNodeJob = `SELECT j.state,a.public_id AS result FROM canvas_job_link
   JOIN jobs j ON j.id=l.job_id AND j.deleted_at IS NULL
   LEFT JOIN LATERAL (SELECT a.public_id FROM job_assets r JOIN assets a ON a.id=r.asset_id
     WHERE r.job_id=j.id AND r.role='output' ORDER BY a.created_at,a.public_id LIMIT 1) a ON true`;
+export async function canvasNodeMedia(
+  sql: Sql,
+  project: string,
+  node: CanvasNode,
+  adoptedOnly = false,
+): Promise<string | null> {
+  if (node.use_media) return node.media_id;
+  if (adoptedOnly && !node.active_job) return null;
+  const row = await one(
+    sql,
+    `${selectNodeJob}
+    WHERE l.project_id=$1 AND l.node=$2 ${node.active_job ? "AND j.public_id=$3" : "ORDER BY l.id DESC LIMIT 1"}
+    ${adoptedOnly ? "AND j.kind='video' FOR SHARE OF j" : ""}`,
+    [project, node.id, ...(node.active_job ? [node.active_job] : [])],
+  );
+  if (!row) return adoptedOnly ? null : node.media_id;
+  return row.state === "completed" && row.result ? row.result : null;
+}
 type ShotVideo = {
   id: string;
   public_id: string;
@@ -284,24 +302,7 @@ export class OriginalCanvases {
       return this.publicProject(row, user);
     });
   }
-  async mediaForNode(
-    sql: Sql,
-    project: string,
-    node: CanvasNode,
-    adoptedOnly = false,
-  ): Promise<string | null> {
-    if (node.use_media) return node.media_id;
-    if (adoptedOnly && !node.active_job) return null;
-    const row = await one(
-      sql,
-      `${selectNodeJob}
-      WHERE l.project_id=$1 AND l.node=$2 ${node.active_job ? "AND j.public_id=$3" : "ORDER BY l.id DESC LIMIT 1"}
-      ${adoptedOnly ? "AND j.kind='video' FOR SHARE OF j" : ""}`,
-      [project, node.id, ...(node.active_job ? [node.active_job] : [])],
-    );
-    if (!row) return adoptedOnly ? null : node.media_id;
-    return row.state === "completed" && row.result ? row.result : null;
-  }
+  mediaForNode = canvasNodeMedia;
   private async listCoverJobs(
     sql: Sql,
     pending: { project: string; node: CanvasNode }[],

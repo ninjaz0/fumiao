@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
+import { canvasTailSourceId } from "@fumiao/web-compat/director.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
@@ -18,7 +18,6 @@ import {
   canvasDialogueRunFields,
   canvasRunFields,
   parseCanvasDocument,
-  type CinematographySpec,
 } from "./canvas-draft.js";
 import {
   expandGroupNodeIds,
@@ -29,7 +28,12 @@ import {
   createTailFrameAsset,
   hasTailChainTable,
 } from "@fumiao/platform/tail-frame.js";
-import { resolveSpeakerVoice } from "./dialogue.js";
+import { resolveDialogueInput } from "./dialogue.js";
+import {
+  canvasNarrationInput,
+  canvasVisualPayload,
+  resolveCanvasVisualBase,
+} from "./director-inputs.js";
 import {
   canvasBytes,
   canvasDocumentJson,
@@ -64,40 +68,7 @@ function isBgmMusicModel(
   return false;
 }
 
-/** F030: Compiles structured 6-dimension director cinematography spec into clean prompt text. */
-export function compileCinematographyPrompt(
-  basePrompt: string,
-  spec?: CinematographySpec | null,
-  generationMode?: string,
-  gridLayout?: "2x2" | "3x3" | null,
-): string {
-  const parts: string[] = [];
-  if (generationMode === "grid_preview") {
-    const grid = gridLayout === "2x2" ? "2x2 四宫格" : "3x3 九宫格";
-    const count = gridLayout === "2x2" ? 4 : 9;
-    parts.push(
-      `【${grid}分镜构图预览】在一张画布上平均划分为 ${grid}（共 ${count} 个等大独立连续分镜画面），细黑线整齐分隔，无文字水印，主体与场景风格连贯：`,
-    );
-  }
-  parts.push(basePrompt.trim());
-  if (spec) {
-    const entries: [string, string | undefined][] = [
-      ["景别", spec.shot_size],
-      ["机位", spec.camera_angle],
-      ["运镜", spec.camera_movement],
-      ["光影", spec.lighting],
-      ["镜头", spec.lens],
-      ["氛围", spec.mood],
-    ];
-    const tags = entries
-      .filter(([, v]) => typeof v === "string" && v.trim().length > 0)
-      .map(([k, v]) => `${k}:${v!.trim()}`);
-    if (tags.length) {
-      parts.push(`【导演参数：${tags.join(" / ")}】`);
-    }
-  }
-  return parts.filter(Boolean).join("\n\n").slice(0, 12000);
-}
+export { compileCinematographyPrompt } from "./director-inputs.js";
 type Run = {
   uid: string;
   expected_revision: number | bigint;
@@ -283,9 +254,8 @@ export class OriginalCanvasRuns {
       return { id: Number(old.job) };
     }
     requireValue(p.revision === body.expected_revision, 409, canvasConflict);
-    const doc = parseCanvasDocument(canvasDocumentJson(p.document)),
-      nodes = new Map(doc.nodes.map((n) => [n.id, n])),
-      node = nodes.get(nid);
+    const doc = parseCanvasDocument(canvasDocumentJson(p.document));
+    const node = doc.nodes.find((item) => item.id === nid);
     requireValue(
       node && (node.type === "image" || node.type === "video"),
       400,
@@ -304,118 +274,14 @@ export class OriginalCanvasRuns {
       409,
       "这个节点还有生成任务，请等待完成",
     );
-    const texts: string[] = [],
-      sources: (
-        { node: string; text: string } | { node: string; media: string }
-      )[] = [];
-    let refs: string[] = [];
-    for (const edge of doc.edges) {
-      if (edge.target !== nid) continue;
-      const source = nodes.get(edge.source)!;
-      const extValue =
-        source.extension && edge.sourcePort
-          ? source.extension.result?.[edge.sourcePort]
-          : undefined;
-      if (canvasSourceKind(source, edge.sourcePort) === "text") {
-        const text = pythonStrip(
-          source.extension ? (extValue ?? "") : source.text,
-        );
-        requireValue(
-          text,
-          409,
-          `参考文本“${source.title || "文本"}”还没有内容`,
-        );
-        texts.push(text);
-        sources.push({ node: source.id, text });
-      } else {
-        const key = source.extension
-          ? extValue
-          : await this.canvases.mediaForNode(sql, p.id, source);
-        requireValue(key, 409, `参考图片“${source.title || "图片"}”尚未就绪`);
-        if (!refs.includes(key)) refs.push(key);
-        sources.push({ node: source.id, media: key });
-      }
-    }
-    const rawPrompt = [
-      ...texts,
-      ...(pythonStrip(node.prompt) ? [pythonStrip(node.prompt)] : []),
-    ].join("\n\n");
-    requireValue(
-      rawPrompt && [...rawPrompt].length <= 12000,
-      400,
-      "请输入提示词或连接文本，合计不超过 12000 字",
-    );
-    const prompt = compileCinematographyPrompt(
-      rawPrompt,
-      node.cinematography,
-      node.generation_mode,
-      node.grid_layout,
-    );
-    const bindings = await CanvasSubmissionModels.read(sql),
-      params = node.params,
-      model = params.model || bindings.default(node.type),
-      rule = bindings.rules.get(model);
-
-    // F011: Honor explicit node.generation_mode instead of letting stale params.h3.mode override it.
-    let native =
-      node.type === "video" && rule?.nativeH3
-        ? params.h3
-          ? node.generation_mode === "omni_ref"
-            ? {
-                ...params.h3,
-                mode: "reference" as const,
-                first_frame: null,
-                last_frame: null,
-              }
-            : node.generation_mode === "first_last_frame"
-              ? { ...params.h3, mode: "frames" as const }
-              : params.h3
-          : node.generation_mode === "first_last_frame"
-            ? {
-                mode: "frames" as const,
-                first_frame: null,
-                last_frame: null,
-                video_audio: [] as string[],
-              }
-            : node.generation_mode === "omni_ref"
-              ? {
-                  mode: "reference" as const,
-                  first_frame: null,
-                  last_frame: null,
-                  video_audio: [] as string[],
-                }
-              : null
-        : null;
-    if (
-      node.type === "video" &&
-      rule?.nativeH3 &&
-      node.generation_mode === "omni_ref" &&
-      params.h3
-    ) {
-      const carried = [params.h3.first_frame, params.h3.last_frame].filter(
-        (id): id is string => Boolean(id),
-      );
-      if (carried.length) refs = [...new Set([...refs, ...carried])];
-    }
-
+    const bindings = await CanvasSubmissionModels.read(sql);
+    const base = await resolveCanvasVisualBase(sql, p.id, doc, node, bindings);
+    let { refs, native } = base;
     // F028: Automatic tail-frame chain discovery for video shots marked `tail_inherited: true`.
     // Never touches shots where `tail_inherited` is falsy (preserves explicit first frames).
     let pendingTailParentJobId: string | null = null;
     if (node.type === "video" && node.tail_inherited) {
-      const fallbackVideoOrder = doc.nodes
-        .filter((n) => n.type === "video")
-        .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
-        .map((n) => n.id);
-      const shotOrder = doc.shots?.length ? doc.shots : fallbackVideoOrder;
-      const shotIdx = shotOrder.indexOf(nid);
-      const prevNodeId =
-        shotIdx > 0
-          ? shotOrder[shotIdx - 1]
-          : (doc.edges.find(
-              (e) =>
-                e.target === nid &&
-                nodes.get(e.source)?.type === "video",
-            )?.source ?? null);
+      const prevNodeId = canvasTailSourceId(doc, nid);
       if (prevNodeId) {
         const prevJob = await one(
           sql,
@@ -476,7 +342,7 @@ export class OriginalCanvasRuns {
               }
             }
             if (tailPublicId) {
-              if (rule?.nativeH3) {
+              if (base.rule?.nativeH3) {
                 native = {
                   ...(native ?? {
                     mode: "frames" as const,
@@ -496,73 +362,14 @@ export class OriginalCanvasRuns {
       }
     }
 
-    if (native)
-      refs =
-        native.mode === "frames"
-          ? [
-              ...new Set(
-                [native.first_frame, native.last_frame].filter(
-                  (id): id is string => !!id,
-                ),
-              ),
-            ]
-          : [...new Set([...refs, ...params.h3_refs])];
-    else if (node.generation_mode === "first_last_frame" && params.h3) {
-      const frameRefs = [params.h3.first_frame, params.h3.last_frame].filter(
-        (id): id is string => !!id,
-      );
-      if (frameRefs.length) refs = [...new Set([...frameRefs, ...refs])];
-    } else if (node.generation_mode === "omni_ref" && params.h3_refs.length) {
-      refs = [...new Set([...refs, ...params.h3_refs])];
-    } else
-      requireValue(
-        !params.h3_refs.length || !params.model || rule?.nativeH3,
-        400,
-        "请先移除 H3 参考素材后切换模型生成",
-      );
-    const extraParams =
-      node.extra_params &&
-      typeof node.extra_params === "object" &&
-      !Array.isArray(node.extra_params) &&
-      Object.keys(node.extra_params).length > 0
-        ? node.extra_params
-        : undefined;
-    const common = {
-      uid: uuid5(
-        namespaceUrl,
-        `fumiao:canvas:${p.public_id}:${nid}:${body.uid}`,
-      ),
-      prompt,
-      refs,
-      ratio: params.ratio,
-      price_revision:
-        typeof body.price_revision === "number" ? body.price_revision : null,
-      asset_packs: node.asset_packs,
-      model,
-      ...(extraParams ? { params: extraParams } : {}),
-    };
+    const payload = canvasVisualPayload(node, { ...base, refs, native }, seedOffset);
     const draft = parseDraft(
       node.type,
-      node.type === "image"
-        ? {
-            ...common,
-            resolution: params.resolution,
-            image_quality: params.image_quality,
-          }
-        : {
-            ...common,
-            h3: native,
-            flow_source_job: params.flow_source_job,
-            quality: params.quality,
-            seconds: params.seconds,
-            seed:
-              params.seed === null
-                ? null
-                : (params.seed + seedOffset) % 2 ** 53,
-            sampling_steps:
-              rule?.fixedSamplingSteps ??
-              (params.fast_mode ? 4 : params.sampling_steps),
-          },
+      {
+        ...payload,
+        uid: uuid5(namespaceUrl, `fumiao:canvas:${p.public_id}:${nid}:${body.uid}`),
+        price_revision: typeof body.price_revision === "number" ? body.price_revision : null,
+      },
       await new StudioCatalog(this.p.db).catalog(sql),
     );
     const result = await this.generation.submitOn(
@@ -579,10 +386,10 @@ export class OriginalCanvasRuns {
     );
     await this.link(sql, p, user, nid, body.uid, result.id, {
       revision: p.revision,
-      prompt,
-      refs,
-      sources,
-      params,
+      prompt: payload.prompt,
+      refs: payload.refs,
+      sources: base.sources,
+      params: node.params,
       asset_packs: node.asset_packs,
     });
     if (pendingTailParentJobId && (await hasTailChainTable(sql))) {
@@ -722,9 +529,7 @@ export class OriginalCanvasRuns {
         "audio",
         {
           uid: uuid5(body.uid, `voice:${p.public_id}:${nid}`),
-          model: bindings.resolveAudio(node.narration_model),
-          prompt: node.narration_text,
-          instruction: node.narration_instruction,
+          ...canvasNarrationInput(node, bindings),
           price_revision:
             typeof body.price_revision === "number"
               ? body.price_revision
@@ -866,13 +671,11 @@ export class OriginalCanvasRuns {
       }[] = [];
 
       for (const line of targets) {
-        const cleanText = pythonStrip(line.text);
-        requireValue(cleanText, 400, "对白台词不能为空");
         const nodeName = `dialogue:${nid}:${line.id}`;
         const uid = uuid5(body.uid, `dialogue:${p.public_id}:${nid}:${line.id}`);
         const old = await this.previous(sql, user, uid);
-        const resolved = await resolveSpeakerVoice(sql, p.workspace_id, line);
-        const model = bindings.resolveAudio(resolved.model);
+        const { voice: resolved, payload } = await resolveDialogueInput(sql, p.workspace_id, line, bindings);
+        const { model, prompt: cleanText } = payload;
         if (old) {
           requireValue(
             old.project_id === p.id &&
@@ -895,12 +698,6 @@ export class OriginalCanvasRuns {
           409,
           `对白「${line.speaker || line.id}」仍在生成`,
         );
-        const extraParams: Record<string, unknown> = {};
-        if (resolved.voiceId) extraParams.voice = resolved.voiceId;
-        if (resolved.rate) extraParams.rate = resolved.rate;
-        if (resolved.pitch) extraParams.pitch = resolved.pitch;
-        if (resolved.instruction) extraParams.instruction = resolved.instruction;
-
         const draft = parseDraft(
           "audio",
           {
@@ -908,10 +705,7 @@ export class OriginalCanvasRuns {
               body.uid,
               `dialogue-job:${p.public_id}:${nid}:${line.id}`,
             ),
-            model,
-            prompt: cleanText,
-            instruction: resolved.instruction,
-            ...(Object.keys(extraParams).length ? { params: extraParams } : {}),
+            ...payload,
             price_revision:
               typeof body.price_revision === "number"
                 ? body.price_revision

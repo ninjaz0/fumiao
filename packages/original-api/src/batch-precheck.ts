@@ -1,4 +1,3 @@
-import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { evaluateBudgetImpact } from "@fumiao/platform/budgets.js";
 import type { Platform } from "@fumiao/platform/platform.js";
@@ -6,10 +5,11 @@ import { one } from "@fumiao/platform/db.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { ReferencePacks } from "@fumiao/platform/packs.js";
-import { hash, requireValue } from "@fumiao/platform/security.js";
+import { DomainError, hash, requireValue } from "@fumiao/platform/security.js";
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
 import { OriginalCanvases } from "./canvases.js";
-import { resolveSpeakerVoice } from "./dialogue.js";
+import { resolveDialogueInput } from "./dialogue.js";
+import { canvasRawPrompt, inspectDirectorShotInputs, resolveCanvasSources } from "./director-inputs.js";
 import {
   batchQuoteFields,
   canvasBatchPrecheckFields,
@@ -79,6 +79,18 @@ export class OriginalBatchPrecheck {
     this.canvases = new OriginalCanvases(p);
     this.catalog = new StudioCatalog(p.db);
     this.packs = new ReferencePacks(p.db);
+  }
+
+  async directorInputs(user: OriginalActor, projectKey: string, nodeId: string) {
+    return this.p.db.transaction(async (sql) => {
+      await sql.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      const project = await this.canvases.project(sql, user, projectKey);
+      const doc = parseCanvasDocument(canvasDocumentJson(project.document));
+      const node = doc.nodes.find((item) => item.id === nodeId && item.type === "video");
+      requireValue(node && doc.director?.shot_ids.includes(nodeId), 404, "本集镜头不存在");
+      const inputs = await inspectDirectorShotInputs(sql, { id: project.id, workspace_id: project.workspace_id }, doc, node);
+      return { revision: Number(project.revision), ...inputs };
+    });
   }
 
   /**
@@ -203,7 +215,6 @@ export class OriginalBatchPrecheck {
       );
       const project = await this.canvases.project(sql, user, projectKey);
       const doc = parseCanvasDocument(canvasDocumentJson(project.document));
-      const nodesById = new Map(doc.nodes.map((n) => [n.id, n]));
       const targets = expandGroupNodeIds(doc.nodes, body.node_ids);
       requireValue(targets.length > 0, 400, "未找到可预检的目标节点");
 
@@ -297,27 +308,17 @@ export class OriginalBatchPrecheck {
             }
             const connectedTexts: string[] = [];
             let connectedImageCount = 0;
-            for (const edge of doc.edges) {
-              if (edge.target !== node.id) continue;
-              const src = nodesById.get(edge.source);
-              if (!src) continue;
-              const srcKind = canvasSourceKind(src, edge.sourcePort);
-              if (srcKind === "text") {
-                const txt = pythonStrip(src.text);
-                if (!txt) {
+            for (const { node: src, kind, value } of await resolveCanvasSources(sql, project.id, doc, node.id)) {
+              if (kind === "text") {
+                if (!value) {
                   issues.push(`上游文本节点「${src.title || src.id}」为空`);
                   status = "blocked";
                 } else {
-                  connectedTexts.push(txt);
+                  connectedTexts.push(value);
                 }
-              } else if (srcKind === "image") {
+              } else {
                 connectedImageCount++;
-                const media = await this.canvases.mediaForNode(
-                  sql,
-                  project.id,
-                  src,
-                );
-                if (!media) {
+                if (!value) {
                   // If upstream image is also being run in this batch, warn instead of hard block!
                   if (
                     stages.includes("image") &&
@@ -334,10 +335,7 @@ export class OriginalBatchPrecheck {
                 }
               }
             }
-            const combinedPrompt = [
-              ...connectedTexts,
-              ...(pythonStrip(node.prompt) ? [pythonStrip(node.prompt)] : []),
-            ].join("\n\n");
+            const combinedPrompt = canvasRawPrompt(connectedTexts, node);
             if (!combinedPrompt) {
               issues.push("缺少提示词或连接的上游文本");
               status = "blocked";
@@ -457,16 +455,12 @@ export class OriginalBatchPrecheck {
                   status = "blocked";
                   continue;
                 }
-                const resolved = await resolveSpeakerVoice(
-                  sql,
-                  project.workspace_id,
-                  line,
-                );
                 let lineModel = "";
                 try {
-                  lineModel = bindings.resolveAudio(resolved.model);
-                } catch {
-                  lineModel = "";
+                  const input = await resolveDialogueInput(sql, project.workspace_id, line, bindings);
+                  lineModel = input.payload.model;
+                } catch (error) {
+                  if (!(error instanceof DomainError)) throw error;
                 }
                 if (!lineModel) {
                   issues.push(

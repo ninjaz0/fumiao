@@ -19,7 +19,7 @@ import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import { capacity, EXPORT_RESERVE } from "@fumiao/platform/capacity.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
-import { directorBasis, directorShotIds } from "@fumiao/web-compat/director.js";
+import { canvasTailSourceId, directorBasis, directorShotIds } from "@fumiao/web-compat/director.js";
 import {
   originalStoryboard,
   type CompositionOptions,
@@ -319,7 +319,8 @@ export class OriginalStoryboardExports {
           ...(n.original_audio_gain !== undefined
             ? { originalGain: n.original_audio_gain }
             : {}),
-          ...(n.tail_inherited ? { tailInherited: true } : {}),
+          ...(n.tail_inherited && (!isEpisode || (i > 0 && canvasTailSourceId(doc, nid) === shotIds[i - 1]))
+            ? { tailInherited: true } : {}),
         };
         if (isEpisode && n.audio_strategy === "keep_original") {
           shots.push(shot);

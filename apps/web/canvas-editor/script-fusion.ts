@@ -2086,9 +2086,7 @@ export function syncDirectorBreakdownToCanvas(
       const prior = previous?.shots?.find((item) => item.node_id === id);
       if (!row) return prior ?? { node_id: id };
       const source = directorFieldDigests(row.incoming);
-      const state = { ...prior, node_id: id, source };
-      if (row.nodeId && merge.get(row.anchor)?.write.size) delete state.story_basis;
-      return state;
+      return { ...prior, node_id: id, source };
     }),
   };
   const order = result.document.shots ?? [];

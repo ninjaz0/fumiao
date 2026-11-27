@@ -10,6 +10,8 @@ import { ProviderError, type ProviderPlugin } from "@fumiao/plugin-sdk/index.js"
 import { wakeTailFrameChildren } from "@fumiao/platform/tail-frame.js";
 import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
+import { parseCanvasDocument } from "@fumiao/original-api/canvas-draft.js";
+import { inspectDirectorShotInputs, resolveDirectorInputBasis } from "@fumiao/original-api/director-inputs.js";
 import { OriginalPacks } from "@fumiao/original-api/packs.js";
 import { OriginalSeries } from "@fumiao/original-api/series.js";
 import { canvasRunsFixture } from "../helpers/canvas-runs.js";
@@ -63,6 +65,80 @@ async function seedImageAsset(
   );
   return { id, publicId, bytes };
 }
+
+test("director input basis covers resolved reference and voice", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  await ensureBuiltinEdgeTts(f.p);
+  const packs = new OriginalPacks(f.p);
+  const ws = String(f.workspace.public_id);
+  const img = await seedImageAsset(f);
+  const other = await seedImageAsset(f, "#aa7744");
+  const voice = (voiceId: string) => ({
+    name: "小林",
+    purpose: "subject",
+    media: [img.publicId],
+    voice_profile: { model: "edge-tts", voice_id: voiceId },
+  });
+  const pack = await packs.save(f.admin, voice("zh-CN-XiaoxiaoNeural"), ws);
+  const nodes = [
+    { id: "image", type: "image", title: "角色参考", x: 0, y: 0 },
+    { id: "previous", type: "video", title: "首镜", x: 0, y: 0 },
+    { id: "shot", type: "video", x: 0, y: 0, prompt: "小林抬头", dialogue_lines: [
+      { id: "line", speaker: "小林", pack_id: pack.id, text: "天亮了。" },
+    ] },
+  ];
+  const edges = [{ id: "ref", source: "image", target: "shot" }];
+  const publicId = await f.project(nodes, edges, ws);
+  const row = await f.canvases.project(f.db, f.admin, publicId);
+  const project = { id: String(row.id), workspace_id: f.workspace.id };
+  const document = parseCanvasDocument({ nodes, edges, shots: ["previous", "shot"] });
+  const pinned = parseCanvasDocument({
+    ...document,
+    nodes: [{ ...nodes[0], active_job: 801 }, ...nodes.slice(1)],
+  });
+  const video = { node_id: "shot", stage: "video" } as const;
+  const dialogue = { node_id: "shot", stage: "dialogue", line_id: "line" } as const;
+  const editShot = (graph: typeof document, patch: Partial<typeof document.nodes[number]>) => ({
+    ...graph,
+    nodes: graph.nodes.map((node) => node.id === "shot" ? { ...node, ...patch } : node),
+  });
+  const inPack = editShot(pinned, { asset_packs: [{ id: pack.id, revision: pack.revision }] });
+  const basis = (target: typeof video | typeof dialogue, graph = document) =>
+    f.db.transaction((sql) => resolveDirectorInputBasis(sql, project, graph, target));
+  const inspect = (graph: typeof document) => f.db.transaction((sql) =>
+    inspectDirectorShotInputs(sql, project, graph, graph.nodes.find((node) => node.id === "shot")!),
+  );
+  await assert.rejects(basis(video), { status: 409, message: /角色参考.*尚未就绪/ });
+  await f.job(801, "image", "completed", img.id);
+  await f.link(publicId, "image", 801);
+  const before = await basis(video);
+  const pinnedBefore = await basis(video, pinned);
+  const voiceBefore = await basis(dialogue);
+  assert.ok(await basis(video, inPack));
+  const followed = await inspect(document);
+  assert.match(followed.visual_issues.join(), /请固定参考图.*角色参考/);
+  const confirmed = await inspect(pinned);
+  assert.equal(confirmed.story_basis, followed.story_basis);
+  assert.equal(followed.material_basis, null);
+  assert.ok(confirmed.material_basis);
+  const revisedStory = await inspect(editShot(pinned, { prompt: "小林低头", x: 300 }));
+  assert.notEqual(revisedStory.story_basis, confirmed.story_basis);
+  assert.equal(revisedStory.material_basis, confirmed.material_basis);
+  assert.deepEqual(await inspect(editShot(pinned, { x: 450 })), confirmed);
+  await f.job(802, "image", "completed", other.id);
+  await f.link(publicId, "image", 802);
+  await packs.save(f.admin, { ...voice("zh-CN-YunxiNeural"), expected_revision: pack.revision }, ws, pack.id);
+  assert.notEqual(await basis(video), before);
+  assert.equal(await basis(video, pinned), pinnedBefore);
+  assert.notEqual(await basis(dialogue), voiceBefore);
+  assert.notEqual((await inspect(pinned)).material_basis, confirmed.material_basis);
+  await assert.rejects(basis(video, inPack), { status: 409, message: /素材包.*小林.*新版本/ });
+  await assert.rejects(basis(video, editShot(document, { tail_inherited: true })), { status: 409, message: /首镜.*自动尾帧/ });
+  await assert.rejects(basis(dialogue, editShot(document, { dialogue_lines: [{
+    id: "line", speaker: "小林", pack_id: randomUUID().replaceAll("-", ""), text: "天亮了。",
+  }] })), { status: 409, message: /角色素材包不可用/ });
+});
 
 test("#9 F010/F007/F027: mixed-price dialogue precheck matches batchRun, rejects quote drift 409, replays idempotently, and returns line_id", async (t) => {
   const f = await canvasRunsFixture();
