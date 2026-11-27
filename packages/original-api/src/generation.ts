@@ -44,7 +44,7 @@ export class OriginalGeneration {
     continuation = false,
   ): Promise<OriginalTask | undefined> {
     if (!id) return undefined;
-    const resource = await originalTask(sql, workspace, id, continuation, continuation);
+    const resource = await originalTask(sql, workspace, id, continuation);
     if (!resource) return;
     await new OriginalLibrary(this.p).access(
       sql,
@@ -133,10 +133,13 @@ export class OriginalGeneration {
         );
         return { id: Number(previous.public_id) };
       }
-      const { refs, prompt, snapshots } = await expandOriginalPacks(sql, workspace.id, draft, true);
+      let snapshots: Awaited<ReturnType<typeof expandOriginalPacks>>["snapshots"] = [];
       if (draft.asset_packs.length) {
-        draft.prompt = prompt;
-        draft.refs = refs;
+        await new OriginalIdentity(this.p).requireWorkspace(sql, user, Number(workspace.public_id));
+        const expanded = await expandOriginalPacks(sql, workspace.id, draft, true);
+        snapshots = expanded.snapshots;
+        draft.prompt = expanded.prompt;
+        draft.refs = expanded.refs;
         draft.asset_packs = [];
         adapter.validate(draft, "before-retry");
       }

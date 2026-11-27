@@ -223,6 +223,39 @@ test("director pack inputs match actual submit, including expanded prompt and de
   assert.deepEqual(legacy.references.map(({ id }) => id), [refs[0].public_id]);
 });
 
+test("pack generation rechecks workspace membership after waiting for the wallet", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  const ws = String(f.team.public_id);
+  const ref = await f.asset(randomUUID().replaceAll("-", ""), "ref", f.team);
+  const pack = await new OriginalPacks(f.p).save(f.admin, {
+    name: "场景说明",
+    purpose: "scene",
+    media: [ref.public_id],
+  }, ws);
+  await f.db.query("UPDATE documents SET body=body-'assets' WHERE public_id=$1", [pack.id]);
+  const project = await f.project([{
+    id: "shot", type: "video", x: 0, y: 0, prompt: "窗边",
+    asset_packs: [{ id: pack.id, revision: pack.revision }],
+  }], [], ws, f.member);
+  const transaction = f.db.transaction.bind(f.db);
+  let revoked = false;
+  f.db.transaction = (fn) => transaction((sql) => fn({
+    query: async <T extends Record<string, unknown>>(query: string, values?: unknown[]) => {
+      const result = await sql.query<T>(query, values);
+      if (!revoked && query.includes("FROM wallets WHERE workspace_id=$1 FOR UPDATE")) {
+        await f.db.query("DELETE FROM members WHERE workspace_id=$1 AND user_id=$2", [f.team.id, f.member.id]);
+        revoked = true;
+      }
+      return result;
+    },
+  }));
+  await assert.rejects(f.runs.generate(f.member, project, "shot", f.body()), { status: 403, message: "无法访问这个工作区" });
+  assert.ok(revoked);
+  const count = (await f.db.query("SELECT count(*) AS count FROM jobs WHERE workspace_id=$1", [f.team.id])).rows[0];
+  assert.equal(Number(count.count), 0);
+});
+
 test("#9 F010/F007/F027: mixed-price dialogue precheck matches batchRun, rejects quote drift 409, replays idempotently, and returns line_id", async (t) => {
   const f = await canvasRunsFixture();
   t.after(() => f.cleanup());
