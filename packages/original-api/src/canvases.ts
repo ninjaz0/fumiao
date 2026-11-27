@@ -346,10 +346,12 @@ export class OriginalCanvases {
     project: string,
     node: CanvasNode,
     adoptedOnly = false,
+    assetLock: "wait" | "nowait" = "wait",
   ) {
     const key = await this.mediaForNode(sql, project, node, adoptedOnly);
     const { rows } = await sql.query<ShotVideo>(
-      "SELECT id,public_id,workspace_id,mime,size FROM assets WHERE public_id=$1 AND original_kind='video' AND state='ready' FOR SHARE",
+      `SELECT id,public_id,workspace_id,mime,size FROM assets
+       WHERE public_id=$1 AND original_kind='video' AND state='ready' FOR SHARE${assetLock === "nowait" ? " NOWAIT" : ""}`,
       [key],
     );
     return rows[0];

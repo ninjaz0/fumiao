@@ -64,6 +64,7 @@ export type DirectorShotInputs = {
 
 export const directorBatchUnclaimed = "本次提交未创建回执。";
 export const directorScriptConflict = "主剧本已更新，请重新预览后同步。";
+export const directorExportAssetBusy = "本集素材正在被更新，请稍后重试合成。";
 export const episodeMaxShots = 30;
 export const episodeMaxSeconds = 300;
 
@@ -119,19 +120,10 @@ export function directorAudioEvidenceMismatch(
   const params = recorded.params && typeof recorded.params === "object"
     ? recorded.params as Record<string, unknown> : undefined;
   if (edge && current.model === "edge-tts") {
-    const old = {
-      voice: settings?.voice ?? params?.voice ?? evidence.voice_id,
-      rate: settings?.rate ?? params?.rate,
-      pitch: settings?.pitch ?? params?.pitch,
-    };
-    // The current Edge parameters have been resolved with the same defaults
-    // that its adapter uses on admission. An omitted historical field is unknown.
-    const canonical = (value: unknown) => typeof value === "string"
-      ? value.trim().replace(/^([+-]?\d+)(%|Hz)$/, (_, number, unit) => String(Number(number)) + unit)
-      : value;
+    // Both values come from the Edge renderer's normalization. A missing
+    // historical field is unknown rather than a recorded default.
     return (["voice", "rate", "pitch"] as const).some((key) =>
-      typeof old[key] === "string" && old[key] &&
-      canonical(old[key]) !== canonical(current.params?.[key]));
+      settings?.[key] !== undefined && settings[key] !== current.params?.[key]);
   }
   if (params) {
     for (const key of ["voice", "rate", "pitch"])

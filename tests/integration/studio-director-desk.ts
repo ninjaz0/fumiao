@@ -249,6 +249,33 @@ export async function verifyDirectorDesk(
     }, "PUT");
     await episode.getByRole("button", { name: "合成本集" }).click();
     await expect(episode.getByRole("alert")).toContainText("主剧本已更新");
+
+    const selectedClip = (await runs()).find(({ id }) => id === acceptedJob)?.result;
+    assert.ok(selectedClip);
+    let signalLocked!: () => void, releaseClip!: () => void;
+    const locked = new Promise<void>((resolve) => { signalLocked = resolve; });
+    const held = new Promise<void>((resolve) => { releaseClip = resolve; });
+    const writer = platform.db.transaction(async (sql) => {
+      await sql.query("SELECT id FROM assets WHERE public_id=$1 FOR UPDATE", [selectedClip]);
+      signalLocked();
+      await held;
+    });
+    let blockedExport: unknown;
+    try {
+      await Promise.race([locked, writer]);
+      const [blocked] = await Promise.all([
+        page.waitForResponse((res) => res.request().method() === "POST" && res.url().endsWith(path + "/exports"), { timeout: 10_000 }),
+        episode.getByRole("button", { name: `合成已确认剧本版本 ${script.revision}` }).click(),
+      ]);
+      assert.equal(blocked.status(), 409, await blocked.text());
+      blockedExport = blocked.request().postDataJSON();
+      await expect(episode.getByRole("alert")).toContainText("素材正在被更新，请稍后重试合成");
+      await expect(episode.getByRole("button", { name: "恢复本集合成提交" })).toBeEnabled();
+    } finally {
+      releaseClip();
+      await writer;
+    }
+
     let lostExport: unknown;
     let firstExportId = "";
     const exportUrl = `**${path}/exports`;
@@ -259,8 +286,9 @@ export async function verifyDirectorDesk(
       firstExportId = (await response.json()).id;
       await route.abort("failed");
     }, { times: 1 });
-    await episode.getByRole("button", { name: `合成已确认剧本版本 ${script.revision}` }).click();
+    await episode.getByRole("button", { name: "恢复本集合成提交" }).click();
     await expect(episode.getByRole("button", { name: "恢复本集合成提交" })).toBeEnabled();
+    assert.deepEqual(lostExport, blockedExport);
     await page.reload();
     await directorTab.click();
     const replayExport = page.waitForRequest((run) => run.method() === "POST" && run.url().endsWith(path + "/exports"));

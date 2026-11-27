@@ -14,6 +14,7 @@ import { S3Storage } from "@fumiao/platform/storage.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
 import { originalStoryboard } from "@fumiao/platform/composition/renderer.js";
 import { OriginalMedia } from "@fumiao/original-api/media.js";
+import { OriginalLibrary } from "@fumiao/original-api/library.js";
 import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
 import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
@@ -1833,6 +1834,34 @@ test("episode compares the accepted ordinary Edge rendering with pack rate, pitc
     assert.deepEqual(view?.audio_settings, pitched.job.original_view.audio_settings);
     await f.db.query("UPDATE jobs SET input=$2 WHERE id=$1", [pitched.job.id, JSON.stringify({ prompt: line.text })]);
     await acceptAndRelease();
+
+    await editPack({ rate: "+120%", pitch: "+75Hz" });
+    const clamped = await prepareTake();
+    assert.equal(clamped.job.input.params.rate, "+120%");
+    assert.equal(clamped.job.input.params.pitch, "+75Hz");
+    const clampedRuns = await ordinary.list(f.admin, f.project.id);
+    const clampedView = (clampedRuns.runs as Record<string, unknown>[])
+      .find((run) => run.id === Number(clamped.job.public_id));
+    assert.deepEqual(clampedView?.audio_settings, { voice: "zh-CN-XiaoxiaoNeural", rate: "+100%", pitch: "+50Hz" });
+    await editPack({ rate: "+100%", pitch: "+50Hz" });
+    await confirmEpisodeAdoptions(f, clamped.graph);
+    await acceptAndRelease();
+    await editPack({ rate: "+99%", pitch: "+50Hz" });
+    await confirmEpisodeAdoptions(f, clamped.graph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+    await editPack({ rate: "+100%", pitch: "+49Hz" });
+    await confirmEpisodeAdoptions(f, clamped.graph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+
+    const invalid = { rate: "invalid-rate", pitch: "invalid-pitch" };
+    await f.db.query("UPDATE jobs SET original_view=$2,input=$3 WHERE id=$1", [
+      clamped.job.id,
+      JSON.stringify({ ...clamped.job.original_view, audio_settings: {} }),
+      JSON.stringify({ ...clamped.job.input, params: invalid }),
+    ]);
+    await editPack({});
+    await confirmEpisodeAdoptions(f, clamped.graph);
+    await acceptAndRelease();
   } finally {
     await f.cleanup();
   }
@@ -1928,6 +1957,90 @@ test("episode holds legacy fallback reference state until it freezes the export"
     clearTimeout(timer);
     release.resolve();
     await Promise.allSettled([exportRequest]);
+    await f.cleanup();
+  }
+});
+
+test("episode and original library deletion avoid opposite-order asset deadlock", async () => {
+  const f = await fixture();
+  const release = deferred();
+  const clipHeld = deferred<number>();
+  const originalTransaction = f.db.transaction.bind(f.db);
+  let exportRequest: Promise<unknown> | undefined;
+  let deleting: Promise<unknown> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await seedEpisodeScript(f);
+    const reference = { id: "00000000-0000-4000-8000-000000000001", publicId: randomUUID().replaceAll("-", "") };
+    await f.db.query(
+      `INSERT INTO assets(id, public_id, workspace_id, owner_id, object_key, mime, size, state, original_kind)
+       VALUES($1::uuid,$2,$3,$4,$1::uuid::text,'image/png',0,'ready','ref')`,
+      [reference.id, reference.publicId, f.workspace.id, f.admin.id],
+    );
+    assert.ok(reference.id < f.video.id);
+    await f.job(901, "video", "completed", f.video.id);
+    const refNode = { id: "ref", type: "image", x: 0, y: 0, media_id: reference.publicId, use_media: true };
+    const shot = { ...f.doc.nodes[0], audio_strategy: "keep_original", narration_job: null, narration_text: "" };
+    const document = {
+      ...f.doc,
+      nodes: [shot, refNode],
+      edges: [{ id: "ref-in", source: refNode.id, target: shot.id }],
+      director: episode(f.doc.shots),
+    };
+    const saved = await f.canvases.save(f.admin, f.project.id, { expected_revision: 1, title: f.project.title, document });
+    await confirmEpisodeAdoptions(f, document);
+
+    let paused = false;
+    f.db.transaction = (fn) => originalTransaction((sql) => fn({
+      async query<T extends Record<string, unknown>>(statement: string, params?: unknown[]) {
+        const result = await sql.query<T>(statement, params);
+        if (!paused && statement.includes("original_kind='video'") && statement.includes("FOR SHARE") &&
+          params?.[0] === f.video.public_id) {
+          paused = true;
+          const { pid } = await one(sql, "SELECT pg_backend_pid() AS pid");
+          clipHeld.resolve(pid);
+          await release.promise;
+        }
+        return result;
+      },
+    }));
+    const request = { uid: randomUUID(), expected_revision: saved.revision, scope: "episode" };
+    exportRequest = f.service.create(f.admin, f.project.id, request);
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("episode did not lock the adopted clip")), 8000);
+    });
+    const exporterPid = await Promise.race([clipHeld.promise, exportRequest, timeout]);
+    assert.equal(typeof exporterPid, "number");
+    deleting = new OriginalLibrary(f.p).remove(f.admin, {
+      keys: ["asset:" + reference.publicId, "job:901"],
+    });
+    void deleting.catch(() => {});
+    const deadline = Date.now() + 8000;
+    for (;;) {
+      const { blocked } = await one(f.db, `SELECT EXISTS(
+        SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))
+      ) AS blocked`, [exporterPid]);
+      if (blocked) break;
+      assert.ok(Date.now() < deadline, "library did not reach the held adopted clip");
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+    await assert.rejects(
+      f.db.query("SELECT id FROM assets WHERE id=$1 FOR UPDATE NOWAIT", [reference.id]),
+      { code: "55P03" },
+    );
+
+    release.resolve();
+    await assert.rejects(exportRequest, { status: 409, message: /素材.*重试合成/ });
+    await assert.rejects(deleting, { status: 409, message: /素材正在画布中使用/ });
+    assert.equal((await one(f.db, "SELECT count(*)::int AS n FROM storyboard_exports WHERE uid=$1", [request.uid])).n, 0);
+    const receipt = await f.service.create(f.admin, f.project.id, request);
+    assert.equal(receipt.scope, "episode");
+    assert.deepEqual(await f.service.create(f.admin, f.project.id, request), receipt);
+  } finally {
+    clearTimeout(timer);
+    release.resolve();
+    await Promise.allSettled([exportRequest, deleting]);
+    f.db.transaction = originalTransaction;
     await f.cleanup();
   }
 });

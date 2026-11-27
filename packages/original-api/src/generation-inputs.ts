@@ -41,6 +41,7 @@ export async function originalFlowSource(
   workspaceId: string,
   id: number,
   lock = false,
+  nowaitAssets = false,
 ) {
   const source = await originalTask(sql, workspaceId, id, true, lock);
   if (!source) return;
@@ -50,7 +51,7 @@ export async function originalFlowSource(
        FROM job_assets r JOIN assets a ON a.id=r.asset_id
       WHERE r.job_id=$1 AND r.role='output'
       ORDER BY a.created_at,a.public_id LIMIT 1
-      ${lock ? "FOR SHARE OF a" : ""}`,
+      ${lock ? `FOR SHARE OF a${nowaitAssets ? " NOWAIT" : ""}` : ""}`,
     [source.row.id],
   );
   const media = output?.workspace_id === workspaceId && output.state === "ready" &&

@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
-import { requireValue } from "@fumiao/platform/security.js";
+import { DomainError, requireValue } from "@fumiao/platform/security.js";
 import { capacity, EXPORT_RESERVE } from "@fumiao/platform/capacity.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import {
@@ -25,6 +25,7 @@ import {
   directorAudioEvidenceMismatch,
   directorAudioTargets,
   directorBasis,
+  directorExportAssetBusy,
   directorMissingApproval,
   directorShotIds,
   directorTargetKey,
@@ -340,7 +341,7 @@ export class OriginalStoryboardExports {
       const pinVoice = async (voice: Record<string, any>) => {
         const locked = await one(
           sql,
-          "SELECT state FROM assets WHERE id=$1 FOR SHARE",
+          `SELECT state FROM assets WHERE id=$1 FOR SHARE${isEpisode ? " NOWAIT" : ""}`,
           [voice.id],
         );
         if (isEpisode) {
@@ -373,6 +374,7 @@ export class OriginalStoryboardExports {
           project.id,
           n,
           isEpisode,
+          isEpisode ? "nowait" : "wait",
         );
         requireValue(media, 409, `镜头 ${i + 1} 的视频尚未就绪`);
         await this.canvases.library.access(
@@ -396,7 +398,7 @@ export class OriginalStoryboardExports {
           ...(!isEpisode && n.tail_inherited ? { tailInherited: true } : {}),
         };
         const inputs = isEpisode
-          ? await inspectDirectorShotInputs(sql, { id: project.id, workspace_id: project.workspace_id }, doc, n, models, { adoption: true, lock: true })
+          ? await inspectDirectorShotInputs(sql, { id: project.id, workspace_id: project.workspace_id }, doc, n, models, { adoption: true, lock: true, nowaitAssets: true })
           : undefined;
         const requireAdoption = async () => {
           if (!isEpisode) return;
@@ -418,7 +420,7 @@ export class OriginalStoryboardExports {
           const recorded = link ? canvasDocumentJson(link.inputs) : {};
           const rendered = {
             model: job.provider_model,
-            audio_settings: directorRenderedVoice(job.original_view?.audio_settings, job.input?.params),
+            audio_settings: directorRenderedVoice(job.provider_model, job.original_view?.audio_settings, job.input?.params, recorded),
           };
           requireValue(!directorAudioEvidenceMismatch({
             model: job.original_view?.model, ...recorded,
@@ -541,7 +543,8 @@ export class OriginalStoryboardExports {
       if (bgmKey) {
         const bgmAsset = await one(
           sql,
-          "SELECT * FROM assets WHERE public_id=$1 AND workspace_id=$2 AND original_kind IN ('audio','ref_audio') AND state='ready' FOR SHARE",
+          `SELECT * FROM assets WHERE public_id=$1 AND workspace_id=$2
+           AND original_kind IN ('audio','ref_audio') AND state='ready' FOR SHARE${isEpisode ? " NOWAIT" : ""}`,
           [bgmKey, project.workspace_id],
         );
         requireValue(bgmAsset, 404, "背景音乐素材不存在或无权访问");
@@ -691,6 +694,12 @@ export class OriginalStoryboardExports {
           asset.id,
         ]);
       return this.public(row);
+    }).catch((error: unknown) => {
+      // Discovery follows the saved shot order. A competing library write may
+      // already hold a reference while waiting for one of our adopted assets.
+      if (isEpisode && error instanceof Error && "code" in error && error.code === "55P03")
+        throw new DomainError(409, directorExportAssetBusy);
+      throw error;
     });
   }
   async recover() {

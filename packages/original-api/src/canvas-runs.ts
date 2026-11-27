@@ -155,14 +155,16 @@ export class OriginalCanvasRuns {
             runs: links.map((l) => {
               const j = byId.get(Number(l.job));
               requireValue(j, 503, "画布任务尚未完成原状态迁移");
-              const voice = j.kind === "audio" ? directorRenderedVoice(l.audio_settings, l.prepared_audio) : {};
+              const inputs = parseCanvasRunJson(canvasText(l.inputs));
+              const voice = j.kind === "audio" ? directorRenderedVoice(j.model, l.audio_settings, l.prepared_audio,
+                inputs && typeof inputs === "object" ? inputs as Record<string, unknown> : undefined) : {};
               return {
                 ...Object.fromEntries(fields.map((key) => [key, j[key]])),
                 ...(j.result_mime ? { result_mime: j.result_mime } : {}),
                 ...(Object.keys(voice).length ? { audio_settings: voice } : {}),
                 link_id: parseCanvasRunJson(l.id),
                 canvas_node: l.node,
-                inputs: parseCanvasRunJson(canvasText(l.inputs)),
+                inputs,
                 batch: byJob.get(j.id) ?? null,
                 model_label: bindings.rules.get(j.model)?.showModelLabel
                   ? (models[j.model]?.label ?? null)

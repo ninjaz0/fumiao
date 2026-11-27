@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Film, Music, Package, Sparkles } from "lucide-react";
 import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename";
-import { directorScriptConflict } from "@fumiao/web-compat/director.js";
+import { directorExportAssetBusy, directorScriptConflict } from "@fumiao/web-compat/director.js";
 import { api, ApiError } from "./api";
 import type { CanvasBgm } from "./types";
 
@@ -228,7 +228,8 @@ export function Composition({
         clear();
         setStaleScript(undefined);
       } catch (cause) {
-        if (cause instanceof ApiError && cause.status < 500 && cause.status !== 408) {
+        if (cause instanceof ApiError && cause.status < 500 && cause.status !== 408 &&
+          !(cause.status === 409 && cause.message === directorExportAssetBusy)) {
           clear();
           if (cause.message === directorScriptConflict) setStaleScript(body.script_revision);
         }

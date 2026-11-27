@@ -2,6 +2,7 @@ import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { edgeSpeechSettings } from "@fumiao/platform/tts/edge-plugin.js";
+import { edgeRenderingSettings } from "@fumiao/platform/tts/edge-tts.js";
 import type { Sql } from "@fumiao/platform/db.js";
 import { DomainError, requireValue } from "@fumiao/platform/security.js";
 import {
@@ -18,15 +19,24 @@ import { canvasNodeMedia } from "./canvases.js";
 import { resolveDialogueInput } from "./dialogue.js";
 import { expandOriginalPacks, originalFlowSource } from "./generation-inputs.js";
 
-export function directorRenderedVoice(view: unknown, prepared: unknown): DirectorVoiceSettings {
+export function directorRenderedVoice(model: string, view: unknown, prepared: unknown, captured?: Record<string, unknown>): DirectorVoiceSettings {
   const settings: DirectorVoiceSettings = {};
-  for (const source of [prepared, view]) {
+  const edge = model === "edge-tts" || captured?.model === "edge-tts";
+  const sources = edge ? [{ voice: captured?.voice_id }, captured?.params, view, prepared] : [prepared, view];
+  const prosody = ["voice", "rate", "pitch"] as const;
+  for (const source of sources) {
     if (!source || typeof source !== "object") continue;
     const recorded = source as Record<string, unknown>;
     for (const key of ["voice", "rate", "pitch", "instruction"] as const) {
       const value = recorded[key];
-      if (typeof value === "string" && (key === "instruction" || value.trim()))
+      if (typeof value === "string" && (edge || key === "instruction" || value.trim()))
         settings[key] = value;
+    }
+  }
+  if (edge) {
+    const normalized = edgeRenderingSettings(settings);
+    for (const key of prosody) {
+      if (settings[key] !== undefined) settings[key] = normalized[key];
     }
   }
   return settings;
@@ -67,6 +77,7 @@ export function compileCinematographyPrompt(
   return parts.filter(Boolean).join("\n\n").slice(0, 12000);
 }
 type InputProject = { id: string; workspace_id: string };
+type DirectorInputLocks = { lock?: boolean; nowaitAssets?: boolean };
 
 export async function resolveCanvasSources(
   sql: Sql,
@@ -211,9 +222,8 @@ export async function resolveDirectorInput(
   document: CanvasDocument,
   target: DirectorTarget,
   bindings?: CanvasSubmissionModels,
-  options?: {
+  options?: DirectorInputLocks & {
     sources?: Awaited<ReturnType<typeof resolveCanvasSources>>;
-    lock?: boolean;
   },
 ) {
   const node = document.nodes.find(({ id }) => id === target.node_id);
@@ -257,7 +267,7 @@ export async function resolveDirectorInput(
   const references = expanded.refs;
   const sourceJob = "flow_source_job" in payload ? payload.flow_source_job : null;
   const flowSource = sourceJob
-    ? await originalFlowSource(sql, project.workspace_id, sourceJob, options?.lock)
+    ? await originalFlowSource(sql, project.workspace_id, sourceJob, options?.lock, options?.nowaitAssets)
     : undefined;
   let flowBasis;
   if (sourceJob) {
@@ -287,7 +297,7 @@ export async function resolveDirectorInput(
     const { rows } = await sql.query<{ id: string; mime: string }>(
       `SELECT public_id AS id,mime FROM assets
        WHERE public_id=ANY($1::text[]) AND workspace_id=$2 AND state='ready'
-       ORDER BY id ${options?.lock ? "FOR SHARE" : ""}`,
+       ORDER BY id ${options?.lock ? `FOR SHARE${options.nowaitAssets ? " NOWAIT" : ""}` : ""}`,
       [mediaToCheck, project.workspace_id],
     );
     requireValue(rows.length === mediaToCheck.length, 409, "有参考素材已删除或不可访问，请重新选择");
@@ -334,7 +344,7 @@ export async function inspectDirectorShotInputs(
   document: CanvasDocument,
   node: CanvasNode,
   bindings?: CanvasSubmissionModels,
-  options?: { adoption?: boolean; lock?: boolean },
+  options?: DirectorInputLocks & { adoption?: boolean },
 ): Promise<Omit<DirectorShotInputs, "revision">> {
   const result: Omit<DirectorShotInputs, "revision"> = {
     description: "", story_basis: null, material_basis: null,
@@ -360,7 +370,7 @@ export async function inspectDirectorShotInputs(
   const materials: unknown[] = [];
   let visualBasis: string | undefined;
   try {
-    const visual = await resolveDirectorInput(sql, project, document, { node_id: node.id, stage: "video" }, models, { sources, lock: options?.lock });
+    const visual = await resolveDirectorInput(sql, project, document, { node_id: node.id, stage: "video" }, models, { ...options, sources });
     if (visual.stage === "video") {
       visualBasis = visual.basis;
       materials.push(visual.material);
@@ -386,7 +396,8 @@ export async function inspectDirectorShotInputs(
         pack_id: input.stage === "dialogue" ? input.voice.packId : null,
         voice_id: input.stage === "dialogue" ? input.voice.voiceId ?? null : null,
         instruction: input.payload.instruction ?? "",
-        ...(options?.adoption ? { params: input.payload.model === "edge-tts" ? edgeSpeechSettings(params) : params } : {}),
+        ...(options?.adoption ? { params: input.payload.model === "edge-tts"
+          ? edgeRenderingSettings(edgeSpeechSettings(params)) : params } : {}),
       };
       if (input.stage === "dialogue") {
         result.voices.push({
@@ -427,7 +438,7 @@ export async function inspectDirectorShotInputs(
       audio: audioTargets,
       strategy: node.audio_strategy ?? "replace",
       ...(node.audio_strategy === "mix" ? { gain: node.original_audio_gain ?? 0.35 } : {}),
-      visual: visualBasis ?? await legacyAdoptionVisual(sql, project, document, node, sources, options.lock),
+      visual: visualBasis ?? await legacyAdoptionVisual(sql, project, document, node, sources, options),
     });
   }
   return result;
@@ -442,7 +453,7 @@ async function legacyAdoptionVisual(
   document: CanvasDocument,
   node: CanvasNode,
   sources: Awaited<ReturnType<typeof resolveCanvasSources>>,
-  lock = false,
+  { lock = false, nowaitAssets = false }: DirectorInputLocks,
 ) {
   const packIds = node.asset_packs.map(({ id }) => id);
   const packs = packIds.length ? (await sql.query(
@@ -464,7 +475,7 @@ async function legacyAdoptionVisual(
   ].filter((value): value is string => Boolean(value)))];
   const media = mediaIds.length ? (await sql.query(
     `SELECT public_id, state FROM assets WHERE workspace_id=$1 AND public_id=ANY($2::text[])
-     ORDER BY id ${lock ? "FOR SHARE" : ""}`,
+     ORDER BY id ${lock ? `FOR SHARE${nowaitAssets ? " NOWAIT" : ""}` : ""}`,
     [project.workspace_id, mediaIds],
   )).rows : [];
   return {
