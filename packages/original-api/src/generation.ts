@@ -10,12 +10,9 @@ import {
 } from "@fumiao/platform/security.js";
 import { canonical, validator } from "@fumiao/platform/plugins.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
-import { ReferencePacks, packPurposes } from "@fumiao/platform/packs.js";
 import { capacity, JOB_RESERVE } from "@fumiao/platform/capacity.js";
-import {
-  executableJob,
-  ordinaryFlowSource,
-} from "@fumiao/platform/retired-jobs.js";
+import { executableJob } from "@fumiao/platform/retired-jobs.js";
+import { expandOriginalPacks, originalTask } from "./generation-inputs.js";
 import { acceptTask, type AcceptTaskMeta } from "@fumiao/platform/accept.js";
 import { saveSubmissionForecast } from "@fumiao/platform/submission-forecast.js";
 import { OriginalIdentity, type OriginalActor } from "./identity.js";
@@ -47,29 +44,15 @@ export class OriginalGeneration {
     continuation = false,
   ): Promise<OriginalTask | undefined> {
     if (!id) return undefined;
-    const row = await one(
-      sql,
-      `SELECT j.*,(${ordinaryFlowSource}) AS ordinary_origin FROM jobs j WHERE public_id=$1 AND workspace_id=$2 AND deleted_at IS NULL`,
-      [id, workspace],
-    );
-    if (!row) return undefined;
+    const resource = await originalTask(sql, workspace, id, continuation, continuation);
+    if (!resource) return;
     await new OriginalLibrary(this.p).access(
       sql,
       user,
-      { kind: "job", row },
+      { kind: "job", row: resource.row },
       workspace,
     );
-    const metadata = { ...row.original_view.actual, ...row.result?.usage };
-    if (continuation && !row.ordinary_origin) delete metadata.flow_media_id;
-    return {
-      id: Number(row.public_id),
-      model: row.provider_model,
-      kind: row.kind,
-      state: row.state,
-      params: row.input.params,
-      view: { ...row.input.params, ...row.original_view },
-      metadata,
-    };
+    return resource.task;
   }
   async submit(user: OriginalActor, value: OriginalDraft, selected?: string) {
     return this.p.db.transaction((sql) =>
@@ -150,58 +133,11 @@ export class OriginalGeneration {
         );
         return { id: Number(previous.public_id) };
       }
-      let snapshots: unknown[] = [];
+      const { refs, prompt, snapshots } = await expandOriginalPacks(sql, workspace.id, draft, true);
       if (draft.asset_packs.length) {
-        // Expand public IDs before validating any direct references, as Pure does.
-        const packs = new ReferencePacks(this.p.db),
-          refs = [...draft.refs],
-          prompts = [pythonStrip(draft.prompt)];
-        requireValue(
-          new Set(draft.asset_packs.map((p) => p.id)).size ===
-            draft.asset_packs.length,
-          400,
-          "请勿重复引用素材包",
-        );
-        for (const selectedPack of draft.asset_packs) {
-          const pack = await packs.view(
-            sql,
-            await packs.get(
-              sql,
-              user,
-              selectedPack.id,
-              workspace.id,
-              true,
-              "share",
-            ),
-          );
-          requireValue(
-            pack.revision === selectedPack.revision,
-            409,
-            `素材包“${pack.name}”已更新，请重新选择后生成`,
-          );
-          for (const id of pack.media) if (!refs.includes(id)) refs.push(id);
-          const indexes = pack.media
-            .map((id: string) => `<Picture ${refs.indexOf(id) + 1}>`)
-            .join(", ");
-          prompts.push(
-            `${pack.name}（${packPurposes[pack.purpose as keyof typeof packPurposes]}，${indexes}）：${pack.description}`,
-          );
-          snapshots.push(
-            Object.fromEntries(
-              ["id", "revision", "name", "purpose", "description", "media"].map(
-                (key) => [key, (pack as any)[key]],
-              ),
-            ),
-          );
-        }
-        draft.prompt = prompts.join("\n\n");
+        draft.prompt = prompt;
         draft.refs = refs;
         draft.asset_packs = [];
-        requireValue(
-          refs.length <= 9 && [...draft.prompt].length <= 12000,
-          400,
-          "参考图片合计最多 9 张，提示词和素材说明合计最多 12000 字",
-        );
         adapter.validate(draft, "before-retry");
       }
       // The policy check precedes reference validation and billing in the original.

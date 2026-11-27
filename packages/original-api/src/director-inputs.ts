@@ -13,6 +13,7 @@ import {
 import type { CanvasDocument, CanvasNode, CinematographySpec } from "./canvas-draft.js";
 import { canvasNodeMedia } from "./canvases.js";
 import { resolveDialogueInput } from "./dialogue.js";
+import { expandOriginalPacks, originalFlowSource } from "./generation-inputs.js";
 
 /** F030: Compiles structured 6-dimension director cinematography spec into clean prompt text. */
 export function compileCinematographyPrompt(
@@ -174,38 +175,6 @@ export function canvasVisualPayload(node: CanvasNode, base: CanvasVisualBase, se
     };
 }
 
-async function directorPacks(sql: Sql, workspaceId: string, node: CanvasNode) {
-  if (!node.asset_packs.length) return [];
-  const ids = node.asset_packs.map(({ id }) => id);
-  requireValue(new Set(ids).size === ids.length, 400, "请勿重复引用素材包");
-  const { rows } = await sql.query<{
-    id: string;
-    title: string;
-    revision: number;
-    body: { purpose?: string; description?: string };
-    pack_text: { name: string; description: string } | null;
-    media: (string | null)[];
-  }>(
-    `SELECT d.public_id AS id, d.title, d.revision, d.body, d.pack_text,
-        ARRAY(SELECT a.public_id FROM jsonb_array_elements_text(COALESCE(d.body->'assets','[]')) WITH ORDINALITY AS s(id, position)
-          LEFT JOIN assets a ON a.id=s.id::uuid AND a.state='ready' AND a.workspace_id=d.workspace_id
-          ORDER BY s.position) AS media
-      FROM documents d
-      WHERE d.public_id=ANY($1::text[]) AND d.workspace_id=$2 AND d.kind='pack' AND NOT d.deleted`,
-    [ids, workspaceId],
-  );
-  const byId = new Map(rows.map((pack) => [pack.id, pack]));
-  return node.asset_packs.map(({ id, revision }) => {
-    const pack = byId.get(id);
-    requireValue(pack, 409, `素材包 ${id.slice(0, 6)} 已删除或不可访问`);
-    const { name, description } = pack.pack_text ?? { name: pack.title, description: pack.body.description ?? "" };
-    requireValue(Number(pack.revision) === revision, 409, `素材包“${name}”已有新版本，请重新选择`);
-    const media = pack.media.filter((id): id is string => Boolean(id));
-    requireValue(media.length === pack.media.length && media.length, 409, `素材包“${name}”缺少可用图片`);
-    return { id, revision, name, description, purpose: pack.body.purpose || "subject", media };
-  });
-}
-
 export function canvasNarrationInput(node: CanvasNode, bindings: CanvasSubmissionModels) {
   requireValue(pythonStrip(node.narration_text), 400, "请先填写镜头旁白");
   return {
@@ -223,7 +192,10 @@ export async function resolveDirectorInput(
   document: CanvasDocument,
   target: DirectorTarget,
   bindings?: CanvasSubmissionModels,
-  sources?: Awaited<ReturnType<typeof resolveCanvasSources>>,
+  options?: {
+    sources?: Awaited<ReturnType<typeof resolveCanvasSources>>;
+    lock?: boolean;
+  },
 ) {
   const node = document.nodes.find(({ id }) => id === target.node_id);
   requireValue(node && node.type === (target.stage === "image" ? "image" : "video"), 400, "生成阶段与节点类型不匹配");
@@ -254,12 +226,37 @@ export async function resolveDirectorInput(
     const label = source ? `“${source.title || source.id}”的` : "";
     requireValue(false, 409, `本镜已启用${label}自动尾帧继承，请先关闭自动继承，可在画布固定所需尾帧`);
   }
-  const base = await resolveCanvasVisualBase(sql, project.id, document, node, bindings ?? await CanvasSubmissionModels.read(sql), sources);
+  const base = await resolveCanvasVisualBase(
+    sql, project.id, document, node,
+    bindings ?? await CanvasSubmissionModels.read(sql), options?.sources,
+  );
   const payload = canvasVisualPayload(node, base);
-  const packs = await directorPacks(sql, project.workspace_id, node);
   const native = "h3" in payload ? payload.h3 : undefined;
-  requireValue(native?.mode !== "frames" || !packs.length, 400, "首尾帧模式请在画布槽位中直接选择图片");
-  const references = [...new Set([...payload.refs, ...packs.flatMap((pack) => pack.media)])];
+  requireValue(native?.mode !== "frames" || !payload.asset_packs.length, 400, "首尾帧模式请在画布槽位中直接选择图片");
+  const expanded = await expandOriginalPacks(sql, project.workspace_id, payload, options?.lock);
+  const references = expanded.refs;
+  const sourceJob = "flow_source_job" in payload ? payload.flow_source_job : null;
+  const flowSource = sourceJob
+    ? await originalFlowSource(sql, project.workspace_id, sourceJob, options?.lock)
+    : undefined;
+  let flowBasis;
+  if (sourceJob) {
+    const providerMedia: unknown = flowSource?.task.metadata.flow_media_id;
+    requireValue(
+      flowSource?.media && flowSource.task.state === "completed" &&
+      flowSource.task.kind === "video" && flowSource.row.plugin_id === "flow" &&
+      typeof providerMedia === "string" && providerMedia,
+      409,
+      "续写来源必须是当前工作区内已完成并保留来源信息的 Flow 视频",
+    );
+    flowBasis = {
+      id: sourceJob,
+      media: flowSource.media.id,
+      providerMedia,
+      model: flowSource.task.model,
+      ratio: flowSource.task.view.ratio,
+    };
+  }
   const mediaToCheck = [...new Set([
     ...references,
     ...(native?.video_audio ?? []),
@@ -280,7 +277,8 @@ export async function resolveDirectorInput(
       ? [source.title || source.id]
       : [],
   );
-  const material = { target, refs: payload.refs, h3: native, flow_source_job: "flow_source_job" in payload ? payload.flow_source_job : undefined, packs };
+  if (flowSource?.media) referenceMedia.push({ ...flowSource.media, role: "continuation" });
+  const material = { target, refs: references, h3: native, flow: flowBasis, packs: expanded.snapshots };
   // Script links are persisted as canvas metadata rather than generation settings.
   const settings = Object.fromEntries(Object.entries(payload.params ?? {}).filter(([key]) => !key.startsWith("script_")));
   return {
@@ -288,9 +286,13 @@ export async function resolveDirectorInput(
     payload,
     sources: base.sources,
     references: referenceMedia,
+    pack_texts: expanded.texts,
     unfixedSources,
     material,
-    basis: await directorBasis({ target, payload: { ...payload, params: settings }, packs }),
+    basis: await directorBasis({
+      material,
+      payload: { ...payload, prompt: expanded.prompt, refs: references, params: settings },
+    }),
   };
 }
 
@@ -312,7 +314,7 @@ export async function inspectDirectorShotInputs(
 ): Promise<Omit<DirectorShotInputs, "revision">> {
   const result: Omit<DirectorShotInputs, "revision"> = {
     description: "", story_basis: null, material_basis: null,
-    references: [], visual_issues: [], material_issues: [], voices: [],
+    references: [], pack_texts: [], visual_issues: [], material_issues: [], voices: [],
   };
   const sources = await resolveCanvasSources(sql, project.id, document, node.id);
   const texts = sources.filter(({ kind }) => kind === "text");
@@ -333,10 +335,11 @@ export async function inspectDirectorShotInputs(
   const models = bindings ?? await CanvasSubmissionModels.read(sql, { strict: false });
   const materials: unknown[] = [];
   try {
-    const visual = await resolveDirectorInput(sql, project, document, { node_id: node.id, stage: "video" }, models, sources);
+    const visual = await resolveDirectorInput(sql, project, document, { node_id: node.id, stage: "video" }, models, { sources });
     if (visual.stage === "video") {
       materials.push(visual.material);
       result.references = visual.references;
+      result.pack_texts = visual.pack_texts;
       result.visual_issues.push(...visual.unfixedSources.map((title) => `请固定参考图“${title}”`));
     }
   } catch (error) {

@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { chromium, expect, type Browser, type Locator } from "@playwright/test";
+import { chromium, expect, type Browser, type Locator, type Response, type Route } from "@playwright/test";
 import sharp from "sharp";
 import { directorBasis, directorShotIds } from "../../packages/web-compat/src/director.js";
-import { newNode, type Project } from "../../apps/web/canvas-editor/types.js";
+import { newNode, type Project, type Studio } from "../../apps/web/canvas-editor/types.js";
 
 const externalOrigin = process.env.STUDIO_TEST_ORIGIN;
 const externalUser = process.env.STUDIO_TEST_USER ?? "admin";
@@ -746,6 +746,44 @@ try {
     await director.getByRole("button", { name: "确认素材", exact: true }).click();
     await expect(director.getByRole("button", { name: "素材已确认" })).toBeDisabled();
     const firstImage = await material.locator("img").getAttribute("src");
+    await material.getByRole("button", { name: "定位素材节点" }).click();
+    const candidateUrl = `**/api/canvases/${canvasA.id}/nodes/${s02Grid.id}/candidates`;
+    const pinnedMaterial = await (await context.request.get(`/api/canvases/${canvasA.id}`, { headers })).json() as Project;
+    const pinnedImage = pinnedMaterial.document.nodes.find(({ id }) => id === s02Grid.id);
+    assert.ok(pinnedImage?.use_media && pinnedImage.media_id && !pinnedImage.active_job);
+    const generate = page.getByRole("button", { name: "生成", exact: true });
+    // Candidate responses are simulated below; quote a local fixture tier so the real composer opens that path.
+    const quoteImage = async (route: Route) => {
+      const response = await route.fetch();
+      const state = await response.json() as Studio;
+      for (const model of Object.keys(state.images.models)) {
+        const form = state.model_forms[model];
+        if (!form?.canvas) continue;
+        form.tiers = [{ tier: "director-test", when: {} }];
+        state.pricing.items.push({ key: `${model}|director-test`, amount: 1 });
+      }
+      await route.fulfill({ response, json: state });
+    };
+    await page.route("**/api/state", quoteImage);
+    try {
+      await expect(generate).toHaveAttribute("title", "生成", { timeout: 12000 });
+      for (const status of [409, 200]) {
+        await page.route(candidateUrl, (route) => route.fulfill({ status, json: status === 200 ? { candidates: [] } : { detail: "合成测试候选未接收" } }), { times: 1 });
+        const received: Promise<Response> = page.waitForResponse((event: Response): boolean =>
+          event.url().endsWith(`/nodes/${s02Grid.id}/candidates`),
+        );
+        await Promise.all([received, generate.click()]);
+        assert.equal((await received).status(), status);
+        const afterSubmit = await (await context.request.get(`/api/canvases/${canvasA.id}`, { headers })).json() as Project;
+        const image: Project["document"]["nodes"][number] | undefined = afterSubmit.document.nodes.find(({ id }) => id === s02Grid.id);
+        assert.ok(image?.use_media, "normal canvas image generation must keep the selected reference pinned");
+        assert.equal(image.media_id, pinnedImage.media_id);
+      }
+    } finally {
+      await page.unroute("**/api/state", quoteImage);
+    }
+    await directorTab.click();
+    await expect(director.getByRole("button", { name: "素材已确认" })).toBeDisabled();
     await uploadReference(material, "替换图片", "#ae4a55");
     await expect(material.locator("img")).not.toHaveAttribute("src", firstImage!);
     await expect(director.getByRole("button", { name: "素材已变更，重新确认" })).toBeEnabled();

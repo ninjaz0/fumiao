@@ -25,7 +25,8 @@ export type DirectorShotInputs = {
   description: string;
   story_basis: string | null;
   material_basis: string | null;
-  references: { id: string; mime: string }[];
+  references: { id: string; mime: string; role?: "continuation" }[];
+  pack_texts: { id: string; text: string }[];
   visual_issues: string[];
   material_issues: string[];
   voices: {

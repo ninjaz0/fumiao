@@ -276,6 +276,41 @@ test("episode export freezes adopted shots in canvas order", async () => {
     await f.cleanup();
   }
 });
+test("episode keeps the head of adjacent legacy clips after adopting a different predecessor", async () => {
+  const f = await fixture();
+  try {
+    const original = await f.job(901, "video", "completed", f.video.id);
+    const replacementClip = await f.asset(randomUUID().replaceAll("-", ""), "video");
+    await f.job(902, "video", "completed", replacementClip.id);
+    const child = await f.job(903, "video", "completed", f.video.id);
+    await f.link(f.project.id, "prior", 901);
+    await f.link(f.project.id, "prior", 902);
+    await f.link(f.project.id, "next", 903);
+    await f.db.query("INSERT INTO job_tail_chains(child_job_id,parent_job_id) VALUES($1,$2)", [child.id, original.id]);
+    const shots = ["prior", "next"];
+    for (const inherited of [true, false]) {
+      await setCanvas(f, {
+        nodes: [
+          { id: "prior", type: "video", x: 0, y: 0, active_job: 902 },
+          { id: "next", type: "video", x: 300, y: 0, active_job: 903, tail_inherited: inherited },
+        ],
+        shots,
+        director: episode(shots),
+      });
+      const accepted = await f.service.create(f.admin, f.project.id, {
+        uid: randomUUID(), expected_revision: 1, scope: "episode",
+      });
+      const row = await one(f.db, "SELECT snapshot FROM storyboard_exports WHERE public_id=$1", [accepted.id]);
+      const frozen = JSON.parse(Buffer.from(row.snapshot).toString("utf8"));
+      assert.deepEqual(frozen.map((shot: { video: string }) => shot.video), [replacementClip.public_id, f.video.public_id]);
+      assert.ok(frozen.every((shot: { tailInherited?: boolean }) => !shot.tailInherited));
+      await f.db.query("UPDATE storyboard_exports SET state='failed' WHERE public_id=$1", [accepted.id]);
+    }
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("episode receipt remains available when the renderer is down", async () => {
   const f = await fixture();
   try {

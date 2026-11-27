@@ -223,7 +223,8 @@ export function DirectorDesk({
   const selectedPacks = (node?.asset_packs ?? []).map((binding) => {
     const pack = packs.find((item) => item.id === binding.id);
     const affected = videoNodes.filter((shot) => order.includes(shot.id) && shot.asset_packs?.some((item) => item.id === binding.id));
-    return { binding, pack, affected };
+    const text = inputs?.pack_texts?.find((packText) => packText.id === binding.id)?.text;
+    return { binding, pack, affected, text };
   });
 
   return (
@@ -330,18 +331,19 @@ export function DirectorDesk({
                     </li>)}
                   </ul>}
                   {selectedPacks.length > 0 && <ul className="fm-director-materials">
-                    {selectedPacks.map(({ binding, pack, affected }) => <li key={binding.id}>
+                    {selectedPacks.map(({ binding, pack, affected, text }) => <li key={binding.id}>
                       <div>
                         <strong>{pack?.name || `素材包 ${binding.id.slice(0, 6)}`}</strong>
                         <small>{!pack ? "缺失" : binding.revision !== pack.revision ? `待更新至版本 ${pack.revision}` : `已绑定版本 ${binding.revision}`}{affected.length > 1 && ` · 关联镜头 ${affected.map((shot) => shot.title).join("、")}`}</small>
+                        {text && <p>{text}</p>}
                       </div>
                     </li>)}
                   </ul>}
                   {inputs && inputs.references.length > 0 && <div className="fm-director-effective">
                     <p>生成使用的参考素材顺序</p>
                     <ol>
-                      {inputs.references.map(({ id, mime }) => <li key={id}>
-                        {mime.startsWith("image/") ? <img src={`/media/${id}?variant=thumb`} alt="参考图" loading="lazy" /> : <a href={`/media/${id}`} target="_blank" rel="noreferrer">{mime.startsWith("video/") ? "参考视频" : "参考音频"}</a>}
+                      {inputs.references.map(({ id, mime, role }) => <li key={`${id}:${role ?? "ref"}`}>
+                        {mime.startsWith("image/") ? <img src={`/media/${id}?variant=thumb`} alt="参考图" loading="lazy" /> : <a href={`/media/${id}`} target="_blank" rel="noreferrer">{role === "continuation" ? "续写来源视频" : mime.startsWith("video/") ? "参考视频" : "参考音频"}</a>}
                       </li>)}
                     </ol>
                   </div>}

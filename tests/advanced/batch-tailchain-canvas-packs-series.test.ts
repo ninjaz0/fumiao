@@ -11,7 +11,8 @@ import { wakeTailFrameChildren } from "@fumiao/platform/tail-frame.js";
 import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
 import { parseCanvasDocument } from "@fumiao/original-api/canvas-draft.js";
-import { inspectDirectorShotInputs, resolveDirectorInputBasis } from "@fumiao/original-api/director-inputs.js";
+import { inspectDirectorShotInputs, resolveDirectorInput, resolveDirectorInputBasis } from "@fumiao/original-api/director-inputs.js";
+import { OriginalGeneration } from "@fumiao/original-api/generation.js";
 import { OriginalPacks } from "@fumiao/original-api/packs.js";
 import { OriginalSeries } from "@fumiao/original-api/series.js";
 import { canvasRunsFixture } from "../helpers/canvas-runs.js";
@@ -97,6 +98,10 @@ test("director input basis covers resolved reference and voice", async (t) => {
     ...document,
     nodes: [{ ...nodes[0], active_job: 801 }, ...nodes.slice(1)],
   });
+  const mediaPinned = parseCanvasDocument({
+    ...document,
+    nodes: [{ ...nodes[0], use_media: true, media_id: img.publicId }, ...nodes.slice(1)],
+  });
   const video = { node_id: "shot", stage: "video" } as const;
   const dialogue = { node_id: "shot", stage: "dialogue", line_id: "line" } as const;
   const editShot = (graph: typeof document, patch: Partial<typeof document.nodes[number]>) => ({
@@ -131,13 +136,91 @@ test("director input basis covers resolved reference and voice", async (t) => {
   await packs.save(f.admin, { ...voice("zh-CN-YunxiNeural"), expected_revision: pack.revision }, ws, pack.id);
   assert.notEqual(await basis(video), before);
   assert.equal(await basis(video, pinned), pinnedBefore);
+  assert.equal(await basis(video, mediaPinned), pinnedBefore);
   assert.notEqual(await basis(dialogue), voiceBefore);
   assert.notEqual((await inspect(pinned)).material_basis, confirmed.material_basis);
-  await assert.rejects(basis(video, inPack), { status: 409, message: /素材包.*小林.*新版本/ });
+  await assert.rejects(basis(video, inPack), { status: 409, message: /素材包.*小林.*已更新/ });
   await assert.rejects(basis(video, editShot(document, { tail_inherited: true })), { status: 409, message: /首镜.*自动尾帧/ });
   await assert.rejects(basis(dialogue, editShot(document, { dialogue_lines: [{
     id: "line", speaker: "小林", pack_id: randomUUID().replaceAll("-", ""), text: "天亮了。",
   }] })), { status: 409, message: /角色素材包不可用/ });
+});
+
+test("director Flow continuation binds the private provider output and the actual workspace video", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  const clip = await f.asset(randomUUID().replaceAll("-", ""), "video");
+  const source = await f.job(801, "video", "completed", clip.id);
+  const sourceModel = "flow:veo-3.1-fast-extend-8s-landscape";
+  await f.db.query(`UPDATE jobs SET provider_model=$2,plugin_id='flow',
+    original_view='{"ratio":"16:9","actual":{"flow_media_id":"private-first"}}' WHERE id=$1`, [source.id, sourceModel]);
+  const video = { node_id: "shot", stage: "video" } as const;
+  const document = parseCanvasDocument({ nodes: [{
+    id: video.node_id, x: 0, y: 0, type: "video", prompt: "镜头向前", params: { model: sourceModel, flow_source_job: 801 },
+  }], edges: [] });
+  const publicId = await f.project();
+  const row = await f.canvases.project(f.db, f.admin, publicId);
+  const project = { id: String(row.id), workspace_id: f.workspace.id };
+  const resolve = () => f.db.transaction((sql) => resolveDirectorInput(sql, project, document, video));
+  const before = await resolve();
+  assert.equal(before.stage, "video");
+  assert.ok(before.stage === "video" && before.references.some((item) => item.id === clip.public_id));
+  await f.db.query("UPDATE jobs SET result=$2::json WHERE id=$1", [
+    source.id, JSON.stringify({ assets: [clip.id], usage: { flow_media_id: "private-second" } }),
+  ]);
+  assert.notEqual((await resolve()).basis, before.basis);
+  await f.db.query("UPDATE assets SET state='uploading' WHERE id=$1", [clip.id]);
+  await assert.rejects(resolve(), { message: /续写来源/ });
+  await f.db.query("UPDATE studio_catalog SET hidden=false WHERE id=$1", [sourceModel]);
+  await f.db.query("UPDATE studio_policy SET flags=flags || jsonb_build_object($1::text,true)", [sourceModel]);
+  await f.db.query("UPDATE studio_workspace_policy SET flags=flags || jsonb_build_object($1::text,true) WHERE workspace_id=$2", [sourceModel, f.workspace.id]);
+  const ordinary = new OriginalGeneration(f.p);
+  const draft = await ordinary.parse("video", { uid: randomUUID(), model: sourceModel, prompt: "镜头向前", flow_source_job: 801 });
+  const accepted = await ordinary.submit(f.admin, draft, String(f.workspace.public_id));
+  const submitted = (await f.db.query("SELECT input FROM jobs WHERE public_id=$1", [accepted.id])).rows[0];
+  assert.equal(submitted.input.params.source_media_id, "private-second", "ordinary continuation can use a retained provider output without a local preview");
+  await f.db.query("UPDATE jobs SET deleted_at=now() WHERE id=$1", [source.id]);
+  await assert.rejects(resolve(), { message: /续写来源/ });
+});
+
+test("director pack inputs match actual submit, including expanded prompt and deduplicated limits", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  const refs = await Promise.all(Array.from({ length: 10 }, () => f.asset(randomUUID().replaceAll("-", ""))));
+  const packs = new OriginalPacks(f.p);
+  const ws = String(f.workspace.public_id);
+  const main = await packs.save(f.admin, { name: "雨夜", purpose: "scene", description: "窗外灯塔", media: [refs[1].public_id, refs[0].public_id] }, ws);
+  const extra = await packs.save(f.admin, { name: "场景组", purpose: "scene", media: refs.slice(2).map((asset) => asset.public_id) }, ws);
+  const video = { node_id: "shot", stage: "video" } as const;
+  const shot = { id: video.node_id, type: "video", x: 0, y: 0, prompt: "推近窗户", asset_packs: [{ id: main.id, revision: main.revision }] };
+  const nodes = [{ id: "ref", type: "image", x: 0, y: 0, media_id: refs[0].public_id, use_media: true }, shot];
+  const edges = [{ id: "edge", source: "ref", target: "shot" }];
+  const publicId = await f.project(nodes, edges, ws);
+  const row = await f.canvases.project(f.db, f.admin, publicId);
+  const project = { id: String(row.id), workspace_id: f.workspace.id };
+  const graph = (patch = {}) => parseCanvasDocument({ nodes: [nodes[0], { ...shot, ...patch }], edges });
+  const inspect = (doc = graph()) => f.db.transaction((sql) => inspectDirectorShotInputs(sql, project, doc, doc.nodes[1]));
+  const input = await inspect();
+  assert.deepEqual(input.references.map(({ id }) => id), refs.slice(0, 2).map((asset) => asset.public_id));
+  const generated = await f.runs.generate(f.admin, publicId, "shot", f.body());
+  const job = (await f.db.query("SELECT input FROM jobs WHERE public_id=$1", [generated.id])).rows[0];
+  assert.equal(job.input.prompt, `${input.description}\n\n${input.pack_texts.map(({ text }) => text).join("\n\n")}`);
+  assert.deepEqual(job.input.references, refs.slice(0, 2).map((asset) => asset.id));
+  assert.ok(input.story_basis && input.material_basis);
+  const expanded = await inspect(graph({ asset_packs: [...shot.asset_packs, { id: extra.id, revision: extra.revision }] }));
+  const tooLong = await inspect(graph({ prompt: "景".repeat(11999) }));
+  for (const invalid of [expanded, tooLong]) {
+    assert.equal(invalid.material_basis, null);
+    assert.match(invalid.visual_issues.join(), /参考图片合计最多 9 张.*12000 字/);
+  }
+  const newer = await packs.save(f.admin, { name: "雨夜", purpose: "scene", description: "更亮的窗外灯塔", media: main.media, expected_revision: main.revision }, ws, main.id);
+  const rebound = await inspect(graph({ asset_packs: [{ id: newer.id, revision: newer.revision }] }));
+  assert.equal(rebound.story_basis, input.story_basis);
+  assert.notEqual(rebound.material_basis, input.material_basis);
+  await f.db.query("UPDATE documents SET body=jsonb_set(body,'{assets}','null') WHERE public_id=$1", [extra.id]);
+  const legacy = await inspect(graph({ asset_packs: [{ id: extra.id, revision: extra.revision }] }));
+  assert.ok(legacy.material_basis, "legacy descriptive packs can omit their media array");
+  assert.deepEqual(legacy.references.map(({ id }) => id), [refs[0].public_id]);
 });
 
 test("#9 F010/F007/F027: mixed-price dialogue precheck matches batchRun, rejects quote drift 409, replays idempotently, and returns line_id", async (t) => {

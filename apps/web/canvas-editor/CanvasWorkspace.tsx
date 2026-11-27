@@ -2430,7 +2430,10 @@ export function CanvasWorkspace({
     setConfirmCandidates(false);
     if (!single || submitting) return;
     const nid = single.id;
-    if (!single.active_job) edit(nid, { use_media: false });
+    const { document } = doc.ref.current;
+    const directorReference = single.type === "image" && single.use_media && single.media_id &&
+      document.edges.some((edge) => edge.source === nid && document.director?.shot_ids.includes(edge.target));
+    if (!single.active_job && !directorReference) edit(nid, { use_media: false });
     setSubmitting(nid);
     try {
       const rev = await doc.flush();
