@@ -70,7 +70,6 @@ import {
   Clock,
   RefreshCw,
   LayoutGrid,
-  ListVideo,
   Columns2,
   Palette,
   LoaderCircle,
@@ -82,7 +81,6 @@ import {
   Layers,
   Crop,
   Clapperboard,
-  List,
   Sparkles,
   BookOpen,
   MessageSquare,
@@ -94,7 +92,6 @@ import {
   newNode,
   names,
   resolveNode,
-  videoSeconds,
   connectionError,
   createClipboardSnapshot,
   resolvePasteOffset,
@@ -110,7 +107,6 @@ import {
   matchViewportFocusShortcut,
   isCanvasComposerOpen,
   hasCanvasSelectionToolbar,
-  resolveBatchShots,
   linkedValue,
   type CanvasClipboard,
   type CanvasNode,
@@ -124,12 +120,9 @@ import {
 } from "./types";
 import {ChatWorkspace, chatRequest} from "./chat/ChatWorkspace";
 import { chatSettingsPath } from "./chat/guidance";
-import { ShotList } from "./ShotList";
 import { VideoVersions } from "./VideoVersions";
 import { cameraMotion } from "../app/motion";
 import { AiStoryboard } from "./AiStoryboard";
-import { Narration } from "./Narration";
-import { Composition } from "./Composition";
 import { AssetPacks, type Pack } from "./AssetPacks";
 import { CinematographyPanel } from "./CinematographyPanel";
 import { OptionSelect, SegmentedOptions } from "./OptionSelect";
@@ -787,24 +780,6 @@ export function CanvasWorkspace({
     [progress, setProgress] = useState<number | null>(null),
     [preview, setPreview] = useState<Preview | null>(null),
     [confirm, setConfirm] = useState<null | (() => void)>(null);
-  const [shotList, setShotList] = useState(false);
-  const [viewMode, setViewModeState] = useState<"canvas" | "split" | "list">(() => {
-    try {
-      const saved = localStorage.getItem("fm-canvas-view-mode");
-      if (saved === "canvas" || saved === "split" || saved === "list") return saved;
-    } catch {
-      // Ignore storage failures in restricted contexts.
-    }
-    return "canvas";
-  });
-  const setViewMode = useCallback((mode: "canvas" | "split" | "list") => {
-    setViewModeState(mode);
-    try {
-      localStorage.setItem("fm-canvas-view-mode", mode);
-    } catch {
-      // Ignore storage failures.
-    }
-  }, []);
   const [precheckTarget, setPrecheckTarget] = useState<{
     nodeIds: string[];
     title?: string;
@@ -929,76 +904,10 @@ export function CanvasWorkspace({
     single = selected.length === 1 && active ? active : null;
   const current = single ? resolveNodeFromIndex(single, runsByNode) : null;
   const completedVersions = current?.list.filter((job) => job.status === "done" && job.result) ?? [];
-  const shotIds = doc.value.document.shots ?? [];
-  const batchShots = useMemo(
-    () => resolveBatchShots(selectedNodes, selected, shotIds),
-    [selectedNodes, selected, shotIds],
-  );
-  const studioJobByResult = useMemo(() => {
-    const map = new Map<string, Job>();
-    for (const job of studio.jobs) {
-      if (job.result && !map.has(job.result)) map.set(job.result, job);
-    }
-    return map;
-  }, [studio.jobs]);
-  const shots = useMemo(
-    () =>
-      shotIds.flatMap((id) => {
-        const node = nodeById.get(id);
-        if (!node) return [];
-        const { run, media } = resolveNodeFromIndex(node, runsByNode);
-        const source = run ?? (media ? studioJobByResult.get(media) : undefined);
-        const voice = node.narration_job
-          ? runById.get(node.narration_job)
-          : undefined;
-        return [
-          {
-            id,
-            title: node.title,
-            media,
-            adopted: node.active_job,
-            prompt: node.prompt,
-            generation_mode: node.generation_mode,
-            cinematography: node.cinematography ?? null,
-            seconds: Math.max(
-              videoSeconds(source) || node.params.seconds,
-              voice?.status === "done" ? voice.actual?.duration || 0 : 0,
-            ),
-            status: run ? labels[run.status] || "待生成" : "待生成",
-          },
-        ];
-      }),
-    [shotIds, nodeById, runsByNode, runById, studioJobByResult],
-  );
-  const compositionIssue = useMemo(() => {
-    if (!shotList && viewMode === "canvas") return "";
-    if (shots.reduce((sum, shot) => sum + shot.seconds, 0) > 900) {
-      return "成片最多 15 分钟（900 秒），请减少镜头或缩短旁白";
-    }
-    for (let index = 0; index < shotIds.length; index++) {
-      const node = nodeById.get(shotIds[index]);
-      if (!node) continue;
-      if (!resolveNodeFromIndex(node, runsByNode).media) {
-        return `镜头 ${index + 1} 的视频尚未就绪`;
-      }
-      const pending = node.narration_pending
-        ? runById.get(node.narration_pending)
-        : undefined;
-      if (pending && ["queued", "running"].includes(pending.status)) {
-        return `镜头 ${index + 1} 的旁白仍在生成`;
-      }
-      const voice = node.narration_job
-        ? runById.get(node.narration_job)
-        : undefined;
-      if (node.narration_text?.trim() && (!voice?.result || voice.status !== "done")) {
-        return `请先生成镜头 ${index + 1} 的旁白`;
-      }
-      if (voice && voice.prompt.trim() !== (node.narration_text || "").trim()) {
-        return `镜头 ${index + 1} 的文稿已修改，请更新旁白`;
-      }
-    }
-    return "";
-  }, [shotList, shots, shotIds, nodeById, runsByNode, runById]);
+  const referenceShots = (doc.value.document.shots ?? []).flatMap((id) => {
+    const node = nodeById.get(id);
+    return node ? [node] : [];
+  });
   const compared = compareNode ? nodeById.get(compareNode) : undefined;
   const comparisonRuns = compared ? resolveNodeFromIndex(compared, runsByNode).list.filter((job) => job.status === "done" && job.result) : [];
   const availableModel = (model:string) => !!studio.model_forms?.[model]?.canvas && (studio.model_access || studio.model_policy?.enabled)?.[model] === true && (model !== 'gpt-image-2.6-sunburst' || studio.images.configured) && (studio.model_catalog?.[model]?.provider!=='flow' || Boolean(studio.flow?.configured));
@@ -1777,56 +1686,11 @@ export function CanvasWorkspace({
     setMenu(null);
     setContext(null);
   };
-  const updateShots = (change: (ids: string[]) => string[]) =>
-    doc.change((d) => ({ ...d, document: { ...d.document, shots: change(d.document.shots ?? []) } }));
-  const addShot = (node: CanvasNode) => {
-    updateShots((ids) => ids.includes(node.id) ? ids : [...ids, node.id]);
-    notify("已加入镜头列表");
-  };
-  const addSelectedShots = () => {
-    const current = doc.ref.current.document;
-    const { videoIds, addedIds } = resolveBatchShots(
-      current.nodes,
-      selected,
-      current.shots ?? [],
-    );
-    if (!videoIds.length) return;
-    if (!addedIds.length) {
-      setShotList(true);
-      return;
-    }
-    updateShots((ids) => {
-      const plan = resolveBatchShots(
-        doc.ref.current.document.nodes,
-        selected,
-        ids,
-      );
-      return plan.addedIds.length ? plan.nextShots : ids;
-    });
-    notify(`已将 ${addedIds.length} 个视频加入镜头列表`);
-  };
-  const moveShot = (id: string, offset: number) => updateShots((ids) => {
-    const index = ids.indexOf(id);
-    const target = index + offset;
-    if (index < 0 || target < 0 || target >= ids.length) return ids;
-    const ordered = [...ids];
-    [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
-    return ordered;
-  });
-  const exportShots = async () => {
-    const expected_revision = await doc.flush();
-    const download = await api<{ url: string; filename: string }>(
-      `/api/canvases/${project.id}/shots/download`, { expected_revision },
-    );
-    const link = document.createElement("a");
-    link.href = download.url;
-    link.download = download.filename;
-    link.click();
-  };
   const openSharedReference = (id: string) => {
     setReferenceError("");
-    setReferenceTargets(doc.ref.current.document.edges.filter((edge) =>
-      edge.source === id && shotIds.includes(edge.target)
+    const { edges, shots } = doc.ref.current.document;
+    setReferenceTargets(edges.filter((edge) =>
+      edge.source === id && shots?.includes(edge.target)
     ).map((edge) => edge.target));
     setSharedReference(id);
   };
@@ -2729,14 +2593,6 @@ export function CanvasWorkspace({
     [runs],
   );
   const latestBgmRun = bgmRuns[0] ?? null;
-  const activeBgmRun =
-    bgmRuns.find((r) => BGM_ACTIVE_STATUSES.has(r.status)) ?? null;
-  const bgmGenerating =
-    Boolean(activeBgmRun) ||
-    (pendingBgmJobId !== null &&
-      !bgmRuns.some(
-        (r) => r.id === pendingBgmJobId && !BGM_ACTIVE_STATUSES.has(r.status),
-      ));
   const appliedBgmJobsRef = useRef<Set<number>>(new Set());
   const notifiedBgmFailedRef = useRef<Set<number>>(new Set());
   useEffect(() => {
@@ -2786,203 +2642,6 @@ export function CanvasWorkspace({
     }
   }, [latestBgmRun, pendingBgmJobId, studio.jobs, doc.change, doc.flush, doc.ref]);
 
-  const availableAudioModels = Object.entries(studio.model_catalog)
-    .filter(([id, spec]) => spec.kind === "audio" && availableModel(id))
-    .map(([id, spec]) => ({ id, label: spec.label || id }));
-  const isBgmMusicModel = (
-    id: string,
-    spec?: { kind?: string; provider?: string },
-  ) =>
-    spec?.kind === "audio" &&
-    (spec.provider === "bgm-generator" ||
-      ["bgm-v1", "suno-v4", "udio-v1.5", "musicgen-large"].includes(id) ||
-      (typeof spec.provider === "string" &&
-        /(?:^|[-_])(bgm|music)(?:$|[-_])/i.test(spec.provider)));
-  const bgmModels = availableAudioModels.filter((m) =>
-    isBgmMusicModel(m.id, studio.model_catalog[m.id]),
-  );
-  const defaultBgmPrompt = shots.length
-    ? `为以下分镜创作背景配乐：${shots
-        .slice(0, 4)
-        .map((s) => s.title || s.prompt.slice(0, 20))
-        .filter(Boolean)
-        .join(" / ")}，电影感器乐配乐`
-    : "电影感器乐背景配乐，情绪层次丰富";
-  const handleGenerateBgm = async (opts: { prompt: string; model?: string }) => {
-    const model = opts.model || bgmModels[0]?.id;
-    if (!model) throw new Error("暂无可用的 AI 配乐模型");
-    const res = await api<{ id: number }>(`/api/canvases/${project.id}/bgm`, {
-      uid: crypto.randomUUID(),
-      model,
-      prompt: opts.prompt.slice(0, 300),
-      instruction: "background music soundtrack",
-      price_revision: studio.pricing.revision,
-    });
-    setPendingBgmJobId(res.id);
-    await fetchRuns();
-  };
-  const compositionAudioAssets = [
-    ...bgmRuns
-      .filter((r) => r.status === "done" && r.result)
-      .map((r) => ({
-        id: r.result!,
-        label: `${r.model || "配乐"} · ${(r.prompt || "").slice(0, 18) || "#" + r.id}`,
-      })),
-    ...studio.assets
-      .filter((a) => a.kind === "audio" || a.kind === "ref_audio")
-      .map((a) => ({
-        id: a.id,
-        label: a.name || `音频 ${a.id.slice(0, 6)}`,
-      })),
-    ...studio.jobs
-      .filter((j) => j.kind === "audio" && j.status === "done" && j.result)
-      .map((j) => ({
-        id: j.result!,
-        label: `${j.model || "配乐"} · ${(j.prompt || "").slice(0, 18) || "#" + j.id}`,
-      })),
-  ].filter((item, idx, arr) => arr.findIndex((x) => x.id === item.id) === idx);
-  const handleInheritTailFrame = async (shotId: string, closeModal = false) => {
-    const source = doc.ref.current.document.nodes.find((n) => n.id === shotId);
-    if (!source) return;
-    await doc.flush();
-    const res = await api<{ asset_id: string; width: number; height: number }>(
-      `/api/canvases/${project.id}/nodes/${shotId}/tail-frame`,
-      {},
-    );
-    const nextIdx = doc.ref.current.document.nodes.length + 1;
-    const imgNode = newNode("image", source.x + source.width + 64, source.y, nextIdx);
-    imgNode.title = `${source.title || "镜头"} · 尾帧`;
-    imgNode.media_id = res.asset_id;
-    imgNode.use_media = true;
-    const vidNode = newNode("video", imgNode.x + imgNode.width + 64, source.y, nextIdx + 1);
-    vidNode.title = `${source.title || "镜头"} 续镜`;
-    vidNode.tail_inherited = true;
-    vidNode.generation_mode = "first_last_frame";
-    vidNode.params = {
-      ...source.params,
-      h3: {
-        mode: "frames",
-        first_frame: res.asset_id,
-        last_frame: null,
-        video_audio: [],
-      },
-    };
-    doc.change((d) => ({
-      ...d,
-      document: {
-        ...d.document,
-        nodes: [...d.document.nodes, imgNode, vidNode],
-        edges: [
-          ...d.document.edges,
-          { id: crypto.randomUUID(), source: imgNode.id, target: vidNode.id },
-        ],
-        shots: [...(d.document.shots ?? []), vidNode.id],
-      },
-    }));
-    notify("已抽取尾帧并创建续接镜头");
-    if (closeModal) setShotList(false);
-    selectOne(vidNode.id);
-    focusNodes([vidNode.id]);
-  };
-  const renderShotNarration = (shot: { id: string }) => {
-    const node = doc.value.document.nodes.find((n) => n.id === shot.id);
-    if (!node) return null;
-    const preferred = node.narration_model?.trim();
-    const audioCandidates = [
-      ...(preferred ? [preferred] : []),
-      "breeze-tts-2",
-      "tts-1",
-      "gpt-4o-mini-tts",
-      "local-tts-compat",
-      "edge-tts",
-    ];
-    const activeAudio =
-      audioCandidates.find((m) => availableModel(m)) ??
-      availableAudioModels[0]?.id ??
-      "";
-    const priceItem = activeAudio
-      ? studio.pricing.items.find((p) => p.key.startsWith(activeAudio + "|"))
-      : undefined;
-    const price = !activeAudio
-      ? null
-      : (priceItem?.amount ?? (activeAudio === "edge-tts" ? 0 : null));
-    const unavailableReason = !activeAudio
-      ? "当前空间未开放语音模型"
-      : price === null
-        ? "语音生成尚未定价"
-        : studio.credits.available < price
-          ? "当前空间积分不足"
-          : "";
-    return (
-      <Narration
-        node={node}
-        runs={runs}
-        cost={price}
-        unavailableReason={unavailableReason}
-        audioModels={availableAudioModels}
-        onEditStart={doc.begin}
-        onEditEnd={doc.end}
-        onChange={(patch, history) => edit(shot.id, patch, history)}
-        onGenerate={async () => {
-          const rev = await doc.flush();
-          const key = `fm-canvas-voice-${studio.me.id}-${project.id}-${shot.id}`;
-          let pending;
-          try {
-            pending = JSON.parse(localStorage.getItem(key) || "null");
-          } catch {}
-          if (!pending) {
-            pending = {
-              uid: crypto.randomUUID(),
-              expected_revision: rev,
-              price_revision: studio.pricing.revision,
-            };
-            localStorage.setItem(key, JSON.stringify(pending));
-          }
-          try {
-            const result = await api(
-              `/api/canvases/${project.id}/nodes/${shot.id}/narration`,
-              pending,
-            );
-            edit(shot.id, { narration_pending: result.id });
-            await doc.flush();
-            localStorage.removeItem(key);
-            await fetchRuns();
-          } catch (e) {
-            if (e instanceof ApiError && e.status < 500)
-              localStorage.removeItem(key);
-            throw e;
-          }
-        }}
-        onGenerateDialogue={async (lineId) => {
-          const rev = await doc.flush();
-          const result = await api<{ items: { line_id: string; id: number }[] }>(
-            `/api/canvases/${project.id}/nodes/${shot.id}/dialogue`,
-            {
-              uid: crypto.randomUUID(),
-              expected_revision: rev,
-              price_revision: studio.pricing.revision,
-              ...(lineId ? { line_id: lineId } : {}),
-            },
-          );
-          const idMap = new Map(result.items.map((it) => [it.line_id, it.id]));
-          const current = doc.ref.current.document.nodes.find(
-            (n) => n.id === shot.id,
-          );
-          if (current?.dialogue_lines?.length) {
-            // F027 (#9): Write ONLY audio_pending on submission; preserve previous
-            // valid audio_job until the new run actually completes with an output asset.
-            edit(shot.id, {
-              dialogue_lines: current.dialogue_lines.map((l) =>
-                idMap.has(l.id) ? { ...l, audio_pending: idMap.get(l.id)! } : l,
-              ),
-            });
-            await doc.flush();
-          }
-          await fetchRuns();
-        }}
-      />
-    );
-  };
   return (
     <div
       ref={workspaceRef}
@@ -3215,37 +2874,6 @@ export function CanvasWorkspace({
           </button>
         </div>
         <div className="global-tools">
-          {surface === "canvas" && (
-            <div className="fm-view-switch" role="group" aria-label="画布与分镜表视图切换">
-              <button
-                type="button"
-                className={viewMode === "canvas" ? "active" : ""}
-                onClick={() => setViewMode("canvas")}
-                title="纯画布视图"
-              >
-                <LayoutGrid size={14} />
-                画布
-              </button>
-              <button
-                type="button"
-                className={viewMode === "split" ? "active" : ""}
-                onClick={() => setViewMode("split")}
-                title="画布 + 分镜表双轨分屏"
-              >
-                <Columns2 size={14} />
-                分屏
-              </button>
-              <button
-                type="button"
-                className={viewMode === "list" ? "active" : ""}
-                onClick={() => setViewMode("list")}
-                title="纯分镜表视图"
-              >
-                <List size={14} />
-                列表
-              </button>
-            </div>
-          )}
           <IconButton
             icon={Search}
             label="搜索节点"
@@ -3290,11 +2918,6 @@ export function CanvasWorkspace({
                 setAgentDock(true);
               }
             }}
-          />
-          <IconButton
-            icon={ListVideo}
-            label="镜头列表"
-            onClick={() => setShotList(true)}
           />
           <IconButton
             icon={FolderOpen}
@@ -3587,12 +3210,7 @@ export function CanvasWorkspace({
             <IconButton icon={Download} label="下载" onClick={downloadNodes} />
           )}
           <IconButton icon={Trash2} label="删除节点" onClick={removeSelected} />
-          {single.type === "video" && (
-            <IconButton icon={ListVideo}
-              label={shotIds.includes(single.id) ? "查看镜头列表" : "加入镜头列表"}
-              onClick={() => shotIds.includes(single.id) ? setShotList(true) : addShot(single)} />
-          )}
-          {single.type === "image" && current?.media && shots.length > 0 && (
+          {single.type === "image" && current?.media && referenceShots.length > 0 && (
             <IconButton icon={Link2} label="应用参考图到镜头" onClick={() => openSharedReference(single.id)} />
           )}
           {single.type === "image" && current?.media && (
@@ -3690,15 +3308,6 @@ export function CanvasWorkspace({
             disabled={!canDownloadSelected}
             onClick={downloadNodes}
           />
-          {batchShots.videoIds.length > 0 && (
-            <IconButton
-              icon={ListVideo}
-              label={batchShots.allInShots ? "查看镜头列表" : "加入镜头列表"}
-              onClick={() =>
-                batchShots.allInShots ? setShotList(true) : addSelectedShots()
-              }
-            />
-          )}
           <IconButton
             icon={Trash2}
             label="删除所选节点"
@@ -4900,58 +4509,6 @@ export function CanvasWorkspace({
         <div className="dialog-actions"><button className="secondary" onClick={() => setConfirmCandidates(false)}>取消</button>
           <button className="primary" disabled={!canGenerate} onClick={() => void submit()}>确认生成 · {candidateCost}</button></div>
       </Modal>}
-      {shotList && (
-        <Modal title="镜头列表" wide onClose={() => setShotList(false)}>
-          <ShotList shots={shots} onMove={moveShot} onExport={exportShots}
-            onEditShot={(id, patch) => edit(id, patch, false)}
-            onBatchPrecheck={(nodeIds) => {
-              void doc
-                .flush()
-                .then(() => {
-                  setShotList(false);
-                  setPrecheckTarget({
-                    nodeIds,
-                    title: `分镜批量预检 (${nodeIds.length} 镜)`,
-                    stages: ["video", "narration", "dialogue"],
-                  });
-                })
-                .catch((e) => notify((e as Error).message));
-            }}
-            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId, true)}
-            composition={
-              <Composition
-                project={project.id}
-                getRevision={doc.flush}
-                ready={shots.length > 0 && !compositionIssue}
-                waitingReason={compositionIssue}
-                audioAssets={compositionAudioAssets}
-                bgm={doc.value.document.bgm ?? null}
-                loudnorm={doc.value.document.loudnorm}
-                defaultBgmPrompt={defaultBgmPrompt}
-                bgmModels={bgmModels}
-                bgmGenerating={bgmGenerating}
-                onGenerateBgm={handleGenerateBgm}
-                onMixChange={(patch) =>
-                  doc.change((d) => ({
-                    ...d,
-                    document: {
-                      ...d.document,
-                      ...("bgm" in patch ? { bgm: patch.bgm } : {}),
-                      ...("loudnorm" in patch ? { loudnorm: patch.loudnorm } : {}),
-                    },
-                  }))
-                }
-              />
-            }
-            renderNarration={renderShotNarration}
-            onRemove={(id) => updateShots((ids) => ids.filter((item) => item !== id))}
-            onSelect={(id) => {
-              setShotList(false);
-              selectOne(id);
-              focusNodes([id]);
-            }} />
-        </Modal>
-      )}
       {showCrop && firstFrame && (
         <Modal title="首帧裁切预览" onClose={() => setShowCrop(false)}>
           <p>MiniMax H3 会按 {single?.params.ratio} 居中裁切单张参考图，并将它用作首帧。</p>
@@ -4971,11 +4528,11 @@ export function CanvasWorkspace({
           <p>勾选需要共用这张图的镜头。修改连线会影响后续生成。</p>
           <div className="reference-targets">
             <label>
-              <input type="checkbox" checked={referenceTargets.length === shots.length && shots.length > 0}
-                onChange={(event) => setReferenceTargets(event.target.checked ? shots.map((shot) => shot.id) : [])} />
+              <input type="checkbox" checked={referenceTargets.length === referenceShots.length && referenceShots.length > 0}
+                onChange={(event) => setReferenceTargets(event.target.checked ? referenceShots.map((shot) => shot.id) : [])} />
               全选镜头
             </label>
-            {shots.map((shot, index) => (
+            {referenceShots.map((shot, index) => (
               <label key={shot.id}>
                 <input type="checkbox" checked={referenceTargets.includes(shot.id)} onChange={(event) => {
                   const checked = event.target.checked;
@@ -5056,79 +4613,6 @@ export function CanvasWorkspace({
             </button>
           </div>
         </Modal>
-      )}
-      {viewMode !== "canvas" && (
-        <aside
-          className={
-            "fm-docked-storyboard" + (viewMode === "list" ? " fm-full-list" : "")
-          }
-          aria-label="分镜表双向同步视图"
-        >
-          <div className="fm-docked-head">
-            <strong>分镜表 · 实时双向同步 ({shots.length} 镜)</strong>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setViewMode("canvas")}
-            >
-              返回纯画布
-            </button>
-          </div>
-          <ShotList
-            docked
-            shots={shots}
-            onMove={moveShot}
-            onExport={exportShots}
-            onEditShot={(id, patch) => edit(id, patch, false)}
-            onBatchPrecheck={(nodeIds) => {
-              void doc
-                .flush()
-                .then(() =>
-                  setPrecheckTarget({
-                    nodeIds,
-                    title: `分镜批量预检 (${nodeIds.length} 镜)`,
-                    stages: ["video", "narration", "dialogue"],
-                  }),
-                )
-                .catch((e) => notify((e as Error).message));
-            }}
-            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId, false)}
-            onRemove={(id) =>
-              updateShots((ids) => ids.filter((item) => item !== id))
-            }
-            onSelect={(id) => {
-              if (viewMode === "list") setViewMode("split");
-              selectOne(id);
-              focusNodes([id]);
-            }}
-            composition={
-              <Composition
-                project={project.id}
-                getRevision={doc.flush}
-                ready={shots.length > 0 && !compositionIssue}
-                waitingReason={compositionIssue}
-                audioAssets={compositionAudioAssets}
-                bgm={doc.value.document.bgm ?? null}
-                loudnorm={doc.value.document.loudnorm}
-                defaultBgmPrompt={defaultBgmPrompt}
-                bgmModels={bgmModels}
-                bgmGenerating={bgmGenerating}
-                onGenerateBgm={handleGenerateBgm}
-                onMixChange={(patch) =>
-                  doc.change((d) => ({
-                    ...d,
-                    document: {
-                      ...d.document,
-                      ...("bgm" in patch ? { bgm: patch.bgm } : {}),
-                      ...("loudnorm" in patch ? { loudnorm: patch.loudnorm } : {}),
-                    },
-                  }))
-                }
-              />
-            }
-            renderNarration={renderShotNarration}
-          />
-        </aside>
       )}
       {precheckTarget && (
         <Modal

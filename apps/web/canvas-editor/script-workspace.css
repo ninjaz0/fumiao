@@ -59,14 +59,9 @@
 .canvas-workspace[data-surface="document"] .multi-toolbar,
 .canvas-workspace[data-surface="document"] .fm-multi-bar,
 .canvas-workspace[data-surface="document"] .node-composer,
-.canvas-workspace[data-surface="document"] .canvas-empty,
-.canvas-workspace[data-surface="document"] .fm-docked-storyboard {
+.canvas-workspace[data-surface="document"] .canvas-empty {
   visibility: hidden;
   pointer-events: none;
-}
-
-.canvas-workspace .fm-docked-storyboard {
-  right: var(--fm-agent-width, 0px);
 }
 
 /* Top-left Canvas Quick Switcher inside Project Menu */

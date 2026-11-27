@@ -43,7 +43,7 @@
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Compose" />
 </p>
 
-弗淼（Fumiao）是面向个人与团队的自部署多模型 AI 创作工作台：在 `/studio` 完成对话构思、节点画布与分镜编排、视频 / 图片 / 语音生成及成片合成，并通过版本化插件自由接入云端模型服务与自建 GPU 节点。<br />
+弗淼（Fumiao）是面向个人与团队的自部署多模型 AI 创作工作台：在 `/studio` 完成对话构思、节点画布与剧本创作、视频 / 图片 / 语音生成，并通过版本化插件自由接入云端模型服务与自建 GPU 节点。<br />
 <sub>Self-hosted multi-model AI creative studio for individuals &amp; teams · node canvas &amp; storyboard · multi-tenant workspaces · versioned plugin &amp; GPU node-pool platform</sub>
 
 <p align="center">
