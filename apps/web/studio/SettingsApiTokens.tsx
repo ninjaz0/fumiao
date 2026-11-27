@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
+import { SkillEditorCard } from "./SkillEditorCard";
 
 type ApiToken = {
   id: string;
@@ -205,7 +206,7 @@ export function SettingsApiTokens({
       <div className="ledger-card" style={cardStyle}>
         <h3>Agent 安全执行开关（防误烧费）</h3>
         <p className="console-description">
-          默认开启「只建图不烧费 (plan_only)」，外部 MCP 与画布 Agent 仅可读取上下文与提交待审批提案，禁止直接扣费；用户本人在浏览器界面的主动生成不受影响。
+          默认开启「只建图不烧费」，外部 MCP 与画布 Agent 仅可读取上下文与提交待审批提案，禁止直接扣费；用户本人在浏览器界面的主动生成不受影响。
         </p>
         <select
           aria-label="Agent 执行安全策略"
@@ -214,17 +215,13 @@ export function SettingsApiTokens({
           style={{ width: "100%", maxWidth: "100%", boxSizing: "border-box" }}
           onChange={(e) => void savePolicy(e.target.value as AgentPolicy)}
         >
-          <option value="plan_only">只建图不烧费 (plan_only · 推荐)</option>
-          <option value="propose_and_confirm">
-            提案人工批准后执行 (propose_and_confirm)
-          </option>
-          <option value="auto_within_budget">
-            预算硬上限内自动执行 (auto_within_budget)
-          </option>
+          <option value="plan_only">只建图不烧费（推荐）</option>
+          <option value="propose_and_confirm">提案人工批准后执行</option>
+          <option value="auto_within_budget">预算硬上限内自动执行</option>
         </select>
         {!hasActiveCapBudget && (
           <p className="console-description" style={{ marginTop: 6, fontSize: 12 }}>
-            提示：如需切换为「预算硬上限内自动执行」，请先在「预算与风控」中启用工作区硬上限预算策略 (cap)。
+            提示：如需切换为「预算硬上限内自动执行」，请先在「预算控制」中启用工作区硬上限预算策略。
           </p>
         )}
       </div>
@@ -396,6 +393,8 @@ export function SettingsApiTokens({
           </div>
         )}
       </div>
+
+      <SkillEditorCard workspace={Number(workspace)} />
     </div>
   );
 }

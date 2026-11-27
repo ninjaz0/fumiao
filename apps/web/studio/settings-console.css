@@ -1,8 +1,9 @@
 .ledger-settings,
-body:has(.ledger-settings) #modal {
-  --side: #fafafa;
-  --bg: #fff;
-  --surface: #fff;
+body:has(.ledger-settings) #modal,
+#modal.ledger-invite-sheet {
+  --side: #f3f4f6;
+  --bg: #f8f9fa;
+  --surface: #ffffff;
   --field: var(--surface);
   --pop: var(--surface);
   --text: #09090b;
@@ -11,32 +12,30 @@ body:has(.ledger-settings) #modal {
   --line: #e4e4e7;
   --hover: #f0f0f2;
   --selected: #ececef;
-  --blue: #047857;
+  --blue: #3686ad;
   --focus: var(--blue);
-  --accent-soft: #e7f7ef;
+  --accent-soft: rgba(54, 134, 173, 0.12);
+  --ledger-serif: inherit;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }
 [data-theme="dark"] .ledger-settings,
-[data-theme="dark"] body:has(.ledger-settings) #modal {
-  --side: #111214;
-  --bg: #141619;
-  --surface: #181b1f;
+[data-theme="dark"] body:has(.ledger-settings) #modal,
+[data-theme="dark"] #modal.ledger-invite-sheet {
+  --side: #171717;
+  --bg: #111111;
+  --surface: #1e1e1e;
   --text: #f4f5f7;
   --secondary: #a1a8b3;
   --muted: #959daa;
-  --line: #30353d;
-  --hover: #22262d;
-  --selected: #262b33;
-  --blue: #3ecf8e;
-  --accent-soft: #1a342b;
+  --line: rgba(255, 255, 255, 0.09);
+  --hover: #242424;
+  --selected: #2a2a2a;
+  --blue: #68a8db;
+  --accent-soft: rgba(104, 168, 219, 0.15);
 }
 .ledger-settings {
-  --ledger-serif: inherit;
-  font:
-    13.5px/1.5 Inter,
-    -apple-system,
-    BlinkMacSystemFont,
-    "PingFang SC",
-    sans-serif;
+  font-size: 13.5px;
+  line-height: 1.5;
 }
 .ledger-settings .settings-layout {
   grid-template-columns: clamp(205px, 20cqi, 252px) minmax(0, 1fr);
@@ -707,10 +706,88 @@ body:has(.ledger-settings) #modal {
 .ledger-settings .settings-content .model-settings .console-empty {
   margin-top: 14px;
 }
+:where(.ledger-settings .settings-content)
+  label:where(
+    :not(
+      .formlabel,
+      .ledger-search,
+      .console-search,
+      .price-row,
+      .setting-row,
+      .model-switch,
+      .check,
+      .ledger-segments *
+    ):has(
+      input:not(
+        [type="checkbox"],
+        [type="radio"],
+        [type="file"],
+        [type="range"]
+      ),
+      select,
+      textarea
+    )
+  ) {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+}
+:where(.ledger-settings .settings-content)
+  :is(
+    input:not(
+      :where([type="checkbox"], [type="radio"], [type="file"], [type="range"])
+    ),
+    select,
+    textarea
+  ):not(:where(.formlabel, .ledger-search, .console-search) *) {
+  min-width: 0;
+  max-width: 100%;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+:where(.ledger-settings .settings-content)
+  textarea:not(:where(.formlabel, .ledger-search, .console-search) *) {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+}
+.ledger-settings .settings-content button:is(.secondary, .quiet-button) {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ledger-settings
+  .settings-content
+  button:is(.secondary, .quiet-button):not(:disabled):hover {
+  background: var(--hover);
+}
+.ledger-settings .settings-content button:is(.secondary, .quiet-button).danger {
+  color: var(--danger);
+}
+.ledger-settings
+  .settings-content
+  button:is(.secondary, .quiet-button):disabled {
+  cursor: not-allowed;
+}
 .ledger-settings
   .settings-content
   :is(
-    input[type="search"],
+    input[type="search"]:not(:where(.ledger-search *, .console-search *)),
     .model-search input,
     .workspace-member-search input,
     .model-search,
@@ -722,7 +799,11 @@ body:has(.ledger-settings) #modal {
   border-radius: 8px;
   background: var(--field);
 }
-.ledger-settings .settings-content :is(input, select, textarea):focus-visible {
+.ledger-settings
+  .settings-content
+  :is(input, select, textarea):not(
+    :where([type="checkbox"], [type="radio"], .ledger-search *, .console-search *)
+  ):focus-visible {
   border-color: var(--blue);
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);

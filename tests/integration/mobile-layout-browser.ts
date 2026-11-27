@@ -667,8 +667,12 @@ async function checkNoOverflowAndNoCover(page: Page) {
     assert.equal(await lastViewControlCovered(page), null, "设置默认分类最后一个可交互元素未被遮挡");
     const toggle = page.locator(".ledger-navigation-toggle");
     await expect(toggle).toBeVisible();
+    await toggle.tap();
+    await expect(page.locator('.ledger-navigation-panel [data-act="settings-tab"][data-value="general"]')).toHaveCount(0);
+    await expect(page.locator('.ledger-navigation-panel [data-act="settings-tab"][data-value="budgets"]')).toContainText("预算控制");
+    await toggle.tap();
     const sections = [
-      "profile", "general", "credits", "budgets", "apiTokens",
+      "profile", "credits", "budgets", "apiTokens",
       "plugins", "models", "prices", "creditAdmin", "redeemAdmin",
       "workspaces", "team", "invites", "storage", "observability",
     ];
@@ -686,6 +690,17 @@ async function checkNoOverflowAndNoCover(page: Page) {
         await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
         `设置(${section}) 无横向滚动`,
       );
+      if (section === "apiTokens") {
+        await expect(page.getByRole("heading", { name: "工作区技能（SKILL.md）" })).toBeVisible();
+        await page.getByRole("button", { name: "新建 SKILL.md", exact: true }).tap();
+        await expect(page.getByRole("textbox", { name: "SKILL.md 内容" })).toBeVisible();
+        assert.ok(
+          await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+          "设置(apiTokens) 展开技能编辑器后无横向滚动",
+        );
+        assert.equal(await lastViewControlCovered(page), null, "设置(apiTokens) 技能编辑器最后一个可交互元素未被遮挡");
+        await page.getByRole("button", { name: "取消", exact: true }).tap();
+      }
       if (section === "prices") {
         const priceWidths = await page.locator(".price-row input").evaluateAll((inputs) =>
           inputs.map((input) => getComputedStyle(input).width),
@@ -840,7 +855,14 @@ async function checkCanvasList(page: Page) {
   if (evidence) await page.screenshot({ path: `${evidence}/page-canvas-list-dark.png`, animations: "disabled" });
   await setTheme(page, "light");
 
-  // 剧集项目树卡片：标题一行省略、details 默认收起可展开、“新建剧集”视觉 36px 且触控 >= 44px
+  // 剧集分集管理卡片：位于页面主标题下方、标题一行省略、无剧集时默认折叠可展开创建、“新建剧集”视觉 36px 且触控 >= 44px
+  const headingAboveSeries = await page.evaluate(() => {
+    const heading = document.querySelector<HTMLElement>(".project-list-heading")!.getBoundingClientRect();
+    const series = document.querySelector<HTMLElement>(".fm-series-panel")!.getBoundingClientRect();
+    return heading.bottom <= series.top + 1;
+  });
+  assert.equal(headingAboveSeries, true, "画布主标题位于剧集分集管理面板上方");
+
   const seriesMetrics = await page.evaluate(() => {
     const h2 = document.querySelector<HTMLElement>(".fm-series-head h2")!;
     const titleSpan = h2.querySelector<HTMLElement>("span");
@@ -864,19 +886,25 @@ async function checkCanvasList(page: Page) {
   assert.ok(seriesMetrics.hitH >= 43.5 && seriesMetrics.hitW >= 43.5, `新建剧集触控区域 >= 44px: ${JSON.stringify(seriesMetrics)}`);
 
   if (!(await page.locator(".fm-series-card").count())) {
-    const help = page.locator("details.fm-series-help");
-    await expect(help).toBeVisible();
-    await expect(help).not.toHaveJSProperty("open", true);
-    await help.locator("summary").tap();
-    await expect(help).toHaveJSProperty("open", true);
-    await expect(help).toContainText("四级结构");
-    await help.locator("summary").tap();
-    await expect(help).not.toHaveJSProperty("open", true);
+    const panel = page.locator(".fm-series-panel");
+    await expect(panel).toHaveClass(/\bis-collapsed\b/);
+    await expect(panel.locator(".fm-series-head h2")).toContainText("剧集分集管理 · 0 部剧集");
+    await expect(panel.locator(".fm-series-form, .fm-series-list")).toHaveCount(0);
 
-    // 桌面端 (>=761px) 保持原有非折叠说明与 72px 顶栏外观不变
+    await panel.getByRole("button", { name: "新建剧集", exact: true }).tap();
+    await expect(panel).not.toHaveClass(/\bis-collapsed\b/);
+    await expect(panel.locator(".fm-series-form")).toBeVisible();
+    await expect(panel.getByRole("button", { name: "结构化 JSON", exact: true })).toBeVisible();
+    assert.ok(
+      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      "展开新建剧集与世界观设定表单后无横向滚动",
+    );
+    await panel.locator(".fm-series-form").getByRole("button", { name: "取消", exact: true }).tap();
+    await expect(panel).toHaveClass(/\bis-collapsed\b/);
+
+    // 桌面端 (>=761px) 保持 #223 空剧集折叠降级形态与 72px 顶栏外观不变
     await page.setViewportSize({ width: 1440, height: 900 });
-    await expect(help).toBeHidden();
-    await expect(page.locator(".fm-series-desc")).toBeVisible();
+    await expect(panel).toHaveClass(/\bis-collapsed\b/);
     const desktopHeader = (await page.locator(".list-header").boundingBox())!;
     assert.ok(Math.abs(desktopHeader.height - 72) <= 1, `桌面端画布列表顶栏保持 72px: ${desktopHeader.height}`);
     if (evidence) await page.screenshot({ path: `${evidence}/page-canvas-list-desktop.png`, animations: "disabled" });
@@ -1019,6 +1047,14 @@ async function checkCanvasList(page: Page) {
     if ((await card.locator(".fm-series-toggle").first().getAttribute("aria-expanded")) !== "true") {
       await card.locator(".fm-series-toggle").first().tap();
     }
+    await card.getByRole("button", { name: "填写设定", exact: true }).tap();
+    await expect(card.locator(".fm-series-bible-editor")).toBeVisible();
+    assert.ok(
+      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      "展开剧集世界观设定编辑器后无横向溢出",
+    );
+    await card.locator(".fm-series-bible-editor").getByRole("button", { name: "取消", exact: true }).tap();
+
     const seasonGroup = card.locator(".fm-season-group").first();
     if ((await seasonGroup.locator(".fm-series-toggle").first().getAttribute("aria-expanded")) !== "true") {
       await seasonGroup.locator(".fm-series-toggle").first().tap();

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { BookOpen, Check, ShieldCheck, Sparkles, X } from "lucide-react";
+import { Check, ShieldCheck, Sparkles, X } from "lucide-react";
 
 type ProposalOp = {
   op: string;
@@ -27,9 +27,9 @@ type CanvasProposal = {
 type AgentPolicy = "plan_only" | "propose_and_confirm" | "auto_within_budget";
 
 const POLICY_LABELS: Record<AgentPolicy, string> = {
-  plan_only: "只建图不烧费 (plan_only)",
-  propose_and_confirm: "提案人工批准后执行 (propose_and_confirm)",
-  auto_within_budget: "预算硬上限内自动执行 (auto_within_budget)",
+  plan_only: "只建图不烧费",
+  propose_and_confirm: "提案人工批准后执行",
+  auto_within_budget: "预算硬上限内自动执行",
 };
 
 export function ProposalDiffPreview({
@@ -37,7 +37,7 @@ export function ProposalDiffPreview({
   projectId,
   canEditPolicy,
   onApproveProposal,
-  onOpenSkills,
+  onPendingCountChange,
   onClose,
   embedded = false,
 }: {
@@ -45,7 +45,7 @@ export function ProposalDiffPreview({
   projectId: string;
   canEditPolicy: boolean;
   onApproveProposal: (proposalId: string) => Promise<{ conflict?: string }>;
-  onOpenSkills: () => void;
+  onPendingCountChange?: (count: number) => void;
   onClose: () => void;
   embedded?: boolean;
 }) {
@@ -83,14 +83,18 @@ export function ProposalDiffPreview({
         req(`/api/canvases/${projectId}/proposals`),
         req("/api/workspace/agent-policy"),
       ]);
-      setProposals(pRes.proposals || []);
+      const nextProposals: CanvasProposal[] = pRes.proposals || [];
+      setProposals(nextProposals);
+      onPendingCountChange?.(
+        nextProposals.filter((p) => p.status === "pending").length,
+      );
       if (polRes.execution_policy) setPolicy(polRes.execution_policy);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [projectId, req]);
+  }, [onPendingCountChange, projectId, req]);
 
   useEffect(() => {
     void load();
@@ -157,15 +161,6 @@ export function ProposalDiffPreview({
             <Sparkles size={15} /> 画布 Agent 提案箱
           </strong>
           <div className="fm-agent-head-btns">
-            <button
-              type="button"
-              className="secondary"
-              onClick={onOpenSkills}
-              title="管理工作区 SKILL.md 技能包"
-            >
-              <BookOpen size={14} />
-              Skills
-            </button>
             <button
               type="button"
               className="icon-button"

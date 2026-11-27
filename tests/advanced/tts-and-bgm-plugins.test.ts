@@ -8,9 +8,9 @@ import test from "node:test";
 import { promisify } from "node:util";
 import type { chatHttp } from "@fumiao/plugin-sdk/chat-transport.js";
 import { evaluateFormConstraints } from "@fumiao/plugin-sdk/model-form.js";
-import { manifestSchema } from "@fumiao/plugin-sdk/index.js";
+import { manifestSchema, ProviderError } from "@fumiao/plugin-sdk/index.js";
 import { Executor } from "@fumiao/platform/executor.js";
-import { PluginRegistry } from "@fumiao/platform/plugins.js";
+import { PluginRegistry, validator } from "@fumiao/platform/plugins.js";
 import { inspectProviderOutput } from "@fumiao/platform/provider-output.js";
 import { sandboxRequest } from "@fumiao/platform/sandbox-request.js";
 import { StudioPackages, parsePackageFile } from "@fumiao/platform/studio-packages.js";
@@ -19,7 +19,11 @@ import {
   computeSecMsGec,
   type EdgeWebSocketFactory,
 } from "@fumiao/platform/tts/edge-tts.js";
-import { createEdgeTtsPlugin } from "@fumiao/platform/tts/edge-plugin.js";
+import {
+  createEdgeTtsPlugin,
+  edgeTtsForm,
+  edgeTtsPlugin,
+} from "@fumiao/platform/tts/edge-plugin.js";
 import { OriginalBudgets } from "@fumiao/original-api/budgets-api.js";
 import { createOriginalApp } from "../../apps/api/src/original.js";
 import { canvasRunsFixture } from "../helpers/canvas-runs.js";
@@ -128,6 +132,93 @@ test("F029 built-in Edge TTS generates Sec-MS-GEC token, safe SSML and valid MP3
   );
   assert.equal(inspected.mime, "audio/mpeg");
   assert.ok(Number(inspected.duration) > 0.2);
+});
+
+test("Edge TTS plugin removes dead instruction field from form & inputSchema, marks canvas: true for CanvasWorkspace model availability, tolerates historic drafts in prepare(), and reports actionable failure message", async () => {
+  assert.equal(edgeTtsForm.canvas, true);
+  assert.equal("instruction" in edgeTtsForm.fields, false);
+  assert.deepEqual(Object.keys(edgeTtsForm.fields), ["voice", "rate", "pitch"]);
+
+  const inputSchema = edgeTtsPlugin.manifest.models[0].inputSchema as {
+    properties: Record<string, unknown>;
+  };
+  assert.equal("instruction" in inputSchema.properties, false);
+  assert.deepEqual(Object.keys(inputSchema.properties), [
+    "voice",
+    "rate",
+    "pitch",
+  ]);
+
+  const prepared = await edgeTtsPlugin.originalSubmission!.prepare!(
+    {
+      uid: "historic-draft-1",
+      kind: "audio",
+      model: "edge-tts",
+      prompt: "历史草稿兼容测试",
+      instruction: "旧版遗留备注",
+      params: {
+        voice: "zh-CN-YunxiNeural",
+        rate: "+15%",
+        pitch: "-5Hz",
+        instruction: "旧版参数备注",
+      },
+      refs: [],
+      asset_packs: [],
+      price_revision: 1,
+    } as any,
+    {
+      references: [],
+      owner: { id: 1, site: "http://localhost:3000" },
+      admit: async () => {},
+      capacity: async () => {},
+    },
+  );
+  assert.deepEqual(prepared.params, {
+    voice: "zh-CN-YunxiNeural",
+    rate: "+15%",
+    pitch: "-5Hz",
+  });
+  assert.equal(
+    validator.validate(
+      edgeTtsPlugin.manifest.models[0].inputSchema,
+      prepared.params,
+    ),
+    true,
+  );
+
+  const failingPlugin = createEdgeTtsPlugin(() => {
+    throw new Error("握手被拒绝");
+  });
+  await assert.rejects(
+    () =>
+      failingPlugin.submit({
+        jobId: "edge-fail-1",
+        idempotencyKey: "edge-fail-idem-1",
+        model: "edge-tts",
+        kind: "audio",
+        config: {},
+        signal: AbortSignal.timeout(5_000),
+        input: {
+          prompt: "失败提示校验",
+          params: {
+            voice: "zh-CN-XiaoxiaoNeural",
+            rate: "+0%",
+            pitch: "+0Hz",
+          },
+          references: [],
+        },
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof ProviderError);
+      assert.equal(err.certainty, "rejected");
+      assert.equal(
+        err.message,
+        "Edge TTS 连接失败（握手被拒绝）。请稍后重试，或切换其他可用语音模型（管理员可在「设置 → 插件」导入商业语音插件）",
+      );
+      assert.equal(err.message.includes("配置自定义 Edge 语音端点"), false);
+      return true;
+    },
+  );
 });
 
 test("F029 tts-commercial package installs cleanly and handles binary /v1/audio/speech responses", async () => {
@@ -786,4 +877,1027 @@ test("F033 POST /api/canvases/:key/bgm enforces music-only models, atomic projec
     await app?.close();
     await f.cleanup();
   }
+});
+
+test("PR #223 Round 2 Item 6: disabling saved tts-1 via policy, connection, plugin, or workspace permission falls back consistently to edge-tts across state, precheck, narrate, and dialogue while filtering BGM and preserving explicit disabled-model rejection & zero-engine block", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+
+  const { ensureBuiltinEdgeTts } = await import("@fumiao/platform/tts/edge-plugin.js");
+  const { OriginalBatchPrecheck } = await import("@fumiao/original-api/batch-precheck.js");
+  const { OriginalState } = await import("@fumiao/original-api/state.js");
+  const { OriginalGeneration } = await import("@fumiao/original-api/generation.js");
+  const { OriginalSettings } = await import("@fumiao/original-api/settings.js");
+
+  // Disable built-in gpu audio connection (breeze-tts-2) so speech engines under test are tts-commercial + edge-tts (+ bgm-generator)
+  await f.p.db.query(
+    `UPDATE connections SET enabled = FALSE
+      WHERE id IN (SELECT connection_id FROM models WHERE kind = 'audio')`,
+  );
+
+  // Enable built-in Edge TTS (0 credits)
+  await ensureBuiltinEdgeTts(f.p, { endpoint: "ws://127.0.0.1:1/mock-edge" });
+
+  // Install & configure both tts-commercial (tts-1 @ 2 credits) AND bgm-generator (bgm-v1 @ 10 credits)
+  const pkgs = new StudioPackages(f.p);
+  const ttsPkg = JSON.parse(
+    await readFile("plugins/tts-commercial/tts-commercial.fmplugin.json", "utf8"),
+  );
+  const bgmPkg = JSON.parse(
+    await readFile("plugins/bgm-generator/bgm-generator.fmplugin.json", "utf8"),
+  );
+  await pkgs.install(f.admin, ttsPkg);
+  const ttsConn = randomUUID();
+  await f.p.db.query(
+    "INSERT INTO connections(id,name,plugin_id,plugin_version,config,enabled) VALUES ($1,'Synthetic TTS','tts-commercial',$2,$3,true)",
+    [
+      ttsConn,
+      ttsPkg.adapterVersion,
+      f.p.vault.seal({
+        baseUrl: "https://tts.example.invalid",
+        apiKey: "sk-test-tts",
+      }),
+    ],
+  );
+  await f.p.db.query(
+    "INSERT INTO models(id,connection_id,catalog_id,provider_model,label,kind,schema,enabled) VALUES ($1,$2,'tts-1','tts-1','OpenAI TTS-1','audio',$3,true)",
+    [randomUUID(), ttsConn, { type: "object", additionalProperties: true }],
+  );
+  await f.p.db.query(
+    `UPDATE studio_policy SET flags = flags || '{"tts-1":true}'::jsonb WHERE singleton`,
+  );
+  const ttsInstalled = (
+    await f.p.db.query("SELECT revision FROM studio_packages WHERE id='tts-commercial'")
+  ).rows[0];
+  await pkgs.change(f.admin, "tts-commercial", Number(ttsInstalled.revision), "enable");
+
+  await pkgs.install(f.admin, bgmPkg);
+  const bgmConn = randomUUID();
+  await f.p.db.query(
+    "INSERT INTO connections(id,name,plugin_id,plugin_version,config,enabled) VALUES ($1,'Synthetic BGM','bgm-generator',$2,$3,true)",
+    [
+      bgmConn,
+      bgmPkg.adapterVersion,
+      f.p.vault.seal({
+        baseUrl: "https://bgm.example.invalid",
+        apiKey: "sk-test-bgm",
+      }),
+    ],
+  );
+  await f.p.db.query(
+    "INSERT INTO models(id,connection_id,catalog_id,provider_model,label,kind,schema,enabled) VALUES ($1,$2,'bgm-v1','bgm-v1','AI 配乐 BGM v1','audio',$3,true)",
+    [randomUUID(), bgmConn, { type: "object", additionalProperties: true }],
+  );
+  await f.p.db.query(
+    `UPDATE studio_policy SET flags = flags || '{"bgm-v1":true}'::jsonb WHERE singleton`,
+  );
+  const bgmInstalled = (
+    await f.p.db.query("SELECT revision FROM studio_packages WHERE id='bgm-generator'")
+  ).rows[0];
+  await pkgs.change(f.admin, "bgm-generator", Number(bgmInstalled.revision), "enable");
+
+  const wsPublicId = String(f.workspace.public_id);
+  await f.p.db.query("UPDATE wallets SET balance = 200, held = 0 WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+
+  const canvasId = await f.project(
+    [
+      {
+        id: "shot1",
+        type: "video",
+        title: "镜头 1",
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 220,
+        prompt: "rainy alley",
+        narration_text: "旧模型停用后应与前端一致回退到免费 Edge TTS",
+        narration_instruction: "深沉",
+        narration_model: "tts-1",
+        dialogue_lines: [
+          {
+            id: "line1",
+            speaker: "侦探",
+            text: "对白同样在旧模型不可用时回退到 Edge TTS",
+            model: "tts-1",
+          },
+        ],
+        params: {},
+      },
+    ],
+    [],
+    wsPublicId,
+    f.admin,
+  );
+
+  const precheck = new OriginalBatchPrecheck(f.p);
+  const stateSvc = new OriginalState(f.p);
+  const settings = new OriginalSettings(f.p);
+  const generation = new OriginalGeneration(f.p);
+
+  // Baseline while tts-1 IS enabled: canvas_speech_models contains tts-1 & edge-tts, NEVER bgm-v1!
+  const stateBefore = (await stateSvc.read(f.admin, wsPublicId)) as any;
+  assert.ok(Array.isArray(stateBefore.canvas_speech_models));
+  assert.equal(stateBefore.canvas_speech_models.includes("tts-1"), true);
+  assert.equal(stateBefore.canvas_speech_models.includes("edge-tts"), true);
+  assert.equal(stateBefore.canvas_speech_models.includes("bgm-v1"), false);
+  // Global audio_models contract remains intact
+  assert.equal("bgm-v1" in stateBefore.audio_models, true);
+
+  // 1) Disable tts-1 via model policy (PATCH /api/settings/models):
+  await settings.models(f.admin, {
+    model: "tts-1",
+    enabled: false,
+    expected_revision: stateBefore.model_policy.revision,
+  });
+
+  // Direct/explicit submission to OriginalGeneration with disabled "tts-1" MUST STILL REJECT (no validation bypass!)
+  await assert.rejects(
+    generation.submit(
+      f.admin,
+      await generation.parse("audio", {
+        uid: randomUUID(),
+        model: "tts-1",
+        prompt: "明确选择禁用模型必须被拦截",
+      }),
+      wsPublicId,
+    ),
+    (err: any) => err?.status === 403,
+  );
+
+  // Meanwhile, canvas state, precheck (narration + dialogue), narrate, and narrateDialogue ALL fall back consistently to edge-tts @ 0 credits!
+  const stateAfterPolicy = (await stateSvc.read(f.admin, wsPublicId)) as any;
+  assert.equal(stateAfterPolicy.canvas_speech_models.includes("tts-1"), false);
+  assert.equal(stateAfterPolicy.canvas_speech_models.includes("edge-tts"), true);
+
+  const preAfterPolicy = await precheck.precheckCanvas(f.admin, canvasId, {
+    expected_revision: 2,
+    node_ids: ["shot1"],
+    stages: ["narration", "dialogue"],
+  });
+  const preNarr = preAfterPolicy.items.find((i) => i.stage === "narration")!;
+  const preDlg = preAfterPolicy.items.find((i) => i.stage === "dialogue")!;
+  assert.equal(preNarr.model, "edge-tts");
+  assert.equal(preNarr.credits, 0);
+  assert.notEqual(preNarr.status, "blocked");
+  assert.equal(preDlg.model, "edge-tts");
+  assert.equal(preDlg.credits, 0);
+  assert.notEqual(preDlg.status, "blocked");
+
+  const narrRes = await f.runs.narrate(f.admin, canvasId, "shot1", {
+    expected_revision: 2,
+    uid: randomUUID(),
+  });
+  const narrJob = (
+    await f.p.db.query("SELECT provider_model, price FROM jobs WHERE public_id = $1", [
+      narrRes.id,
+    ])
+  ).rows[0];
+  assert.equal(narrJob.provider_model, "edge-tts");
+  assert.equal(Number(narrJob.price), 0);
+
+  const dlgRes = await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+    expected_revision: 2,
+    uid: randomUUID(),
+  });
+  assert.equal(dlgRes.items[0].model, "edge-tts");
+
+  // Cancel queued test jobs so shot1 isn't busy for next checks
+  await f.p.db.query("UPDATE jobs SET state = 'cancelled' WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+
+  // 2) Re-enable tts-1 policy, then disable via workspace model_permissions -> ALSO falls back to edge-tts!
+  const polRev2 = ((await stateSvc.read(f.admin, wsPublicId)) as any).model_policy.revision;
+  await settings.models(f.admin, {
+    model: "tts-1",
+    enabled: true,
+    expected_revision: polRev2,
+  });
+  const ttsModelRow = (
+    await f.p.db.query("SELECT id FROM models WHERE catalog_id = 'tts-1' LIMIT 1")
+  ).rows[0];
+  await f.p.db.query(
+    `INSERT INTO model_permissions(model_id, workspace_id, enabled)
+     VALUES ($1, $2, FALSE)
+     ON CONFLICT (model_id, workspace_id) DO UPDATE SET enabled = FALSE`,
+    [ttsModelRow.id, f.workspace.id],
+  );
+  const stateAfterPerm = (await stateSvc.read(f.admin, wsPublicId)) as any;
+  assert.equal(stateAfterPerm.canvas_speech_models.includes("tts-1"), false);
+  const preAfterPerm = await precheck.precheckCanvas(f.admin, canvasId, {
+    expected_revision: 2,
+    node_ids: ["shot1"],
+    stages: ["narration"],
+  });
+  assert.equal(preAfterPerm.items[0].model, "edge-tts");
+  assert.equal(preAfterPerm.items[0].credits, 0);
+
+  // 3) Disable ALL speech engines (including edge-tts & gpt-4o-mini-tts & local-tts-compat) while bgm-v1 STAYS enabled -> MUST BLOCK (never pick bgm-v1)!
+  await f.p.db.query(
+    `UPDATE connections SET enabled = FALSE WHERE plugin_id IN ('tts-commercial', 'edge-tts')`,
+  );
+  const stateNoSpeech = (await stateSvc.read(f.admin, wsPublicId)) as any;
+  assert.deepEqual(stateNoSpeech.canvas_speech_models, []);
+  const preBlocked = await precheck.precheckCanvas(f.admin, canvasId, {
+    expected_revision: 2,
+    node_ids: ["shot1"],
+    stages: ["narration"],
+  });
+  assert.equal(preBlocked.items[0].status, "blocked");
+  assert.notEqual(preBlocked.items[0].model, "bgm-v1");
+  await assert.rejects(
+    f.runs.narrate(f.admin, canvasId, "shot1", {
+      expected_revision: 2,
+      uid: randomUUID(),
+    }),
+    (err: any) => [403, 503].includes(err?.status),
+  );
+});
+
+test("PR #223 Round 3 Item 1 & Item 2: accepted dialogue retries survive disabled speech engines & preserve snapshot model/voice, and UI/precheck/submit share requireConfigured + portable v3 speech + defaultModelIds", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+
+  const { ensureBuiltinEdgeTts } = await import("@fumiao/platform/tts/edge-plugin.js");
+  const { OriginalBatchPrecheck } = await import("@fumiao/original-api/batch-precheck.js");
+  const { OriginalState } = await import("@fumiao/original-api/state.js");
+  const { ReferencePacks } = await import("@fumiao/platform/packs.js");
+  const typesMod = (await import("../../apps/web/canvas-editor/types.js")) as Record<
+    string,
+    any
+  >;
+
+  // Disable built-in gpu audio connection (breeze-tts-2) so speech engines are controlled explicitly
+  await f.p.db.query(
+    `UPDATE connections SET enabled = FALSE
+      WHERE id IN (SELECT connection_id FROM models WHERE kind = 'audio')`,
+  );
+  await ensureBuiltinEdgeTts(f.p, { endpoint: "ws://127.0.0.1:1/mock-edge" });
+
+  const pkgs = new StudioPackages(f.p);
+  const ttsPkg = JSON.parse(
+    await readFile("plugins/tts-commercial/tts-commercial.fmplugin.json", "utf8"),
+  );
+  const bgmPkg = JSON.parse(
+    await readFile("plugins/bgm-generator/bgm-generator.fmplugin.json", "utf8"),
+  );
+
+  await pkgs.install(f.admin, ttsPkg);
+  const ttsConn = randomUUID();
+  await f.p.db.query(
+    "INSERT INTO connections(id,name,plugin_id,plugin_version,config,enabled) VALUES ($1,'Synthetic TTS','tts-commercial',$2,$3,true)",
+    [
+      ttsConn,
+      ttsPkg.adapterVersion,
+      f.p.vault.seal({
+        baseUrl: "https://tts.example.invalid",
+        apiKey: "sk-test-tts",
+      }),
+    ],
+  );
+  await f.p.db.query(
+    "INSERT INTO models(id,connection_id,catalog_id,provider_model,label,kind,schema,enabled) VALUES ($1,$2,'tts-1','tts-1','OpenAI TTS-1','audio',$3,true),($4,$2,'gpt-4o-mini-tts','gpt-4o-mini-tts','GPT-4o Mini TTS','audio',$3,true)",
+    [randomUUID(), ttsConn, { type: "object", additionalProperties: true }, randomUUID()],
+  );
+  await f.p.db.query(
+    `UPDATE studio_policy SET flags = flags || '{"tts-1":true,"gpt-4o-mini-tts":true}'::jsonb WHERE singleton`,
+  );
+  const ttsInstalled = (
+    await f.p.db.query("SELECT revision FROM studio_packages WHERE id='tts-commercial'")
+  ).rows[0];
+  await pkgs.change(f.admin, "tts-commercial", Number(ttsInstalled.revision), "enable");
+
+  await pkgs.install(f.admin, bgmPkg);
+  const bgmConn = randomUUID();
+  await f.p.db.query(
+    "INSERT INTO connections(id,name,plugin_id,plugin_version,config,enabled) VALUES ($1,'Synthetic BGM','bgm-generator',$2,$3,true)",
+    [
+      bgmConn,
+      bgmPkg.adapterVersion,
+      f.p.vault.seal({
+        baseUrl: "https://bgm.example.invalid",
+        apiKey: "sk-test-bgm",
+      }),
+    ],
+  );
+  await f.p.db.query(
+    "INSERT INTO models(id,connection_id,catalog_id,provider_model,label,kind,schema,enabled) VALUES ($1,$2,'bgm-v1','bgm-v1','AI 配乐 BGM v1','audio',$3,true)",
+    [randomUUID(), bgmConn, { type: "object", additionalProperties: true }],
+  );
+  await f.p.db.query(
+    `UPDATE studio_policy SET flags = flags || '{"bgm-v1":true}'::jsonb WHERE singleton`,
+  );
+  const bgmInstalled = (
+    await f.p.db.query("SELECT revision FROM studio_packages WHERE id='bgm-generator'")
+  ).rows[0];
+  await pkgs.change(f.admin, "bgm-generator", Number(bgmInstalled.revision), "enable");
+
+  const wsPublicId = String(f.workspace.public_id);
+  await f.p.db.query("UPDATE wallets SET balance = 200, held = 0 WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+
+  // Create a character pack with voice_profile { model: 'tts-1', voice_id: 'alloy' }
+  const packsSvc = new ReferencePacks(f.p.db);
+  const packAssetId = randomUUID().replaceAll("-", "");
+  await f.asset(packAssetId);
+  const createdPack = await f.p.db.transaction((sql) =>
+    packsSvc.save(sql, f.admin, f.workspace.id, {
+      name: "林墨",
+      purpose: "subject",
+      description: "冷峻侦探",
+      media: [packAssetId],
+      expected_revision: null,
+      voice_profile: {
+        model: "tts-1",
+        voice_id: "alloy",
+        instruction: "冷静克制",
+      },
+    }),
+  );
+
+  const canvasId = await f.project(
+    [
+      {
+        id: "shot1",
+        type: "video",
+        title: "镜头 1",
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 220,
+        prompt: "rainy street",
+        narration_text: "旁白测试",
+        dialogue_lines: [
+          {
+            id: "line1",
+            speaker: "林墨",
+            pack_id: createdPack.public_id,
+            text: "第一句已接单对白重试不应依赖当前语音引擎开关",
+          },
+          {
+            id: "line2",
+            speaker: "路人",
+            text: "第二句历史回执无 model 字段兼容测试",
+            model: "tts-1",
+            voice_id: "echo",
+          },
+        ],
+        params: {},
+      },
+    ],
+    [],
+    wsPublicId,
+    f.admin,
+  );
+
+  // --- Item 1: Accepted dialogue retry (both fallback-available & zero-speech-engines + legacy receipt) ---
+  const acceptedDialogueUid = randomUUID();
+  const initialDlg = await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+    expected_revision: 2,
+    uid: acceptedDialogueUid,
+  });
+  assert.equal(initialDlg.items.length, 2);
+  assert.deepEqual(initialDlg.items[0], {
+    line_id: "line1",
+    id: initialDlg.items[0].id,
+    speaker: "林墨",
+    model: "tts-1",
+    voice_id: "alloy",
+  });
+  assert.deepEqual(initialDlg.items[1], {
+    line_id: "line2",
+    id: initialDlg.items[1].id,
+    speaker: "路人",
+    model: "tts-1",
+    voice_id: "echo",
+  });
+
+  // Simulate a legacy pre-Round-3 receipt on line2 by stripping `model` from `canvas_job_links.inputs`
+  await f.p.db.query(
+    `UPDATE canvas_job_links
+        SET inputs = convert_to((convert_from(inputs, 'utf8')::jsonb - 'model')::text, 'utf8')
+      WHERE node = 'dialogue:shot1:line2'`,
+  );
+
+  const walletAfterAccept = (
+    await f.p.db.query("SELECT balance, held FROM wallets WHERE workspace_id = $1", [
+      f.workspace.id,
+    ])
+  ).rows[0];
+  const jobCountAfterAccept = Number(
+    (
+      await f.p.db.query("SELECT count(*)::int AS c FROM jobs WHERE workspace_id = $1", [
+        f.workspace.id,
+      ])
+    ).rows[0].c,
+  );
+
+  // Mutate character pack voice_profile AND disable tts-commercial while edge-tts stays enabled (Case B: fallback available)
+  await f.p.db.transaction((sql) =>
+    packsSvc.save(
+      sql,
+      f.admin,
+      f.workspace.id,
+      {
+        name: "林墨",
+        purpose: "subject",
+        description: "冷峻侦探",
+        media: [packAssetId],
+        expected_revision: createdPack.revision,
+        voice_profile: {
+          model: "edge-tts",
+          voice_id: "zh-CN-YunxiNeural",
+        },
+      },
+      createdPack.public_id,
+    ),
+  );
+  await f.p.db.query("UPDATE connections SET enabled = FALSE WHERE plugin_id = 'tts-commercial'");
+
+  const retryWithFallback = await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+    expected_revision: 2,
+    uid: acceptedDialogueUid,
+  });
+  assert.deepEqual(retryWithFallback, initialDlg);
+
+  // Now ALSO disable edge-tts while bgm-v1 stays enabled (Case A: zero speech engines!)
+  await f.p.db.query("UPDATE connections SET enabled = FALSE WHERE plugin_id = 'edge-tts'");
+
+  const retryWithZeroSpeech = await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+    expected_revision: 2,
+    uid: acceptedDialogueUid,
+  });
+  assert.deepEqual(retryWithZeroSpeech, initialDlg);
+
+  const walletAfterRetries = (
+    await f.p.db.query("SELECT balance, held FROM wallets WHERE workspace_id = $1", [
+      f.workspace.id,
+    ])
+  ).rows[0];
+  const jobCountAfterRetries = Number(
+    (
+      await f.p.db.query("SELECT count(*)::int AS c FROM jobs WHERE workspace_id = $1", [
+        f.workspace.id,
+      ])
+    ).rows[0].c,
+  );
+  assert.deepEqual(walletAfterRetries, walletAfterAccept);
+  assert.equal(jobCountAfterRetries, jobCountAfterAccept);
+
+  // First-time submission with a NEW uid while zero speech engines are enabled MUST still reject with 503!
+  await assert.rejects(
+    f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 2,
+      uid: randomUUID(),
+    }),
+    (err: any) => err?.status === 503,
+  );
+
+  // Cancel queued dialogue jobs before Item 2 checks
+  await f.p.db.query("UPDATE jobs SET state = 'cancelled' WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+
+  // --- Item 2a: tts-commercial enabled with EMPTY apiKey ("") + executable edge-tts ---
+  await f.p.db.query("UPDATE connections SET enabled = TRUE WHERE plugin_id = 'edge-tts'");
+  await f.p.db.query(
+    "UPDATE connections SET enabled = TRUE, config = $2 WHERE id = $1",
+    [
+      ttsConn,
+      f.p.vault.seal({
+        baseUrl: "https://tts.example.invalid",
+        apiKey: "",
+      }),
+    ],
+  );
+
+  const stateSvc = new OriginalState(f.p);
+  const precheck = new OriginalBatchPrecheck(f.p);
+
+  const stateEmptyKey = (await stateSvc.read(f.admin, wsPublicId)) as any;
+  assert.equal(
+    stateEmptyKey.canvas_speech_models.includes("tts-1"),
+    false,
+    "tts-1 with empty apiKey must NOT appear in canvas_speech_models",
+  );
+  assert.deepEqual(stateEmptyKey.canvas_speech_models, ["edge-tts"]);
+
+  const uiModelsEmptyKey = typesMod.resolveCanvasSpeechModels(stateEmptyKey);
+  assert.deepEqual(
+    uiModelsEmptyKey.map((m: { id: string }) => m.id),
+    ["edge-tts"],
+  );
+
+  const preEmptyKey = await precheck.precheckCanvas(f.admin, canvasId, {
+    expected_revision: 2,
+    node_ids: ["shot1"],
+    stages: ["narration", "dialogue"],
+  });
+  for (const item of preEmptyKey.items) {
+    assert.equal(item.model, "edge-tts");
+    assert.equal(item.credits, 0);
+    assert.notEqual(item.status, "blocked");
+  }
+  const preItemsEmptyKey = await precheck.quoteBatch(
+    f.admin,
+    {
+      items: [
+        { kind: "audio", model: "" },
+        { kind: "audio", model: "tts-1" },
+      ],
+    },
+    wsPublicId,
+  );
+  assert.equal(preItemsEmptyKey.items[0].model, "edge-tts");
+  assert.equal(preItemsEmptyKey.items[0].credits, 0);
+  assert.equal(preItemsEmptyKey.items[0].allowed, true);
+  assert.equal(preItemsEmptyKey.items[1].allowed, false);
+
+  const narrEmptyKey = await f.runs.narrate(f.admin, canvasId, "shot1", {
+    expected_revision: 2,
+    uid: randomUUID(),
+  });
+  const narrEmptyKeyRow = (
+    await f.p.db.query("SELECT catalog_id, price FROM jobs WHERE public_id = $1", [
+      narrEmptyKey.id,
+    ])
+  ).rows[0];
+  assert.equal(narrEmptyKeyRow.catalog_id, "edge-tts");
+  assert.equal(Number(narrEmptyKeyRow.price), 0);
+  await f.p.db.query("UPDATE jobs SET state = 'cancelled' WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+
+  // --- Item 2b: Portable v3 speech plugin WITHOUT canvasSubmission (model_forms[id].canvas === false) ---
+  const portableSpeechPkg = {
+    format: 1,
+    id: "portable-speech-v3",
+    label: "Portable Speech v3",
+    version: "1.0.0",
+    adapterVersion: "1.0.0",
+    contributes: { version: 1, hostCapabilities: ["media"] },
+    manifest: {
+      id: "portable-speech-v3",
+      label: "Portable Speech v3",
+      version: "1.0.0",
+      contractVersion: 1,
+      mode: "request",
+      originalSubmission: { version: 3 },
+      artifactValidation: {
+        version: 3,
+        errors: {
+          imageFormat: "图片格式不受支持",
+          imageDecode: "无法解码图片",
+          video: "视频无效",
+          audio: "音频无效",
+          failed: "未保存成品",
+        },
+      },
+      configSchema: {
+        type: "object",
+        properties: {
+          baseUrl: { type: "string" },
+          apiKey: { type: "string", writeOnly: true },
+        },
+        required: ["baseUrl", "apiKey"],
+      },
+      models: [
+        {
+          id: "portable-tts-pro",
+          label: "Portable TTS Pro",
+          kind: "audio",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+          studio: {
+            order: 65,
+            priceOrder: 650,
+            descriptor: { kind: "audio", label: "Portable TTS Pro" },
+            prices: [
+              {
+                tier: "standard",
+                amount: 4,
+                label: "便携语音合成",
+                match: { type: "object" },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    program:
+      "({request(){return {path:'/speech',body:{}}},result({raw}){return {state:'completed',artifacts:[{url:raw.url,mime:'audio/mpeg'}]}}})",
+  };
+  await pkgs.install(f.admin, portableSpeechPkg);
+  await f.p.createConnection(
+    f.admin,
+    {
+      pluginId: "portable-speech-v3",
+      version: "1.0.0",
+      name: "Portable Speech Conn",
+      config: { baseUrl: "https://portable-tts.example.invalid", apiKey: "sk-portable" },
+    },
+    true,
+  );
+  await pkgs.change(f.admin, "portable-speech-v3", 1, "enable");
+  await f.p.db.query(
+    `UPDATE studio_policy SET flags = flags || '{"portable-tts-pro":true}'::jsonb WHERE singleton`,
+  );
+
+  const stateWithPortable = (await stateSvc.read(f.admin, wsPublicId)) as any;
+  assert.equal(stateWithPortable.model_forms["portable-tts-pro"]?.canvas, false);
+  assert.equal(stateWithPortable.canvas_speech_models.includes("portable-tts-pro"), true);
+  assert.equal(Array.isArray(stateWithPortable.canvas_speech_default_models), true);
+
+  // Frontend helper must keep portable-tts-pro even though model_forms['portable-tts-pro'].canvas === false!
+  const uiSpeechWithPortable = typesMod.resolveCanvasSpeechModels(stateWithPortable);
+  assert.equal(
+    uiSpeechWithPortable.some((m: { id: string }) => m.id === "portable-tts-pro"),
+    true,
+  );
+
+  // Auto-route prefers non-Edge speech model ("portable-tts-pro" @ 4 credits) identically on UI, precheck, and submit!
+  const uiPlanPortable = typesMod.quoteCanvasSpeechPlan({
+    studio: stateWithPortable,
+    node: {
+      id: "shot1",
+      type: "video",
+      narration_text: "旁白测试",
+      dialogue_lines: [],
+    },
+    packs: [],
+  });
+  assert.equal(uiPlanPortable.narration.activeModel, "portable-tts-pro");
+  assert.equal(uiPlanPortable.narration.cost, 4);
+
+  const preWithPortable = await precheck.precheckCanvas(f.admin, canvasId, {
+    expected_revision: 2,
+    node_ids: ["shot1"],
+    stages: ["narration"],
+  });
+  assert.equal(preWithPortable.items[0].model, "portable-tts-pro");
+  assert.equal(preWithPortable.items[0].credits, 4);
+});
+
+test("PR #223 Round 4 Items 1, 2 & 4: dialogue old UID + bumped revision rejects 409, unexecutable default speech blocks precheckCanvas, and multi-tier speech pricing matches server tiers without misusing first tier", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+
+  const { OriginalBatchPrecheck } = await import("@fumiao/original-api/batch-precheck.js");
+  const { OriginalState } = await import("@fumiao/original-api/state.js");
+  const typesMod = (await import("../../apps/web/canvas-editor/types.js")) as Record<
+    string,
+    any
+  >;
+
+  // Disable built-in gpu audio connection (breeze-tts-2) so speech models are controlled explicitly
+  await f.p.db.query(
+    `UPDATE connections SET enabled = FALSE
+      WHERE id IN (SELECT connection_id FROM models WHERE kind = 'audio')`,
+  );
+
+  // Install tts-commercial with tts-1 declared as defaultForKind: true (sole policy-allowed speech default!)
+  const pkgs = new StudioPackages(f.p);
+  const ttsPkg = JSON.parse(
+    await readFile("plugins/tts-commercial/tts-commercial.fmplugin.json", "utf8"),
+  );
+  ttsPkg.manifest.canvasSubmission.models[0].defaultForKind = true;
+  await pkgs.install(f.admin, ttsPkg);
+
+  const ttsConn = randomUUID();
+  await f.p.db.query(
+    "INSERT INTO connections(id,name,plugin_id,plugin_version,config,enabled) VALUES ($1,'Default TTS','tts-commercial',$2,$3,true)",
+    [
+      ttsConn,
+      ttsPkg.adapterVersion,
+      f.p.vault.seal({
+        baseUrl: "https://tts.example.invalid",
+        apiKey: "", // Empty apiKey -> schema passes, requireConfigured fails!
+      }),
+    ],
+  );
+  await f.p.db.query(
+    "INSERT INTO models(id,connection_id,catalog_id,provider_model,label,kind,schema,enabled) VALUES ($1,$2,'tts-1','tts-1','OpenAI TTS-1','audio',$3,true)",
+    [randomUUID(), ttsConn, { type: "object", additionalProperties: true }],
+  );
+  await f.p.db.query(
+    `UPDATE studio_policy SET flags = (flags || '{"breeze-tts-2":false,"tts-1":true}'::jsonb) WHERE singleton`,
+  );
+  const ttsInstalled = (
+    await f.p.db.query("SELECT revision FROM studio_packages WHERE id='tts-commercial'")
+  ).rows[0];
+  await pkgs.change(f.admin, "tts-commercial", Number(ttsInstalled.revision), "enable");
+
+  const wsPublicId = String(f.workspace.public_id);
+  await f.p.db.query("UPDATE wallets SET balance = 10, held = 0 WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+
+  const canvasId = await f.project(
+    [
+      {
+        id: "shot1",
+        type: "video",
+        title: "镜头 1",
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 220,
+        prompt: "alley",
+        narration_text: "默认语音未配置密钥时预检应阻断",
+        dialogue_lines: [
+          {
+            id: "line1",
+            speaker: "侦探",
+            text: "第一版对白台词",
+          },
+        ],
+        params: {},
+      },
+    ],
+    [],
+    wsPublicId,
+    f.admin,
+  );
+
+  const stateSvc = new OriginalState(f.p);
+  const precheck = new OriginalBatchPrecheck(f.p);
+
+  // --- Item 2: tts-1 is sole policy-allowed default, connection enabled with apiKey="", no Edge TTS ---
+  const stateUnconfigured = (await stateSvc.read(f.admin, wsPublicId)) as any;
+  assert.deepEqual(stateUnconfigured.canvas_speech_models, []);
+
+  // Direct submit keeps legacy 503 behavior
+  await assert.rejects(
+    f.runs.narrate(f.admin, canvasId, "shot1", {
+      expected_revision: 2,
+      uid: randomUUID(),
+    }),
+    (err: any) => err?.status === 503,
+  );
+  await assert.rejects(
+    f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 2,
+      uid: randomUUID(),
+    }),
+    (err: any) => err?.status === 503,
+  );
+
+  // precheckCanvas MUST block both narration and dialogue with 0 credits!
+  const preUnconfigured = await precheck.precheckCanvas(f.admin, canvasId, {
+    expected_revision: 2,
+    node_ids: ["shot1"],
+    stages: ["narration", "dialogue"],
+  });
+  for (const stage of ["narration", "dialogue"] as const) {
+    const item = preUnconfigured.items.find((i) => i.stage === stage)!;
+    assert.equal(item.status, "blocked", `${stage} must be blocked when default speech has empty apiKey`);
+    assert.equal(item.credits, 0);
+  }
+
+  // --- Item 4: Configure valid apiKey on tts-1, add earlier conditional 50-credit wav tier & 15-credit vip voice tier ---
+  await f.p.db.query(
+    "UPDATE connections SET config = $2 WHERE id = $1",
+    [
+      ttsConn,
+      f.p.vault.seal({
+        baseUrl: "https://tts.example.invalid",
+        apiKey: "sk-valid-tts",
+      }),
+    ],
+  );
+  // Existing tts-1|standard is position=0, amount=2; place wav (50) and vip-clone (15) ahead of standard (2)
+  await f.p.db.query(
+    `UPDATE studio_prices
+        SET position = 10,
+            amount = 2,
+            matcher = $1::jsonb
+      WHERE key = 'tts-1|standard'`,
+    [
+      JSON.stringify({
+        type: "object",
+        not: {
+          anyOf: [
+            { required: ["response_format"], properties: { response_format: { const: "wav" } } },
+            { required: ["voice"], properties: { voice: { const: "vip-clone" } } },
+          ],
+        },
+      }),
+    ],
+  );
+  await f.p.db.query(
+    `INSERT INTO studio_prices(key, model_id, tier, label, position, matcher, amount)
+     VALUES
+       ('tts-1|wav', 'tts-1', 'wav', 'WAV 高清档', -2, $1::jsonb, 50),
+       ('tts-1|vip', 'tts-1', 'vip', 'VIP 声线档', -1, $2::jsonb, 15)`,
+    [
+      JSON.stringify({
+        type: "object",
+        required: ["response_format"],
+        properties: { response_format: { const: "wav" } },
+      }),
+      JSON.stringify({
+        type: "object",
+        required: ["voice"],
+        properties: { voice: { const: "vip-clone" } },
+      }),
+    ],
+  );
+
+  // Wallet balance is 10: multi-tier tts-1 must NOT guess the first 50-credit wav tier or falsely block UI;
+  // real server submission quotes 2 credits for ordinary narration/dialogue (accepted!) and 15 credits (> 10 -> 402!) for vip-clone!
+  const stateMultiTier = (await stateSvc.read(f.admin, wsPublicId)) as any;
+  assert.equal("canvas_speech_price_tiers" in stateMultiTier, false);
+  const ordinaryPlan = typesMod.quoteCanvasSpeechPlan({
+    studio: stateMultiTier,
+    node: {
+      narration_model: undefined,
+      dialogue_lines: [{ id: "line1", speaker: "侦探", text: "普通对白 2 积分" }],
+    },
+    packs: [],
+  });
+  assert.equal(ordinaryPlan.narration.cost, null);
+  assert.equal(ordinaryPlan.narration.costIndeterminate, true);
+  assert.equal(ordinaryPlan.narration.unavailableReason, "");
+  assert.equal(ordinaryPlan.dialogue.lineCosts.line1, null);
+  assert.equal(ordinaryPlan.dialogue.lineReasons.line1, "");
+  assert.equal(ordinaryPlan.dialogue.batchCost, null);
+  assert.equal(ordinaryPlan.dialogue.costIndeterminate, true);
+  assert.equal(ordinaryPlan.dialogue.unavailableReason, "");
+
+  // Real server narration submit quotes 2-credit standard tier (wallet 10 -> held 2, NOT blocked at 50!)
+  const narrRes = await f.runs.narrate(f.admin, canvasId, "shot1", {
+    expected_revision: 2,
+    uid: randomUUID(),
+  });
+  assert.ok(narrRes.id > 0);
+  const heldAfterNarr = Number(
+    (
+      await f.p.db.query("SELECT held FROM wallets WHERE workspace_id = $1", [
+        f.workspace.id,
+      ])
+    ).rows[0].held,
+  );
+  assert.equal(heldAfterNarr, 2);
+  await f.p.db.query(
+    "UPDATE jobs SET state = 'cancelled' WHERE workspace_id = $1",
+    [f.workspace.id],
+  );
+  await f.p.db.query(
+    "UPDATE wallets SET balance = 10, held = 0 WHERE workspace_id = $1",
+    [f.workspace.id],
+  );
+
+  // --- Item 1: Accept dialogue at revision=2 with uidRev2 (also verifies real server 2-credit dialogue quote), edit same line to revision=3, retry with old uidRev2 + expected_revision=3 -> MUST reject 409! ---
+  const uidRev2 = randomUUID();
+  const acceptedRev2 = await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+    expected_revision: 2,
+    uid: uidRev2,
+  });
+  assert.equal(acceptedRev2.items.length, 1);
+  assert.equal(acceptedRev2.items[0].model, "tts-1");
+
+  // Cancel queued job so node isn't busy, then edit line1 text -> canvas becomes revision=3
+  await f.p.db.query("UPDATE jobs SET state = 'cancelled' WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+  const loadedCanvas = await f.canvases.get(f.admin, canvasId);
+  await f.canvases.save(f.admin, canvasId, {
+    title: loadedCanvas.title,
+    expected_revision: 2,
+    document: {
+      ...loadedCanvas.document,
+      nodes: loadedCanvas.document.nodes.map((n: any) =>
+        n.id === "shot1"
+          ? {
+              ...n,
+              dialogue_lines: [
+                {
+                  id: "line1",
+                  speaker: "侦探",
+                  text: "修改到 revision=3 的全新对白台词",
+                },
+              ],
+            }
+          : n,
+      ),
+    },
+  });
+
+  const walletBeforeStaleUid = (
+    await f.p.db.query("SELECT balance, held FROM wallets WHERE workspace_id = $1", [
+      f.workspace.id,
+    ])
+  ).rows[0];
+  const jobsBeforeStaleUid = Number(
+    (
+      await f.p.db.query("SELECT count(*)::int AS c FROM jobs WHERE workspace_id = $1", [
+        f.workspace.id,
+      ])
+    ).rows[0].c,
+  );
+
+  // Re-submitting old uidRev2 with expected_revision=3 MUST reject 409 instead of returning revision=2's job!
+  await assert.rejects(
+    f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 3,
+      uid: uidRev2,
+    }),
+    (err: any) => err?.status === 409,
+  );
+
+  const walletAfterStaleUid = (
+    await f.p.db.query("SELECT balance, held FROM wallets WHERE workspace_id = $1", [
+      f.workspace.id,
+    ])
+  ).rows[0];
+  const jobsAfterStaleUid = Number(
+    (
+      await f.p.db.query("SELECT count(*)::int AS c FROM jobs WHERE workspace_id = $1", [
+        f.workspace.id,
+      ])
+    ).rows[0].c,
+  );
+  assert.deepEqual(walletAfterStaleUid, walletBeforeStaleUid);
+  assert.equal(jobsAfterStaleUid, jobsBeforeStaleUid);
+
+  // Same UID + same revision=3 (both with persisted inputs.revision=3 AND legacy receipt without inputs.revision) still replays cleanly even when all speech engines are disabled!
+  const uidRev3 = randomUUID();
+  const acceptedRev3 = await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+    expected_revision: 3,
+    uid: uidRev3,
+  });
+  await f.p.db.query("UPDATE connections SET enabled = FALSE WHERE id = $1", [ttsConn]);
+  assert.deepEqual(
+    await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 3,
+      uid: uidRev3,
+    }),
+    acceptedRev3,
+  );
+
+  // Strip `revision` from inputs to verify legacy receipt without inputs.revision still replays idempotently
+  await f.p.db.query(
+    `UPDATE canvas_job_links
+        SET inputs = convert_to((convert_from(inputs, 'utf8')::jsonb - 'revision')::text, 'utf8')
+      WHERE uid = $1`,
+    [
+      (
+        await f.p.db.query(
+          "SELECT uid FROM canvas_job_links ORDER BY id DESC LIMIT 1",
+        )
+      ).rows[0].uid,
+    ],
+  );
+  assert.deepEqual(
+    await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 3,
+      uid: uidRev3,
+    }),
+    acceptedRev3,
+  );
+
+  // Re-enable connection, cancel job, and verify conditional high-price tier (voice_id="vip-clone" -> 15 credits > 10 balance) is rejected by real server submit!
+  await f.p.db.query("UPDATE connections SET enabled = TRUE WHERE id = $1", [ttsConn]);
+  await f.p.db.query("UPDATE jobs SET state = 'cancelled' WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+  await f.p.db.query("UPDATE wallets SET balance = 10, held = 0 WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+  const loadedRev3 = await f.canvases.get(f.admin, canvasId);
+  await f.canvases.save(f.admin, canvasId, {
+    title: loadedRev3.title,
+    expected_revision: 3,
+    document: {
+      ...loadedRev3.document,
+      nodes: loadedRev3.document.nodes.map((n: any) =>
+        n.id === "shot1"
+          ? {
+              ...n,
+              dialogue_lines: [
+                {
+                  id: "line1",
+                  speaker: "VIP",
+                  voice_id: "vip-clone",
+                  text: "命中 15 积分 VIP 声线档位",
+                },
+              ],
+            }
+          : n,
+      ),
+    },
+  });
+  await assert.rejects(
+    f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 4,
+      uid: randomUUID(),
+    }),
+    (err: any) => err?.status === 402 || /积分不足/.test(String(err?.message)),
+  );
 });

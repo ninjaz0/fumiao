@@ -58,7 +58,7 @@ export async function verifyChatSettingsRetry(page: Page) {
     release!();
     await page.unroute("**/api/admin/chat");
   }
-  await setTab(page, "general");
+  await setTab(page, "profile");
   await page.route("**/api/admin/chat", (route) =>
     route.fulfill({ json: { providers: {} } }),
   );

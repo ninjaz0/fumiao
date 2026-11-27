@@ -37,15 +37,15 @@ test("gpu resolves to the first visible legacy page, even when page IDs repeat a
 
 test("only a missing page list enables the old GPU panel", () => {
   assert.equal(resolvePluginTab("gpu", undefined, true), "gpu");
-  assert.equal(resolvePluginTab("gpu", undefined, false), "general");
-  assert.equal(resolvePluginTab("gpu", [], true), "general");
+  assert.equal(resolvePluginTab("gpu", undefined, false), "profile");
+  assert.equal(resolvePluginTab("gpu", [], true), "profile");
   assert.equal(
     resolvePluginTab("gpu", [page("extension", false)], true),
-    "general",
+    "profile",
   );
 });
 
-test("a removed or hidden page returns to general settings and fixed tabs stay selected", () => {
-  assert.equal(resolvePluginTab("plugin:removed:summary", [], true), "general");
+test("a removed or hidden page returns to profile settings and fixed tabs stay selected", () => {
+  assert.equal(resolvePluginTab("plugin:removed:summary", [], true), "profile");
   assert.equal(resolvePluginTab("credits", [], false), "credits");
 });

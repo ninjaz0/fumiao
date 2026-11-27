@@ -90,7 +90,7 @@ export function SettingsRedeem({
 
   return (
     <section className="settings-section">
-      <h2>批量兑换码管理（F034）</h2>
+      <h2>兑换码管理</h2>
       <p className="console-description">
         批量签发一次性或限次积分兑换码（仅服务端保存 SHA-256 摘要，明文仅在签发时展示一次）。
       </p>
@@ -158,6 +158,7 @@ export function SettingsRedeem({
               <strong>本次签发明文（请及时复制保存）：</strong>
               <button
                 type="button"
+                className="secondary"
                 onClick={() => {
                   void navigator.clipboard.writeText(
                     minted.codes.map((c) => c.code).join("\n"),
@@ -206,7 +207,11 @@ export function SettingsRedeem({
                 {c.enabled ? "有效" : "已停用"}
               </div>
               {c.enabled && (
-                <button type="button" onClick={() => void disableCode(c.id)}>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void disableCode(c.id)}
+                >
                   停用
                 </button>
               )}

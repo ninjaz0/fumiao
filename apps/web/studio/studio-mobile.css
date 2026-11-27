@@ -897,7 +897,11 @@
     flex-wrap: wrap;
   }
   #app .ledger-settings
-    :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    :is(
+      input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"]),
+      select,
+      textarea
+    ) {
     width: 100%;
     min-width: 0;
     max-width: 100%;
@@ -905,10 +909,11 @@
   }
   #app .ledger-settings .settings-content
     :is(
-      input:not([type="checkbox"]):not([type="radio"]),
+      input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"]),
       select,
       textarea
-    ):not(.ledger-search input) {
+    ):not(:where(.ledger-search, .console-search) *) {
+    height: auto;
     min-height: 40px;
     padding: 8px 11px;
     border: 1px solid var(--line);

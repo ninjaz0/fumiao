@@ -130,10 +130,6 @@
   outline-offset: 2px;
 }
 
-.fm-series-help {
-  display: none;
-}
-
 @media (max-width: 760px) {
   #canvas-root .list-header {
     position: sticky;
@@ -211,6 +207,10 @@
     border-color: var(--line, var(--cv-line));
   }
 
+  #canvas-root .fm-series-panel.is-collapsed {
+    padding: 10px 14px;
+  }
+
   #canvas-root .fm-series-head {
     gap: 8px;
     margin-bottom: 0;
@@ -227,6 +227,12 @@
     font-size: 15px;
     font-weight: 600;
     line-height: 1.4;
+  }
+
+  #canvas-root .fm-series-panel.is-collapsed .fm-series-head h2 {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--secondary, var(--cv-muted));
   }
 
   #canvas-root .fm-series-head h2 > span {
@@ -254,56 +260,9 @@
     inset: -4px 0;
   }
 
-  #canvas-root .fm-series-desc {
-    display: none;
-  }
-
-  #canvas-root .fm-series-help {
-    display: block;
-    margin-top: 4px;
-  }
-
-  #canvas-root .fm-series-help > summary {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    min-height: 28px;
-    color: var(--secondary, var(--cv-muted));
-    font-size: 12px;
-    cursor: pointer;
-    list-style: none;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-
-  #canvas-root .fm-series-help > summary::-webkit-details-marker {
-    display: none;
-  }
-
-  #canvas-root .fm-series-help > summary::before {
-    content: "▸";
-    font-size: 11px;
-    transition: transform var(--motion-feedback) var(--motion-ease);
-  }
-
-  #canvas-root .fm-series-help[open] > summary::before {
-    transform: rotate(90deg);
-  }
-
-  #canvas-root .fm-series-help > summary::after {
-    content: "";
-    position: absolute;
-    inset: -8px;
-  }
-
-  #canvas-root .fm-series-help > .fm-series-muted {
-    margin: 6px 0 0;
-    font-size: 13px;
-    line-height: 1.55;
-  }
-
-  #canvas-root .fm-series-row {
+  #canvas-root .fm-series-row,
+  #canvas-root .fm-series-bible-head,
+  #canvas-root .fm-series-form-actions {
     flex-wrap: wrap;
   }
 
@@ -320,6 +279,7 @@
   }
 
   #canvas-root .fm-ep-form {
+    display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

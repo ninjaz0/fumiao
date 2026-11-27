@@ -404,7 +404,7 @@ export function AssetDialog({
           >
             <h2 id="modal-heading">{content.entry.title}</h2>
             {content.entry.fields?.map((field) => (
-              <label key={field.name}>
+              <label key={field.name} className="formlabel">
                 {field.label}
                 <input
                   name={field.name}
