@@ -121,6 +121,7 @@ export class ChatRuntime {
       timer.unref();
       let adapter: Pick<ProviderPlugin, "chatStream" | "chatTitle">;
       let useTools: boolean, config: Record<string, unknown>;
+      let validateToolOutput: ((value: unknown) => void) | undefined;
       if (snapshot) {
         const route = snapshot.route;
         const client = await resolveConnectionRevision(
@@ -130,6 +131,10 @@ export class ChatRuntime {
           this.options.nativeHttp ?? generationTransport,
         );
         const output = client.createOutputGuard();
+        validateToolOutput = (value) => {
+          if (client.containsCredential(JSON.stringify(value)))
+            throw new ChatReplyError("对话工具返回了受保护的内容");
+        };
         config = {};
         useTools =
           route.capabilities.tools ??
@@ -219,6 +224,7 @@ export class ChatRuntime {
             adapter,
             request,
             snapshot?.project,
+            validateToolOutput,
           )
         : adapter.chatStream(request);
       iterator = stream[Symbol.asyncIterator]();

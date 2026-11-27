@@ -26,6 +26,7 @@ import {
 } from "./original-request.js";
 
 const routes: { path: RegExp; methods: Record<string, Fields | null> }[] = [
+  { path: /^\/api\/chat\/messages\/[^/]+\/source$/, methods: { GET: null } },
   { path: /^\/api\/chat\/quote$/, methods: { POST: chatQuoteFields } },
   { path: /^\/api\/chats$/, methods: { GET: null, POST: chatCreateFields } },
   {
@@ -42,7 +43,9 @@ const routes: { path: RegExp; methods: Record<string, Fields | null> }[] = [
 ];
 
 export const isOriginalChatRequest = (req: Request) =>
-  /^\/api\/(?:chats(?:\/|$)|chat\/quote\/?$)/i.test(decodePath(req.path));
+  /^\/api\/(?:chats(?:\/|$)|chat\/(?:quote\/?$|messages\/))/i.test(
+    decodePath(req.path),
+  );
 
 export function originalChatRequest(
   identity: OriginalIdentity,

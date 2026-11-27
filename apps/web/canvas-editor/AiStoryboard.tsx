@@ -56,9 +56,24 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
  onRecharge:()=>void;onConfigureModels?:()=>void;
 }){
  const key=`fm-storyboard-${userId}-${workspace}-${project}`;
- const [draft,setDraft]=useState(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]'));
+ const [draft]=useState(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]'));
  const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(draft.shots),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
  const [shotSource,setShotSource]=useState<ReplySource|null>(draft.source);
+ const [sourceRetry,setSourceRetry]=useState(0),[sourceError,setSourceError]=useState(false);
+ // Pre-upgrade proposals recorded only the globally unique assistant message.
+ // The most recent chat can belong to a different (failed) attempt.
+ useEffect(()=>{
+  if(!draft.shots.length || !draft.message || draft.source || shotSource)return;
+  let current=true;
+  setSourceError(false);
+  void chatRequest<ReplySource & {content:string}>(workspace,'/api/chat/messages/'+draft.message+'/source')
+   .then(({cid,message,content})=>{
+    if(!current || message!==draft.message)return;
+    try{parseStoryboard(content)}catch{return}
+    setShotSource(existing=>existing??{cid,message});
+   },e=>{if(current && e.status!==403 && e.status!==404)setSourceError(true)});
+  return ()=>{current=false};
+ },[workspace,draft.message,draft.source,draft.shots.length,shotSource,sourceRetry]);
  const [latestReceipt,setLatestReceipt]=useState<ReplySource|null>(null);
  const showReceipt=(source:ReplySource|null)=>source&&<StoryboardBill key={source.cid+'-'+source.message} workspace={workspace} source={source}/>;
  const setResult=(chat:string,m:any)=>{
@@ -98,9 +113,9 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
     const p=pending.current,boundary=s.messages.find((r:any)=>r.role==='assistant'&&(r.state==='running'||r.turn===s.conversation.active_turn))||(p?.cid===cid&&s.conversation.revision>p.body.expected_revision?[...s.messages].reverse().find((r:any)=>r.role==='user'&&r.content===p.body.text):null);
     const rows=boundary?s.messages.slice(0,s.messages.indexOf(boundary)):s.messages,previous=[...rows].reverse().find((r:any)=>r.role==='assistant'&&r.state!=='running');
     if(previous?.state==='complete' && !draft.source){
-     try{parseStoryboard(previous.content);setShotSource({cid,message:previous.id})}catch{/* Legacy draft has no verifiable source. */}
+     try{if(JSON.stringify(parseStoryboard(previous.content))===JSON.stringify(draft.shots))setShotSource({cid,message:previous.id})}catch{/* Legacy draft has no verifiable source. */}
     }
-    lastMessage.current=previous?.id||0;setDraft(d=>({...d,message:lastMessage.current}));
+    lastMessage.current=previous?.id||0;
    }
    if(m.state==='running')return;
    pending.current=null;localStorage.removeItem(key+'-pending');
@@ -110,7 +125,7 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
   const events=new EventSource('/api/chats/'+cid+'/events?workspace='+workspace);events.onmessage=e=>accept(JSON.parse(e.data));
   return()=>{closed=true;events.close()};
  },[cid,workspace]);
- useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:lastMessage.current,shots,source:shotSource}))},[shots,key,draft.message,shotSource]);
+ useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:shotSource?.message??draft.message,shots,source:shotSource}))},[shots,key,draft.message,shotSource]);
  const trackHint = generationMode === 'omni_ref'
       ? '采用全能多参考链路（可在画面描述中引用 @角色名/@场景名 或 <Picture N>）。'
       : generationMode === 'grid_preview'
@@ -184,6 +199,7 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
   {error&&<p className="error" role="alert">{error}</p>}
   {latestReceipt?.cid===cid && (latestReceipt.cid!==shotSource?.cid || latestReceipt.message!==shotSource.message) && showReceipt(latestReceipt)}
 
+  {!shotSource&&sourceError&&<button type="button" onClick={()=>setSourceRetry(n=>n+1)}>重新载入分镜账单</button>}
   {!!shots.length&&<>{showReceipt(shotSource)}<div className="storyboard-proposal">{shots.map((shot,i)=><section key={i}><label>镜头 {i+1}<input value={shot.title} maxLength={80} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,title:e.target.value}:r))}/></label><label>画面<textarea rows={3} value={shot.prompt} maxLength={12000} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,prompt:e.target.value}:r))}/></label><label>旁白<textarea rows={2} maxLength={300} value={shot.narration} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,narration:e.target.value}:r))}/></label><div className="storyboard-seconds" role="group" aria-label={`镜头 ${i+1} 时长`}>{([5,10,15] as const).map(seconds=><button key={seconds} aria-pressed={shot.seconds===seconds} onClick={()=>setShots(rows=>rows.map((r,j)=>j===i?{...r,seconds}:r))}>{seconds}s</button>)}</div></section>)}</div>
    <div className="dialog-actions"><span className="fm-number">{shots.length} 个镜头 · {shots.reduce((t,s)=>t+s.seconds,0)} 秒</span><button className="primary" disabled={busy||shots.some(s=>!s.title.trim()||!s.prompt.trim())} onClick={async()=>{setBusy(true);setApplying(true);try{await onApply(shots,{generationMode,tailChain,gridLayout})}catch(e){setError((e as Error).message)}finally{setBusy(false);setApplying(false)}}}>{applying?'正在加入画布…':'采用分镜，不生成视频'}</button></div></>}
  </div>

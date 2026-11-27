@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { ChatExecution } from "@fumiao/original-api/chat-execution.js";
 import { ChatRuntime } from "@fumiao/original-api/chat-runtime.js";
 import { one } from "@fumiao/platform/db.js";
@@ -174,14 +175,19 @@ test("正式 HTTP 报价后冻结上游、执行真实对话协议，按回执�
 
 async function setupNative(
   t: test.TestContext,
-  options: { free?: boolean; tools?: boolean; json?: boolean } = {},
+  options: {
+    free?: boolean;
+    tools?: boolean;
+    json?: boolean;
+    credential?: string;
+  } = {},
 ) {
   const f = await chatsFixture();
   t.after(f.cleanup);
   const api = new OriginalModelAccess(f.identity);
   const conn = await api.create(f.admin, {
     base_url: "https://1.1.1.1/chat",
-    api_key: "synthetic-only",
+    api_key: options.credential ?? "synthetic-only",
   });
   const draft_id = randomUUID();
   const prices = options.free
@@ -906,4 +912,411 @@ test("原样重传已受理的画布请求可跨自动保存修订和零可用�
     ).n,
     1,
   );
+});
+
+test("项目历史只沿用受理时最近的有效用户来源，旧库 hold 和 spend 升级后合计", async (t) => {
+  const f = await chatsFixture("058_model_access_publications.sql");
+  t.after(f.cleanup);
+  const a = await f.canvas(),
+    b = await f.canvas();
+  const view = await f.chats.create(f.admin, {}),
+    cid = view.conversation.id;
+  async function send(project?: typeof a, finish = true) {
+    const snapshot = await f.chats.get(f.admin, cid);
+    const sent = await f.chats.send(
+      f.admin,
+      cid,
+      await f.draft(
+        snapshot,
+        project
+          ? {
+              context: {
+                project: project.public_id,
+                expected_revision: project.revision,
+              },
+            }
+          : {},
+      ),
+    );
+    const turn = await f.turn(sent.conversation.active_turn);
+    if (finish)
+      await f.chats.finish(turn.id, { state: "complete", text: "旧回复" });
+    return turn;
+  }
+  const empty = await send(),
+    sourceA = await send(a),
+    spent = await send(),
+    sourceB = await send(b),
+    held = await send(undefined, false);
+  assert.equal(
+    (await one(f.db, "SELECT count(*)::int AS n FROM canvas_chat_links")).n,
+    0,
+  );
+  // Same-second ordering follows the original message sequence, never a future turn.
+  // Exercise an installation which already ran the initial 059 schema before
+  // receiving its independent project backfill.
+  const initial = "059_model_access_chat.sql";
+  const schema = await readFile("migrations/" + initial, "utf8");
+  await f.db.transaction(async (sql) => {
+    await sql.query(schema);
+    await sql.query("INSERT INTO schema_migrations(version) VALUES($1)", [
+      initial,
+    ]);
+  });
+  assert.equal(
+    (
+      await one(
+        f.db,
+        "SELECT count(*)::int AS n FROM chat_charges WHERE project_id IS NOT NULL",
+      )
+    ).n,
+    0,
+  );
+  const { migrate } = await import("@fumiao/platform/db.js");
+  await migrate(f.db);
+  await migrate(f.db);
+  const charges = (
+    await f.db.query("SELECT turn_id,project_id FROM chat_charges")
+  ).rows;
+  const projects = new Map(charges.map((r) => [r.turn_id, r.project_id]));
+  assert.deepEqual(
+    [empty, sourceA, spent, sourceB, held].map((r) => projects.get(r.id)),
+    [null, a.id, a.id, b.id, b.id],
+  );
+  assert.deepEqual(
+    (await computeScopeSpend(f.db, "project", a.id, "total")).exact,
+    { held: "0", spent: "2", committed: "2" },
+  );
+  assert.deepEqual(
+    (await computeScopeSpend(f.db, "project", b.id, "total")).exact,
+    { held: "1", spent: "1", committed: "2" },
+  );
+  await f.db.query(
+    "INSERT INTO budget_policies(scope_type,scope_id,period,mode,cap_limit) VALUES('project',$1,'total','cap',2)",
+    [b.public_id],
+  );
+  const fresh = await f.chats.create(f.admin, {});
+  await assert.rejects(
+    f.chats.send(
+      f.admin,
+      fresh.conversation.id,
+      await f.draft(fresh, {
+        context: { project: b.public_id, expected_revision: b.revision },
+      }),
+    ),
+    /预算上限/,
+  );
+  await f.chats.finish(held.id, { state: "complete", text: "完成" });
+  assert.deepEqual(
+    (await computeScopeSpend(f.db, "project", b.id, "total")).exact,
+    { held: "0", spent: "2", committed: "2" },
+  );
+});
+
+test("旧固定价重放准确返回原回合，旧分镜消息来源按当前工作区授权", async (t) => {
+  const f = await chatsFixture();
+  t.after(f.cleanup);
+  const chat = await f.chats.create(f.admin, {}),
+    cid = chat.conversation.id;
+  const { OriginalCanvases } = await import("@fumiao/original-api/canvases.js");
+  const canvases = new OriginalCanvases(f.p);
+  const canvas = await canvases.create(f.admin, { title: "固定价写回" });
+  const saved = await canvases.save(f.admin, canvas.id, {
+    title: canvas.title,
+    expected_revision: canvas.revision,
+    document: {
+      nodes: [{ id: "draft", type: "text", text: "原文", x: 0, y: 0 }],
+    },
+  });
+  const context = {
+    project: canvas.id,
+    node: "draft",
+    expected_revision: saved.revision,
+    writeback: true,
+  };
+  const original = await f.draft(chat, { context });
+  const first = await f.request(
+    "POST",
+    "/api/chats/" + cid + "/messages",
+    original,
+  );
+  assert.equal(first.status, 200);
+  const turn = await f.turn(first.body.conversation.active_turn);
+  await f.chats.finish(turn.id, { state: "complete", text: "原分镜" });
+  const snapshot = await f.chats.get(f.admin, cid);
+  const second = await f.chats.send(
+    f.admin,
+    cid,
+    await f.draft(snapshot, { text: "下一条", context }),
+  );
+  await f.chats.finish((await f.turn(second.conversation.active_turn)).id, {
+    state: "complete",
+    text: "不应写入下一轮",
+  });
+  const third = await f.chats.send(
+    f.admin,
+    cid,
+    await f.draft(await f.chats.get(f.admin, cid)),
+  );
+  await f.chats.finish((await f.turn(third.conversation.active_turn)).id, {
+    state: "failed",
+    text: "稍后再试",
+  });
+  const replay = await f.request(
+    "POST",
+    "/api/chats/" + cid + "/messages",
+    original,
+  );
+  const message = snapshot.messages.at(-1)!.id;
+  await t.test("受理与重传", () => {
+    assert.equal(first.body.accepted_turn, turn.public_id);
+    assert.equal(replay.body.accepted_turn, turn.public_id);
+    assert.equal(
+      replay.body.messages.find(
+        (m: any) => m.turn === replay.body.accepted_turn,
+      ).id,
+      message,
+    );
+  });
+  await t.test("确认原助手与画布修订，过期重放不覆盖画布", async () => {
+    const reply = replay.body.messages.find(
+      (m: any) => m.turn === replay.body.accepted_turn,
+    );
+    assert.equal(reply.id, message);
+    const apply = {
+      uid: randomUUID(),
+      project: canvas.id,
+      node: context.node,
+      expected_revision: context.expected_revision,
+      mode: "replace",
+      expected_text: "原文",
+      message: reply.id,
+    };
+    const result = await f.request(
+      "POST",
+      "/api/chats/" + cid + "/apply",
+      apply,
+    );
+    assert.equal(result.status, 200);
+    assert.equal(result.body.document.nodes[0].text, "原分镜");
+    const stale = await f.request("POST", "/api/chats/" + cid + "/apply", {
+      ...apply,
+      uid: randomUUID(),
+    });
+    assert.equal(stale.status, 409);
+    assert.equal(
+      (await canvases.get(f.admin, canvas.id)).document.nodes[0].text,
+      "原分镜",
+    );
+    assert.equal(
+      (await one(f.db, "SELECT count(*)::int AS n FROM chat_applications")).n,
+      1,
+    );
+  });
+  await t.test(
+    "跨会话按准确助手消息取来源，其他工作区和非成功消息不可读",
+    async () => {
+      const other = await f.chats.create(f.admin, {});
+      assert.notEqual(other.conversation.id, cid);
+      const path = "/api/chat/messages/" + message + "/source";
+      assert.deepEqual((await f.request("GET", path)).body, {
+        cid,
+        message,
+        content: "原分镜",
+      });
+      assert.equal((await f.request("GET", path, undefined, 1)).status, 404);
+      assert.equal(
+        (await f.request("GET", path + "?workspace=" + f.memberSpace.public_id))
+          .status,
+        403,
+      );
+      for (const id of [
+        snapshot.messages[0].id,
+        replay.body.messages.at(-1).id,
+        "bad",
+      ])
+        assert.equal(
+          (await f.request("GET", "/api/chat/messages/" + id + "/source"))
+            .status,
+          404,
+        );
+      await f.chats.remove(f.admin, cid);
+      assert.equal((await f.request("GET", path)).status, 404);
+    },
+  );
+});
+
+test("原生画布建议在写入前校验业务对象，拒绝时没有提案或画布变动", async (t) => {
+  const f = await setupNative(t, { free: true, tools: true, json: true });
+  const canvas = (
+    await f.request("POST", "/api/canvases", { title: "建议校验" })
+  ).body;
+  const context = { project: canvas.id, expected_revision: canvas.revision };
+  const { turnTools, executeChatTool } =
+    await import("@fumiao/original-api/chat-tools.js");
+  const spec = { model: f.model, text: "提议添加文字", context };
+  const created = await f.chats.create(f.admin, { model: f.model, context });
+  const cid = created.conversation.id,
+    quote = await f.chats.quote(f.admin, { ...spec, cid });
+  const sent = await f.chats.send(f.admin, cid, {
+    ...spec,
+    ...quote,
+    expected_revision: created.conversation.revision,
+    uid: randomUUID(),
+  });
+  const turn = await f.turn(sent.conversation.active_turn),
+    store = new ChatExecution(f.chats),
+    claim = await store.claim(turn.id);
+  const tool = (await turnTools(f.db, turn.id, canvas.id)).get(
+    "fm_propose_canvas_changes",
+  )!;
+  const operation = {
+    op: "add_node",
+    temp_id: "node",
+    type: "text",
+    text: "普通合成文字",
+  };
+  const args = {
+    title: "测试建议",
+    summary: "测试摘要",
+    operations_json: JSON.stringify([operation]),
+  };
+  const call = {
+    type: "function" as const,
+    id: "test",
+    function: {
+      name: "fm_propose_canvas_changes",
+      arguments: JSON.stringify(args),
+    },
+  };
+  // Inject a rejecting policy over harmless data; this checks the write boundary
+  // without asking any provider to emit a credential.
+  let checked: unknown;
+  const verify = (value: unknown) => {
+    checked = value;
+    throw new Error("拒绝合成样本");
+  };
+  await assert.rejects(
+    executeChatTool(
+      store,
+      turn.id,
+      claim!.lease,
+      tool,
+      call,
+      args,
+      AbortSignal.timeout(5000),
+      verify,
+    ),
+  );
+  assert.deepEqual(checked, {
+    project_id: canvas.id,
+    title: args.title,
+    summary: args.summary,
+    operations: [operation],
+  });
+  assert.equal(
+    (await one(f.db, "SELECT count(*)::int AS n FROM canvas_proposals")).n,
+    0,
+  );
+  assert.equal(
+    (await f.request("GET", "/api/canvases/" + canvas.id)).body.revision,
+    canvas.revision,
+  );
+  const accepted = await executeChatTool(
+    store,
+    turn.id,
+    claim!.lease,
+    tool,
+    call,
+    args,
+    AbortSignal.timeout(5000),
+  );
+  assert.equal(JSON.parse(accepted).ok, true);
+  assert.equal(
+    (await one(f.db, "SELECT count(*)::int AS n FROM canvas_proposals")).n,
+    1,
+  );
+});
+
+test("原生执行器把同一凭据校验带入正规化后的提案，普通提案可正常交付", async (t) => {
+  // The proposed node omits coordinates. The proposal service supplies zeros as
+  // defaults, providing a synthetic policy match without an upstream echo.
+  for (const guarded of [true, false])
+    await t.test(guarded ? "拒绝" : "交付", async (t) => {
+      const f = await setupNative(t, {
+        free: true,
+        tools: true,
+        json: true,
+        credential: guarded ? "0" : "ordinary-fixture",
+      });
+      const canvas = (
+        await f.request("POST", "/api/canvases", { title: "原生建议" })
+      ).body;
+      const context = {
+        project: canvas.id,
+        expected_revision: canvas.revision,
+      };
+      const spec = { model: f.model, text: "生成建议", context };
+      const cid = (await f.chats.create(f.admin, { model: f.model, context }))
+        .conversation.id;
+      const quote = await f.chats.quote(f.admin, { ...spec, cid });
+      const accepted = await f.chats.send(f.admin, cid, {
+        ...spec,
+        ...quote,
+        expected_revision: 1,
+        uid: randomUUID(),
+      });
+      let requests = 0;
+      const runtime = new ChatRuntime(new ChatExecution(f.chats), {
+        nativeHttp: async () => {
+          const first = ++requests === 1;
+          const message = first
+            ? {
+                tool_calls: [
+                  {
+                    type: "function",
+                    id: "suggest",
+                    function: {
+                      name: "fm_propose_canvas_changes",
+                      arguments: JSON.stringify({
+                        title: "正常建议",
+                        operations_json: JSON.stringify([
+                          { op: "add_node", type: "text", temp_id: "draft" },
+                        ]),
+                      }),
+                    },
+                  },
+                ],
+              }
+            : { content: "已完成" };
+          return {
+            status: 200,
+            contentType: "application/json",
+            body: Buffer.from(
+              JSON.stringify({
+                choices: [
+                  { message, finish_reason: first ? "tool_calls" : "stop" },
+                ],
+              }),
+            ),
+          };
+        },
+      });
+      t.after(() => runtime.close());
+      await runtime.execute(
+        (await f.turn(accepted.conversation.active_turn)).id,
+      );
+      assert.equal(
+        (await f.chats.get(f.admin, cid)).messages.at(-1)?.state,
+        guarded ? "failed" : "complete",
+      );
+      assert.equal(
+        (await one(f.db, "SELECT count(*)::int AS n FROM canvas_proposals")).n,
+        guarded ? 0 : 1,
+      );
+      assert.equal(
+        (await f.request("GET", "/api/canvases/" + canvas.id)).body.revision,
+        canvas.revision,
+      );
+    });
 });

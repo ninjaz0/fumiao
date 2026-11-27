@@ -36,6 +36,7 @@ export async function* chatToolStream(
   adapter: Pick<ProviderPlugin, "chatStream">,
   request: ChatRequest,
   project?: string | null,
+  validateToolOutput?: (value: unknown) => void,
 ): AsyncGenerator<ChatChunk> {
   const tools = await turnTools(store.p.db, id, project);
   const messages = [...request.messages];
@@ -85,6 +86,7 @@ export async function* chatToolStream(
         call,
         args,
         request.signal,
+        validateToolOutput,
       );
       messages.push({ role: "tool", tool_call_id: call.id, content });
     }

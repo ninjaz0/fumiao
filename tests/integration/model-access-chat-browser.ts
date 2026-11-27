@@ -18,9 +18,10 @@ async function composerPage(t: test.TestContext) {
  import {createRoot} from 'react-dom/client';
  import {ChatWorkspace} from './canvas-editor/chat/ChatWorkspace';
  import {AiStoryboard} from './canvas-editor/AiStoryboard';
- const props={workspace:1,userId:1};
+ const props={workspace:Number(new URLSearchParams(location.search).get("workspace")||1),userId:1};
  createRoot(document.getElementById('root')).render(location.pathname==='/storyboard'
    ? <AiStoryboard {...props} project="project" onApply={async()=>{}} onRecharge={()=>{}}/>
+   : location.pathname==='/writeback'? <ChatWorkspace {...props} project="project" node="node" onApply={async(cid,message,mode,opts)=>{sessionStorage.setItem('applied',JSON.stringify({cid,id:message.id,opts}))}}/>
    : <ChatWorkspace {...props} getContext={async()=>({project:'project',node:'',expected_revision:Number(sessionStorage.getItem('canvasRev')||3)})}/>);
  `,
     },
@@ -50,7 +51,8 @@ test("聊天和分镜按显示的最高扣费发送，报价冲突保留草稿�
     accepted = false,
     conflict = true,
     storyboard = false,
-    storyboardFailed = false;
+    storyboardFailed = false,
+    sameChatHistory = false;
   const cid = "a".repeat(32),
     failedCid = "b".repeat(32);
   const conversation = () => ({
@@ -118,11 +120,33 @@ test("聊天和分镜按显示的最高扣费发送，报价冲突保留草稿�
         contentType: "text/event-stream",
         body: ": keepalive\n\n",
       });
+    if (path === "/api/chat/messages/2/source")
+      return route.fulfill({
+        json: {
+          cid: sameChatHistory ? failedCid : cid,
+          message: 2,
+          content: JSON.stringify([
+            { title: "镜头", prompt: "光", narration: "", seconds: 5 },
+          ]),
+        },
+      });
     if (path.endsWith("/bills"))
       return route.fulfill({
         json: {
           bills: accepted
             ? [
+                ...(sameChatHistory && path.includes(failedCid)
+                  ? [
+                      {
+                        kind: "fixed",
+                        turn: "prior",
+                        message: 2,
+                        user_message: 1,
+                        charged: "0.64",
+                        state: "complete",
+                      },
+                    ]
+                  : []),
                 {
                   kind: "fixed",
                   turn: "other",
@@ -166,7 +190,18 @@ test("聊天和分镜按显示的最高扣费发送，报价冲突保留草稿�
     return route.fulfill({
       json: {
         conversation: conversation(),
-        messages: messages(),
+        messages: sameChatHistory
+          ? [
+              {
+                id: 2,
+                role: "assistant",
+                state: "complete",
+                turn: "prior",
+                content: "有效的早期回复",
+              },
+              ...messages(),
+            ]
+          : messages(),
       },
     });
   });
@@ -219,6 +254,46 @@ test("聊天和分镜按显示的最高扣费发送，报价冲突保留草稿�
   await expect(page.locator(".storyboard-proposal input").first()).toHaveValue(
     "镜头",
   );
+  const key = "fm-storyboard-1-1-project-proposal";
+  // Reopen an actual pre-upgrade cache after a later attempt has failed.
+  await page.evaluate((key) => {
+    const { shots } = JSON.parse(localStorage.getItem(key)!);
+    localStorage.setItem(key, JSON.stringify({ message: 2, shots }));
+  }, key);
+  await page.reload();
+  await expect(page.locator("summary")).toHaveText([
+    "实扣 0 积分",
+    "实扣 0.64 积分",
+  ]);
+  await expect(page.locator(".storyboard-proposal input").first()).toHaveValue(
+    "镜头",
+  );
+  await page.reload();
+  await expect(page.locator("summary")).toHaveText([
+    "实扣 0 积分",
+    "实扣 0.64 积分",
+  ]);
+  sameChatHistory = true;
+  await page.evaluate((key) => {
+    const { shots } = JSON.parse(localStorage.getItem(key)!);
+    localStorage.setItem(key, JSON.stringify({ message: 2, shots }));
+  }, key);
+  await page.reload();
+  await expect(page.locator("summary")).toHaveText([
+    "实扣 0 积分",
+    "实扣 0.64 积分",
+  ]);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (key) => JSON.parse(localStorage.getItem(key)!).source?.cid,
+        key,
+      ),
+    )
+    .toBe(failedCid);
+  await page.goto("https://chat.test/storyboard?workspace=2");
+  await expect(page.locator("summary")).toHaveCount(0);
+  await expect(page.locator(".storyboard-proposal")).toHaveCount(0);
 });
 
 test("画布受理后丢失响应，刷新零余额原样重放并保留编辑后的草稿", async (t) => {
@@ -335,4 +410,104 @@ test("画布受理后丢失响应，刷新零余额原样重放并保留编辑�
   assert.equal(submitted[1].context.expected_revision, 3);
   assert.equal(quoteCount, quotes);
   await expect(input).toHaveValue("修改后的下一条");
+});
+
+test("固定价重放原回合后只写回原助手消息和受理的画布版本", async (t) => {
+  const { page, bundle } = await composerPage(t),
+    cid = "d".repeat(32);
+  const ctx = {
+    project: "project",
+    node: "node",
+    writeback: true,
+    expected_revision: 3,
+  };
+  const messages = [1, 2, 3, 4].map((id) => ({
+    id,
+    role: id % 2 ? "user" : "assistant",
+    state: "complete",
+    content: "消息" + id,
+    context: id % 2 ? JSON.stringify({ ...ctx, text: "原文" }) : "{}",
+    turn: id % 2 ? null : "t" + id,
+    reply_to: id % 2 ? null : id - 1,
+  }));
+  const conversation = {
+    id: cid,
+    title: "固定价",
+    model: "legacy",
+    revision: 5,
+    active_turn: null,
+    can_delete: true,
+    updated: 1,
+  };
+  await page.addInitScript(
+    ({ cid, ctx }) => {
+      const scope = "fm-chat-1-1-project-node";
+      sessionStorage.setItem(scope + "-active", cid);
+      sessionStorage.setItem(
+        scope + "-pending-send-" + cid,
+        JSON.stringify({
+          cid,
+          body: {
+            uid: "test",
+            model: "legacy",
+            text: "消息1",
+            expected_revision: 1,
+            price_revision: 1,
+            context: ctx,
+          },
+        }),
+      );
+    },
+    { cid, ctx },
+  );
+  await page.route("https://chat.test/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/bundle")
+      return route.fulfill({
+        contentType: "application/javascript",
+        body: bundle.outputFiles[0].text,
+      });
+    if (path === "/writeback")
+      return route.fulfill({
+        contentType: "text/html",
+        body: '<main id="root"></main><script src="/bundle"></script>',
+      });
+    if (path.endsWith("/config"))
+      return route.fulfill({
+        json: {
+          models: { legacy: { label: "固定价" } },
+          pricing: { revision: 1, items: [{ key: "legacy|reply", amount: 1 }] },
+          credits: { available: 0 },
+        },
+      });
+    if (path.endsWith("/events"))
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: ": live\n\n",
+      });
+    if (path.endsWith("/bills")) return route.fulfill({ json: { bills: [] } });
+    if (path === "/api/chats")
+      return route.fulfill({ json: { conversations: [conversation] } });
+    return route.fulfill({
+      json: {
+        conversation,
+        messages,
+        ...(path.endsWith("/messages") ? { accepted_turn: "t2" } : {}),
+      },
+    });
+  });
+  await page.goto("https://chat.test/writeback");
+  await page.getByRole("button", { name: "确认上次发送" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => JSON.parse(sessionStorage.getItem("applied") || "{}").id,
+      ),
+    )
+    .toBe(2);
+  const applied = await page.evaluate(() =>
+    JSON.parse(sessionStorage.getItem("applied")!),
+  );
+  assert.equal(applied.cid, cid);
+  assert.equal(applied.opts.expectedRevision, 3);
 });

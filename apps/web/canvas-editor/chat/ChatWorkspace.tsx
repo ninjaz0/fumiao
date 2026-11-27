@@ -15,7 +15,7 @@ type Snapshot={conversation:Conversation;messages:Message[];accepted_turn?:strin
 type PendingSend={cid:string;body:{uid:string;model:string;text:string;expected_revision:number;price_revision:string|number;retry:number|null;context?:ChatContext;max_charge?:string}};
 type Config={models:Record<string,{label:string;provider:string;billing?:"token"}>;pricing:{revision:number;items:{key:string;amount:number|null}[]};credits:{available:number;exact?:{available:string}}};
 export type ChatContext={project:string;node:string;expected_revision:number;writeback?:boolean;script_ids?:string[];node_ids?:string[]};
-export type ApplyOptions={automatic?:boolean;expectedText?:string;targetNode?:string;targetProject?:string;uid?:string};
+export type ApplyOptions={automatic?:boolean;expectedRevision?:number;expectedText?:string;targetNode?:string;targetProject?:string;uid?:string};
 type Props={workspace:number;userId:number;isAdmin?:boolean;configureLabel?:string;configureHref?:string;onConfigureModels?:(event:MouseEvent<HTMLButtonElement|HTMLAnchorElement>)=>void;compact?:boolean;inline?:boolean;onActivityChange?:(active:boolean)=>void;project?:string;node?:string;nodeTitle?:string;getContext?:()=>Promise<ChatContext>;onApply?:(cid:string,message:Message,mode:'new'|'replace',options?:ApplyOptions)=>Promise<void>;onClose?:()=>void;openCanvas?:(event:MouseEvent<HTMLAnchorElement>)=>void;onRecharge?:()=>void};
 class ApiError extends Error {constructor(public status:number,message:string){super(message)}}
 export async function chatRequest<T=any>(workspace:number,path:string,body?:unknown,method?:string):Promise<T>{
@@ -51,9 +51,9 @@ export function ChatWorkspace(props:Props){
  const [picker,setPicker]=useState<Message|null>(null),[projects,setProjects]=useState<{id:string;title:string}[]>([]),[target,setTarget]=useState(''),[canvasName,setCanvasName]=useState('新画布');
  const [applied,setApplied]=useState<{id:string;message:number}|null>(null);
  const [listLoading,setListLoading]=useState(true),[listError,setListError]=useState('');
- const [writes,setWrites]=useState<Record<string,{cid:string;uid:string}>>(()=>{try{return JSON.parse(sessionStorage.getItem(scope+'-writes')||'{}')}catch{return {}}}),[applying,setApplying]=useState(false),[updatedMessage,setUpdatedMessage]=useState<number|null>(null);
+ const [writes,setWrites]=useState<Record<string,{cid:string;uid:string;expectedRevision?:number}>>(()=>{try{return JSON.parse(sessionStorage.getItem(scope+'-writes')||'{}')}catch{return {}}}),[applying,setApplying]=useState(false),[updatedMessage,setUpdatedMessage]=useState<number|null>(null);
  const writing=useRef<number|null>(null);
- const saveWrites=(fn:(current:Record<string,{cid:string;uid:string}>)=>Record<string,{cid:string;uid:string}>)=>setWrites(current=>{const next=fn(current);sessionStorage.setItem(scope+'-writes',JSON.stringify(next));return next});
+ const saveWrites=(fn:(current:Record<string,{cid:string;uid:string;expectedRevision?:number}>)=>Record<string,{cid:string;uid:string;expectedRevision?:number}>)=>setWrites(current=>{const next=fn(current);sessionStorage.setItem(scope+'-writes',JSON.stringify(next));return next});
  const forgetWrite=(id:number)=>saveWrites(current=>{const next={...current};delete next[id];return next});
  const deletedWasCurrent=useRef(false);
  const operationPending=useRef(false);
@@ -106,7 +106,7 @@ export function ChatWorkspace(props:Props){
   const source=data.messages.find(m=>m.id===message.reply_to);let context:any={};try{context=JSON.parse(source?.context||'{}')}catch{}
   if(!context.writeback||context.project!==project||context.node!==node||typeof context.text!=='string'){forgetWrite(message.id);return}
   writing.current=message.id;setApplying(true);
-  void props.onApply(data.conversation.id,message,'replace',{automatic:true,expectedText:context.text,targetNode:context.node,targetProject:context.project,uid:writes[message.id].uid})
+  void props.onApply(data.conversation.id,message,'replace',{automatic:true,expectedRevision:writes[message.id].expectedRevision,expectedText:context.text,targetNode:context.node,targetProject:context.project,uid:writes[message.id].uid})
    .then(()=>{if(alive.current){setUpdatedMessage(message.id);setNotice('已更新节点文字，可撤销')}})
    .catch(e=>{if(alive.current)setError((e as Error).message)})
    .finally(()=>{forgetWrite(message.id);writing.current=null;if(alive.current)setApplying(false)});
@@ -169,7 +169,7 @@ export function ChatWorkspace(props:Props){
   try{await fn()}catch(e){if(alive.current)setError((e as Error).message)}
   finally{operationPending.current=false;creatingConversation.current=false;if(alive.current)setBusy(false)}
  };
- const transmit=async(p:PendingSend)=>{
+ const transmit=async(p:PendingSend,replay=false)=>{
   const {cid:sentId,body}=p;
   let result:Snapshot;
   try{result=await req<Snapshot>('/api/chats/'+sentId+'/messages',body)}
@@ -184,8 +184,8 @@ export function ChatWorkspace(props:Props){
   }
   savePending(p,true);
   if(body.context?.writeback&&props.onApply){
-   const reply=result.accepted_turn?result.messages.find(m=>m.turn===result.accepted_turn):[...result.messages].reverse().find(m=>m.role==='assistant');
-   if(reply)saveWrites(current=>({...current,[reply.id]:{cid:result.conversation.id,uid:current[reply.id]?.uid||crypto.randomUUID()}}));
+   const reply=result.accepted_turn && result.messages.find(m=>m.role==='assistant' && m.turn===result.accepted_turn);
+   if(reply)saveWrites(current=>({...current,[reply.id]:{cid:result.conversation.id,uid:current[reply.id]?.uid||crypto.randomUUID(),expectedRevision:replay?body.context?.expected_revision:undefined}}));
   }
   update(result);
   if(!body.retry)setDraft(latest=>{
@@ -196,7 +196,7 @@ export function ChatWorkspace(props:Props){
   });
   pending.current=null;follow.current=true;await loadConfig();
  };
- const confirmSend=waiting&&!busy&&<button className="fm-chat-primary" type="button" onClick={()=>void safely(()=>transmit(waiting))}>确认上次发送</button>;
+ const confirmSend=waiting&&!busy&&<button className="fm-chat-primary" type="button" onClick={()=>void safely(()=>transmit(waiting,true))}>确认上次发送</button>;
  const send=async(retry?:number)=>safely(async()=>{
   const quote=retry?retryOffer.quote:offered.quote;
   if(waiting||!model||(!retry&&!draft.trim())||(native&&!quote))return;

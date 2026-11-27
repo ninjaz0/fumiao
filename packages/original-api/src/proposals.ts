@@ -514,7 +514,12 @@ export class OriginalCanvasProposals {
    * F018: Validates and records an atomic Canvas Proposal + estimated credits WITHOUT
    * modifying the live canvas or charging credits. User must approve via `apply()`.
    */
-  async create(user: OriginalActor, projectKey: string, value: unknown) {
+  async create(
+    user: OriginalActor,
+    projectKey: string,
+    value: unknown,
+    validateOutput?: (value: unknown) => void,
+  ) {
     const body = parseBody(value, proposalCreateFields, true) as {
       title: string;
       summary: string;
@@ -571,6 +576,15 @@ export class OriginalCanvasProposals {
         if (q.allowed && q.priced) estimatedUnits += creditUnits(String(q.amount));
       }
 
+      const title = pythonStrip(body.title) || "画布变更提案";
+      const summary = pythonStrip(body.summary || "");
+      validateOutput?.({
+        project_id: projectKey,
+        base_revision: baseRevision,
+        title,
+        summary,
+        operations: preview.ops,
+      });
       const id = randomUUID();
       const publicId = randomUUID().replaceAll("-", "");
       await sql.query(
@@ -583,8 +597,8 @@ export class OriginalCanvasProposals {
           project.workspace_id,
           user.id,
           baseRevision,
-          pythonStrip(body.title) || "画布变更提案",
-          pythonStrip(body.summary || ""),
+          title,
+          summary,
           JSON.stringify(preview.ops),
           formatCredits(estimatedUnits),
         ],

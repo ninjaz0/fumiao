@@ -4557,7 +4557,7 @@ export function CanvasWorkspace({
                 const revision=await doc.flush();
                 if(doc.ref.current.document.nodes.find(n=>n.id===id)?.text!==expectedText)throw new Error('节点文字已被修改，未覆盖。请基于当前文字重新生成。');
                 const snapshot=JSON.stringify(doc.ref.current);
-                const result=await chatRequest<Project & {applied_node:string}>(project.workspace,'/api/chats/'+cid+'/apply',{uid:options?.uid||crypto.randomUUID(),message:message.id,project:project.id,expected_revision:revision,mode:'replace',node:id,expected_text:expectedText});
+                const result=await chatRequest<Project & {applied_node:string}>(project.workspace,'/api/chats/'+cid+'/apply',{uid:options?.uid||crypto.randomUUID(),message:message.id,project:project.id,expected_revision:options?.expectedRevision??revision,mode:'replace',node:id,expected_text:expectedText});
                 doc.acceptRemote(result,snapshot);
               };
               const queued=textApplyQueue.current.then(apply);
@@ -4834,7 +4834,7 @@ export function CanvasWorkspace({
         </Modal>
       )}
       {aiStoryboard && <Modal title="AI 分镜" wide onClose={() => setAiStoryboard(false)}>
-        <AiStoryboard workspace={project.workspace} userId={studio.me.id} project={project.id}
+        <AiStoryboard key={`${studio.me.id}-${project.workspace}-${project.id}`} workspace={project.workspace} userId={studio.me.id} project={project.id}
           onRecharge={openCredits}
           onConfigureModels={studio.me.role === "admin" ? () => void closeAndLeave(chatSettingsPath(studio)) : undefined}
           onApply={async (shots, options)=>{
@@ -5410,7 +5410,7 @@ export function CanvasWorkspace({
                 uid: options?.uid || crypto.randomUUID(),
                 message: message.id,
                 project: project.id,
-                expected_revision: revision,
+                expected_revision: options?.expectedRevision ?? revision,
                 mode: "replace",
                 node: postFlush.nodeId,
                 expected_text: postFlush.expectedText,

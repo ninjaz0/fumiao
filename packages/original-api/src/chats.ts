@@ -402,6 +402,37 @@ export class OriginalChats {
       return prepared.quote;
     });
   }
+  async replySource(actor: Actor, message: string, selected?: string) {
+    requireValue(
+      /^[1-9]\d{0,15}$/.test(message) && Number.isSafeInteger(Number(message)),
+      404,
+      "内容不存在或无权访问",
+    );
+    return this.p.db.transaction(async (sql) => {
+      await sql.query(
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      const workspace = await this.identity.activeWorkspace(
+        sql,
+        actor,
+        selected,
+      );
+      const row = await one(
+        sql,
+        `SELECT c.public_id,m.content FROM chat_messages m
+        JOIN chat_conversations c ON c.id=m.conversation_id
+        WHERE m.public_id=$1 AND m.role='assistant' AND m.state='complete' AND c.workspace_id=$2`,
+        [message, workspace.id],
+      );
+      requireValue(row, 404, "内容不存在或无权访问");
+      await this.access(sql, actor, row.public_id, workspace.id);
+      return {
+        cid: row.public_id,
+        message: Number(message),
+        content: chatText(row.content),
+      };
+    });
+  }
   async bills(actor: Actor, key: string, selected?: string) {
     return this.p.db.transaction(async (sql) => {
       await sql.query(
@@ -461,9 +492,7 @@ export class OriginalChats {
           "发送标识已使用",
         );
         const snapshot = await this.snapshot(sql, chat, actor);
-        return previous.native_snapshot
-          ? { ...snapshot, accepted_turn: previous.public_id }
-          : snapshot;
+        return { ...snapshot, accepted_turn: previous.public_id };
       }
       requireValue(
         chat.revision === body.expected_revision,
@@ -746,7 +775,7 @@ export class OriginalChats {
         await this.access(sql, actor, key, workspace.id),
         actor,
       );
-      return native ? { ...snapshot, accepted_turn: turn.public_id } : snapshot;
+      return { ...snapshot, accepted_turn: turn.public_id };
     });
   }
   private async ledger(

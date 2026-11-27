@@ -305,6 +305,7 @@ export async function executeChatTool(
   call: ToolCall,
   args: Record<string, unknown>,
   signal: AbortSignal,
+  validateToolOutput?: (value: unknown) => void,
 ) {
   if (tool.builtin) {
     // Validate live turn lease, active actor, and workspace membership before invoking built-in Agent tools.
@@ -362,14 +363,21 @@ export async function executeChatTool(
           error: "operations_json 必须为非空操作数组",
         });
       }
-      const created = await proposals.create(verified.actor, projectId, {
+      const proposal = {
         title: String(args.title || "画布助手变更提案").slice(0, 120),
         summary: String(args.summary || "").slice(0, 1000),
         ...(typeof args.base_revision === "number"
           ? { base_revision: args.base_revision }
           : {}),
         operations: ops,
-      });
+      };
+      validateToolOutput?.({ project_id: projectId, ...proposal });
+      const created = await proposals.create(
+        verified.actor,
+        projectId,
+        proposal,
+        validateToolOutput,
+      );
       return JSON.stringify({
         ok: true,
         proposal_id: created.id,
