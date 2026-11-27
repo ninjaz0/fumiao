@@ -13,10 +13,10 @@ BEGIN
 EXCEPTION WHEN data_exception OR program_limit_exceeded THEN RETURN NULL;
 END
 $$;
-CREATE INDEX canvas_chat_links_conversation_created ON canvas_chat_links(conversation_id,created,project_id);
+CREATE INDEX IF NOT EXISTS canvas_chat_links_conversation_created ON canvas_chat_links(conversation_id,created,project_id);
 -- Mirrors the fixed-price admission lookup. The public message sequence breaks
 -- timestamp ties, including several same-second turns in an imported chat.
-CREATE INDEX chat_messages_canvas_context_history ON chat_messages(conversation_id,public_id DESC)
+CREATE INDEX IF NOT EXISTS chat_messages_canvas_context_history ON chat_messages(conversation_id,public_id DESC)
 WHERE role='user' AND NOT superseded AND context NOT IN ('','{}');
 WITH historical AS MATERIALIZED (
   SELECT c.turn_id,c.workspace_id,t.conversation_id,t.created,
