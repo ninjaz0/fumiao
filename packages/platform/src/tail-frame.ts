@@ -85,15 +85,12 @@ async function materializeStorageObject(
   const src = await p.storage
     .stream(objectKey, undefined, undefined, signal)
     .catch((error: unknown) => {
-      const fault = error as NodeJS.ErrnoException & {
-        $metadata?: { httpStatusCode?: number };
-      };
+      const fault = error as NodeJS.ErrnoException;
+      // GetObject may also return HTTP 404 for an unavailable bucket or route.
       if (
         fault.code === "ENOENT" ||
-        [fault.code, fault.name].some(
-          (code) => code === "NoSuchKey" || code === "NotFound",
-        ) ||
-        fault.$metadata?.httpStatusCode === 404
+        fault.code === "NoSuchKey" ||
+        fault.name === "NoSuchKey"
       )
         throw new MissingTailSource();
       throw error;

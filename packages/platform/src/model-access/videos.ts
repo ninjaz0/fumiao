@@ -5,6 +5,7 @@ import type { Platform } from "../platform.js";
 import { generationTransport, requirePublicHttps } from "../plugin-host.js";
 import { inspectProviderOutput } from "../provider-output.js";
 import { DomainError, requireValue } from "../security.js";
+import { resolveConnectionRevision } from "./connections.js";
 import { prepareVideoParameters } from "./video-parameters.js";
 import { routeScopeAllows, type FrozenModelRoute } from "./publication.js";
 import {
@@ -41,6 +42,44 @@ export function videoPollingUrl(
     "视频任务编号无效",
   );
   return client.base_url + "/videos/" + encodeURIComponent(id);
+}
+
+/** Older OpenRouter workers kept the ID when they rejected a poll URL.
+ * Its source is the sealed connection revision, including after key rotation.
+ * As an owner gains a canonical URL, the unique index takes over without a gap. */
+export async function bindVideoRemote(
+  sql: Sql,
+  p: Platform,
+  job: Job,
+  client: Client,
+  id: unknown,
+) {
+  const location = videoPollingUrl(client, id);
+  const legacy = await sql.query<{ revision_id: string }>(
+    `SELECT DISTINCT native_snapshot->>'connectionRevisionId' AS revision_id FROM jobs
+     WHERE source_kind='builtin' AND kind='video' AND native_polling_url IS NULL
+       AND connection_id=$1 AND remote_id=$2 AND id<>$3`,
+    [job.connection_id, id, job.id],
+  );
+  for (const owner of legacy.rows) {
+    const frozen = await resolveConnectionRevision(sql, p, owner.revision_id);
+    requireValue(
+      frozen.base_url !== client.base_url,
+      409,
+      "上游编号已关联其他任务",
+    );
+  }
+  try {
+    await sql.query(
+      "UPDATE jobs SET remote_id=$2,native_polling_url=$3 WHERE id=$1",
+      [job.id, id, location],
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "23505")
+      throw new DomainError(409, "上游编号已关联其他任务");
+    throw error;
+  }
+  return location;
 }
 
 async function jsonResponse(
@@ -145,16 +184,11 @@ async function createVideo(
   const result = await jsonResponse(response, signal, true);
   if (terminalFailure.includes(result?.status))
     throw new DefiniteSubmissionFailure();
-  const location = videoPollingUrl(client, result?.id);
-  const valid = !router || matchesPolling(result.polling_url, location);
   await p.db.transaction(async (sql) => {
     const current = await leased(sql, job);
     if (!current) return;
-    await sql.query(
-      "UPDATE jobs SET remote_id=$2,native_polling_url=$3 WHERE id=$1",
-      [job.id, result.id, location],
-    );
-    if (!valid) {
+    const location = await bindVideoRemote(sql, p, job, client, result?.id);
+    if (router && !matchesPolling(result.polling_url, location)) {
       await interruptedMediaSubmission(p, sql, current);
       return;
     }
