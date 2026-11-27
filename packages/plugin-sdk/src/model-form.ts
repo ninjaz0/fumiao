@@ -71,6 +71,15 @@ export interface FormConstraintEvaluation {
 }
 
 export const displayRatios = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
+
+/** Public image output choices use standard format names, including for upstream MIME aliases. */
+export function imageFormatName(value: unknown) {
+  const name = typeof value === "string"
+    ? value.toLowerCase().replace(/^image\//, "")
+    : "";
+  return name === "jpg" ? "jpeg" : name;
+}
+
 export function choices(
   values: string[] | number[],
   initial = values[0],

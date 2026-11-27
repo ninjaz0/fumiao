@@ -8,6 +8,7 @@ import {
 import { resolve as resolveFlow } from "../canvas-editor/flowPicker";
 import {
   formError,
+  imageFormatName,
   matches,
   normalizeForm,
   type FormValues,
@@ -684,6 +685,22 @@ export const publishedMedia = (state: StudioState, model: string) =>
 
 export type MediaQuote = { price_revision: number; route_revision: string; price_revision_id: string; max_charge: string };
 
+function historicalNativeParameters(
+  kind: Job["kind"],
+  form: ModelForm,
+  values: FormValues,
+): FormValues {
+  if (kind === "image" && values.output_format !== undefined) {
+    const name = imageFormatName(values.output_format);
+    if (
+      name !== values.output_format &&
+      form.fields.output_format?.enum?.includes(name)
+    )
+      return { ...values, output_format: name };
+  }
+  return values;
+}
+
 export function normalizeParams(state: StudioState, draft: Draft, preserveNative = false): Draft {
   const form = modelForm(state, draft);
   const flow = flowSpec(state, selectedModel(draft));
@@ -710,11 +727,12 @@ export function normalizeParams(state: StudioState, draft: Draft, preserveNative
     };
   }
   const native = publishedMedia(state, selectedModel(draft));
-  const values = native && form
-    ? (preserveNative && draft.params ? draft.params : normalizeForm(form, draft.params ?? {}))
-    : form
-    ? normalizeForm(form, { ...draftValues(draft), ...draft.params })
-    : {};
+  let values: FormValues = {};
+  if (form) {
+    values = native && preserveNative && draft.params
+      ? historicalNativeParameters(draft.kind, form, draft.params)
+      : normalizeForm(form, native ? draft.params ?? {} : { ...draftValues(draft), ...draft.params });
+  }
   const seed = typeof draft.seed === "string" ? draft.seed.trim() : "";
   const h3 = supportsH3
     ? h3Options(
@@ -1472,7 +1490,9 @@ export function referenceIssue(
   if (form?.parameterObject) {
     const issue = formError(
       form,
-      job ? (publishedMedia(state, model) ? savedParameters(job) : normalizeForm(form, savedParameters(job))) : (draft.params ?? {}),
+      job
+        ? jobFormParameters(job, form, publishedMedia(state, model))
+        : (draft.params ?? {}),
     );
     if (issue) return issue;
   }
@@ -1588,6 +1608,18 @@ function savedParameters(job: Job): FormValues {
     }
   );
 }
+
+function jobFormParameters(
+  job: Job,
+  form: ModelForm,
+  published: boolean,
+): FormValues {
+  const params = savedParameters(job);
+  return published
+    ? historicalNativeParameters(job.kind, form, params)
+    : normalizeForm(form, params);
+}
+
 export function loadJob(
   state: StudioState,
   session: DraftSession,
@@ -1657,7 +1689,8 @@ export function generationRequest(
     price_revision: state.pricing?.revision,
     ...offered,
   };
-  if (state.model_forms?.[model]?.parameterObject) {
+  const form = state.model_forms?.[model];
+  if (form?.parameterObject) {
     return {
       kind,
       path:
@@ -1670,7 +1703,7 @@ export function generationRequest(
         ...common,
         model,
         params: job
-          ? publishedMedia(state, model) ? savedParameters(job) : normalizeForm(state.model_forms?.[model], savedParameters(job))
+          ? jobFormParameters(job, form, publishedMedia(state, model))
           : (draft.params ?? {}),
         ...(kind === "audio"
           ? {}

@@ -19,6 +19,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import { join } from "node:path";
+import { DomainError } from "./security.js";
 import {
   contentDisposition,
   type ContentDispositionType,
@@ -59,18 +60,36 @@ export interface Storage {
   ): Promise<string>;
 }
 export class DiskStorage implements Storage {
-  constructor(private directory: string) {}
+  private readonly directory: string;
+  private createDefault: boolean;
+  constructor(directory?: string) {
+    this.directory = directory || ".runtime-advanced/objects";
+    this.createDefault = !directory;
+  }
+  private async initializeDefault() {
+    // Studio requires an explicitly configured private volume to exist at startup.
+    if (this.createDefault) {
+      await mkdir(this.directory, { recursive: true, mode: 0o700 });
+      this.createDefault = false;
+    }
+  }
   private path(key: string) {
     if (!/^[a-zA-Z0-9-]+$/.test(key)) throw new Error("Invalid object key");
     return join(this.directory, key);
   }
   async put(key: string, data: Uint8Array) {
-    await mkdir(this.directory, { recursive: true });
+    await this.initializeDefault();
     await writeFile(this.path(key), data, { mode: 0o600 });
   }
   async availableBytes() {
-    await mkdir(this.directory, { recursive: true });
-    const disk = await statfs(this.directory);
+    await this.initializeDefault();
+    const disk = await statfs(this.directory).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT")
+          throw new DomainError(503, "本地媒体存储目录暂不可用");
+        throw error;
+      },
+    );
     return Number(disk.bavail) * Number(disk.bsize);
   }
   async putFile(
@@ -80,7 +99,7 @@ export class DiskStorage implements Storage {
     signal?: AbortSignal,
   ) {
     signal?.throwIfAborted();
-    await mkdir(this.directory, { recursive: true });
+    await this.initializeDefault();
     await pipeline(
       createReadStream(path),
       createWriteStream(this.path(key), { mode: 0o600 }),

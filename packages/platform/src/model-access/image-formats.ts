@@ -1,15 +1,8 @@
+import { imageFormatName } from "@fumiao/plugin-sdk/model-form.js";
 import { requireValue } from "../security.js";
 import type { DeclaredParameters } from "./discovery.js";
 
 const deliverable = ["png", "jpeg", "webp"];
-
-function formatName(value: unknown) {
-  const name =
-    typeof value === "string"
-      ? value.toLowerCase().replace(/^image\//, "")
-      : "";
-  return name === "jpg" ? "jpeg" : name;
-}
 
 /** UI choices use standard format names. The upstream receives its own enum spelling. */
 export function imageFormats(caps: DeclaredParameters) {
@@ -23,7 +16,7 @@ export function imageFormats(caps: DeclaredParameters) {
       : []
     : deliverable;
   for (const value of values) {
-    const name = formatName(value);
+    const name = imageFormatName(value);
     if (
       typeof value === "string" &&
       deliverable.includes(name) &&
@@ -56,7 +49,7 @@ export function defaultImageFormat(
   formats: Map<string, string>,
 ) {
   if (!caps.definitions?.output_format) return;
-  const preferred = formatName(caps.output_format_default);
+  const preferred = imageFormatName(caps.output_format_default);
   return formats.has(preferred) ? preferred : formats.keys().next().value;
 }
 
@@ -75,7 +68,7 @@ export function imageOutputFormat(
     const fallback = formats && defaultImageFormat(caps, formats);
     return fallback ? formats?.get(fallback) : undefined;
   }
-  const wire = formats?.get(formatName(selected));
+  const wire = formats?.get(imageFormatName(selected));
   requireValue(wire, 400, "线路不支持此图片输出格式");
   return wire;
 }

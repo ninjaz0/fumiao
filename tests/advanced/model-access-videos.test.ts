@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +11,7 @@ import { OriginalModelAccess } from "@fumiao/original-api/model-access.js";
 import { ModelAccessConnections } from "@fumiao/platform/model-access/connections.js";
 import { Executor } from "@fumiao/platform/executor.js";
 import { one } from "@fumiao/platform/db.js";
+import { DiskStorage } from "@fumiao/platform/storage.js";
 import { mediaCharge } from "@fumiao/platform/model-access/media-billing.js";
 import type { HttpTransport } from "@fumiao/platform/plugin-host.js";
 
@@ -1237,24 +1238,51 @@ test("查询正文中断可恢复，完整无效 JSON 释放预留，创建响�
   assert.equal(Number((await f.p.wallet(f.member, f.memberSpace.id)).held), 24);
 });
 
-test("整个本地媒体目录暂时离线时保留尾帧子单，恢复后按原单继续", async (t) => {
+test("显式媒体目录离线时其他接单和写入不能建空卷，恢复后尾帧子单只结算一次", async (t) => {
   const f = await fixture(t, "new-api-videos");
   const { job: parent } = await f.admit();
   const { bytes } = await video(t, 7.8);
+  let posts = 0;
   const http: HttpTransport<string | Uint8Array> = async (url, init) => {
-    if (init.method === "POST") return json({ id: remote });
-    if (url.href === polling) return json({ id: remote, status: "completed" });
+    if (init.method === "POST") return json({ id: "movie-" + ++posts });
+    if (!url.pathname.endsWith("/content"))
+      return json({ id: url.pathname.split("/").pop(), status: "completed" });
     return { status: 200, contentType: "video/mp4", body: bytes };
   };
   await f.wake(parent.id, http);
   assert.equal((await f.wake(parent.id, http)).state, "completed");
-  const { job: child } = await f.admit();
+  const { job: child, ordered } = await f.admit();
   await f.db.query(
     "INSERT INTO job_tail_chains(parent_job_id,child_job_id) VALUES($1,$2)",
     [parent.id, child.id],
   );
-  await rename(f.directory, f.directory + "-offline");
+  const writer = new DiskStorage(f.directory);
+  const offline = f.directory + "-offline";
+  const source = await one(
+    f.db,
+    `SELECT a.object_key FROM job_assets r JOIN assets a ON a.id=r.asset_id
+    WHERE r.job_id=$1 AND r.role='output'`,
+    [parent.id],
+  );
+  await rename(f.directory, offline);
   try {
+    const coworker = await f.requestAs(
+      "POST",
+      "/api/jobs",
+      { ...ordered, uid: randomUUID() },
+      0,
+    );
+    assert.equal(coworker.status, 503, "离线卷上不能受理其他工作区的新订单");
+    await assert.rejects(writer.availableBytes(), { status: 503 });
+    await assert.rejects(writer.put("other", Buffer.from("other")));
+    await assert.rejects(
+      new DiskStorage(f.directory).putFile(
+        "other-file",
+        join(offline, source.object_key),
+        "video/mp4",
+      ),
+    );
+    await assert.rejects(stat(f.directory), { code: "ENOENT" });
     await new Executor(f.p).recover();
     const waiting = await one(
       f.db,
@@ -1267,9 +1295,22 @@ test("整个本地媒体目录暂时离线时保留尾帧子单，恢复后按�
       Number((await f.p.wallet(f.member, f.memberSpace.id)).held),
       24,
     );
+    assert.equal(Number((await f.p.wallet(f.admin, f.workspace.id)).held), 0);
+    assert.equal((await f.db.query("SELECT id FROM jobs")).rows.length, 2);
+    assert.deepEqual(
+      (
+        await f.db.query("SELECT action FROM ledger WHERE job_id=$1", [
+          child.id,
+        ])
+      ).rows,
+      [{ action: "hold" }],
+    );
   } finally {
-    await rename(f.directory + "-offline", f.directory);
+    // On the broken implementation an unrelated admission creates this fixture path.
+    await rm(f.directory, { recursive: true, force: true });
+    await rename(offline, f.directory);
   }
+  assert.deepEqual(await writer.read(source.object_key), bytes);
   await f.db.query("UPDATE jobs SET request_retry_at=NULL WHERE id=$1", [
     child.id,
   ]);
@@ -1287,6 +1328,23 @@ test("整个本地媒体目录暂时离线时保留尾帧子单，恢复后按�
     ).rows.length,
     0,
   );
+  assert.equal((await f.wake(child.id, http)).state, "running");
+  assert.equal((await f.wake(child.id, http)).state, "completed");
+  assert.equal((await f.wake(child.id, http)).state, "completed");
+  assert.equal(posts, 2);
+  assert.deepEqual(
+    (
+      await f.db.query(
+        "SELECT action,amount::float8 AS amount FROM ledger WHERE job_id=$1 ORDER BY action",
+        [child.id],
+      )
+    ).rows,
+    [
+      { action: "hold", amount: 24 },
+      { action: "spend", amount: 23.4 },
+    ],
+  );
+  assert.equal(Number((await f.p.wallet(f.member, f.memberSpace.id)).held), 0);
 });
 
 test("尾帧永久缺失释放子单，超过一轮上限的暂时故障让出健康工作区", async (t) => {

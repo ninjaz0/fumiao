@@ -1649,3 +1649,111 @@ test("原生图片草稿恢复和历史重发以字符串质量报价", (t) => {
     assert.deepEqual(JSON.parse(JSON.stringify(estimateBody(state, source))), {kind:"image", model, params:{quality:"high"}, refs:[]});
   }
 });
+
+test("图片历史和旧草稿只恢复当前原生表单仍支持的等价格式", (t) => {
+  t.after(installFakeEnv().restore);
+  const base = makeState(),
+    model = "custom-image";
+  const form = {
+    parameterObject: true,
+    fields: {
+      output_format: {
+        title: "输出格式",
+        type: "string" as const,
+        enum: ["webp", "jpeg"],
+        default: "webp",
+      },
+    },
+    tiers: [],
+    references: { min: 0, max: 0 },
+  };
+  const state = makeState({
+    studio_plugins: true,
+    model_access: { [model]: true },
+    images: {
+      ...base.images,
+      models: { [model]: model },
+      default_model: model,
+    },
+    pricing: {
+      revision: 8,
+      items: [],
+      published: [{ model, price: { kind: "image", unit: "0.25" } }],
+    },
+    model_forms: { [model]: form },
+  });
+  const session = readDraft(state);
+  for (const output_format of [
+    "JPG",
+    "image/jpeg",
+    "IMAGE/JPG",
+    "gif",
+    "svg",
+    "image/png",
+  ]) {
+    const job = {
+      id: 8,
+      kind: "image",
+      model,
+      prompt: "旧作品",
+      refs: [],
+      params: { output_format },
+    } as unknown as Job;
+    session.draft = {
+      ...session.draft,
+      kind: "image",
+      model,
+      params: { output_format },
+    };
+    writeDraft(state, session);
+    const expected = ["JPG", "image/jpeg", "IMAGE/JPG"].includes(output_format)
+      ? "jpeg"
+      : output_format;
+    for (const source of [readDraft(state), loadJob(state, session, job)]) {
+      assert.equal(source.draft.params?.output_format, expected);
+      assert.equal(estimateBody(state, source).params?.output_format, expected);
+      assert.equal(
+        referenceIssue(state, source),
+        expected === "jpeg" ? "" : "输出格式的值无效",
+      );
+    }
+    assert.equal(
+      referenceIssue(state, session, job),
+      expected === "jpeg" ? "" : "输出格式的值无效",
+    );
+    const body = generationRequest(state, session, job).body;
+    assert.ok("params" in body);
+    assert.deepEqual(body.params, { output_format: expected });
+    assert.deepEqual(job.params, { output_format });
+  }
+  const plugin = {
+    ...state,
+    pricing: { ...state.pricing, published: [] },
+    model_forms: {
+      [model]: {
+        ...form,
+        fields: {
+          output_format: {
+            ...form.fields.output_format,
+            enum: ["JPG", "jpeg"],
+          },
+        },
+      },
+    },
+  };
+  const job = {
+    id: 9,
+    kind: "image",
+    model,
+    prompt: "插件历史",
+    refs: [],
+    params: { output_format: "JPG" },
+  } as unknown as Job;
+  assert.equal(
+    loadJob(plugin, session, job).draft.params?.output_format,
+    "JPG",
+  );
+  const body = generationRequest(plugin, session, job).body;
+  assert.ok("params" in body);
+  assert.deepEqual(body.params, job.params);
+});
