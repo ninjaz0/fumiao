@@ -226,9 +226,7 @@ export async function resolveConnectionRevision(
     base_url: config.base_url,
     default_video_protocol: config.default_video_protocol,
     containsCredential(text: string) {
-      return config.api_key.length >= 8
-        ? text.includes(config.api_key)
-        : text === config.api_key || text.includes("Bearer " + config.api_key);
+      return text.includes(config.api_key);
     },
     async request(
       input: {
@@ -555,6 +553,10 @@ function draftSelection(
   const parameters: DeclaredParameters & Omit<typeof options, "frame_images"> =
     { ...declared, ...options };
   delete parameters.protocol;
+  if (declared.unconfirmed_parameters?.length && declared.names) {
+    const unconfirmed = new Set(declared.unconfirmed_parameters);
+    parameters.names = declared.names.filter((name) => !unconfirmed.has(name));
+  }
   const reasons: string[] = [];
   if (!kind) reasons.push("purpose");
   if (!protocol) reasons.push("protocol");

@@ -7,6 +7,7 @@ export type Directory = "models" | "images/models" | "videos/models";
 export type DirectoryStatus =
   | "ok"
   | "empty"
+  | "partial"
   | "invalid_credentials"
   | "forbidden"
   | "timeout"
@@ -17,6 +18,8 @@ type Descriptor =
   | { type: "boolean" };
 export interface DeclaredParameters {
   names?: string[];
+  /** Listed by the gateway, but lacking a usable parameter constraint. */
+  unconfirmed_parameters?: string[];
   definitions?: Record<string, Descriptor>;
   durations?: number[];
   automatic_duration?: boolean;
@@ -60,38 +63,73 @@ const safeText = (v: unknown, limit = 512): v is string =>
   v.length <= limit &&
   v.trim() === v &&
   !/[\u0000-\u001f\u007f]/.test(v);
-const strings = (v: unknown) =>
-  Array.isArray(v)
-    ? (v.filter((x) => safeText(x, 128)).slice(0, 128) as string[])
-    : undefined;
-function definitions(input: Record<string, unknown>) {
-  const valid: Record<string, Descriptor> = Object.create(null);
-  for (const [key, value] of Object.entries(input).slice(0, 128)) {
-    if (!/^[a-z][a-z0-9_]{0,63}$/.test(key)) continue;
-    const item = obj(value);
-    if (item.type === "boolean") valid[key] = { type: "boolean" };
-    if (
-      item.type === "range" &&
-      typeof item.min === "number" &&
-      typeof item.max === "number" &&
-      Number.isFinite(item.min) &&
-      Number.isFinite(item.max) &&
-      item.min <= item.max
+type ContainsCredential = (text: string) => boolean;
+function strings(value: unknown, containsCredential: ContainsCredential) {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .filter(
+      (item): item is string =>
+        safeText(item, 128) && !containsCredential(item),
     )
-      valid[key] = { type: "range", min: item.min, max: item.max };
-    if (item.type === "enum" && Array.isArray(item.values))
-      valid[key] = {
-        type: "enum",
-        values: item.values
-          .filter(
-            (v) =>
-              safeText(v, 128) || (typeof v === "number" && Number.isFinite(v)),
-          )
-          .slice(0, 128),
-      };
-  }
-  return { ...valid };
+    .slice(0, 128);
 }
+function parameterDefinition(
+  value: unknown,
+  containsCredential: ContainsCredential,
+): Descriptor | undefined {
+  const item = obj(value);
+  if (item.type === "boolean") return { type: "boolean" };
+  if (
+    item.type === "range" &&
+    typeof item.min === "number" &&
+    typeof item.max === "number" &&
+    Number.isFinite(item.min) &&
+    Number.isFinite(item.max) &&
+    item.min <= item.max
+  )
+    return { type: "range", min: item.min, max: item.max };
+
+  const options = Array.isArray(value)
+    ? value
+    : item.type === "enum"
+      ? item.values
+      : undefined;
+  if (!Array.isArray(options) || !options.length || options.length > 128)
+    return;
+  if (
+    !options.every(
+      (v) =>
+        (safeText(v, 128) && !containsCredential(v)) ||
+        (typeof v === "number" && Number.isFinite(v)),
+    )
+  )
+    return;
+  return { type: "enum", values: options };
+}
+function declaredOptions(
+  value: unknown,
+  containsCredential: ContainsCredential,
+): DeclaredParameters {
+  if (Array.isArray(value))
+    return { names: strings(value, containsCredential) };
+  if (!value || typeof value !== "object") return {};
+  const names: string[] = [];
+  const unconfirmed: string[] = [];
+  const definitions: Record<string, Descriptor> = Object.create(null);
+  for (const [key, raw] of Object.entries(value).slice(0, 128)) {
+    if (!safeText(key, 128) || containsCredential(key)) continue;
+    names.push(key);
+    const descriptor = parameterDefinition(raw, containsCredential);
+    if (descriptor) definitions[key] = descriptor;
+    else unconfirmed.push(key);
+  }
+  return {
+    names,
+    definitions: { ...definitions },
+    ...(unconfirmed.length ? { unconfirmed_parameters: unconfirmed } : {}),
+  };
+}
+
 function modelPurpose(
   directory: Directory,
   outputs: string[] | undefined,
@@ -107,23 +145,29 @@ function modelPurpose(
     return { purpose: "chat", purpose_source: "output_modalities" };
   return { purpose: null, purpose_source: null };
 }
-function parseEntry(value: unknown, source: Directory): Entry | undefined {
-  const row = obj(value);
-  if (!safeText(row.id)) return;
+function parseEntry(
+  id: string,
+  raw: unknown,
+  source: Directory,
+  containsCredential: ContainsCredential,
+): Entry {
+  const row = obj(raw);
   const architecture = obj(row.architecture);
-  const outputs = strings(
-    architecture.output_modalities ?? row.output_modalities,
-  );
+  const outputs = architecture.output_modalities ?? row.output_modalities;
   const parameters: DeclaredParameters = {
-    input_modalities: strings(architecture.input_modalities),
-    output_modalities: outputs,
-    names: strings(row.supported_parameters),
-    resolutions: strings(row.supported_resolutions),
-    aspect_ratios: strings(row.supported_aspect_ratios),
-    sizes: strings(row.supported_sizes),
-    frame_images: strings(row.supported_frame_images)?.filter((v) =>
-      ["first_frame", "last_frame"].includes(v),
+    ...declaredOptions(row.supported_parameters, containsCredential),
+    input_modalities: strings(
+      architecture.input_modalities,
+      containsCredential,
     ),
+    output_modalities: strings(outputs, containsCredential),
+    resolutions: strings(row.supported_resolutions, containsCredential),
+    aspect_ratios: strings(row.supported_aspect_ratios, containsCredential),
+    sizes: strings(row.supported_sizes, containsCredential),
+    frame_images: strings(
+      row.supported_frame_images,
+      containsCredential,
+    )?.filter((v) => ["first_frame", "last_frame"].includes(v)),
   };
   const limit = obj(row.top_provider).max_completion_tokens;
   if (
@@ -134,8 +178,6 @@ function parseEntry(value: unknown, source: Directory): Entry | undefined {
     parameters.context_length = row.context_length;
   if (typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0)
     parameters.max_completion_tokens = limit;
-  if (row.supported_parameters && !Array.isArray(row.supported_parameters))
-    parameters.definitions = definitions(obj(row.supported_parameters));
   if (Array.isArray(row.supported_durations)) {
     parameters.durations = [
       ...new Set(
@@ -149,31 +191,18 @@ function parseEntry(value: unknown, source: Directory): Entry | undefined {
   for (const key of Object.keys(parameters) as (keyof DeclaredParameters)[])
     if (parameters[key] === undefined) delete parameters[key];
   return {
-    upstream_id: row.id,
-    name: safeText(row.name) ? row.name : row.id,
-    ...modelPurpose(source, outputs),
+    upstream_id: id,
+    name: safeText(row.name) && !containsCredential(row.name) ? row.name : id,
+    // A removed or malformed second modality must not turn an ambiguous entry into a single-purpose model.
+    ...modelPurpose(
+      source,
+      Array.isArray(outputs) &&
+        parameters.output_modalities?.length === outputs.length
+        ? parameters.output_modalities
+        : undefined,
+    ),
     parameters,
   };
-}
-
-function reflectsCredential(entry: Entry, matches: (value: string) => boolean) {
-  if (matches(entry.upstream_id) || matches(entry.name)) return true;
-  for (const list of Object.values(entry.parameters))
-    if (
-      Array.isArray(list) &&
-      list.some((v) => typeof v === "string" && matches(v))
-    )
-      return true;
-  for (const [name, definition] of Object.entries(
-    entry.parameters.definitions ?? {},
-  ))
-    if (
-      matches(name) ||
-      (definition.type === "enum" &&
-        definition.values.some((v) => typeof v === "string" && matches(v)))
-    )
-      return true;
-  return false;
 }
 
 type FetchDirectory = (
@@ -209,20 +238,24 @@ async function readDirectory(
     if (!Array.isArray(data) || data.length > 10000)
       return { path, status: "unavailable" as const };
     const entries = new Map<string, Entry>();
+    let malformed = false;
     for (const value of data) {
-      const entry = parseEntry(value, path);
-      if (
-        entry &&
-        !reflectsCredential(entry, containsCredential) &&
-        !entries.has(entry.upstream_id)
-      )
-        entries.set(entry.upstream_id, entry);
+      const id = typeof value === "string" ? value : obj(value).id;
+      if (!safeText(id)) {
+        malformed = true;
+        continue;
+      }
+      if (!containsCredential(id) && !entries.has(id))
+        entries.set(id, parseEntry(id, value, path, containsCredential));
     }
-    return {
-      path,
-      status: entries.size ? ("ok" as const) : ("empty" as const),
-      entries: [...entries.values()],
-    };
+    if (data.length && !entries.size)
+      return { path, status: "unavailable" as const };
+    const status: DirectoryStatus = malformed
+      ? "partial"
+      : entries.size
+        ? "ok"
+        : "empty";
+    return { path, status, entries: [...entries.values()] };
   } catch (e) {
     return {
       path,
@@ -234,6 +267,32 @@ async function readDirectory(
     };
   }
 }
+function mergeParameters(
+  prior: DeclaredParameters | undefined,
+  entry: DeclaredParameters,
+) {
+  if (!prior) return entry;
+  const merged = { ...prior, ...entry };
+  if (prior.names && entry.names)
+    merged.names = [...new Set([...prior.names, ...entry.names])];
+  if (prior.definitions && entry.definitions)
+    merged.definitions = { ...prior.definitions, ...entry.definitions };
+  if (prior.unconfirmed_parameters || entry.unconfirmed_parameters) {
+    // An unsupported constraint is not an executable option, even if another
+    // directory lists the same parameter without mentioning that constraint.
+    merged.unconfirmed_parameters = [
+      ...new Set([
+        ...(prior.unconfirmed_parameters ?? []),
+        ...(entry.unconfirmed_parameters ?? []),
+      ]),
+    ];
+    merged.definitions = { ...merged.definitions };
+    for (const name of merged.unconfirmed_parameters)
+      delete merged.definitions[name];
+  }
+  return merged;
+}
+
 const usable = (s?: DirectoryStatus) => s === "ok" || s === "empty";
 
 export async function discoverModels(
@@ -253,9 +312,20 @@ export async function discoverModels(
   const snapshots = { ...previous?.snapshots };
   const directories: Discovery["directories"] = {};
   const merged = new Map<string, Candidate>();
+  const observedInPartial = new Map<Directory, Set<string>>();
   for (const read of reads) {
     directories[read.path] = read.status;
-    if (read.entries) snapshots[read.path] = read.entries;
+    if (read.status === "partial" && read.entries) {
+      const saved = new Map(
+        snapshots[read.path]?.map((row) => [row.upstream_id, row]),
+      );
+      for (const row of read.entries) saved.set(row.upstream_id, row);
+      snapshots[read.path] = [...saved.values()];
+      observedInPartial.set(
+        read.path,
+        new Set(read.entries.map((row) => row.upstream_id)),
+      );
+    } else if (read.entries) snapshots[read.path] = read.entries;
     for (const entry of snapshots[read.path] ?? []) {
       const prior = merged.get(entry.upstream_id);
       merged.set(entry.upstream_id, {
@@ -264,7 +334,7 @@ export async function discoverModels(
         purpose_source: entry.purpose_source ?? prior?.purpose_source ?? null,
         name:
           entry.name === entry.upstream_id && prior ? prior.name : entry.name,
-        parameters: { ...prior?.parameters, ...entry.parameters },
+        parameters: mergeParameters(prior?.parameters, entry.parameters),
         directories: [...(prior?.directories ?? []), read.path],
         change: "added",
         metadata_status: "declared",
@@ -284,12 +354,17 @@ export async function discoverModels(
         : "changed";
     const incomplete =
       !item.purpose ||
+      !!item.parameters.unconfirmed_parameters?.length ||
       (isOpenRouter(base) &&
         item.purpose === "image" &&
         !item.directories.includes("images/models")) ||
       (item.purpose === "video" &&
         (!item.parameters.durations?.length || item.parameters.upscale_only));
-    const stale = item.directories.some((d) => !usable(directories[d]));
+    const stale = item.directories.some(
+      (d) =>
+        !usable(directories[d]) &&
+        !observedInPartial.get(d)?.has(item.upstream_id),
+    );
     item.metadata_status = stale
       ? "stale"
       : incomplete

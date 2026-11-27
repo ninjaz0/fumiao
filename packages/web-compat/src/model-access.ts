@@ -7,6 +7,7 @@ export type ModelDirectory = "models" | "images/models" | "videos/models";
 export type DirectoryStatus =
   | "ok"
   | "empty"
+  | "partial"
   | "invalid_credentials"
   | "forbidden"
   | "timeout"
@@ -17,6 +18,8 @@ export type ParameterDefinition =
   | { type: "boolean" };
 export interface ModelParameters {
   names?: string[];
+  /** Informational names whose gateway constraints still need confirmation. */
+  unconfirmed_parameters?: string[];
   definitions?: Record<string, ParameterDefinition>;
   durations?: number[];
   automatic_duration?: boolean;

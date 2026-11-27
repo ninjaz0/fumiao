@@ -202,6 +202,7 @@ test("OpenRouter 合并专用目录，保留有界参数、歧义和部分失败
       {
         id: "studio/edit",
         architecture: { output_modalities: ["text", "image"] },
+        supported_parameters: ["seed"],
         pricing: { prompt: "79" },
       },
       {
@@ -256,6 +257,11 @@ test("OpenRouter 合并专用目录，保留有界参数、歧义和部分失败
   assert.equal(by("auto").purpose, null);
   assert.deepEqual(by("auto").parameters.output_modalities, ["text", "image"]);
   assert.deepEqual(by("edit").directories, ["models", "images/models"]);
+  assert.deepEqual(by("edit").parameters.names?.slice().sort(), [
+    "aspect_ratio",
+    "input_references",
+    "seed",
+  ]);
   assert.equal(by("edit").purpose_source, "image_directory");
   assert.deepEqual(
     by("edit").parameters.definitions,
@@ -602,7 +608,7 @@ test("并发刷新和改地址拒绝迟到结果，设置默认格式保留同�
   assert.deepEqual((await s.view()).discoveries, []);
 });
 
-test("普通密钥与本地字段重名时仍可发现，忽略上游反射密钥的行", async (t) => {
+test("上游反射的短密钥不入库，本地字段同名和安全模型 ID 仍可发现", async (t) => {
   const { ModelAccessConnections } =
     await import("@fumiao/platform/model-access/connections.js");
   const f = await databaseFixture();
@@ -619,15 +625,29 @@ test("普通密钥与本地字段重名时仍可发现，忽略上游反射密�
           JSON.stringify({
             data: [
               { id: "tiny-model" },
-              { id: "bad-name", name: "Bearer " + key },
-              { id: "bad-parameter", supported_parameters: [key] },
+              { id: "private-" + key + "-id" },
+              {
+                id: "detail",
+                name: "private-" + key + "-label",
+                supported_parameters: {
+                  quality: ["low", "private-" + key + "-value"],
+                  ["s_" + key + "_mode"]: { type: "boolean" },
+                },
+              },
+              {
+                id: "clean",
+                supported_parameters: [
+                  "private-" + key + "-parameter",
+                  "tools",
+                ],
+              },
             ],
           }),
         ),
       };
     },
   );
-  for (const key of ["parameters", "name"]) {
+  for (const key of ["k4x", "parameters", "name"]) {
     const c = await service.create({
       base_url: "https://1.1.1.1/v1",
       api_key: key,
@@ -635,8 +655,27 @@ test("普通密钥与本地字段重名时仍可发现，忽略上游反射密�
     const result = await service.discover(c.id, { expected_revision: 1 });
     assert.deepEqual(
       result.candidates.map((m) => m.upstream_id),
-      ["tiny-model"],
+      ["clean", "detail", "tiny-model"],
     );
+    assert.equal(
+      result.candidates.find((c) => c.upstream_id === "detail")!.name,
+      "detail",
+    );
+    assert.deepEqual(
+      result.candidates.find((c) => c.upstream_id === "clean")!.parameters
+        .names,
+      ["tools"],
+    );
+    const stored = (
+      await f.db.query(
+        "SELECT snapshots,candidates FROM model_access_discoveries WHERE connection_revision_id=$1",
+        [c.revision_id],
+      )
+    ).rows[0];
+    for (const json of [result, stored, await service.view()]) {
+      assert.equal(JSON.stringify(json).includes("private-" + key), false);
+      assert.equal(JSON.stringify(json).includes("s_" + key + "_mode"), false);
+    }
   }
 });
 
@@ -691,4 +730,126 @@ test("管理员可为目录漏列的 OpenRouter 图片模型确认专用协议�
     (await f.db.query("SELECT mode FROM studio_plugin_profile")).rows[0].mode,
     "explicit",
   );
+});
+
+test("裸字符串目录、混合目录和畸形响应保留可信记录，空目录才报告 empty", async () => {
+  const { discoverModels } =
+    await import("@fumiao/platform/model-access/discovery.js");
+  let data: unknown[] = ["clip-v1", "clip-v1"];
+  const read = (prev?: Awaited<ReturnType<typeof discoverModels>>) =>
+    discoverModels(
+      "https://1.1.1.1/v1",
+      async () => ({
+        status: 200,
+        contentType: "application/json",
+        body: Buffer.from(JSON.stringify({ data })),
+      }),
+      () => false,
+      prev,
+    );
+  const first = await read();
+  assert.equal(first.directories.models, "ok");
+  assert.deepEqual(
+    first.candidates.map((m) => [m.upstream_id, m.purpose, m.metadata_status]),
+    [["clip-v1", null, "needs_confirmation"]],
+  );
+  data = [null, { unexpected: 2 }, 3];
+  const failed = await read(first);
+  assert.equal(failed.directories.models, "unavailable");
+  assert.equal(failed.candidates[0].metadata_status, "stale");
+  assert.deepEqual(failed.snapshots, first.snapshots);
+  data = [{ unexpected: true }, "next-v1"];
+  const partial = await read(failed);
+  assert.equal(partial.directories.models, "partial");
+  assert.ok(partial.candidates.some((m) => m.upstream_id === "next-v1"));
+  assert.notEqual(
+    partial.candidates.find((m) => m.upstream_id === "clip-v1")?.change,
+    "missing",
+  );
+  data = [];
+  const empty = await read(partial);
+  assert.equal(empty.directories.models, "empty");
+  assert.ok(empty.candidates.every((m) => m.change === "missing"));
+});
+
+test("自建目录保留可辨识的枚举，把其余参数约束单列为待确认", async () => {
+  const { discoverModels } =
+    await import("@fumiao/platform/model-access/discovery.js");
+  const output = await discoverModels(
+    "https://1.1.1.1/v1",
+    async () => ({
+      status: 200,
+      contentType: "application/json",
+      body: Buffer.from(
+        JSON.stringify({
+          data: [
+            {
+              id: "model",
+              output_modalities: ["text"],
+              supported_parameters: {
+                seed: { type: "integer" },
+                quality: ["low", "high"],
+                invalid: { type: "range", min: 10, max: 1 },
+              },
+            },
+          ],
+        }),
+      ),
+    }),
+    () => false,
+  );
+  const item = output.candidates[0];
+  assert.deepEqual(item.parameters.names?.sort(), [
+    "invalid",
+    "quality",
+    "seed",
+  ]);
+  assert.deepEqual(item.parameters.definitions, {
+    quality: { type: "enum", values: ["low", "high"] },
+  });
+  assert.deepEqual(item.parameters.unconfirmed_parameters?.sort(), [
+    "invalid",
+    "seed",
+  ]);
+  assert.equal(item.metadata_status, "needs_confirmation");
+});
+
+test("草稿有效参数排除仍待确认的目录约束", async (t) => {
+  const { ModelAccessConnections } =
+    await import("@fumiao/platform/model-access/connections.js");
+  const f = await databaseFixture();
+  t.after(f.cleanup);
+  const service = new ModelAccessConnections(f.db, f.p.vault, async () => ({
+    status: 200,
+    contentType: "application/json",
+    body: Buffer.from(
+      JSON.stringify({
+        data: [
+          {
+            id: "clip-v1",
+            output_modalities: ["text"],
+            supported_parameters: {
+              seed: { type: "integer" },
+              quality: ["low", "high"],
+            },
+          },
+        ],
+      }),
+    ),
+  }));
+  const c = await service.create({
+    base_url: "https://1.1.1.1/v1",
+    api_key: "private-fixture",
+  });
+  await service.discover(c.id, { expected_revision: 1 });
+  const { draft } = await service.saveDraft(randomUUID(), {
+    expected_revision: 0,
+    connection_id: c.id,
+    connection_revision: 1,
+    upstream_id: "clip-v1",
+    chat_prices: { input: "1", output: "1" },
+  });
+  assert.deepEqual(draft.parameters.names, ["quality"]);
+  assert.deepEqual(draft.parameters.unconfirmed_parameters, ["seed"]);
+  assert.equal(draft.parameters.definitions?.seed, undefined);
 });
