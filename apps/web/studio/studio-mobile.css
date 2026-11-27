@@ -221,18 +221,30 @@
   #app .detail-view {
     z-index: 12;
   }
-  /* Chat fills the space between the bars instead of the whole viewport. */
-  .workspace:has(#chat-root) .fm-chat {
+  /* Chat sizes itself between topbar and tabbar; drop #view's bottom spacer so
+     the document itself does not gain an extra scroll range. */
+  #app #view:has(> #chat-root) {
+    padding: 0 8px;
+  }
+  #app #chat-root {
     height: calc(
-      100dvh - var(--mobile-topbar-height) - env(safe-area-inset-top) -
-        var(--mobile-tabbar-height) - env(safe-area-inset-bottom)
+      var(--visual-viewport-height, 100dvh) - 52px -
+        var(--mobile-tabbar-height) - env(safe-area-inset-top) -
+        env(safe-area-inset-bottom)
     );
   }
-  .shell:has(> .mobile-tabbar[hidden]) .workspace:has(#chat-root) .fm-chat {
+  #app .shell:has(.mobile-tabbar[hidden]) #chat-root {
     height: calc(
-      var(--visual-viewport-height, 100dvh) - var(--mobile-topbar-height) -
-        env(safe-area-inset-top)
+      var(--visual-viewport-height, 100dvh) - 52px -
+        env(safe-area-inset-top) - env(safe-area-inset-bottom)
     );
+  }
+  #app #chat-root > .fm-chat {
+    height: 100%;
+    min-height: 0;
+  }
+  #app #chat-root :is(input:not([type="checkbox"]):not([type="radio"]), textarea, select) {
+    font-size: var(--mobile-input-size);
   }
 
   /* Composer dock: the one Composer becomes a compact bar above the tab bar
@@ -527,6 +539,401 @@
   }
   #popover.popover[data-sheet]
     :is(input:not([type="checkbox"]), textarea, select) {
+    font-size: var(--mobile-input-size);
+  }
+
+  /* Shared page headings, section headings and empty states. */
+  #app .page-heading {
+    margin-bottom: 16px;
+  }
+  #app .page-heading h1,
+  #app #view > .plugin-page > .page-heading h2,
+  #app .ledger-settings .settings-content
+    :is(
+      .settings-section > h2,
+      .page-heading h2,
+      .recharge-heading h2,
+      .ledger-invite-heading h2,
+      .plugin-heading h2
+    ) {
+    font-size: var(--mobile-title-size);
+    font-weight: 600;
+  }
+  #app :is(
+      .section-head h2,
+      .asset-date,
+      .credit-heading,
+      .model-group h3,
+      .ledger-settings .ledger-card h3,
+      .plugin-page h3,
+      .plugin-page-form h3
+    ) {
+    font-size: var(--mobile-section-size);
+    font-weight: 600;
+  }
+  #app .empty-state {
+    min-height: 160px;
+    border-radius: var(--mobile-card-radius);
+  }
+
+  /* Creation (home). */
+  #app .home-view {
+    padding: 20px var(--mobile-gutter);
+  }
+  #app .home-view > h1 {
+    margin-bottom: 16px;
+    font-size: var(--mobile-title-size);
+    font-weight: 600;
+    text-align: left;
+  }
+  #app #recent-grid .asset-grid,
+  #app .asset-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  /* Library (assets) & asset preview modal. */
+  #app .assets-view {
+    padding-inline: var(--mobile-gutter);
+  }
+  #app .assets-view.is-selecting {
+    padding-bottom: 112px;
+  }
+  #app .library-scopes,
+  #app .asset-filter {
+    min-width: 0;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+  }
+  #app :is(.library-scopes, .asset-filter)::-webkit-scrollbar {
+    display: none;
+  }
+  #app .library-scopes {
+    gap: 6px;
+  }
+  #app .library-scopes .top-tab {
+    flex: none;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 999px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  #app .library-scopes .top-tab.selected {
+    background: var(--hover);
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--text);
+    font-weight: 600;
+  }
+  #app .asset-filter {
+    gap: 8px;
+    height: auto;
+    padding: 4px 0 10px;
+  }
+  #app .asset-filter button {
+    flex: none;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: 999px;
+    background: var(--hover);
+    color: var(--secondary);
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  #app .asset-filter button[aria-selected="true"] {
+    background: var(--pop);
+    box-shadow: inset 0 0 0 1px var(--focus);
+    color: var(--focus);
+    font-weight: 600;
+  }
+  #app .asset-preview {
+    border-radius: var(--mobile-card-radius);
+  }
+  /* Render card quick actions as a reachable row below the preview on phones so
+     touch users can tap them without hover and without blocking the thumbnail. */
+  #app .asset-actions {
+    position: static;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+    opacity: 1;
+  }
+  #app :is(.is-selecting, .is-picking-reference) .asset-actions {
+    display: none;
+  }
+  #app .is-selecting .asset-checkbox {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #app .is-picking-reference .reference-pick-check {
+    opacity: 1;
+  }
+  #app .asset-card.is-favorite .asset-actions > :not(.favorite-button) {
+    display: grid;
+  }
+  #app .asset-actions :is(button, a) {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--hover);
+    color: var(--secondary);
+  }
+  #app .asset-actions .favorite-button.is-favorite {
+    color: var(--focus);
+  }
+  #app .asset-actions [data-act="delete-asset"] {
+    color: var(--danger);
+  }
+  #app .asset-actions :is(button, a)::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+  }
+  #app .assets-view.is-selecting #selection-toolbar {
+    flex-basis: auto;
+    margin-left: auto;
+  }
+  #app .bulk-toolbar {
+    position: fixed;
+    left: var(--mobile-gutter);
+    right: var(--mobile-gutter);
+    bottom: calc(var(--mobile-tabbar-height) + env(safe-area-inset-bottom) + 8px);
+    z-index: 14;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--mobile-card-radius);
+    background: var(--pop);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
+  }
+  #app .bulk-actions {
+    order: 2;
+    flex: 1 0 100%;
+  }
+  #app .bulk-actions button {
+    flex: 1;
+    min-height: 36px;
+  }
+  html #modal.asset-preview-modal {
+    padding: 20px;
+  }
+  html #modal .preview-dialog .h3-media-preview video {
+    max-height: min(44dvh, 340px);
+  }
+  html #modal :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    font-size: var(--mobile-input-size);
+  }
+
+  /* Queue. */
+  #app #view > .management-view {
+    padding: 20px var(--mobile-gutter);
+  }
+  #app #view > .management-view > .list-surface {
+    border-top: 0;
+  }
+  #app .job-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px 8px;
+    margin: 0 0 8px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--mobile-card-radius);
+    background: var(--pop);
+  }
+  #app .job-row :is(.job-row-main, .job-progress) {
+    display: contents;
+  }
+  #app .job-row .job-row-main > button {
+    grid-column: 1 / 3;
+    grid-row: 1;
+    min-width: 0;
+    font-size: var(--mobile-body-size);
+    font-weight: 550;
+  }
+  #app .job-row .job-progress > span {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+    color: var(--focus);
+    font-size: 12px;
+    font-weight: 550;
+    white-space: nowrap;
+  }
+  #app .job-row .job-id {
+    grid-column: 1;
+    grid-row: 2;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  #app .job-row .job-progress > small {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #app .job-row .job-progress > small:empty,
+  #app .job-row .job-actions:empty {
+    display: none;
+  }
+  #app .job-row .job-actions {
+    grid-column: 3;
+    grid-row: 2 / span 2;
+    min-height: 0;
+  }
+  #app .job-row .job-actions button {
+    min-height: 36px;
+  }
+  #app .job-row .job-row-main > .metadata {
+    grid-column: 1 / 3;
+    grid-row: 3;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* Settings. */
+  #app .settings-page.ledger-settings {
+    min-height: 0;
+    padding: 0;
+  }
+  #app .ledger-settings .settings-layout {
+    display: block;
+  }
+  #app .ledger-settings .ledger-navigation {
+    position: static;
+    height: auto;
+    padding: 10px var(--mobile-gutter);
+    border-inline-end: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    background: var(--pop);
+  }
+  #app .ledger-settings .ledger-navigation-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-height: var(--mobile-touch-size);
+    padding: 0 16px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--pop);
+    color: var(--text);
+    font-size: var(--mobile-body-size);
+    font-weight: 550;
+    text-align: left;
+  }
+  #app .ledger-settings .ledger-navigation-toggle[aria-expanded="true"] svg {
+    rotate: 180deg;
+  }
+  #app .ledger-settings .ledger-navigation-panel {
+    position: static;
+    display: none;
+    max-height: 55dvh;
+    padding-top: 10px;
+    overflow: auto;
+  }
+  #app .ledger-settings .ledger-navigation-panel[data-expanded="true"] {
+    display: block;
+  }
+  #app .ledger-settings .settings-navigation {
+    display: grid;
+    flex-direction: column;
+    gap: 4px;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+  #app .ledger-settings .settings-navigation button {
+    min-height: var(--mobile-touch-size);
+    font-size: var(--mobile-body-size);
+  }
+  #app .ledger-settings .settings-navigation .icon {
+    display: block;
+  }
+  #app .ledger-settings .settings-title {
+    min-height: 44px;
+    margin-bottom: 0;
+    padding: 8px var(--mobile-gutter);
+  }
+  #app .ledger-settings .settings-content {
+    padding: 20px var(--mobile-gutter) 24px;
+  }
+  #app .ledger-settings .settings-section > div:first-child {
+    flex-wrap: wrap;
+  }
+  #app .ledger-settings
+    :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    font-size: var(--mobile-input-size);
+  }
+  #app .ledger-settings .settings-content
+    :is(
+      input:not([type="checkbox"]):not([type="radio"]),
+      select,
+      textarea
+    ):not(.ledger-search input) {
+    min-height: 40px;
+    padding: 8px 11px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--pop);
+  }
+  #app .ledger-settings .price-row input {
+    width: 112px;
+  }
+  #app .ledger-settings .workspace-row .workspace-row-name {
+    flex: 1 1 calc(100% - 48px);
+  }
+  #app .ledger-settings
+    :is(
+      .console-scope,
+      .console-model-toolbar .model-search,
+      .ledger-invite-toolbar .ledger-search,
+      .member-search,
+      .profile-section .profile-input-action
+    ) {
+    width: 100%;
+    max-width: none;
+  }
+  #app .ledger-settings :has(> table),
+  #app .plugin-table {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  #app .ledger-settings .price-form-actions {
+    bottom: calc(var(--mobile-tabbar-height) + env(safe-area-inset-bottom) + 8px);
+  }
+  #app .shell:has(.mobile-tabbar[hidden]) .ledger-settings .price-form-actions {
+    bottom: calc(
+      var(--price-viewport-inset, 0px) + max(12px, env(safe-area-inset-bottom))
+    );
+  }
+
+  /* Plugin page. */
+  #app #view > .plugin-page {
+    max-width: 100%;
+    padding: 20px var(--mobile-gutter) 24px;
+    overflow-x: hidden;
+  }
+  #app .settings-content > .plugin-page {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  #app .plugin-page
+    :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
     font-size: var(--mobile-input-size);
   }
 }

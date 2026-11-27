@@ -251,25 +251,6 @@
   color: var(--danger);
   font-size: 13px;
 }
-@media (max-width: 760px) {
-  #modal.asset-preview-modal {
-    padding: 20px;
-  }
-  .preview-dialog .h3-media-preview video {
-    max-height: min(44dvh, 340px);
-  }
-}
-@media (max-width: 560px) {
-  .asset-actions {
-    right: 6px;
-    gap: 3px;
-  }
-  .asset-actions button,
-  .asset-actions a {
-    width: 26px;
-    height: 26px;
-  }
-}
 
 /* 对话无可用模型空态引导 */
 .fm-chat-empty-actions {

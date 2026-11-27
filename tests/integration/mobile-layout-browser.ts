@@ -327,10 +327,216 @@ async function checkDarkSurfaces(page: Page) {             // Review Focus 4
   await setTheme(page, "light");
 }
 
+async function hideDevPortal(page: Page) {
+  await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
+}
+
+async function ensureLibraryImage(page: Page): Promise<string | null> {
+  await page.locator('.mobile-tabbar [data-tab="library"]').tap();
+  if (await page.locator(".asset-card").count()) return null;
+  await page.locator('.asset-filter [data-tab="images"]').tap();
+  if (await page.locator(".asset-card").count()) return null;
+  const createdId = await page.evaluate(async (bytes) => {
+    const response = await fetch("/api/assets", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "image/png", "X-File-Name": "touch-target.png" },
+      body: new Uint8Array(bytes),
+    });
+    if (!response.ok) throw new Error(`upload failed: ${response.status}`);
+    const data = (await response.json()) as { id: string };
+    return data.id;
+  }, [...png]);
+  await page.goto("/studio");
+  await expect(page.locator(".shell")).toBeVisible();
+  await hideDevPortal(page);
+  await page.locator('.mobile-tabbar [data-tab="library"]').tap();
+  await page.locator('.asset-filter [data-tab="images"]').tap();
+  await expect(page.locator(".asset-card").first()).toBeVisible();
+  return createdId;
+}
+
+async function removeAsset(page: Page, id: string | null) {
+  if (!id) return;
+  await page.evaluate(async (assetId) => {
+    await fetch(`/api/assets/${encodeURIComponent(assetId)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+  }, id);
+}
+
+async function lastViewControlCovered(page: Page) {
+  return page.evaluate(() => {
+    scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" });
+    const items = [
+      ...document.querySelectorAll<HTMLElement>("#view button, #view a[href], #view label.model-switch"),
+    ].filter(
+      (e) =>
+        !e.closest(".composer-dock, #asset-composer, .mobile-tabbar, .mobile-topbar") &&
+        !e.closest("details:not([open]) > :not(summary)") &&
+        e.checkVisibility() &&
+        e.getClientRects().length > 0,
+    );
+    const last = items.at(-1);
+    if (!last) return null;
+    let r = last.getBoundingClientRect();
+    // When a tall page ends with read-only cards/tables, its last button sits
+    // near the top and scrolls above the sticky bars at max scrollY. Verify the
+    // bottom card clears the tab bar first, then bring the button below headers.
+    if (r.top < 104) {
+      const tabbar = document.querySelector<HTMLElement>(".mobile-tabbar:not([hidden])");
+      const blocks = [...document.querySelectorAll<HTMLElement>("#view .ledger-card, #view .empty-state")].filter(
+        (e) => e.checkVisibility(),
+      );
+      const bottomBlock = blocks.at(-1);
+      if (tabbar && bottomBlock) {
+        const blockBottom = bottomBlock.getBoundingClientRect().bottom;
+        const barTop = tabbar.getBoundingClientRect().top;
+        if (blockBottom > barTop + 1) {
+          return `bottomBlock=${bottomBlock.className} bottom=${blockBottom} > tabbarTop=${barTop}`;
+        }
+      }
+      scrollBy({ top: r.top - 104, behavior: "instant" });
+      r = last.getBoundingClientRect();
+    }
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    if (hit && last.contains(hit)) return null;
+    return `last=<${last.tagName.toLowerCase()} class="${last.className}" text="${last.textContent?.trim().slice(0, 24)}"> rect=${JSON.stringify({ x: r.x, y: r.y, w: r.width, h: r.height })} hit=<${hit?.tagName.toLowerCase()} class="${(hit as HTMLElement | null)?.className}">`;
+  });
+}
+
+async function checkNoOverflowAndNoCover(page: Page) {
+  const createdId = await ensureLibraryImage(page);
+  try {
+    for (const tab of ["home", "chat", "library", "queue"] as const) {
+      await page.locator(`.mobile-tabbar [data-tab="${tab}"]`).tap();
+      if (tab === "library" && !(await page.locator(".asset-card").count())) {
+        await page.locator('.asset-filter [data-tab="images"]').tap();
+      }
+      await page.waitForTimeout(300);
+      assert.ok(
+        await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+        `${tab} 无横向滚动`,
+      );
+      if (tab === "chat") {
+        assert.ok(
+          await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1),
+          "chat 无多余纵向页面滚动",
+        );
+      }
+      if (evidence) {
+        await page.evaluate(() => scrollTo({ top: 0, behavior: "instant" }));
+        await page.screenshot({ path: `${evidence}/page-${tab}.png`, animations: "disabled" });
+      }
+      assert.equal(await lastViewControlCovered(page), null, `${tab} 最后一个可交互元素未被遮挡`);
+      if (tab === "library") {
+        await page.evaluate(() => scrollTo({ top: 0, behavior: "instant" }));
+        await page.getByRole("button", { name: "多选", exact: true }).tap();
+        const bulk = page.locator(".bulk-toolbar");
+        await expect(bulk).toBeVisible();
+        const bulkBox = (await bulk.boundingBox())!;
+        assert.ok(
+          Math.abs(bulkBox.y + bulkBox.height - (667 - 56 - 8)) <= 1.5,
+          `多选工具条位于标签栏上方 8px: ${JSON.stringify(bulkBox)}`,
+        );
+        assert.ok(
+          await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+          "library 多选态无横向滚动",
+        );
+        if (evidence) {
+          await page.screenshot({ path: `${evidence}/page-library-selecting.png`, animations: "disabled" });
+        }
+        await page.getByRole("button", { name: "取消选择", exact: true }).tap();
+      }
+    }
+    // 设置页：通过账户菜单进入，并覆盖各分类横向溢出与底部遮挡检查
+    await page.locator(".mobile-account").tap();
+    await page.locator("#popover").getByRole("button", { name: "设置" }).tap();
+    await expect(page.locator(".ledger-settings")).toBeVisible();
+    assert.ok(
+      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      "设置无横向滚动",
+    );
+    assert.equal(await lastViewControlCovered(page), null, "设置默认分类最后一个可交互元素未被遮挡");
+    const toggle = page.locator(".ledger-navigation-toggle");
+    await expect(toggle).toBeVisible();
+    const sections = [
+      "profile", "general", "credits", "budgets", "apiTokens",
+      "plugins", "models", "prices", "creditAdmin", "redeemAdmin",
+      "workspaces", "team", "invites", "storage", "observability",
+    ];
+    for (const section of sections) {
+      await page.evaluate(() => scrollTo({ top: 0, behavior: "instant" }));
+      await toggle.tap();
+      const option = page.locator(`.ledger-navigation-panel [data-act="settings-tab"][data-value="${section}"]`);
+      if (!(await option.count())) {
+        await toggle.tap();
+        continue;
+      }
+      await option.tap();
+      await page.waitForTimeout(200);
+      assert.ok(
+        await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+        `设置(${section}) 无横向滚动`,
+      );
+      if (evidence && ["plugins", "models", "credits", "team", "workspaces"].includes(section)) {
+        await page.evaluate(() => scrollTo({ top: 0, behavior: "instant" }));
+        await page.screenshot({ path: `${evidence}/page-settings-${section}.png`, animations: "disabled" });
+      }
+      assert.equal(await lastViewControlCovered(page), null, `设置(${section}) 最后一个可交互元素未被遮挡`);
+    }
+  } finally {
+    await removeAsset(page, createdId);
+  }
+}
+
+async function checkTouchTargets(page: Page) {
+  const createdId = await ensureLibraryImage(page);
+  try {
+    const metrics = await page.evaluate(() => {
+      const actions = [...document.querySelectorAll<HTMLElement>(".asset-actions button, .asset-actions a")].filter(
+        (e) => e.getClientRects().length > 0,
+      );
+      const all = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".mobile-tabbar button, .mobile-topbar button, .asset-actions button, .asset-actions a",
+        ),
+      ].filter((e) => e.getClientRects().length > 0);
+      const small = all
+        .map((e) => e.getBoundingClientRect())
+        .filter((r) => r.width < 36 || r.height < 36).length;
+      const actionVisible = actions.every((e) => Number(getComputedStyle(e.closest(".asset-actions")!).opacity) > 0);
+      const expandedHit = actions.every((e) => {
+        const after = getComputedStyle(e, "::after");
+        if (after.content === "none" || after.content === "normal") return false;
+        const r = e.getBoundingClientRect();
+        const top = parseFloat(after.top) || 0;
+        const bottom = parseFloat(after.bottom) || 0;
+        const left = parseFloat(after.left) || 0;
+        const right = parseFloat(after.right) || 0;
+        return r.width - left - right >= 43.5 && r.height - top - bottom >= 43.5;
+      });
+      return { actionCount: actions.length, small, actionVisible, expandedHit };
+    });
+    assert.ok(metrics.actionCount > 0, "资产页至少渲染一组卡片操作按钮");
+    assert.equal(metrics.small, 0, "顶栏、标签栏与卡片操作按钮尺寸均不小于 36px");
+    assert.equal(metrics.actionVisible, true, "手机触屏下资产卡片操作按钮可见可达");
+    assert.equal(metrics.expandedHit, true, "资产卡片操作按钮 ::after 触控区扩展至 44px");
+    await page.locator(".mobile-account").tap();
+    await page.locator("#popover").getByRole("button", { name: "设置" }).tap();
+    const toggleBox = (await page.locator(".ledger-navigation-toggle").boundingBox())!;
+    assert.ok(toggleBox.height >= 43.5, `设置分类折叠按钮高度 >= 44px: ${toggleBox.height}`);
+  } finally {
+    await removeAsset(page, createdId);
+  }
+}
+
 const checks = [
   checkTabBar, checkDrawerClosesAfterNavigation, checkLongWorkspaceName,
   checkDockCollapseExpand, checkLongDraft, checkWidenClearsDock, checkPickingReturnsExpanded,
   checkMenuSheet, checkDarkSurfaces,
+  checkTouchTargets, checkNoOverflowAndNoCover,
 ];
 
 async function fixture(harness: ChildProcess) {
@@ -373,6 +579,7 @@ try {
   for (const check of checks) {
     await page.goto(origin + "/studio");
     await expect(page.locator(".shell")).toBeVisible();
+    await hideDevPortal(page);
     await check(page);
     if (evidence) await page.screenshot({ path: `${evidence}/${check.name}.png`, animations: "disabled" });
     console.log(`${check.name}: passed`);
