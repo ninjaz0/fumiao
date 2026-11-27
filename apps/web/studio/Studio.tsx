@@ -48,6 +48,8 @@ import {
 } from "./ComposerMenu";
 import { History, Queue, kindLabel } from "./History";
 import { Icon } from "./Icon";
+import { MobileTabBar, MobileTopBar } from "./MobileChrome";
+import { ComposerDock } from "./ComposerDock";
 import {
   HistoryHeading,
   MenuContents,
@@ -103,7 +105,9 @@ import {
   type StudioState,
 } from "./state";
 import { reducedMotion, scrollMotion } from "../app/motion";
+import { useSoftKeyboard } from "./use-soft-keyboard";
 import "./studio-polish.css";
+import "./studio-mobile.css";
 
 type Page = Exclude<Destination, "canvas"> | "settings";
 type Detail = { job: number } | { image: string };
@@ -143,6 +147,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const [dialog, setDialog] = useState<AssetDialogState | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [narrowScreen, setNarrowScreen] = useState(false);
+  // Phone composer: collapsed bar above the tab bar, or the open bottom sheet.
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [menu, setMenu] = useState<StudioMenu | null>(null);
   const [menuShown, setMenuShown] = useState(false);
   const [menuHidden, setMenuHidden] = useState(true);
@@ -236,6 +242,23 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     return () => clearInterval(clock);
   }, [showsJobTimes]);
   const mobileDrawerOpen = narrowScreen && !collapsed;
+  const keyboardOpen = useSoftKeyboard();
+  // The docked composer is on screen: creation or asset page on a phone,
+  // outside the drawer, details, reference picking and library multi-select.
+  const composerDocked =
+    narrowScreen &&
+    !mobileDrawerOpen &&
+    !detail &&
+    !referencePicking &&
+    (page === "home" || (page === "library" && !library.selecting));
+  useEffect(() => {
+    // Widening to desktop or leaving the dock (another page, a detail,
+    // picking, multi-select) folds it; flows that return open it again.
+    if (!composerDocked) setComposerExpanded(false);
+  }, [composerDocked]);
+  function expandComposer(): void {
+    if (narrowScreen) setComposerExpanded(true);
+  }
   const sidebarPopoverOpen =
     !menuHidden &&
     !!anchor.current &&
@@ -531,6 +554,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         closeMenu();
       } else {
         setCollapsed(localStorage.getItem("fm-sidebar") === "collapsed");
+        if (anchor.current?.closest(".mobile-topbar")) closeMenu();
+        delete popover.current?.dataset.sheet;
       }
     };
     narrow.addEventListener("change", onNarrow);
@@ -570,6 +595,15 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     const trigger = anchor.current;
     const element = popover.current;
     if (!trigger?.isConnected || !element) return;
+    if (matchMedia("(max-width: 760px)").matches) {
+      element.dataset.sheet = "";
+      element.style.left = "";
+      element.style.top = "";
+      element.style.removeProperty("--motion-popover-x");
+      element.style.removeProperty("--motion-popover-y");
+      return;
+    }
+    delete element.dataset.sheet;
     const box = trigger.getBoundingClientRect();
     const beside = trigger.dataset.menu === "workspaces" && innerWidth > 760;
     const left = Math.min(
@@ -688,13 +722,22 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   function navigate(destination: Destination | "settings") {
     const space = active.current;
     if (!space || leaving.current) return;
+    // Closing the phone drawer returns focus to its opener for keyboard users,
+    // including selections inside the drawer's #popover (e.g. Account → Settings).
+    const restoreDrawerFocus =
+      mobileDrawerOpen &&
+      !!document.activeElement?.matches(
+        ".side :focus-visible, #popover :focus-visible",
+      );
+    const closeDrawer = () => changeSidebar(true, restoreDrawerFocus);
     if (destination === page && !detail && !referencePicking) {
-      closeMenu();
-      if (mobileDrawerOpen) changeSidebar(true, true);
+      if (mobileDrawerOpen) closeDrawer();
+      else closeMenu();
       return;
     }
     setReferencePicking(null);
     if (destination === "canvas") {
+      if (mobileDrawerOpen) closeDrawer();
       openCanvas();
       return;
     }
@@ -710,8 +753,17 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       else url.searchParams.delete("page");
       history.replaceState(history.state, "", url);
     }
+    if (mobileDrawerOpen) closeDrawer();
     setPage(destination);
     scrollAfterRender.current = () => scrollTo({ top: 0, behavior: "instant" });
+  }
+
+  function workspaceSwitch() {
+    return document.querySelector<HTMLElement>(
+      narrowScreen && !mobileDrawerOpen
+        ? ".mobile-workspace-switch"
+        : ".workspace-switch",
+    );
   }
 
   function openSettingsDialog(
@@ -721,6 +773,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     presentation?: SettingsDialogPresentation,
   ) {
     if (leaving.current || !active.current) return;
+    if (opener?.closest("#popover")) opener = anchor.current ?? workspaceSwitch();
     closeMenu();
     setMenuHidden(true);
     const version = ++settingsDialogVersion.current;
@@ -812,7 +865,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       requestAnimationFrame(() =>
         shell.current
           ?.querySelector<HTMLButtonElement>(
-            nextCollapsed ? ".expand-button" : ".collapse-button",
+            !nextCollapsed
+              ? ".collapse-button"
+              : narrowScreen
+                ? ".mobile-menu-button"
+                : ".expand-button",
           )
           ?.focus({ preventScroll: true }),
       );
@@ -960,6 +1017,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
 
   function returnToComposer() {
     showDetail(null);
+    expandComposer();
     scrollAfterRender.current = () => {
       scrollTo(0, 0);
       focusEditor();
@@ -991,8 +1049,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     opener = document.activeElement as HTMLElement | null,
     adminOnly = false,
   ) {
-    if (opener?.closest("#popover"))
-      opener = document.querySelector(".workspace-switch");
+    if (opener?.closest("#popover")) opener = anchor.current ?? workspaceSwitch();
     closeMenu();
     setMenuHidden(true);
     setDialog({ content, opener, adminOnly });
@@ -1051,6 +1108,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   function openHomeComposer() {
     showDetail(null);
     setPage("home");
+    expandComposer();
     scrollAfterRender.current = () => {
       scrollTo(0, 0);
       focusEditor();
@@ -1129,6 +1187,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     setPage(referencePicking.page);
     library.choose(referencePicking.filter);
     setReferencePicking(null);
+    if (referencePicking.page === "home" || referencePicking.page === "library")
+      expandComposer();
     scrollAfterRender.current = () => scrollTo(0, referencePicking.scroll);
   }
 
@@ -1415,6 +1475,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         if (popover.current?.contains(event.target as Node))
           event.preventDefault();
         closeMenu(true);
+      } else if (narrowScreen && composerExpanded && !modalOpen) {
+        event.preventDefault();
+        setComposerExpanded(false);
       } else if (mobileDrawerOpen && !modalOpen) {
         event.preventDefault();
         changeSidebar(true, true);
@@ -1514,6 +1577,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         if (!sameSpace(space, active.current) || leaving.current) return;
         const latest = currentDraft.current!;
         const draftUnchanged = latest.submitId === session.submitId;
+        setComposerExpanded(false);
         const draftRestored = !job && draftUnchanged && recoverDraft(active.current!);
         if (!job && draftUnchanged) {
           if (!draftRestored) updateDraft(submittedDraft(latest));
@@ -1735,7 +1799,19 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       flowSourceContents={flowSourceContents}
       restoreDraft={hasDraftBackup ? restoreDraft : undefined}
       onRecharge={openCredits}
+      expand={expandComposer}
     />
+  );
+  // One wrapper for both pages so the Composer keeps its place in the tree;
+  // reference picking keeps the asset page's plain floating composer.
+  const dockedComposer = composer && (
+    <ComposerDock
+      narrow={narrowScreen && !referencePicking}
+      expanded={composerExpanded}
+      setExpanded={setComposerExpanded}
+    >
+      {composer}
+    </ComposerDock>
   );
   const favorite = (key: string, saved: boolean) => saveFavorites([key], saved);
 
@@ -1760,6 +1836,15 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             />
             <div className="workspace" inert={mobileDrawerOpen}>
               <header className="topbar" aria-hidden="true"></header>
+              {narrowScreen && (
+                <MobileTopBar
+                  state={state}
+                  menu={menuShown && menu && !isComposerMenu(menu) ? menu : null}
+                  drawerOpen={mobileDrawerOpen}
+                  openDrawer={collapse}
+                  open={openMenu}
+                />
+              )}
               <main id="view" ref={view}>
                 {job ? (
                   <JobDetail
@@ -1807,7 +1892,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                       你好，今天想要<span>创作</span>什么？
                     </h1>
                     <div id="home-composer" className="home-composer">
-                      {composer}
+                      {dockedComposer}
                     </div>
                     <section className="recent-section">
                       <HistoryHeading open={state.jobs.length ? () => {
@@ -1919,7 +2004,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                     library={library}
                     state={state}
                     delta={delta}
-                    composer={composer}
+                    composer={dockedComposer}
                     referencePicking={
                       referencePicking && session
                         ? {
@@ -1961,6 +2046,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                 )}
               </main>
             </div>
+            {narrowScreen && (
+              <MobileTabBar
+                page={page}
+                hidden={!!detail || keyboardOpen || !!referencePicking || composerExpanded}
+                inert={mobileDrawerOpen}
+                navigate={navigate}
+              />
+            )}
           </div>
         ) : (
           <main
