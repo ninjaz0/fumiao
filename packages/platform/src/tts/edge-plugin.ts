@@ -19,6 +19,7 @@ import {
 
 export const edgeTtsForm: ModelForm = {
   parameterObject: true,
+  canvas: true,
   fields: {
     voice: {
       type: "string",
@@ -53,11 +54,6 @@ export const edgeTtsForm: ModelForm = {
         "+15Hz": "高亢 (+15Hz)",
       },
     },
-    instruction: {
-      type: "string",
-      title: "备注",
-      maxLength: 300,
-    },
   },
   tiers: [{ tier: "free", when: {} }],
   references: { min: 0, max: 0 },
@@ -89,7 +85,6 @@ export const edgeTtsManifest: Manifest = {
           voice: { type: "string", enum: EDGE_TTS_VOICE_IDS },
           rate: { type: "string" },
           pitch: { type: "string" },
-          instruction: { type: "string", maxLength: 300 },
         },
       },
       studio: {
@@ -171,18 +166,12 @@ export function createEdgeTtsPlugin(
           typeof rawParams.pitch === "string" && rawParams.pitch.trim()
             ? rawParams.pitch.trim()
             : "+0Hz";
-        const instruction =
-          typeof rawParams.instruction === "string"
-            ? rawParams.instruction.slice(0, 300)
-            : typeof draft.instruction === "string"
-              ? draft.instruction.slice(0, 300)
-              : "";
+        // Tolerantly ignore historic `draft.instruction` / `rawParams.instruction` payloads.
         return {
           params: {
             voice,
             rate,
             pitch,
-            ...(instruction ? { instruction } : {}),
           },
           references: [],
           view: {
@@ -194,7 +183,7 @@ export function createEdgeTtsPlugin(
             width: null,
             height: null,
             image_quality: null,
-            audio_settings: { voice, rate, pitch, instruction },
+            audio_settings: { voice, rate, pitch },
             h3_inputs: null,
             refs: [],
           },
@@ -243,7 +232,7 @@ export function createEdgeTtsPlugin(
         // failure should finish in `failed` with a diagnosable message (allowing immediate
         // user retry or engine switching) instead of leaving the job stuck in `uncertain`.
         throw new ProviderError(
-          `${detail}。请稍后重试，或在「设置 → 插件」配置自定义 Edge 语音端点或商业/本地语音引擎`,
+          `${detail}。请稍后重试，或切换其他可用语音模型（管理员可在「设置 → 插件」导入商业语音插件）`,
           "rejected",
         );
       }
@@ -373,13 +362,18 @@ export async function ensureBuiltinEdgeTts(
       [connId],
     );
     let modelId = existingModel ? String(existingModel.id) : "";
+    const inputSchema = edgeTtsManifest.models[0].inputSchema;
     if (!modelId) {
       modelId = randomUUID();
-      const inputSchema = edgeTtsManifest.models[0].inputSchema;
       await sql.query(
         `INSERT INTO models(id, connection_id, catalog_id, provider_model, label, kind, schema, enabled)
          VALUES ($1, $2, 'edge-tts', 'edge-tts', 'Edge TTS（免费神经语音）', 'audio', $3::jsonb, TRUE)`,
         [modelId, connId, JSON.stringify(inputSchema)],
+      );
+    } else {
+      await sql.query(
+        `UPDATE models SET schema = $2::jsonb WHERE id = $1 AND schema IS DISTINCT FROM $2::jsonb`,
+        [modelId, JSON.stringify(inputSchema)],
       );
     }
 

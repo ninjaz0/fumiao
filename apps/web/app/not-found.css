@@ -29,10 +29,10 @@ body:has(.not-found-shell) {
   --nf-focus: var(--focus, #3686ad);
   --nf-shadow: var(--shadow, 0 8px 40px rgba(0, 0, 0, 0.08));
   --nf-shadow-soft: var(--shadow-soft, 0 2px 10px rgba(0, 0, 0, 0.05));
-  --nf-badge-bg: #e8f1ef;
-  --nf-badge-fg: #26595a;
-  --nf-thread-a: #5c9496;
-  --nf-thread-b: #79c7b7;
+  --nf-badge-bg: rgba(54, 134, 173, 0.12);
+  --nf-badge-fg: #3686ad;
+  --nf-thread-a: #3686ad;
+  --nf-thread-b: #68a8db;
   --nf-thread-c: #7199bc;
 
   display: flex;
@@ -74,13 +74,13 @@ body:has(.not-found-shell) {
   --nf-hair: var(--hair, rgba(204, 221, 255, 0.12));
   --nf-button: var(--button, #fff);
   --nf-on-button: var(--on-button, #191919);
-  --nf-focus: var(--focus, #77aace);
+  --nf-focus: var(--focus, #68a8db);
   --nf-shadow: var(--shadow, 0 8px 40px rgba(0, 0, 0, 0.4));
   --nf-shadow-soft: var(--shadow-soft, 0 2px 10px rgba(0, 0, 0, 0.3));
-  --nf-badge-bg: #17272a;
-  --nf-badge-fg: #a8e6d7;
-  --nf-thread-a: #5d797f;
-  --nf-thread-b: #bbf1df;
+  --nf-badge-bg: rgba(104, 168, 219, 0.16);
+  --nf-badge-fg: #68a8db;
+  --nf-thread-a: #3686ad;
+  --nf-thread-b: #68a8db;
   --nf-thread-c: #7290ba;
 }
 
@@ -107,13 +107,13 @@ body:has(.not-found-shell) {
     --nf-hair: rgba(204, 221, 255, 0.12);
     --nf-button: #fff;
     --nf-on-button: #191919;
-    --nf-focus: #77aace;
+    --nf-focus: #68a8db;
     --nf-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
     --nf-shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.3);
-    --nf-badge-bg: #17272a;
-    --nf-badge-fg: #a8e6d7;
-    --nf-thread-a: #5d797f;
-    --nf-thread-b: #bbf1df;
+    --nf-badge-bg: rgba(104, 168, 219, 0.16);
+    --nf-badge-fg: #68a8db;
+    --nf-thread-a: #3686ad;
+    --nf-thread-b: #68a8db;
     --nf-thread-c: #7290ba;
   }
 }

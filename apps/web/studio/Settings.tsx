@@ -59,50 +59,6 @@ const adminTabs = [
   ["storage", "存储空间", "drive", "organization"],
 ] as const;
 
-function General() {
-  const read = () => document.documentElement.dataset.theme === "dark";
-  const [dark, setDark] = useState(read);
-  useEffect(() => {
-    const sync = () => setDark(read());
-    window.addEventListener("storage", sync);
-    window.addEventListener("fumiao-theme", sync);
-    sync();
-    return () => {
-      window.removeEventListener("storage", sync);
-      window.removeEventListener("fumiao-theme", sync);
-    };
-  }, []);
-  return (
-    <div className="settings-section">
-      <h2>常规</h2>
-      <p className="console-description">选择工作台的外观主题。</p>
-      <div className="ledger-card ledger-appearance">
-        <h3>外观主题</h3>
-        <div className="theme-choices" role="radiogroup" aria-label="外观">
-          {(["light", "dark"] as const).map((theme) => {
-            const selected = dark === (theme === "dark");
-            return (
-              <button
-                key={theme}
-                role="radio"
-                aria-checked={selected}
-                data-act="set-theme"
-                data-value={theme}
-                className={selected ? "selected" : ""}
-                onClick={() => window.setFumiaoTheme?.(theme)}
-              >
-                <span className="ledger-theme-swatch" aria-hidden="true" />
-                <strong>{theme === "dark" ? "深色模式" : "浅色模式"}</strong>
-                {selected && <small>当前使用</small>}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function Settings({
   state,
   tab: requestedTab,
@@ -250,9 +206,8 @@ export function Settings({
   ];
   const sections = [
     ["profile", "个人资料", "account", "account"],
-    ["general", "常规", "settings", "account"],
     ["credits", "积分", "drive", "account"],
-    ["budgets", "预算与风控", "sliders", "account"],
+    ["budgets", "预算控制", "sliders", "account"],
     ["apiTokens", "API 与 MCP", "link", "account"],
     ...(!pages && legacyPanel && state.gpu_node_settings
       ? [["gpu", state.gpu_node_settings.title, "gpu", "account"] as const]
@@ -372,7 +327,6 @@ export function Settings({
             notify={notify}
           />
         )}
-        {tab === "general" && <General />}
         {tab === "credits" && (
           <Credits
             key={`${creditState.me.id}:${workspace}`}

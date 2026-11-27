@@ -733,10 +733,11 @@ export async function verifyRemoteProvider(
     for (const width of [1440, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
       for (const theme of ["light", "dark"] as const) {
-        await setTab(page, "general");
-        await page
-          .getByRole("radio", { name: theme === "light" ? "浅色" : "深色" })
-          .click();
+        await setTab(page, "profile");
+        if ((await page.locator("html").getAttribute("data-theme")) !== theme) {
+          await page.getByRole("button", { name: "切换外观主题" }).click();
+        }
+        await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
         for (const section of ["plugins", "gpu"]) {
           await setTab(page, section);
           if (section === "plugins") {

@@ -346,7 +346,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           setMenuHidden(true);
           setDialog((current) => (current?.adminOnly ? null : current));
           setSettingsTab((tab) =>
-            adminSettingsTabs.some((key) => key === tab) ? "general" : tab,
+            adminSettingsTabs.some((key) => key === tab) ? "profile" : tab,
           );
         }
         const initialDraft = currentDraft.current || readDraft(next);

@@ -10,6 +10,7 @@ import {
   ArrowDown,
   ArrowUp,
   Clapperboard,
+  Crosshair,
   Download,
   Link2,
   Mic,
@@ -23,7 +24,12 @@ import {
   GENERATION_MODE_OPTIONS,
   countActiveCinematography,
 } from "./composer-options";
-import type { CanvasGenerationMode, CanvasNode, CinematographySpec } from "./types";
+import type {
+  CanvasGenerationMode,
+  CanvasNode,
+  CinematographySpec,
+  NextShotContinuation,
+} from "./types";
 
 export type Shot = {
   id: string;
@@ -35,6 +41,7 @@ export type Shot = {
   prompt?: string;
   generation_mode?: CanvasGenerationMode;
   cinematography?: CinematographySpec | null;
+  tailContinuation?: NextShotContinuation | null;
 };
 
 export function ShotList({
@@ -252,7 +259,7 @@ export function ShotList({
                       aria-label={`定位镜头 ${index + 1}`}
                       onClick={() => onSelect(shot.id)}
                     >
-                      定位
+                      <Crosshair size={16} />
                     </button>
                   )}
                   {onEditShot && (
@@ -275,27 +282,37 @@ export function ShotList({
                       <Clapperboard size={16} />
                     </button>
                   )}
-                  {onInheritTailFrame && shot.media && (
-                    <button
-                      className="icon-button"
-                      title="抽取尾帧续接下一镜"
-                      aria-label={`镜头 ${index + 1} 尾帧续接`}
-                      disabled={tailBusy === shot.id || exporting}
-                      onClick={async () => {
-                        setTailBusy(shot.id);
-                        setError("");
-                        try {
-                          await onInheritTailFrame(shot.id);
-                        } catch (e) {
-                          setError((e as Error).message);
-                        } finally {
-                          setTailBusy(null);
+                  {onInheritTailFrame &&
+                    shot.media &&
+                    shot.tailContinuation !== null && (
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title={
+                          shot.tailContinuation?.shotTitle ||
+                          "抽取尾帧续接下一镜"
                         }
-                      }}
-                    >
-                      <Link2 size={16} />
-                    </button>
-                  )}
+                        aria-label={
+                          shot.tailContinuation
+                            ? `镜头 ${index + 1} 尾帧续接（${shot.tailContinuation.label}）`
+                            : `镜头 ${index + 1} 尾帧续接`
+                        }
+                        disabled={tailBusy === shot.id || exporting}
+                        onClick={async () => {
+                          setTailBusy(shot.id);
+                          setError("");
+                          try {
+                            await onInheritTailFrame(shot.id);
+                          } catch (e) {
+                            setError((e as Error).message);
+                          } finally {
+                            setTailBusy(null);
+                          }
+                        }}
+                      >
+                        <Link2 size={16} />
+                      </button>
+                    )}
                   <button
                     className="icon-button"
                     title="旁白与多角色对白"
@@ -372,6 +389,7 @@ export function ShotList({
                   onChange={(cinematography) =>
                     onEditShot(shot.id, { cinematography })
                   }
+                  onClose={() => setCineNode(null)}
                 />
               )}
 
