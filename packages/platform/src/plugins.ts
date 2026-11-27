@@ -166,7 +166,7 @@ export class PluginRegistry {
       const existing = await one(
         sql,
         `SELECT EXISTS (SELECT 1 FROM studio_catalog)
-        OR EXISTS (SELECT 1 FROM connections) AS present`,
+        OR EXISTS (SELECT 1 FROM connections WHERE plugin_id IS NOT NULL) AS present`,
       );
       const compatible = importing || existing.present;
       if (compatible) {

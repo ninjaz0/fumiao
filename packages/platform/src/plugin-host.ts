@@ -114,17 +114,18 @@ export function requirePublicHttps(url: URL) {
   );
 }
 
-export type HttpTransport = (
+export type HttpTransport<Body extends string | Uint8Array = string> = (
   url: URL,
-  init: { method: string; headers: Record<string, string>; body?: string },
+  init: { method: string; headers: Record<string, string>; body?: Body },
   signal: AbortSignal,
 ) => Promise<{
   status: number;
   contentType: string;
   body: Buffer | ReadableStream<Uint8Array>;
 }>;
-const transport: HttpTransport = (url, init, signal) =>
+export const guardedTransport: HttpTransport<string | Uint8Array> = (url, init, signal) =>
   new Promise((done, fail) => {
+    requirePublicHttps(url);
     const req = httpsRequest(
       url,
       {
@@ -153,7 +154,7 @@ const transport: HttpTransport = (url, init, signal) =>
   });
 
 /** Read the entity body once. Count raw bytes before any text conversion. */
-async function* httpChunks(
+export async function* httpChunks(
   body: Buffer | ReadableStream<Uint8Array>,
   signal: AbortSignal,
   limit = hostLimits.httpResponseBytes,
@@ -215,7 +216,7 @@ export async function* importBody(
   origins: readonly string[],
   limit: number,
   signal: AbortSignal,
-  http: HttpTransport = transport,
+  http: HttpTransport = guardedTransport,
 ) {
   signal.throwIfAborted();
   const url = approvedURL(target, origins);
@@ -283,7 +284,7 @@ export class PluginHost {
   constructor(
     private readonly sql: Sql,
     private readonly grant: HostGrant,
-    private readonly http: HttpTransport = transport,
+    private readonly http: HttpTransport = guardedTransport,
     private readonly media?: { session: PluginMedia; actor: string },
   ) {}
 

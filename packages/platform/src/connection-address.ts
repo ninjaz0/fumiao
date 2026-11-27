@@ -24,7 +24,10 @@ export async function addressPause(
   config: Record<string, unknown>,
 ): Promise<AddressPause | null> {
   if (!usesPublicConnection(manifest)) return null;
-  const url = connectionBase(manifest, config);
+  return publicAddressPause(connectionBase(manifest, config));
+}
+
+export async function publicAddressPause(url: URL | null): Promise<AddressPause | null> {
   if (
     !url ||
     url.protocol !== "https:" ||
