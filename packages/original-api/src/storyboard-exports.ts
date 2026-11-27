@@ -19,6 +19,7 @@ import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import { capacity, EXPORT_RESERVE } from "@fumiao/platform/capacity.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
+import { directorBasis, directorShotIds } from "@fumiao/web-compat/director.js";
 import {
   originalStoryboard,
   type CompositionOptions,
@@ -46,6 +47,7 @@ const mimeExt: Record<string, string> = {
 };
 
 const cleanupBatchSize = 16;
+type ExportScope = "canvas" | "episode";
 type ExportObject = {
   export_id: string;
   object_key: string;
@@ -79,6 +81,7 @@ export class OriginalStoryboardExports {
       result: row.result ?? null,
       error: canvasText(row.error),
       revision: row.revision,
+      scope: (row.scope ?? "canvas") as ExportScope,
       created: Number(row.created),
       updated: Number(row.updated),
       exporter: row.exporter_plugin
@@ -137,6 +140,8 @@ export class OriginalStoryboardExports {
   }
   async create(user: Actor, key: string, value: unknown) {
     const body = parseBody(value, storyboardExportFields);
+    const scope = body.scope as ExportScope;
+    const isEpisode = scope === "episode";
     const renderer = this.plugins.get("original-storyboard@1.0.0");
     requireValue(
       renderer && (await renderer.health()),
@@ -156,6 +161,7 @@ export class OriginalStoryboardExports {
       if (old) {
         requireValue(
           old.project_id === project.id &&
+            old.scope === scope &&
             (old.exporter_plugin
               ? old.exporter_plugin + "/" + old.exporter_id
               : "storyboard/mp4") === body.exporter,
@@ -164,6 +170,11 @@ export class OriginalStoryboardExports {
         );
         return this.public(old);
       }
+      requireValue(
+        !isEpisode || body.exporter === "storyboard/mp4",
+        400,
+        "本集只支持合成 MP4",
+      );
       const exporter = (
         await canvasExporters(sql, body.exporter.split("/")[0])
       ).find((e) => e.key === body.exporter);
@@ -174,11 +185,27 @@ export class OriginalStoryboardExports {
         canvasConflict,
       );
       const doc = parseCanvasDocument(canvasDocumentJson(project.document));
-      requireValue(
-        (doc.shots ?? []).length > 0 && (doc.shots ?? []).length <= 120,
-        400,
-        "合成需要 1–120 个镜头",
-      );
+      let shotIds = doc.shots ?? [];
+      if (isEpisode) {
+        requireValue(doc.director, 409, "请先确认本集片单");
+        shotIds = directorShotIds(shotIds, doc.director);
+        requireValue(
+          shotIds.length > 0 && shotIds.length <= 30,
+          400,
+          "本集合成需要 1–30 个镜头",
+        );
+        requireValue(
+          doc.director.order_basis === (await directorBasis(shotIds)),
+          409,
+          "请重新确认本集镜头顺序",
+        );
+      } else {
+        requireValue(
+          shotIds.length > 0 && shotIds.length <= 120,
+          400,
+          "合成需要 1–120 个镜头",
+        );
+      }
       requireValue(
         !(await one(
           sql,
@@ -202,9 +229,57 @@ export class OriginalStoryboardExports {
       );
       const shots: Shot[] = [],
         assets = new Map<string, any>();
-      for (const [i, nid] of (doc.shots ?? []).entries()) {
+      const voiceInProgress = async (key: number) => {
+        const job = await one(
+          sql,
+          `SELECT state FROM jobs WHERE public_id=$1 AND deleted_at IS NULL
+           AND ($2::uuid IS NULL OR workspace_id=$2) FOR SHARE`,
+          [key, isEpisode ? project.workspace_id : null],
+        );
+        return [
+          "queued",
+          "dispatching",
+          "running",
+          "finalizing",
+          "uncertain",
+        ].includes(job?.state);
+      };
+      const pinVoice = async (voice: Record<string, any>) => {
+        const locked = await one(
+          sql,
+          "SELECT state FROM assets WHERE id=$1 FOR SHARE",
+          [voice.id],
+        );
+        if (isEpisode) {
+          await this.canvases.library.access(
+            sql,
+            user,
+            { kind: "asset", row: voice },
+            project.workspace_id,
+          );
+          requireValue(
+            locked?.state === "ready" && voice.mime.startsWith("audio/"),
+            409,
+            "音轨素材尚未就绪",
+          );
+        }
+        assets.set(voice.public_id, voice);
+      };
+      for (const [i, nid] of shotIds.entries()) {
         const n = doc.nodes.find((n) => n.id === nid)!;
-        const media = await this.canvases.videoForShot(sql, project.id, n);
+        if (isEpisode) {
+          requireValue(
+            n.use_media ? n.media_id : n.active_job,
+            409,
+            `镜头 ${i + 1} 尚未采用视频`,
+          );
+        }
+        const media = await this.canvases.videoForShot(
+          sql,
+          project.id,
+          n,
+          isEpisode,
+        );
         requireValue(media, 409, `镜头 ${i + 1} 的视频尚未就绪`);
         await this.canvases.library.access(
           sql,
@@ -225,29 +300,23 @@ export class OriginalStoryboardExports {
             : {}),
           ...(n.tail_inherited ? { tailInherited: true } : {}),
         };
-        if (n.dialogue_lines && n.dialogue_lines.length > 0) {
+        if (isEpisode && n.audio_strategy === "keep_original") {
+          shots.push(shot);
+          continue;
+        }
+        const lines = n.dialogue_lines ?? [];
+        if (
+          isEpisode ? lines.some((line) => pythonStrip(line.text)) : lines.length
+        ) {
           const dialogue: NonNullable<Shot["dialogue"]> = [];
-          for (const [dIdx, line] of n.dialogue_lines.entries()) {
-            if (!pythonStrip(line.text) && !line.audio_job) continue;
-            if (line.audio_pending) {
-              const pending = await one(
-                sql,
-                "SELECT state FROM jobs WHERE public_id=$1 AND deleted_at IS NULL FOR SHARE",
-                [line.audio_pending],
-              );
-              requireValue(
-                !pending ||
-                  ![
-                    "queued",
-                    "dispatching",
-                    "running",
-                    "finalizing",
-                    "uncertain",
-                  ].includes(pending.state),
-                409,
-                `镜头 ${i + 1} 的第 ${dIdx + 1} 句对白仍在生成，请完成后合成`,
-              );
-            }
+          for (const [dIdx, line] of lines.entries()) {
+            if (!pythonStrip(line.text) && (isEpisode || !line.audio_job))
+              continue;
+            requireValue(
+              !line.audio_pending || !(await voiceInProgress(line.audio_pending)),
+              409,
+              `镜头 ${i + 1} 的第 ${dIdx + 1} 句对白仍在生成，请完成后合成`,
+            );
             requireValue(
               line.audio_job,
               409,
@@ -275,37 +344,20 @@ export class OriginalStoryboardExports {
               409,
               `镜头 ${i + 1} 的第 ${dIdx + 1} 句对白台词已修改，请重新生成语音`,
             );
-            await sql.query("SELECT id FROM assets WHERE id=$1 FOR SHARE", [
-              voice.id,
-            ]);
+            await pinVoice(voice);
             dialogue.push({
               voice: voice.public_id,
               speaker: line.speaker || "",
               text: job.input.prompt,
             });
-            assets.set(voice.public_id, voice);
           }
           if (dialogue.length) shot.dialogue = dialogue;
-        } else {
-          if (n.narration_pending) {
-            const pending = await one(
-              sql,
-              "SELECT state FROM jobs WHERE public_id=$1 AND deleted_at IS NULL FOR SHARE",
-              [n.narration_pending],
-            );
-            requireValue(
-              !pending ||
-                ![
-                  "queued",
-                  "dispatching",
-                  "running",
-                  "finalizing",
-                  "uncertain",
-                ].includes(pending.state),
-              409,
-              `镜头 ${i + 1} 的新旁白仍在生成，请完成后合成`,
-            );
-          }
+        } else if (!isEpisode || pythonStrip(n.narration_text)) {
+          requireValue(
+            !n.narration_pending || !(await voiceInProgress(n.narration_pending)),
+            409,
+            `镜头 ${i + 1} 的新旁白仍在生成，请完成后合成`,
+          );
           if (n.narration_job) {
             const job = await one(
               sql,
@@ -329,12 +381,9 @@ export class OriginalStoryboardExports {
               409,
               `镜头 ${i + 1} 的旁白文字已修改，请重新生成旁白或移除音轨`,
             );
-            await sql.query("SELECT id FROM assets WHERE id=$1 FOR SHARE", [
-              voice.id,
-            ]);
+            await pinVoice(voice);
             shot.voice = voice.public_id;
             shot.text = job.input.prompt;
-            assets.set(voice.public_id, voice);
           } else
             requireValue(
               !pythonStrip(n.narration_text),
@@ -473,8 +522,8 @@ export class OriginalStoryboardExports {
         : JSON.stringify(await planComposition(exporter.program, shots));
       const row = await one(
         sql,
-        `INSERT INTO storyboard_exports(id,public_id,uid,owner_id,workspace_id,project_id,revision,snapshot,state,subtitles,error,created,updated,exporter_plugin,exporter_version,exporter_id,output_kind,output_mime,basis_hash,mix_options)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$9,$10,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+        `INSERT INTO storyboard_exports(id,public_id,uid,owner_id,workspace_id,project_id,revision,snapshot,state,subtitles,error,created,updated,exporter_plugin,exporter_version,exporter_id,output_kind,output_mime,basis_hash,mix_options,scope)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$9,$10,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
         [
           id,
           publicId,
@@ -493,6 +542,7 @@ export class OriginalStoryboardExports {
           exporter.mime,
           basisHash,
           mixOptions ? JSON.stringify(mixOptions) : null,
+          scope,
         ],
       );
       for (const asset of assets.values())

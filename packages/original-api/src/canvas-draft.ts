@@ -4,6 +4,7 @@ import {
   type CanvasExtension,
 } from "@fumiao/plugin-sdk/canvas-nodes.js";
 import { requireValue } from "@fumiao/platform/security.js";
+import type { DirectorProduction } from "@fumiao/web-compat/director.js";
 import { parseBody, type Field, type Fields } from "./validation.js";
 const integer = (defaultValue?: unknown): Field => ({
   kind: "integer",
@@ -45,6 +46,12 @@ const identifier: Field = {
   kind: "string",
   pattern: "^[a-zA-Z0-9_-]{1,80}$",
   strictPattern: true,
+};
+const directorDigest: Field = {
+  kind: "string",
+  pattern: "^[a-f0-9]{64}$",
+  strictPattern: true,
+  optional: true,
 };
 const positive: Field = { ...integer(null), nullable: true, gt: 0 };
 const h3Fields: Fields = {
@@ -157,6 +164,33 @@ export const canvasDocumentFields: Fields = {
     1200,
   ),
   shots: { ...list({ kind: "string" }, 200), nullable: true, default: null },
+  director: {
+    kind: "object",
+    optional: true,
+    extra: true,
+    fields: {
+      script_id: media,
+      script_revision: { ...integer(), min: 1, max: 2 ** 31 - 1 },
+      shot_ids: { kind: "list", item: identifier, max: 200 },
+      order_basis: directorDigest,
+      shots: {
+        kind: "list",
+        max: 200,
+        optional: true,
+        item: {
+          kind: "object",
+          extra: true,
+          fields: {
+            node_id: identifier,
+            source: { kind: "dictionary", item: directorDigest, optional: true },
+            story_basis: directorDigest,
+            material_basis: directorDigest,
+            adoption_basis: directorDigest,
+          },
+        },
+      },
+    },
+  },
   bgm: { ...object(canvasBgmFields), nullable: true, optional: true },
   bgm_applied_job: { ...integer(), nullable: true, gt: 0, optional: true },
   loudnorm: { kind: "boolean", strict: false, optional: true },
@@ -189,6 +223,7 @@ export const canvasPluginRunFields: Fields = {
 };
 export const storyboardExportFields: Fields = {
   exporter: text(120, "storyboard/mp4"),
+  scope: literal(["canvas", "episode"], "canvas"),
   uid: { kind: "uuid" },
   bgm_asset: { ...media, nullable: true, optional: true },
   bgm_volume: { kind: "float", min: 0.02, max: 1, optional: true },
@@ -426,6 +461,7 @@ export type CanvasDocument = {
     targetPort?: string;
   }[];
   shots?: string[];
+  director?: DirectorProduction;
   bgm?: CanvasBgm | null;
   bgm_applied_job?: number | null;
   loudnorm?: boolean;

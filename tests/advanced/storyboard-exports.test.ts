@@ -1,7 +1,7 @@
 import { OriginalState } from "@fumiao/original-api/state.js";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
@@ -13,6 +13,8 @@ import { S3Storage } from "@fumiao/platform/storage.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
 import { originalStoryboard } from "@fumiao/platform/composition/renderer.js";
 import { OriginalMedia } from "@fumiao/original-api/media.js";
+import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { OriginalIdentity, type OriginalActor } from "@fumiao/original-api/identity.js";
 const exec = promisify(execFile);
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -107,6 +109,251 @@ async function fixture() {
     ),
   };
 }
+async function setCanvas(f: Awaited<ReturnType<typeof fixture>>, doc: unknown) {
+  await f.db.query(
+    "UPDATE canvas_documents SET document=$2 WHERE project_id=$1",
+    [f.projectId, Buffer.from(JSON.stringify(doc))],
+  );
+}
+function episode(shotIds: string[], globalOrder = shotIds) {
+  const order = globalOrder.filter((id) => shotIds.includes(id));
+  return {
+    script_id: "c".repeat(32),
+    script_revision: 1,
+    shot_ids: shotIds,
+    order_basis: createHash("sha256").update(JSON.stringify(order)).digest("hex"),
+  };
+}
+test("episode export freezes adopted shots in canvas order", async () => {
+  const f = await fixture();
+  try {
+    const imported = f.video;
+    const adopted = await f.asset("a".repeat(32), "video");
+    const trial = await f.asset("b".repeat(32), "video");
+    await f.job(800, "audio", "running");
+    await f.job(901, "video", "completed", adopted.id);
+    await f.job(902, "video", "completed", trial.id);
+    await f.link(f.project.id, "s1", 901);
+    await f.link(f.project.id, "s1", 902);
+    await f.link(f.project.id, "dialogue:s1:line", 900);
+
+    const s1 = {
+      id: "s1",
+      type: "video",
+      title: "对白",
+      x: 0,
+      y: 0,
+      active_job: 901,
+      media_id: trial.public_id,
+      narration_text: "不用旁白",
+      dialogue_lines: [
+        { id: "line", speaker: "林默", text: "你好。😀!", audio_job: 900 },
+      ],
+    };
+    const s2 = {
+      id: "s2",
+      type: "video",
+      title: "原声",
+      x: 0,
+      y: 0,
+      use_media: true,
+      media_id: imported.public_id,
+      audio_strategy: "keep_original",
+      narration_text: "文字可保留",
+      dialogue_lines: [{ id: "line", text: "保留原声", audio_pending: 800 }],
+    };
+    const trialNode = {
+      id: "trial",
+      type: "video",
+      x: 0,
+      y: 0,
+      use_media: true,
+      media_id: trial.public_id,
+    };
+    const shots = ["s2", "trial", "s1"];
+    const director = episode(["s1", "s2"], shots);
+    const doc = { nodes: [s1, s2, trialNode], shots, director };
+    const request = {
+      uid: randomUUID(),
+      expected_revision: 1,
+      scope: "episode" as const,
+    };
+    const create = () => f.service.create(f.admin, f.project.id, request);
+    await setCanvas(f, {
+      ...doc,
+      nodes: [{ ...s1, active_job: null }, s2, trialNode],
+    });
+    await assert.rejects(create(), { status: 409, message: /采用/ });
+    await setCanvas(f, {
+      ...doc,
+      nodes: [{ ...s1, active_job: 999 }, s2, trialNode],
+    });
+    await assert.rejects(create(), { status: 409, message: /尚未就绪/ });
+    await setCanvas(f, { ...doc, shots: ["s1", "trial", "s2"] });
+    await assert.rejects(create(), { status: 409, message: /顺序/ });
+    await setCanvas(f, {
+      ...doc,
+      nodes: [
+        { ...s1, dialogue_lines: [{ id: "line", text: "待配音" }] },
+        s2,
+        trialNode,
+      ],
+    });
+    await assert.rejects(create(), { status: 409, message: /对白尚未生成/ });
+    await setCanvas(f, doc);
+    await assert.rejects(f.service.create(f.member, f.project.id, request), {
+      status: 404,
+    });
+    await assert.rejects(
+      f.service.create(f.admin, f.project.id, { ...request, exporter: "storyboard/fcp" }),
+      { status: 400, message: /MP4/ },
+    );
+    const accepted = await create();
+    assert.equal(accepted.scope, "episode");
+    assert.deepEqual(await create(), accepted);
+    await assert.rejects(
+      f.service.create(f.admin, f.project.id, {
+        uid: request.uid,
+        expected_revision: 1,
+      }),
+      { status: 409, message: /提交编号/ },
+    );
+    const row = await one(
+      f.db,
+      "SELECT snapshot FROM storyboard_exports WHERE public_id=$1",
+      [accepted.id],
+    );
+    assert.deepEqual(JSON.parse(row.snapshot.toString()), [
+      {
+        node: "s2",
+        title: "原声",
+        video: imported.public_id,
+        voice: null,
+        text: "",
+        audioStrategy: "keep_original",
+      },
+      {
+        node: "s1",
+        title: "对白",
+        video: adopted.public_id,
+        voice: null,
+        text: "",
+        dialogue: [{ voice: f.voice.public_id, speaker: "林默", text: "你好。😀!" }],
+      },
+    ]);
+    await setCanvas(f, { ...doc, director: { ...director, shot_ids: ["s2"] } });
+    assert.deepEqual(await create(), accepted);
+    assert.deepEqual((await f.service.list(f.admin, f.project.id)).exports, [accepted]);
+  } finally {
+    await f.cleanup();
+  }
+});
+test("episode export rejects 31 shots at admission and 10 minutes at rendering", async () => {
+  const f = await fixture();
+  try {
+    const nodes = Array.from({ length: 31 }, (_, index) => ({
+      id: `s${index}`,
+      type: "video",
+      x: 0,
+      y: 0,
+      use_media: true,
+      media_id: f.video.public_id,
+    }));
+    const request = {
+      uid: randomUUID(),
+      expected_revision: 1,
+      scope: "episode" as const,
+    };
+    const setShots = async (nodes: unknown[], shots: string[]) => {
+      await setCanvas(f, { nodes, shots, director: episode(shots) });
+    };
+    await setShots(nodes, nodes.map((n) => n.id));
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), {
+      status: 400,
+      message: /30/,
+    });
+    const narrated = {
+      ...nodes[0],
+      narration_text: "你好。😀!",
+      dialogue_lines: [{ id: "blank", text: " " }],
+    };
+    await setShots([narrated], [narrated.id]);
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), {
+      status: 409,
+      message: /填写旁白/,
+    });
+    await exec("ffmpeg", [
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=blue:s=16x16:r=24:d=100",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-f",
+      "mp4",
+      join(f.directory, f.video.id),
+    ]);
+    const episodeNodes = [{ ...narrated, narration_job: 900 }, ...nodes.slice(1, 6)];
+    await setShots(episodeNodes, episodeNodes.map((n) => n.id));
+    const accepted = await f.service.create(f.admin, f.project.id, request);
+    const row = await one(
+      f.db,
+      "SELECT id,snapshot FROM storyboard_exports WHERE public_id=$1",
+      [accepted.id],
+    );
+    assert.equal(JSON.parse(row.snapshot.toString())[0].voice, f.voice.public_id);
+    await f.service.execute(row.id);
+    const failed = (await f.service.list(f.admin, f.project.id)).exports[0];
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.scope, "episode");
+    assert.match(failed.error, /成片总时长最多 5 分钟/);
+  } finally {
+    await f.cleanup();
+  }
+});
+test("scope migration retains queued canvas snapshots and their submission receipts", async () => {
+  const f = await databaseFixture("055_workspace_script_documents.sql");
+  try {
+    await new OriginalIdentity(f.p).bootstrap({
+      name: "admin",
+      nickname: "管理员",
+      password: "scope-migration-fixture",
+    });
+    const admin = (await one(f.db, "SELECT * FROM users WHERE name='admin'")) as OriginalActor;
+    const project = await new OriginalCanvases(f.p).create(admin, {});
+    const request = { uid: randomUUID(), expected_revision: project.revision };
+    const id = randomUUID();
+    const publicId = id.replaceAll("-", "");
+    const snapshot = Buffer.from(JSON.stringify([{ node: "saved", video: "pinned" }]));
+    await f.db.query(
+      `INSERT INTO storyboard_exports
+        (id,public_id,uid,owner_id,workspace_id,project_id,revision,snapshot,state,subtitles,error,created,updated)
+       SELECT $1,$2,$3,owner_id,workspace_id,id,revision,$4,'queued',$5,$5,1,1
+       FROM documents WHERE public_id=$6`,
+      [id, publicId, request.uid, snapshot, Buffer.alloc(0), project.id],
+    );
+    await migrate(f.db);
+    const row = await one(f.db, "SELECT scope,snapshot FROM storyboard_exports WHERE id=$1", [id]);
+    assert.equal(row.scope, "canvas");
+    assert.deepEqual(row.snapshot, snapshot);
+    const service = new OriginalStoryboardExports(f.p);
+    const replay = await service.create(admin, project.id, request);
+    assert.equal(replay.id, publicId);
+    assert.equal(replay.scope, "canvas");
+    assert.equal(replay.state, "queued");
+    await assert.rejects(
+      service.create(admin, project.id, { ...request, scope: "episode" }),
+      { status: 409, message: /提交编号/ },
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 test("real local composition: acceptance, UID replay, refs, audio padding, embedded subtitles and one save", async () => {
   const f = await fixture();
   const bucket = process.env.TEST_STORYBOARD_S3_BUCKET;
@@ -129,6 +376,7 @@ test("real local composition: acceptance, UID replay, refs, audio padding, embed
       request = { uid, expected_revision: 1 };
     const created = await f.service.create(f.admin, f.project.id, request);
     assert.equal(created.state, "queued");
+    assert.equal(created.scope, "canvas");
     assert.deepEqual(
       await f.service.create(f.admin, f.project.id, {
         uid,

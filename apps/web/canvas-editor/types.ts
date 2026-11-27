@@ -4,6 +4,7 @@ import {
   mediaDownloadFilename,
   normalizeMediaMime,
 } from "@fumiao/plugin-sdk/media-filename";
+import type { DirectorProduction } from "@fumiao/web-compat/director.js";
 export type Kind = "text" | "image" | "video" | "sticky" | "plugin" | "group";
 export type CanvasGenerationMode =
   | "first_frame"
@@ -120,6 +121,7 @@ export type Doc = {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
   shots?: string[];
+  director?: DirectorProduction;
   bgm?: CanvasBgm | null;
   bgm_applied_job?: number | null;
   loudnorm?: boolean;

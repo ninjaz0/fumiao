@@ -11,6 +11,8 @@ import {
   canvasVoiceIds,
 } from "@fumiao/original-api/canvas-values.js";
 import { parseCanvasDocument } from "@fumiao/original-api/canvas-draft.js";
+import { OriginalScriptDocuments } from "@fumiao/original-api/script-documents.js";
+import { directorBasis, directorShotIds } from "@fumiao/web-compat/director.js";
 import { museLifecycle } from "@fumiao/plugin-muse/lifecycle.js";
 import { databaseFixture } from "../helpers/database.js";
 import { hash } from "@fumiao/platform/security.js";
@@ -408,6 +410,136 @@ test("Canvas saves replace the node index with exactly the saved node IDs", asyn
       document: { nodes: [] },
     });
     assert.deepEqual(await indexed(), []);
+  } finally {
+    await f.cleanup();
+  }
+});
+test("director state round-trips and cannot reference off-list shots", async () => {
+  const f = await canvasesFixture();
+  try {
+    const project = await f.canvases.create(f.admin, {});
+    const scripts = new OriginalScriptDocuments(f.p);
+    const script = await scripts.create(f.admin, { path: "第一集.md" });
+    const privateScript = await scripts.create(f.member, { path: "私有.md" });
+    const sourceHash = "a".repeat(64);
+    const director = {
+      script_id: script.id,
+      script_revision: script.revision,
+      shot_ids: ["s1", "s2"],
+      order_basis: await directorBasis(["s2", "s1"]),
+      shots: [
+        {
+          node_id: "s1",
+          source: { prompt: sourceHash },
+          story_basis: sourceHash,
+          material_basis: sourceHash,
+          adoption_basis: sourceHash,
+        },
+        { node_id: "s2", story_basis: sourceHash },
+      ],
+    };
+    const adopted = await f.asset("a".repeat(32), "video");
+    const latest = await f.asset("b".repeat(32), "video");
+    await f.job(801, "video", "completed", adopted.id);
+    await f.job(802, "video", "completed", latest.id);
+    await f.link(project.id, "s1", 801);
+    await f.link(project.id, "s1", 802);
+    await f.link(project.id, "s2", 802);
+    const graph = {
+      nodes: [
+        node("s1", "video", { active_job: 801 }),
+        node("s2", "video"),
+        node("trial", "video"),
+        node("note"),
+      ],
+      shots: ["s2", "trial", "s1"],
+    };
+    const save = (document: unknown, revision = project.revision) =>
+      f.canvases.save(f.admin, project.id, {
+        expected_revision: revision,
+        title: "第一集",
+        document,
+      });
+    for (const shot_ids of [["unknown"], ["s1", "s1"], ["note"]]) {
+      await assert.rejects(
+        save({ ...graph, director: { ...director, shot_ids, shots: [] } }),
+        { status: 400 },
+      );
+    }
+    await assert.rejects(
+      save({ ...graph, director: { ...director, shots: [{ node_id: "trial" }] } }),
+      { status: 400 },
+    );
+    await assert.rejects(
+      save({ ...graph, director: { ...director, script_id: privateScript.id } }),
+      { status: 404 },
+    );
+    await assert.rejects(
+      save({ ...graph, director: { ...director, script_revision: script.revision + 1 } }),
+      { status: 409 },
+    );
+    const legacy = await save(graph);
+    assert.equal(Object.hasOwn(legacy.document, "director"), false);
+    const saved = await save({ ...graph, director }, legacy.revision);
+    assert.deepEqual(
+      (await f.canvases.get(f.admin, project.id)).document.director,
+      director,
+    );
+
+    assert.deepEqual(directorShotIds(["s2", "trial", "s1"], director), ["s2", "s1"]);
+    const basis = await directorBasis({ z: [1, { b: 2, a: 3 }], a: "剧本" });
+    assert.match(basis, /^[a-f0-9]{64}$/);
+    assert.equal(
+      basis,
+      await directorBasis({ a: "剧本", z: [1, { a: 3, b: 2 }] }),
+    );
+    assert.notEqual(
+      basis,
+      await directorBasis({ a: "剧本", z: [{ a: 3, b: 2 }, 1] }),
+    );
+
+    const copied = await f.canvases.duplicate(f.admin, project.id);
+    const copiedDocument = parseCanvasDocument(copied.document);
+    assert.deepEqual(copiedDocument.director, {
+      script_id: director.script_id,
+      script_revision: director.script_revision,
+      shot_ids: ["s1", "s2"],
+      shots: [{ node_id: "s1", source: { prompt: sourceHash } }, { node_id: "s2" }],
+    });
+    assert.equal(
+      copiedDocument.nodes.find((n) => n.id === "s1")?.media_id,
+      adopted.public_id,
+    );
+    assert.equal(copiedDocument.nodes.find((n) => n.id === "s2")?.media_id, null);
+
+    await scripts.remove(f.admin, script.id);
+    const retained = await save(graph, saved.revision);
+    assert.deepEqual(retained.document.director, director);
+    await assert.rejects(
+      save({
+        ...graph,
+        shots: ["trial", "s1"],
+        director: { ...director, shot_ids: [...director.shot_ids, "unknown"] },
+      }, retained.revision),
+      { status: 400 },
+    );
+    const pruned = await save({ ...graph, shots: ["trial", "s1"] }, retained.revision);
+    assert.deepEqual(pruned.document.director, {
+      script_id: director.script_id,
+      script_revision: director.script_revision,
+      shot_ids: ["s1"],
+      shots: [director.shots[0]],
+    });
+    const removed = await save(
+      {
+        nodes: [node("trial", "video")],
+        shots: ["trial"],
+        director: pruned.document.director,
+      },
+      pruned.revision,
+    );
+    assert.deepEqual(removed.document.director?.shot_ids, []);
+    assert.deepEqual(removed.document.director?.shots, []);
   } finally {
     await f.cleanup();
   }

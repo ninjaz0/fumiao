@@ -9,6 +9,7 @@ import { ReferencePacks } from "@fumiao/platform/packs.js";
 import { createTailFrameAsset } from "@fumiao/platform/tail-frame.js";
 import { cropGridCell } from "@fumiao/platform/grid-crop.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
+import type { DirectorProduction } from "@fumiao/web-compat/director.js";
 import { OriginalIdentity } from "./identity.js";
 import { archiveEntry, OriginalLibrary } from "./library.js";
 import { parseBody } from "./validation.js";
@@ -221,7 +222,7 @@ export class OriginalCanvases {
     await this.limit(sql, workspace);
     const document = parseCanvasDocument(raw);
     const row = await this.insert(sql, user, workspace, title, document);
-    await this.references(sql, user, row, document);
+    await this.references(sql, user, row, document, null);
     await this.nodes(sql, row.id, document);
     return { id: String(row.public_id), title };
   }
@@ -287,19 +288,19 @@ export class OriginalCanvases {
     sql: Sql,
     project: string,
     node: CanvasNode,
+    adoptedOnly = false,
   ): Promise<string | null> {
     if (node.use_media) return node.media_id;
+    if (adoptedOnly && !node.active_job) return null;
     const row = await one(
       sql,
       `${selectNodeJob}
-      WHERE l.project_id=$1 AND l.node=$2 ${node.active_job ? "AND j.public_id=$3" : "ORDER BY l.id DESC LIMIT 1"}`,
+      WHERE l.project_id=$1 AND l.node=$2 ${node.active_job ? "AND j.public_id=$3" : "ORDER BY l.id DESC LIMIT 1"}
+      ${adoptedOnly ? "AND j.kind='video' FOR SHARE OF j" : ""}`,
       [project, node.id, ...(node.active_job ? [node.active_job] : [])],
     );
-    return row
-      ? row.state === "completed" && row.result
-        ? row.result
-        : null
-      : node.media_id;
+    if (!row) return adoptedOnly ? null : node.media_id;
+    return row.state === "completed" && row.result ? row.result : null;
   }
   private async listCoverJobs(
     sql: Sql,
@@ -334,8 +335,13 @@ export class OriginalCanvases {
       );
     return media;
   }
-  async videoForShot(sql: Sql, project: string, node: CanvasNode) {
-    const key = await this.mediaForNode(sql, project, node);
+  async videoForShot(
+    sql: Sql,
+    project: string,
+    node: CanvasNode,
+    adoptedOnly = false,
+  ) {
+    const key = await this.mediaForNode(sql, project, node, adoptedOnly);
     const { rows } = await sql.query<ShotVideo>(
       "SELECT id,public_id,workspace_id,mime,size FROM assets WHERE public_id=$1 AND original_kind='video' AND state='ready' FOR SHARE",
       [key],
@@ -592,7 +598,13 @@ export class OriginalCanvases {
         )),
     };
   }
-  async references(sql: Sql, user: Actor, row: any, document: CanvasDocument) {
+  async references(
+    sql: Sql,
+    user: Actor,
+    row: any,
+    document: CanvasDocument,
+    previousDirector: DirectorProduction | null = canvasDocumentJson(row.document).director ?? null,
+  ) {
     await validateCanvasDefinitions(
       sql,
       document.nodes.flatMap((n) =>
@@ -604,7 +616,33 @@ export class OriginalCanvases {
       document,
       await CanvasModels.read(sql, { allowIncomplete: true }),
       this.resources(sql, user, row),
+      previousDirector ?? undefined,
     );
+    const director = document.director;
+    if (
+      director &&
+      (director.script_id !== previousDirector?.script_id ||
+        director.script_revision !== previousDirector.script_revision)
+    ) {
+      const script = await one(
+        sql,
+        `SELECT workspace_id, revision FROM workspace_script_documents
+         WHERE public_id=$1 AND workspace_id=$2 AND entry_type='file' AND NOT deleted FOR SHARE`,
+        [director.script_id, row.workspace_id],
+      );
+      requireValue(script, 404, "主剧本文档不存在或无权访问");
+      await this.library.access(
+        sql,
+        user,
+        { kind: "asset", row: script },
+        row.workspace_id,
+      );
+      requireValue(
+        director.script_revision <= script.revision,
+        409,
+        "主剧本文档版本不存在",
+      );
+    }
     await sql.query("DELETE FROM canvas_media_refs WHERE project_id=$1", [
       row.id,
     ]);
@@ -686,11 +724,25 @@ export class OriginalCanvases {
       const document = parseCanvasDocument(
         canvasDocumentJson(original.document),
       );
+      const director = document.director;
+      const episodeMembers = new Set(director?.shot_ids);
+      if (director) {
+        delete director.order_basis;
+        if (director.shots) {
+          director.shots = director.shots.map(({ node_id, source }) => ({
+            node_id,
+            ...(source ? { source } : {}),
+          }));
+        }
+      }
       for (const node of document.nodes)
         if (node.type === "image" || node.type === "video") {
-          node.media_id = await this.mediaForNode(sql, original.id, node);
+          const inEpisode = episodeMembers.has(node.id);
+          node.media_id = inEpisode
+            ? ((await this.videoForShot(sql, original.id, node, true))?.public_id ?? null)
+            : await this.mediaForNode(sql, original.id, node);
           node.active_job = null;
-          node.use_media = true;
+          node.use_media = !inEpisode || Boolean(node.media_id);
         }
       const row = await this.insert(
         sql,
