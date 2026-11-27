@@ -349,21 +349,29 @@ function readSnapshot(
   const raw = value as Partial<DraftSnapshot>;
   if (!raw.draft || typeof raw.draft !== "object") return null;
   const draft = { ...initialDraft, ...raw.draft };
-  if (!state.studio_plugins) {
+  if (!state.studio_plugins && !isPublishedImage(state, draft)) {
     if (!["image", "audio"].includes(draft.kind)) draft.kind = "video";
     if (!state.images.models[draft.model])
       draft.model = state.images.default_model;
     if (!state.video_models[draft.videoModel]) draft.videoModel = H3;
   }
-  return {
-    ...restoreDraftReferences(state, draft, raw.refs, storedTypes),
+  const snapshot = {
+    draft,
+    refs: Array.isArray(raw.refs) ? raw.refs : [],
     parent: typeof raw.parent === "number" ? raw.parent : null,
-    retainedSeed: typeof raw.retainedSeed === "number" ? raw.retainedSeed : null,
+    retainedSeed:
+      typeof raw.retainedSeed === "number" ? raw.retainedSeed : null,
     submitId:
       typeof raw.submitId === "string" && raw.submitId
         ? raw.submitId
         : crypto.randomUUID(),
   };
+  return isPublishedImage(state, draft)
+    ? restoreImageSnapshot(state, snapshot, storedTypes)
+    : {
+        ...snapshot,
+        ...restoreDraftReferences(state, draft, raw.refs, storedTypes),
+      };
 }
 export const displayName = (member: Member) => member.nickname || member.name;
 export const mediaURL = (key: string) => "/media/" + key;
@@ -439,16 +447,14 @@ export function readDraftBackup(state: StudioState): DraftSession | null {
 function restoreStoredDraft(state: StudioState, saved: StoredDraft | null): DraftSession {
   const storedTypes = saved?.referenceTypes;
   const draft = { ...initialDraft, ...saved?.draft };
-  if (saved?.draft && !state.studio_plugins) {
+  if (saved?.draft && !state.studio_plugins && !isPublishedImage(state, draft)) {
     if (!["image", "audio"].includes(draft.kind)) draft.kind = "video";
     if (!state.images.models[draft.model])
       draft.model = state.images.default_model;
     if (!state.video_models[draft.videoModel]) draft.videoModel = H3;
   }
   const normalizedDraft =
-    saved?.draft &&
-    state.studio_plugins &&
-    !modelAvailable(state, selectedModel(draft))
+    saved?.draft && keepUnavailableDraft(state, draft)
       ? draft
       : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft), Boolean(saved?.draft));
   const session: DraftSession = {
@@ -779,6 +785,47 @@ function restoreParent(state: StudioState, saved: DraftSnapshot) {
     retainedSeed: hasParent ? saved.retainedSeed : null,
   };
 }
+
+function isPublishedImage(state: StudioState, draft: Draft) {
+  return draft.kind === "image" && publishedMedia(state, draft.model);
+}
+
+export function keepUnavailableDraft(state: StudioState, draft: Draft) {
+  return (
+    (state.studio_plugins || isPublishedImage(state, draft)) &&
+    !modelAvailable(state, selectedModel(draft))
+  );
+}
+
+function restoreImageSnapshot(
+  state: StudioState,
+  saved: DraftSnapshot,
+  storedTypes?: StoredReferenceTypes,
+): DraftSnapshot {
+  const form = modelForm(state, saved.draft);
+  const params =
+    form && saved.draft.params && modelAvailable(state, saved.draft.model)
+      ? historicalNativeParameters("image", form, saved.draft.params)
+      : saved.draft.params;
+  const draft =
+    params === saved.draft.params ? saved.draft : { ...saved.draft, params };
+  const restored = restoreDraftReferences(
+    state,
+    draft,
+    saved.refs,
+    storedTypes,
+  );
+  const parent = restoreParent(state, saved);
+  const sameRequest =
+    parent.parent === saved.parent &&
+    restored.refs.length === saved.refs.length;
+  return {
+    ...restored,
+    ...parent,
+    submitId: sameRequest ? saved.submitId : crypto.randomUUID(),
+  };
+}
+
 export function changeCreation(
   state: StudioState,
   session: DraftSession,
@@ -786,12 +833,29 @@ export function changeCreation(
 ): DraftSession {
   const { draft } = session;
   if (draft.kind === kind) return session;
+  // The image that was open when entering audio is newer than a legacy image slot.
+  const savedImage =
+    kind === "image" &&
+    [
+      draft.kind === "audio" ? session.suspendedMediaDraft : null,
+      session.suspendedImageDraft,
+    ].find((saved) => saved && isPublishedImage(state, saved.draft));
+  if (savedImage) {
+    return {
+      ...restoreImageSnapshot(state, savedImage),
+      suspendedAudioDraft: suspendAudioDraft(session),
+      suspendedImageDraft: null,
+      suspendedMediaDraft: null,
+    };
+  }
+  const submitId = crypto.randomUUID();
   if (kind === "audio") {
     const mediaSnapshot = draftSnapshot(session);
     const savedAudio = session.suspendedAudioDraft;
     if (savedAudio) {
       return {
         ...savedAudio,
+        submitId,
         draft: ensureCreation(
           state,
           { ...savedAudio.draft, packs: [] },
@@ -818,7 +882,7 @@ export function changeCreation(
       refs: [],
       parent: null,
       retainedSeed: null,
-      submitId: session.submitId,
+      submitId,
       suspendedImageDraft: session.suspendedImageDraft,
       suspendedAudioDraft: null,
       suspendedMediaDraft: mediaSnapshot,
@@ -830,6 +894,7 @@ export function changeCreation(
       const saved = session.suspendedImageDraft;
       return {
         ...saved,
+        submitId,
         draft: ensureCreation(state, saved.draft, "image"),
         refs: saved.refs.filter((id) => referenceAsset(state, id)),
         ...restoreParent(state, saved),
@@ -843,6 +908,7 @@ export function changeCreation(
       const sameKind = saved.draft.kind === kind;
       return {
         ...saved,
+        submitId,
         draft: ensureCreation(state, saved.draft, kind),
         refs: saved.refs.filter((id) => referenceAsset(state, id)),
         ...(sameKind
@@ -874,7 +940,7 @@ export function changeCreation(
       refs: [],
       parent: null,
       retainedSeed: null,
-      submitId: session.submitId,
+      submitId,
       suspendedImageDraft: session.suspendedImageDraft,
       suspendedAudioDraft: audioSnapshot,
       suspendedMediaDraft: null,
@@ -884,6 +950,7 @@ export function changeCreation(
     const saved = session.suspendedImageDraft;
     return {
       ...saved,
+      submitId,
       refs: saved.refs.filter((id) => referenceAsset(state, id)),
       ...restoreParent(state, saved),
       suspendedImageDraft: null,
@@ -893,6 +960,7 @@ export function changeCreation(
   }
   return {
     ...session,
+    submitId,
     draft: ensureCreation(state, draft, kind),
     parent: null,
     retainedSeed: null,
@@ -1156,7 +1224,14 @@ function updateSnapshotPacks<T extends DraftSnapshot>(
     draft = { ...draft, packs: mapped.packs };
   }
   if (draft === snapshot.draft) return snapshot;
-  const nextSnapshot = { ...snapshot, draft };
+  const removedImagePack =
+    isPublishedImage(nextState, draft) &&
+    (draft.packs?.length ?? 0) < (snapshot.draft.packs?.length ?? 0);
+  const nextSnapshot = {
+    ...snapshot,
+    draft,
+    ...(removedImagePack && { submitId: crypto.randomUUID() }),
+  };
   const plain = frames(draft) || draft.kind === "audio";
   if (plain) return nextSnapshot;
   const prevRefs = packReferences(snapshot);

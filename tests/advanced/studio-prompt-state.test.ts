@@ -1757,3 +1757,191 @@ test("图片历史和旧草稿只恢复当前原生表单仍支持的等价格�
   assert.ok("params" in body);
   assert.deepEqual(body.params, job.params);
 });
+
+test("从语音和视频恢复挂起的原生图片时保留原格式、模型和作品", (t) => {
+  t.after(installFakeEnv().restore);
+  const base = makeState(),
+    model = "custom-image";
+  const state = makeState({
+    studio_plugins: true,
+    images: {
+      ...base.images,
+      models: { ...base.images.models, [model]: model },
+    },
+    model_access: { ...base.model_policy.enabled, [model]: true },
+    pricing: {
+      ...base.pricing,
+      published: [{ model, price: { kind: "image", unit: "0.25" } }],
+    },
+    model_forms: {
+      ...base.model_forms,
+      [model]: {
+        parameterObject: true,
+        fields: {
+          output_format: {
+            type: "string",
+            title: "输出格式",
+            default: "webp",
+            enum: ["webp", "jpeg"],
+          },
+        },
+        tiers: [],
+        references: { min: 0, max: 1 },
+      },
+    },
+  });
+  const job = {
+    ...base.jobs[0],
+    kind: "image" as const,
+    model,
+    prompt: "<Picture 1> 旧作品",
+    params: { output_format: "image/jpeg" },
+  };
+  state.jobs = [job];
+  const edited = loadJob(state, readDraft(state), job);
+  // An already-suspended draft written by the original client still has the wire spelling.
+  const historical = {
+    ...edited,
+    draft: { ...edited.draft, params: job.params },
+    submitId: crypto.randomUUID(),
+  };
+  const snapshot = {
+    draft: historical.draft,
+    refs: historical.refs,
+    parent: historical.parent,
+    retainedSeed: historical.retainedSeed,
+    submitId: historical.submitId,
+  };
+  const audio = {
+    ...changeCreation(state, historical, "audio"),
+    submitId: crypto.randomUUID(),
+  };
+  const video = {
+    ...changeCreation(state, audio, "video"),
+    submitId: crypto.randomUUID(),
+  };
+  for (const [suspended, slot] of [
+    [audio, "suspendedMediaDraft"],
+    [
+      { ...audio, suspendedMediaDraft: null, suspendedImageDraft: snapshot },
+      "suspendedImageDraft",
+    ],
+    [{ ...video, suspendedImageDraft: snapshot }, "suspendedImageDraft"],
+  ] as const) {
+    for (const mode of [
+      "supported",
+      "narrowed",
+      "offline",
+      "unlisted",
+    ] as const) {
+      const current = structuredClone(state);
+      if (mode === "narrowed")
+        current.model_forms[model].fields.output_format.enum = ["webp"];
+      if (mode === "offline" || mode === "unlisted") {
+        current.model_access![model] = false;
+        delete current.model_forms[model];
+      }
+      if (mode === "unlisted") {
+        delete current.studio_plugins;
+        delete current.images.models[model];
+      }
+      writeDraft(state, suspended);
+      const stored = readDraft(current);
+      const expected = mode === "supported" ? "jpeg" : "image/jpeg";
+      const restored = changeCreation(current, stored, "image");
+      assert.equal(
+        restored.draft.params?.output_format,
+        expected,
+        slot + "/" + mode,
+      );
+      assert.equal(stored[slot]?.draft.params?.output_format, expected);
+      assert.equal(restored.draft.model, model);
+      assert.equal(restored.draft.prompt, job.prompt);
+      assert.deepEqual(restored.refs, ["img1"]);
+      assert.equal(restored.parent, job.id);
+      assert.equal(restored.submitId, historical.submitId);
+      assert.equal(
+        estimateBody(current, restored).params?.output_format,
+        expected,
+      );
+      if (mode === "narrowed")
+        assert.equal(referenceIssue(current, restored), "输出格式的值无效");
+      if (mode === "offline" || mode === "unlisted") {
+        assert.equal(
+          composerFeedback(current, restored).submitReason,
+          "当前模型暂不可用",
+        );
+        writeDraft(current, restored);
+        assert.equal(readDraft(current).draft.model, model);
+      }
+    }
+    for (const lost of ["parent", "reference"]) {
+      const current = structuredClone(state);
+      if (lost === "parent") current.jobs = [];
+      else
+        current.assets = current.assets.filter((asset) => asset.id !== "img1");
+      writeDraft(state, suspended);
+      const stored = readDraft(current);
+      const restored = changeCreation(current, stored, "image");
+      assert.equal(restored.parent, lost === "parent" ? null : job.id);
+      assert.deepEqual(restored.refs, lost === "reference" ? [] : ["img1"]);
+      assert.equal(
+        restored.draft.prompt,
+        lost === "reference" ? " 旧作品" : job.prompt,
+      );
+      assert.equal(restored.submitId, stored[slot]!.submitId);
+      assert.notEqual(restored.submitId, historical.submitId);
+    }
+  }
+  const freshState = {
+    ...state,
+    images: { ...state.images, models: { [model]: model } },
+  };
+  const fresh = changeCreation(
+    freshState,
+    { ...audio, suspendedMediaDraft: null, suspendedImageDraft: null },
+    "image",
+  );
+  assert.equal(fresh.draft.params?.output_format, "webp");
+  assert.equal(fresh.parent, null);
+  assert.notEqual(fresh.submitId, audio.submitId);
+  const pack = { id: "pack", revision: 1, media: ["img2"] };
+  const packed = {
+    ...audio,
+    suspendedMediaDraft: {
+      ...snapshot,
+      draft: { ...snapshot.draft, packs: [pack] },
+    },
+  };
+  const renamed = pruneDraftPacks(
+    state,
+    state,
+    packed,
+    new Map([[pack.id, { ...pack, name: "素材包" }]]),
+  );
+  assert.equal(
+    changeCreation(state, renamed, "image").submitId,
+    historical.submitId,
+  );
+  const removed = pruneDraftPacks(state, state, packed, new Map());
+  assert.notEqual(
+    changeCreation(state, removed, "image").submitId,
+    historical.submitId,
+  );
+  const old = {
+    ...snapshot,
+    draft: { ...snapshot.draft, prompt: "更早的图片草稿" },
+    parent: null,
+    submitId: crypto.randomUUID(),
+  };
+  const newest = changeCreation(
+    state,
+    { ...historical, suspendedImageDraft: old },
+    "audio",
+  );
+  writeDraft(state, newest);
+  const latest = changeCreation(state, readDraft(state), "image");
+  assert.equal(latest.draft.prompt, job.prompt);
+  assert.equal(latest.parent, job.id);
+  assert.equal(latest.submitId, historical.submitId);
+});

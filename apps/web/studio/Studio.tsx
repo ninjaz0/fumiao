@@ -72,6 +72,7 @@ import {
   h3Options,
   hasDraftPacks,
   isH3,
+  keepUnavailableDraft,
   imageToVideoDraft,
   loadJob,
   modelAvailable,
@@ -380,8 +381,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           previous &&
           JSON.stringify(previous.model_forms?.[model]) !==
             JSON.stringify(next.model_forms?.[model]);
-        const keepUnavailable =
-          next.studio_plugins && model && !modelAvailable(next, model);
+        const keepUnavailable = model && keepUnavailableDraft(next, priorDraft.draft);
         const normalizedDraft = keepUnavailable
           ? priorDraft.draft
           : ensureModel(
@@ -1426,10 +1426,18 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     return () => document.removeEventListener("keydown", onKeyDown);
   });
 
-  function updateDraft(next: DraftSession) {
+  function updateDraft(
+    next: DraftSession,
+    options?: { keepSubmitId: boolean },
+  ) {
     const space = active.current;
     if (space && !leaving.current)
-      persist(space, { ...next, submitId: crypto.randomUUID() });
+      persist(
+        space,
+        options?.keepSubmitId
+          ? next
+          : { ...next, submitId: crypto.randomUUID() },
+      );
   }
 
   function change(prompt: string) {

@@ -112,9 +112,8 @@ test("成员从已交付的 MIME 格式图片重新编辑、确认再次生成�
   const original = await job(originalId);
   assert.equal(original.input.params.output_format, "image/jpeg");
   assert.equal(original.original_view.params.output_format, "image/jpeg");
-  const history = (await member("/api/state")).body.jobs.find(
-    (j: { id: number }) => j.id === originalId,
-  );
+  const state = (await member("/api/state")).body;
+  const history = state.jobs.find((j: { id: number }) => j.id === originalId);
   assert.equal(history.params.output_format, "image/jpeg");
   assert.equal(history.result_mime, "image/jpeg");
   const credits = async () => (await member("/api/credits")).body;
@@ -177,11 +176,49 @@ test("成员从已交付的 MIME 格式图片重新编辑、确认再次生成�
     await page.goto(f.url + "/studio");
     await page.locator(`[data-act="detail"][data-id="${id}"]`).click();
   };
+  const kind = async (value: "image" | "audio") => {
+    await page.locator('.composer [data-menu="creation"]').click();
+    await page
+      .locator(`#popover [data-act="creation"][data-value="${value}"]`)
+      .click();
+  };
+  const imageQuote = () =>
+    page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/api/estimate") &&
+        r.request().postDataJSON().model === model,
+    );
+  const draftKey = `fm-draft-${state.me.id}-workspace-${state.workspace_id}`;
+  const storedDraft = () =>
+    page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)!), draftKey);
   await detail(originalId);
   await page.getByRole("button", { name: "重新编辑" }).click();
   const format = page.getByRole("combobox", { name: "输出格式" });
   await expect(format).toHaveValue(JSON.stringify("jpeg"));
   await expect(format.locator("option:checked")).toHaveText("jpeg");
+  const edited = await storedDraft();
+  await kind("audio");
+  const audio = await storedDraft();
+  assert.equal(audio.suspendedMediaDraft.submitId, edited.submitId);
+  // Persist the format stored by a pre-upgrade Studio, taken from the member's actual job.
+  await page.evaluate(
+    ({ key, raw }) => {
+      const saved = JSON.parse(sessionStorage.getItem(key)!);
+      saved.suspendedMediaDraft.draft.params.output_format = raw;
+      sessionStorage.setItem(key, JSON.stringify(saved));
+    },
+    { key: draftKey, raw: history.params.output_format },
+  );
+  await page.reload();
+  const [resumed] = await Promise.all([imageQuote(), kind("image")]);
+  assert.equal(resumed.request().postDataJSON().params.output_format, "jpeg");
+  assert.equal((await resumed.json()).max_charge, "0.25");
+  await expect(format).toHaveValue(JSON.stringify("jpeg"));
+  const restored = await storedDraft();
+  assert.equal(restored.parent, originalId);
+  assert.equal(restored.submitId, edited.submitId);
+  assert.deepEqual(restored.refs, edited.refs);
+  assert.equal(restored.draft.prompt, input.prompt);
   await detail(originalId);
   const again = page.getByRole("button", { name: "再次生成" });
   const confirm = async (accept: boolean) => {
@@ -222,11 +259,46 @@ test("成员从已交付的 MIME 格式图片重新编辑、确认再次生成�
   ])
     assert.equal(request[key], quote[key]);
   const repeated = await job(repeatId);
+  // Resume the same image request after its HTTP receipt was lost in a prior session.
+  await page.evaluate(
+    ({ key, audio, uid }) => {
+      audio.suspendedMediaDraft.submitId = uid;
+      sessionStorage.setItem(key, JSON.stringify(audio));
+    },
+    { key: draftKey, audio, uid: request.uid },
+  );
+  await page.reload();
+  await Promise.all([imageQuote(), kind("image")]);
+  const replay = page.waitForResponse(
+    (r) =>
+      r.url().endsWith("/api/image-jobs") && r.request().method() === "POST",
+  );
+  await page.locator('.composer [data-act="submit"]').click();
+  const replayed = await replay;
+  assert.equal(replayed.request().postDataJSON().uid, request.uid);
+  assert.deepEqual(await replayed.json(), { id: repeatId });
+  assert.equal((await f.db.query("SELECT id FROM jobs")).rows.length, 2);
   await detail(repeatId);
   await page.getByRole("button", { name: "重新编辑" }).click();
   await expect(format).toHaveValue(JSON.stringify("jpeg"));
+  await kind("audio");
   formats = ["webp"];
   await publish(1, model);
+  await page.reload();
+  const [narrowed] = await Promise.all([imageQuote(), kind("image")]);
+  assert.equal(narrowed.request().postDataJSON().params.output_format, "jpeg");
+  assert.equal(narrowed.status(), 400);
+  await expect(format.locator("option:checked")).toHaveText("jpeg（旧参数）");
+  await expect(page.locator('.composer [data-act="submit"]')).toBeDisabled();
+  const [corrected] = await Promise.all([
+    imageQuote(),
+    format.selectOption(JSON.stringify("webp")),
+  ]);
+  assert.equal(corrected.status(), 200);
+  assert.deepEqual(corrected.request().postDataJSON().params, {
+    output_format: "webp",
+  });
+  await expect(page.locator('.composer [data-act="submit"]')).toBeEnabled();
   await worker.execute(repeated.id);
   await worker.execute(repeated.id);
   assert.deepEqual(wire, ["image/jpeg", "image/jpeg"]);
