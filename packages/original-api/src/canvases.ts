@@ -598,6 +598,14 @@ export class OriginalCanvases {
         )),
     };
   }
+  private directorScript(sql: Sql, workspaceId: string, key: string) {
+    return one(
+      sql,
+      `SELECT workspace_id, revision FROM workspace_script_documents
+       WHERE public_id=$1 AND workspace_id=$2 AND entry_type='file' AND NOT deleted FOR SHARE`,
+      [key, workspaceId],
+    );
+  }
   async references(
     sql: Sql,
     user: Actor,
@@ -624,11 +632,10 @@ export class OriginalCanvases {
       (director.script_id !== previousDirector?.script_id ||
         director.script_revision !== previousDirector.script_revision)
     ) {
-      const script = await one(
+      const script = await this.directorScript(
         sql,
-        `SELECT workspace_id, revision FROM workspace_script_documents
-         WHERE public_id=$1 AND workspace_id=$2 AND entry_type='file' AND NOT deleted FOR SHARE`,
-        [director.script_id, row.workspace_id],
+        row.workspace_id,
+        director.script_id,
       );
       requireValue(script, 404, "主剧本文档不存在或无权访问");
       await this.library.access(
@@ -727,12 +734,21 @@ export class OriginalCanvases {
       const director = document.director;
       const episodeMembers = new Set(director?.shot_ids);
       if (director) {
-        delete director.order_basis;
-        if (director.shots) {
-          director.shots = director.shots.map(({ node_id, source }) => ({
-            node_id,
-            ...(source ? { source } : {}),
-          }));
+        const script = await this.directorScript(
+          sql,
+          original.workspace_id,
+          director.script_id,
+        );
+        if (!script || director.script_revision > script.revision) {
+          delete document.director;
+        } else {
+          delete director.order_basis;
+          if (director.shots) {
+            director.shots = director.shots.map(({ node_id, source }) => ({
+              node_id,
+              ...(source ? { source } : {}),
+            }));
+          }
         }
       }
       for (const node of document.nodes)
@@ -777,7 +793,7 @@ export class OriginalCanvases {
               ],
             );
         }
-      await this.references(sql, user, row, document);
+      await this.references(sql, user, row, document, null);
       await this.nodes(sql, row.id, document);
       return this.publicProject(row, user);
     });

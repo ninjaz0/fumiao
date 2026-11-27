@@ -142,12 +142,6 @@ export class OriginalStoryboardExports {
     const body = parseBody(value, storyboardExportFields);
     const scope = body.scope as ExportScope;
     const isEpisode = scope === "episode";
-    const renderer = this.plugins.get("original-storyboard@1.0.0");
-    requireValue(
-      renderer && (await renderer.health()),
-      503,
-      "成片合成服务尚未配置，请联系管理员",
-    );
     return this.p.db.transaction(async (sql) => {
       const project = await this.canvases.project(sql, user, key, true);
       await sql.query(
@@ -170,6 +164,12 @@ export class OriginalStoryboardExports {
         );
         return this.public(old);
       }
+      const renderer = this.plugins.get("original-storyboard@1.0.0");
+      requireValue(
+        renderer && (await renderer.health()),
+        503,
+        "成片合成服务尚未配置，请联系管理员",
+      );
       requireValue(
         !isEpisode || body.exporter === "storyboard/mp4",
         400,
@@ -179,6 +179,12 @@ export class OriginalStoryboardExports {
         await canvasExporters(sql, body.exporter.split("/")[0])
       ).find((e) => e.key === body.exporter);
       requireValue(exporter, 503, "成片合成服务尚未配置，请联系管理员");
+      requireValue(
+        !isEpisode ||
+          (exporter.outputKind === "composition" && exporter.mime === "video/mp4"),
+        503,
+        "本集 MP4 合成服务尚未配置，请联系管理员",
+      );
       requireValue(
         project.revision === body.expected_revision,
         409,
@@ -519,7 +525,9 @@ export class OriginalStoryboardExports {
         stamp = Math.floor(this.clock());
       const snapshotPayload = isProject
         ? JSON.stringify({ kind: "project", projectTitle, shots })
-        : JSON.stringify(await planComposition(exporter.program, shots));
+        : JSON.stringify(
+            isEpisode ? shots : await planComposition(exporter.program, shots),
+          );
       const row = await one(
         sql,
         `INSERT INTO storyboard_exports(id,public_id,uid,owner_id,workspace_id,project_id,revision,snapshot,state,subtitles,error,created,updated,exporter_plugin,exporter_version,exporter_id,output_kind,output_mime,basis_hash,mix_options,scope)

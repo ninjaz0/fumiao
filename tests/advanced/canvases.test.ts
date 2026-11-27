@@ -513,6 +513,23 @@ test("director state round-trips and cannot reference off-list shots", async () 
     assert.equal(copiedDocument.nodes.find((n) => n.id === "s2")?.media_id, null);
 
     await scripts.remove(f.admin, script.id);
+    const copiedAfterDeletion = parseCanvasDocument(
+      (await f.canvases.duplicate(f.admin, project.id)).document,
+    );
+    assert.equal(copiedAfterDeletion.director, undefined);
+    assert.deepEqual(copiedAfterDeletion.shots, graph.shots);
+    assert.deepEqual(
+      copiedAfterDeletion.nodes.map((n) => n.id),
+      graph.nodes.map((n) => n.id),
+    );
+    assert.equal(
+      copiedAfterDeletion.nodes.find((n) => n.id === "s1")?.media_id,
+      adopted.public_id,
+    );
+    assert.equal(
+      copiedAfterDeletion.nodes.find((n) => n.id === "s2")?.media_id,
+      null,
+    );
     const retained = await save(graph, saved.revision);
     assert.deepEqual(retained.document.director, director);
     await assert.rejects(

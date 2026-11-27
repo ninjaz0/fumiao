@@ -124,6 +124,22 @@ function episode(shotIds: string[], globalOrder = shotIds) {
     order_basis: createHash("sha256").update(JSON.stringify(order)).digest("hex"),
   };
 }
+async function deployStoryboardExporter(
+  f: Awaited<ReturnType<typeof fixture>>,
+  version: string,
+  declaration: { outputKind: string; mime: string; program: string },
+) {
+  await f.db.query(
+    `INSERT INTO studio_package_releases(id,version,package)
+     SELECT id,$1,jsonb_set(
+       jsonb_set(package,'{version}',to_jsonb($1::text)),
+       '{contributes,exporters}',$2::jsonb
+     )
+     FROM studio_package_releases WHERE id='storyboard' AND version='1.0.0'`,
+    [version, JSON.stringify([{ id: "mp4", title: "MP4", ...declaration }])],
+  );
+  await f.db.query("UPDATE studio_packages SET version=$1 WHERE id='storyboard'", [version]);
+}
 test("episode export freezes adopted shots in canvas order", async () => {
   const f = await fixture();
   try {
@@ -208,6 +224,11 @@ test("episode export freezes adopted shots in canvas order", async () => {
       f.service.create(f.admin, f.project.id, { ...request, exporter: "storyboard/fcp" }),
       { status: 400, message: /MP4/ },
     );
+    await deployStoryboardExporter(f, "2.0.0", {
+      outputKind: "composition",
+      mime: "video/mp4",
+      program: "({plan:()=>[{index:1,narration:false,subtitles:false}]})",
+    });
     const accepted = await create();
     assert.equal(accepted.scope, "episode");
     assert.deepEqual(await create(), accepted);
@@ -220,9 +241,10 @@ test("episode export freezes adopted shots in canvas order", async () => {
     );
     const row = await one(
       f.db,
-      "SELECT snapshot FROM storyboard_exports WHERE public_id=$1",
+      "SELECT snapshot,exporter_version FROM storyboard_exports WHERE public_id=$1",
       [accepted.id],
     );
+    assert.equal(row.exporter_version, "2.0.0");
     assert.deepEqual(JSON.parse(row.snapshot.toString()), [
       {
         node: "s2",
@@ -244,6 +266,74 @@ test("episode export freezes adopted shots in canvas order", async () => {
     await setCanvas(f, { ...doc, director: { ...director, shot_ids: ["s2"] } });
     assert.deepEqual(await create(), accepted);
     assert.deepEqual((await f.service.list(f.admin, f.project.id)).exports, [accepted]);
+  } finally {
+    await f.cleanup();
+  }
+});
+test("episode receipt remains available when the renderer is down", async () => {
+  const f = await fixture();
+  try {
+    await setCanvas(f, { ...f.doc, director: episode(f.doc.shots) });
+    const request = {
+      uid: randomUUID(),
+      expected_revision: f.project.revision,
+      scope: "episode" as const,
+    };
+    const accepted = await f.service.create(f.admin, f.project.id, request);
+    let healthChecks = 0;
+    const unavailable = new OriginalStoryboardExports(f.p, [{
+      ...originalStoryboard,
+      health: async () => {
+        healthChecks++;
+        return false;
+      },
+    }]);
+    assert.deepEqual(await unavailable.create(f.admin, f.project.id, request), accepted);
+    await assert.rejects(
+      unavailable.create(f.admin, f.project.id, { ...request, scope: "canvas" }),
+      { status: 409, message: /提交编号/ },
+    );
+    await assert.rejects(
+      unavailable.create(f.member, f.project.id, request),
+      { status: 404 },
+    );
+    assert.equal(healthChecks, 0);
+    await assert.rejects(
+      unavailable.create(f.admin, f.project.id, { ...request, uid: randomUUID() }),
+      { status: 503 },
+    );
+    assert.equal(healthChecks, 1);
+  } finally {
+    await f.cleanup();
+  }
+});
+test("episode exporter requires MP4 composition output", async () => {
+  const f = await fixture();
+  try {
+    await setCanvas(f, { ...f.doc, director: episode(f.doc.shots) });
+    const request = {
+      uid: randomUUID(),
+      expected_revision: f.project.revision,
+      scope: "episode" as const,
+    };
+    await deployStoryboardExporter(f, "2.0.0", {
+      outputKind: "project",
+      mime: "application/zip",
+      program: "({export:()=>({})})",
+    });
+    await assert.rejects(
+      f.service.create(f.admin, f.project.id, request),
+      { status: 503, message: /MP4/ },
+    );
+    await deployStoryboardExporter(f, "3.0.0", {
+      outputKind: "composition",
+      mime: "application/zip",
+      program: "({plan:()=>[{index:0,narration:true,subtitles:true}]})",
+    });
+    await assert.rejects(
+      f.service.create(f.admin, f.project.id, request),
+      { status: 503, message: /MP4/ },
+    );
   } finally {
     await f.cleanup();
   }
@@ -1113,6 +1203,10 @@ test("acceptance retains permission, revision, readiness, narration, UID, global
     ]);
     await assert.rejects(
       unavailable.create(f.member, f.project.id, request()),
+      { status: 404 },
+    );
+    await assert.rejects(
+      unavailable.create(f.admin, f.project.id, request()),
       /成片合成服务尚未配置/,
     );
     await f.db.query("UPDATE jobs SET state='queued' WHERE public_id=900");
