@@ -69,11 +69,31 @@ const activateRoute = z
     route_revision_id: z.uuid(),
   })
   .strict();
+const unitRate = z.string().regex(/^\d{1,19}(?:\.\d{1,6})?$/);
+const priceChange = z
+  .object({
+    action: z.literal("price"),
+    catalog_id: z.string().min(1).max(512),
+    expected_revision: z.number().int().positive(),
+    price: z.union([
+      z
+        .object({
+          kind: z.literal("chat"),
+          input: unitRate,
+          output: unitRate,
+          cache_read: unitRate.nullable(),
+          cache_write: unitRate.nullable(),
+        })
+        .strict(),
+      z.object({ kind: z.enum(["image", "video"]), unit: unitRate }).strict(),
+    ]),
+  })
+  .strict();
 const request = z
   .object({
     uid: z.uuid(),
     items: z
-      .array(z.union([selected, activateRoute]))
+      .array(z.union([selected, activateRoute, priceChange]))
       .min(1)
       .max(256),
   })
@@ -290,24 +310,21 @@ async function publishOne(
       ],
     );
   const revision = (existing?.revision ?? 0) + 1;
-  let priceId = existing?.price_revision_id;
-  if (newPrice) {
-    priceId = randomUUID();
-    await sql.query(
-      `INSERT INTO model_access_price_revisions(id,catalog_id,purpose,unit,input,output,cache_read,cache_write)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [
-        priceId,
+  const priceId = newPrice
+    ? await storePrice(
+        sql,
         catalogId,
-        purpose,
-        purpose === "chat" ? null : price,
-        purpose === "chat" ? chat_prices!.input : null,
-        purpose === "chat" ? chat_prices!.output : null,
-        purpose === "chat" ? (chat_prices!.cache_read ?? null) : null,
-        purpose === "chat" ? (chat_prices!.cache_write ?? null) : null,
-      ],
-    );
-  }
+        purpose === "chat"
+          ? {
+              kind: purpose,
+              input: chat_prices!.input!,
+              output: chat_prices!.output!,
+              cache_read: chat_prices!.cache_read ?? null,
+              cache_write: chat_prices!.cache_write ?? null,
+            }
+          : { kind: purpose, unit: price! },
+      )
+    : existing!.price_revision_id;
   const routeId =
     item.action === "standby" ? existing!.route_revision_id : route.id;
   await sql.query(
@@ -366,6 +383,51 @@ async function activateExisting(
   };
 }
 
+async function storePrice(sql: Sql, catalogId: string, price: PublishedPrice) {
+  const priceId = randomUUID();
+  await sql.query(
+    `INSERT INTO model_access_price_revisions(id,catalog_id,purpose,unit,input,output,cache_read,cache_write)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      priceId,
+      catalogId,
+      price.kind,
+      price.kind === "chat" ? null : price.unit,
+      price.kind === "chat" ? price.input : null,
+      price.kind === "chat" ? price.output : null,
+      price.kind === "chat" ? price.cache_read : null,
+      price.kind === "chat" ? price.cache_write : null,
+    ],
+  );
+  return priceId;
+}
+
+async function updatePrice(sql: Sql, item: z.infer<typeof priceChange>) {
+  const { price, catalog_id } = item;
+  const current = await one(
+    sql,
+    "SELECT * FROM model_access_publications WHERE catalog_id=$1 FOR UPDATE",
+    [catalog_id],
+  );
+  requireValue(
+    current &&
+      current.revision === item.expected_revision &&
+      current.purpose === price.kind,
+    409,
+    "模型售价已更新，请重新确认",
+  );
+  const priceId = await storePrice(sql, catalog_id, price);
+  await sql.query(
+    "UPDATE model_access_publications SET price_revision_id=$2,revision=revision+1 WHERE catalog_id=$1",
+    [catalog_id, priceId],
+  );
+  return {
+    catalog_id,
+    revision: item.expected_revision + 1,
+    route_revision_id: String(current.route_revision_id),
+    price_revision_id: priceId,
+  };
+}
 export async function publishModels(p: Platform, actor: Actor, value: unknown) {
   p.admin(actor);
   const parsed = request.safeParse(value);
@@ -380,7 +442,11 @@ export async function publishModels(p: Platform, actor: Actor, value: unknown) {
     new Set(choices.map((c) => c.id)).size === choices.length &&
       new Set(
         choices.map((c) =>
-          "draft_id" in c.item ? c.item.draft_id : c.item.route_revision_id,
+          "draft_id" in c.item
+            ? c.item.draft_id
+            : c.item.action === "price"
+              ? c.id
+              : c.item.route_revision_id,
         ),
       ).size === choices.length,
     400,
@@ -412,9 +478,11 @@ export async function publishModels(p: Platform, actor: Actor, value: unknown) {
     const items: Awaited<ReturnType<typeof publishOne>>[] = [];
     for (const choice of choices.sort((a, b) => a.id.localeCompare(b.id)))
       items[choice.index] =
-        "route_revision_id" in choice.item
-          ? await activateExisting(p, sql, choice.item)
-          : await publishOne(p, sql, choice.id, choice.item);
+        choice.item.action === "price"
+          ? await updatePrice(sql, choice.item)
+          : "route_revision_id" in choice.item
+            ? await activateExisting(p, sql, choice.item)
+            : await publishOne(p, sql, choice.id, choice.item);
     if (input.items.some((item) => item.action !== "standby"))
       await sql.query(
         "UPDATE studio_policy SET price_revision=price_revision+1",

@@ -1,3 +1,4 @@
+import { modelRouteTrial } from "./model-access-trial.js";
 import { publishModels } from "@fumiao/platform/model-access/publication.js";
 import { ModelAccessConnections } from "@fumiao/platform/model-access/connections.js";
 import type { HttpTransport } from "@fumiao/platform/plugin-host.js";
@@ -36,6 +37,9 @@ export class OriginalModelAccess {
   }
   async publish(actor: OriginalActor, input: unknown) {
     return publishModels(this.identity.p, actor, input);
+  }
+  trial(actor: OriginalActor, id: string, input: unknown, confirm: boolean) {
+    return modelRouteTrial(this.identity, actor, id, input, confirm);
   }
   async edit(
     actor: OriginalActor,

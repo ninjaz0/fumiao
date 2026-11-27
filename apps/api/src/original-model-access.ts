@@ -40,6 +40,24 @@ export class OriginalModelAccessController {
   publish(@Req() req: OriginalAuthRequest, @Body() body: unknown) {
     return this.service.publish(req.actor, body);
   }
+  @Post("routes/:id/trial/quote")
+  @HttpCode(200)
+  quoteTrial(
+    @Req() req: OriginalAuthRequest,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.service.trial(req.actor, id, body, false);
+  }
+  @Post("routes/:id/trial")
+  @HttpCode(200)
+  trial(
+    @Req() req: OriginalAuthRequest,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.service.trial(req.actor, id, body, true);
+  }
   @Patch("connections/:id")
   edit(
     @Req() req: OriginalAuthRequest,

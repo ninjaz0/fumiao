@@ -73,11 +73,13 @@ type ChatConfig = {
 };
 
 export function ChatSettings({
+  setup,
   request,
   notify,
 }: {
   request: AdminRequest;
   notify: (message: string) => void;
+  setup: () => void;
 }) {
   const [config, setConfig] = useState<ChatConfig>();
   const [error, setError] = useState("");
@@ -105,6 +107,7 @@ export function ChatSettings({
   return (
     <section className="settings-section fm-chat-service">
       <h2>对话服务</h2>
+      <button className="ledger-button" onClick={setup}>接入模型或接管兼容对话连接</button>
       {error && (
         <div className="ledger-card plugin-alert" role="alert">
           <span>{error}</span>

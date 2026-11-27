@@ -33,10 +33,11 @@ function revealFocusedPrice(bar: HTMLDivElement | null) {
 export function PriceSettings({
   state,
   visible,
+  editModel,
   request,
   refresh,
   notify,
-}: AdminSave & { state: StudioState; visible: boolean }) {
+}: AdminSave & { state: StudioState; visible: boolean; editModel: (id:string)=>void }) {
   const [draft, setDraft] = useState<PriceDraft | null>(null);
   const [confirmed, setConfirmed] = useState<StudioState["pricing"] | null>(
     null,
@@ -186,7 +187,7 @@ export function PriceSettings({
             <h3 className="credit-heading">模型接入售价</h3>
             {latest.published.map(({ model, price }) => (
               <div className="price-row" key={model}>
-                <span>{state.model_catalog[model]?.label ?? model}</span>
+                <button className="ledger-button" onClick={()=>editModel(model)}>{state.model_catalog[model]?.label ?? model} · 编辑售价</button>
                 {price.kind === "chat" ? (
                   <span>
                     每百万 Token 输入 {price.input}、输出 {price.output}

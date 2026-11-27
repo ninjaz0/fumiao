@@ -4,7 +4,10 @@ import type { Actor, Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue, hash } from "@fumiao/platform/security.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
-import { resolvePublishedRoute } from "@fumiao/platform/model-access/publication.js";
+import {
+  resolvePublishedRoute,
+  type FrozenModelRoute,
+} from "@fumiao/platform/model-access/publication.js";
 import {
   chatBill,
   type ChatCallUsage,
@@ -201,9 +204,14 @@ export class OriginalChats {
       await this.access(sql, actor, key, workspace.id);
     });
   }
-  async create(actor: Actor, value: unknown, selected?: string) {
+  async create(
+    actor: Actor,
+    value: unknown,
+    selected?: string,
+    transaction?: Sql,
+  ) {
     const body = parseBody(value, chatCreateFields, true);
-    return this.p.db.transaction(async (sql) => {
+    const create = async (sql: Sql) => {
       const models = await this.models(sql),
         model = body.model ?? models[0]?.id;
       requireValue(
@@ -252,7 +260,8 @@ export class OriginalChats {
         await this.access(sql, actor, row.public_id, workspace.id),
         actor,
       );
-    });
+    };
+    return transaction ? create(transaction) : this.p.db.transaction(create);
   }
   async rename(actor: Actor, key: string, value: unknown, selected?: string) {
     const body = parseBody(value, chatRenameFields, true),
@@ -447,8 +456,22 @@ export class OriginalChats {
       return readChatBills(sql, chat.id);
     });
   }
-  async send(actor: Actor, key: string, value: unknown, selected?: string) {
+  async send(
+    actor: Actor,
+    key: string,
+    value: unknown,
+    selected?: string,
+    trial?: { transaction: Sql; route: FrozenModelRoute },
+  ) {
     const body = parseChatSend(value);
+    if (trial) {
+      this.p.admin(actor);
+      requireValue(
+        trial.route.catalogId === body.model,
+        409,
+        "试用模型与线路不符",
+      );
+    }
     const requestHash = hash(
       JSON.stringify([
         body.model,
@@ -457,7 +480,7 @@ export class OriginalChats {
         body.context,
       ]),
     );
-    return this.p.db.transaction(async (sql) => {
+    const admit = async (sql: Sql) => {
       // Policy -> admission -> conversation -> canvas -> wallet. Match canvas generation's
       // catalog/financial lock order; global admission serializes only new turns.
       const global = await one(
@@ -511,7 +534,8 @@ export class OriginalChats {
         403,
         "当前空间未开放该模型，请选择其他模型",
       );
-      const route = await resolvePublishedRoute(sql, body.model);
+      const route =
+        trial?.route ?? (await resolvePublishedRoute(sql, body.model));
       const connection = route
         ? undefined
         : [...(await new ChatProviders(this.p).read(sql, true)).values()].find(
@@ -776,7 +800,8 @@ export class OriginalChats {
         actor,
       );
       return { ...snapshot, accepted_turn: turn.public_id };
-    });
+    };
+    return trial ? admit(trial.transaction) : this.p.db.transaction(admit);
   }
   private async ledger(
     sql: Sql,

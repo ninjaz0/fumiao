@@ -276,7 +276,7 @@ async function readDirectory(
       return { path, status };
     }
     const chunks: Buffer[] = [];
-    for await (const chunk of httpChunks(response.body, signal))
+    for await (const chunk of httpChunks(response.body, signal, 8 * 1024 * 1024))
       chunks.push(chunk);
     const data: unknown = obj(
       JSON.parse(Buffer.concat(chunks).toString("utf8")),

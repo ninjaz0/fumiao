@@ -25,7 +25,7 @@ test("resolveChatConfigTarget picks plugins when plugin is not imported or impor
   assert.equal(resolveChatConfigTarget(undefined), "plugins");
   assert.equal(
     resolveChatConfigTarget({ studio_plugins: true, model_groups: {} }),
-    "plugins",
+    "modelAccess",
   );
   assert.equal(
     resolveChatConfigTarget({
@@ -122,7 +122,7 @@ test("resolveChatConfigTarget and resolveChatModelScope align personal, global, 
 test("chatSettingsHref and chatSettingsPath build workspace-scoped settings URLs", () => {
   assert.equal(
     chatSettingsPath({ studio_plugins: true, model_groups: {} }),
-    "/studio?settings=plugins",
+    "/studio?settings=modelAccess",
   );
   assert.equal(
     chatSettingsPath({ studio_plugins: false, model_groups: {} }),

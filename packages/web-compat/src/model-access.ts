@@ -132,6 +132,12 @@ export type PublishedPrice =
   | { kind: "image" | "video"; unit: string };
 export type PublicationItem =
   | {
+      action: "price";
+      catalog_id: string;
+      expected_revision: number;
+      price: PublishedPrice;
+    }
+  | {
       draft_id: string;
       draft_revision: number;
       action: "create" | "standby" | "activate";
@@ -162,6 +168,13 @@ export interface ModelPublication {
     draft_revision: number;
     upstream_id: string;
     protocol: ModelProtocol;
+    directory: Pick<ModelDiscovery, "checked_at" | "directories"> | null;
+    health: {
+      state: string;
+      at: string;
+      missing_usage: number;
+      last_missing_usage: string | null;
+    } | null;
     capabilities: ModelDraft["parameters"];
     enabled: boolean;
   }[];
@@ -183,3 +196,25 @@ export interface ModelAccessView {
   })[];
   drafts: ModelDraft[];
 }
+
+export interface ModelTrialSample {
+  uid: string;
+  workspace: number;
+  prompt: string;
+  route_revision: string;
+  price_revision: string;
+  params?: Record<string, unknown>;
+  refs?: string[];
+}
+export interface ModelTrialQuote {
+  route_revision: string;
+  price_revision: string;
+  max_charge: string;
+  quote_context: string;
+  max_output_tokens?: number;
+}
+export type ModelTrialReceipt = Pick<
+  ModelTrialQuote,
+  "route_revision" | "price_revision" | "max_charge"
+> &
+  ({ cid: string; turn: string } | { job: number });
