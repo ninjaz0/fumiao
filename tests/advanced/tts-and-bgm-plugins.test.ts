@@ -134,7 +134,8 @@ test("F029 built-in Edge TTS generates Sec-MS-GEC token, safe SSML and valid MP3
   assert.ok(Number(inspected.duration) > 0.2);
 });
 
-test("Edge TTS plugin removes dead instruction field from form & inputSchema, tolerates historic drafts in prepare(), and reports actionable failure message", async () => {
+test("Edge TTS plugin removes dead instruction field from form & inputSchema, marks canvas: true for CanvasWorkspace model availability, tolerates historic drafts in prepare(), and reports actionable failure message", async () => {
+  assert.equal(edgeTtsForm.canvas, true);
   assert.equal("instruction" in edgeTtsForm.fields, false);
   assert.deepEqual(Object.keys(edgeTtsForm.fields), ["voice", "rate", "pitch"]);
 

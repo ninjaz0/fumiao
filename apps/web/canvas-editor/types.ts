@@ -600,28 +600,249 @@ export function resolveBatchShots(
   };
 }
 
-export type CinePopoverSide = "right" | "left" | "top";
+export function videoModelAcceptsSingleFirstFrame(
+  studio: Pick<Studio, "video_models" | "model_catalog" | "model_forms">,
+  modelId: string,
+  availableModel: (model: string) => boolean,
+): boolean {
+  if (!modelId || !availableModel(modelId)) return false;
+  const inVideoModels = Boolean(
+    studio.video_models && Object.hasOwn(studio.video_models, modelId),
+  );
+  const spec = studio.model_catalog?.[modelId];
+  if (!inVideoModels && spec?.kind !== "video") return false;
+  if (spec?.mode === "extend") return false;
+  if (typeof spec?.min_refs === "number" && spec.min_refs > 1) return false;
+  if (typeof spec?.max_refs === "number" && spec.max_refs < 1) return false;
+  const form = studio.model_forms?.[modelId];
+  if (!form) return false;
+  if (form.references.min > 1 || form.references.max < 1) return false;
+  if (form.references.counts && form.references.counts.image < 1) return false;
+  return true;
+}
 
-export function resolveCinePopoverSide(input: {
+function flowVideoStem(modelId: string): string {
+  if (!modelId.startsWith("flow:")) return "";
+  return modelId
+    .replace(/-(?:i2v|r2v|t2v|extend|omni)(?=-|$)/g, "")
+    .replace(/-\d+s-(?:landscape|portrait|square|four-three|three-four).*$/, "");
+}
+
+export function resolveNextShotVideoModel(
+  studio: Pick<Studio, "video_models" | "model_catalog" | "model_forms">,
+  sourceModel: string | undefined,
+  want: { ratio?: string; seconds?: number },
+  availableModel: (model: string) => boolean,
+): string {
+  if (
+    sourceModel &&
+    videoModelAcceptsSingleFirstFrame(studio, sourceModel, availableModel)
+  ) {
+    return sourceModel;
+  }
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const id of [
+    ...Object.keys(studio.video_models || {}),
+    ...Object.keys(studio.model_catalog || {}),
+  ]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (videoModelAcceptsSingleFirstFrame(studio, id, availableModel)) {
+      candidates.push(id);
+    }
+  }
+  if (!candidates.length) return "";
+
+  const srcFamily = sourceModel
+    ? studio.model_catalog?.[sourceModel]?.family || ""
+    : "";
+  const srcStem = sourceModel ? flowVideoStem(sourceModel) : "";
+  const modeRank = (mode?: string) =>
+    mode === "i2v" ? 0 : mode === "omni" ? 1 : mode === "r2v" ? 2 : 3;
+
+  const indexed = candidates.map((id, index) => {
+    const spec = studio.model_catalog?.[id];
+    const form = studio.model_forms?.[id];
+    const sameGroup =
+      (srcFamily && spec?.family === srcFamily) ||
+      (srcStem && flowVideoStem(id) === srcStem)
+        ? 0
+        : 1;
+    const ratioMatches =
+      want.ratio &&
+      (spec?.ratio === want.ratio ||
+        form?.fields?.ratio?.enum?.includes(want.ratio))
+        ? 0
+        : 1;
+    const secDiff =
+      want.seconds && typeof spec?.seconds === "number" && spec.seconds > 0
+        ? Math.abs(spec.seconds - want.seconds)
+        : 0;
+    return {
+      id,
+      index,
+      sameGroup,
+      modeScore: sameGroup === 0 ? modeRank(spec?.mode) : 0,
+      ratioMatches,
+      secDiff,
+    };
+  });
+
+  indexed.sort(
+    (a, b) =>
+      a.sameGroup - b.sameGroup ||
+      a.modeScore - b.modeScore ||
+      a.ratioMatches - b.ratioMatches ||
+      a.secDiff - b.secDiff ||
+      a.index - b.index,
+  );
+  return indexed[0].id;
+}
+
+export type CinePopoverSide =
+  | "right"
+  | "left"
+  | "top"
+  | "bottom"
+  | "viewport";
+
+export type CinePopoverPlacement = {
+  side: CinePopoverSide;
+  verticalAlign: "top" | "bottom";
+  maxHeight: number;
+  fixedTop?: number;
+  fixedRight?: number;
+};
+
+export type CinePopoverInput = {
   composerLeft: number;
+  composerTop?: number;
   composerWidth?: number;
+  composerHeight?: number;
   windowWidth: number;
+  windowHeight?: number;
+  headerBottom?: number;
   dockedWidth?: number;
   viewMode?: "canvas" | "split" | "list";
   agentDock?: boolean;
-}): CinePopoverSide {
+  agentDockedWidth?: number;
+};
+
+export function resolveCinePopoverPlacement(
+  input: CinePopoverInput,
+): CinePopoverPlacement {
   const composerWidth = input.composerWidth ?? 520;
+  const composerHeight = input.composerHeight ?? 240;
+  const windowHeight = input.windowHeight ?? 840;
+  const headerBottom = Math.max(56, input.headerBottom ?? 60);
+  const safeTop = headerBottom + 8;
+  const safeBottom = Math.max(safeTop + 120, windowHeight - 12);
   const dockedWidth =
     input.dockedWidth ??
     (input.viewMode === "split" ? Math.min(520, input.windowWidth * 0.46) : 0) +
-      (input.agentDock ? 400 : 0);
+      (input.agentDockedWidth ?? (input.agentDock ? 400 : 0));
   const rightLimit = input.windowWidth - dockedWidth - 12;
   const leftLimit = 76;
+  const composerTop =
+    input.composerTop ?? Math.max(safeTop, windowHeight - composerHeight - 32);
+  const composerBottom = composerTop + composerHeight;
+
+  const sideVertical = (): Pick<
+    CinePopoverPlacement,
+    "verticalAlign" | "maxHeight"
+  > => {
+    const upHeight = composerBottom - safeTop;
+    const downHeight = safeBottom - composerTop;
+    if (upHeight < 240 && downHeight > upHeight) {
+      return {
+        verticalAlign: "top",
+        maxHeight: Math.min(360, Math.max(150, downHeight)),
+      };
+    }
+    return {
+      verticalAlign: "bottom",
+      maxHeight: Math.min(360, Math.max(150, upHeight)),
+    };
+  };
+
   if (input.composerLeft + composerWidth + 352 <= rightLimit) {
-    return "right";
+    return { side: "right", ...sideVertical() };
   }
   if (input.composerLeft - 352 >= leftLimit) {
-    return "left";
+    return { side: "left", ...sideVertical() };
   }
-  return "top";
+
+  if (input.composerTop === undefined) {
+    return {
+      side: "top",
+      verticalAlign: "bottom",
+      maxHeight: Math.min(360, Math.max(160, safeBottom - safeTop)),
+    };
+  }
+
+  const spaceAbove = composerTop - 10 - safeTop;
+  const spaceBelow = safeBottom - (composerBottom + 10);
+  if (spaceAbove >= 200 && (spaceAbove >= spaceBelow || spaceBelow < 200)) {
+    return {
+      side: "top",
+      verticalAlign: "bottom",
+      maxHeight: Math.min(360, Math.floor(spaceAbove)),
+    };
+  }
+  if (spaceBelow >= 200) {
+    return {
+      side: "bottom",
+      verticalAlign: "top",
+      maxHeight: Math.min(360, Math.floor(spaceBelow)),
+    };
+  }
+
+  return {
+    side: "viewport",
+    verticalAlign: "top",
+    fixedTop: safeTop,
+    fixedRight: Math.max(12, Math.round(dockedWidth + 16)),
+    maxHeight: Math.min(360, Math.max(140, Math.floor(safeBottom - safeTop))),
+  };
+}
+
+export function resolveCinePopoverSide(
+  input: CinePopoverInput,
+): CinePopoverSide {
+  return resolveCinePopoverPlacement(input).side;
+}
+
+export function reconcileCanvasRightDocks(input: {
+  prevWindowWidth: number;
+  windowWidth: number;
+  viewMode: "canvas" | "split" | "list";
+  agentDock: boolean;
+  prevAgentDockedWidth: number;
+  agentDockedWidth: number;
+}): { closeAgentDock: boolean; switchSplitToCanvas: boolean } {
+  if (input.windowWidth <= 1100 && input.viewMode === "split" && input.agentDock) {
+    if (input.prevWindowWidth > 1100) {
+      return { closeAgentDock: true, switchSplitToCanvas: false };
+    }
+    if (input.prevAgentDockedWidth === 0 && input.agentDockedWidth > 0) {
+      return { closeAgentDock: false, switchSplitToCanvas: true };
+    }
+  }
+  return { closeAgentDock: false, switchSplitToCanvas: false };
+}
+
+export function resolveEffectiveNarrationModel(input: {
+  requestedModel?: string | null;
+  activeModel?: string;
+  audioModels?: readonly { id: string }[];
+}): string {
+  const requested = input.requestedModel?.trim() || "";
+  const requestedAvailable = Boolean(
+    requested && input.audioModels?.some((m) => m.id === requested),
+  );
+  if (requestedAvailable) return requested;
+  if (input.activeModel) return input.activeModel;
+  if (input.audioModels?.length === 1) return input.audioModels[0].id;
+  return requested;
 }

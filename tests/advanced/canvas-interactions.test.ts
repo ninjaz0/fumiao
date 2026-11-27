@@ -831,3 +831,301 @@ test("CanvasWorkspace centralizes <= 1100px agentDock mutual exclusion inside se
     "setViewModeState must only be called inside setViewMode",
   );
 });
+
+test("PR #223 Item 4: resolveNextShotVideoModel avoids text-only video models like flow:veo-3.1-lite-4s-landscape and hides first-frame action when no model accepts a single image", async () => {
+  const typesMod = (await import("../../apps/web/canvas-editor/types.js")) as Record<
+    string,
+    any
+  >;
+  assert.equal(typeof typesMod.resolveNextShotVideoModel, "function");
+  assert.equal(typeof typesMod.videoModelAcceptsSingleFirstFrame, "function");
+
+  const flowCatalog = {
+    "flow:veo-3.1-lite-4s-landscape": {
+      kind: "video",
+      label: "Veo 3.1 - Lite · 4s · 16:9",
+      provider: "flow",
+      mode: "t2v",
+      ratio: "16:9",
+      seconds: 4,
+      resolution: "原生",
+      min_refs: 0,
+      max_refs: 0,
+    },
+    "flow:veo-3.1-lite-i2v-4s-landscape": {
+      kind: "video",
+      label: "Veo 3.1 - Lite I2V · 4s · 16:9",
+      provider: "flow",
+      mode: "i2v",
+      ratio: "16:9",
+      seconds: 4,
+      resolution: "原生",
+      min_refs: 1,
+      max_refs: 2,
+    },
+    "flow:veo-3.1-lite-extend-8s-landscape": {
+      kind: "video",
+      label: "Veo 3.1 - Lite Extend · 8s · 16:9",
+      provider: "flow",
+      mode: "extend",
+      ratio: "16:9",
+      seconds: 8,
+      resolution: "原生",
+      min_refs: 0,
+      max_refs: 0,
+    },
+    "muse-video-v1": {
+      kind: "video",
+      label: "Muse Video V1",
+      provider: "muse",
+    },
+  };
+  const studioMock = {
+    video_models: {
+      "flow:veo-3.1-lite-4s-landscape": "Veo 3.1 - Lite · 4s · 16:9",
+      "flow:veo-3.1-lite-i2v-4s-landscape": "Veo 3.1 - Lite I2V · 4s · 16:9",
+      "flow:veo-3.1-lite-extend-8s-landscape":
+        "Veo 3.1 - Lite Extend · 8s · 16:9",
+      "muse-video-v1": "Muse Video V1",
+    },
+    model_catalog: flowCatalog,
+    model_forms: {
+      "flow:veo-3.1-lite-4s-landscape": {
+        fields: {},
+        tiers: [],
+        references: { min: 0, max: 0 },
+        canvas: true,
+      },
+      "flow:veo-3.1-lite-i2v-4s-landscape": {
+        fields: {},
+        tiers: [],
+        references: { min: 1, max: 2 },
+        canvas: true,
+      },
+      "flow:veo-3.1-lite-extend-8s-landscape": {
+        fields: {},
+        tiers: [],
+        references: { min: 0, max: 0 },
+        canvas: true,
+      },
+      "muse-video-v1": {
+        fields: {},
+        tiers: [],
+        references: { min: 0, max: 4 },
+        canvas: true,
+      },
+    },
+  };
+
+  // Text-only t2v and extend models do NOT accept a single extracted first-frame image
+  assert.equal(
+    typesMod.videoModelAcceptsSingleFirstFrame(
+      studioMock,
+      "flow:veo-3.1-lite-4s-landscape",
+      () => true,
+    ),
+    false,
+  );
+  assert.equal(
+    typesMod.videoModelAcceptsSingleFirstFrame(
+      studioMock,
+      "flow:veo-3.1-lite-extend-8s-landscape",
+      () => true,
+    ),
+    false,
+  );
+  assert.equal(
+    typesMod.videoModelAcceptsSingleFirstFrame(
+      studioMock,
+      "flow:veo-3.1-lite-i2v-4s-landscape",
+      () => true,
+    ),
+    true,
+  );
+
+  // Source node using flow:veo-3.1-lite-4s-landscape switches cleanly to matching i2v sibling
+  assert.equal(
+    typesMod.resolveNextShotVideoModel(
+      studioMock,
+      "flow:veo-3.1-lite-4s-landscape",
+      { ratio: "16:9", seconds: 4 },
+      () => true,
+    ),
+    "flow:veo-3.1-lite-i2v-4s-landscape",
+  );
+
+  // If i2v sibling is disabled, falls back to another enabled first-frame-capable video model
+  assert.equal(
+    typesMod.resolveNextShotVideoModel(
+      studioMock,
+      "flow:veo-3.1-lite-4s-landscape",
+      { ratio: "16:9", seconds: 4 },
+      (m: string) => m !== "flow:veo-3.1-lite-i2v-4s-landscape",
+    ),
+    "muse-video-v1",
+  );
+
+  // If ONLY text-only / extend models are available, returns "" so UI hides "用作下一镜头首帧"
+  assert.equal(
+    typesMod.resolveNextShotVideoModel(
+      studioMock,
+      "flow:veo-3.1-lite-4s-landscape",
+      { ratio: "16:9", seconds: 4 },
+      (m: string) =>
+        m === "flow:veo-3.1-lite-4s-landscape" ||
+        m === "flow:veo-3.1-lite-extend-8s-landscape",
+    ),
+    "",
+  );
+});
+
+test("PR #223 Item 5: resolveCinePopoverPlacement considers both horizontal and vertical clearance across Split View top-composer, short viewports, and 760-960px widths", async () => {
+  const typesMod = (await import("../../apps/web/canvas-editor/types.js")) as Record<
+    string,
+    any
+  >;
+  assert.equal(typeof typesMod.resolveCinePopoverPlacement, "function");
+
+  // 1. Split View where composer sits near the top (composerTop = 96, height = 240, window 1280x820):
+  // Neither right nor left fits, AND above only has 14px -> MUST place below ("bottom") instead of clipping off the top!
+  const splitTop = typesMod.resolveCinePopoverPlacement({
+    composerLeft: 96,
+    composerTop: 96,
+    composerWidth: 520,
+    composerHeight: 240,
+    windowWidth: 1280,
+    windowHeight: 820,
+    viewMode: "split",
+    agentDock: false,
+  });
+  assert.equal(splitTop.side, "bottom");
+  assert.ok(splitTop.maxHeight >= 220 && splitTop.maxHeight <= 360);
+
+  // 2. Short viewport (e.g. 1024x480 in Split View) where neither right, left, top, nor bottom has >= 200px around a middle composer:
+  // Uses viewport-clamped placement so header + close button stay 100% inside [safeTop, safeBottom]
+  const shortViewport = typesMod.resolveCinePopoverPlacement({
+    composerLeft: 88,
+    composerTop: 140,
+    composerWidth: 520,
+    composerHeight: 220,
+    windowWidth: 1024,
+    windowHeight: 480,
+    headerBottom: 60,
+    viewMode: "split",
+    agentDock: false,
+  });
+  assert.equal(shortViewport.side, "viewport");
+  assert.ok(shortViewport.fixedTop >= 68);
+  assert.ok(shortViewport.fixedTop + shortViewport.maxHeight <= 480 - 12);
+
+  // 3. 760-960px tablet width (e.g. 840x800): CSS must align mobile drawer breakpoint to 760px, not 960px
+  const tablet = typesMod.resolveCinePopoverPlacement({
+    composerLeft: 120,
+    composerTop: 420,
+    composerWidth: 500,
+    composerHeight: 240,
+    windowWidth: 840,
+    windowHeight: 800,
+    viewMode: "canvas",
+    agentDock: false,
+  });
+  assert.equal(tablet.side, "top");
+  assert.ok(tablet.maxHeight >= 220);
+
+  const overridesCss = await readFile(
+    join(process.cwd(), "apps/web/canvas-editor/canvas-overrides.css"),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    overridesCss,
+    /@media\s*\(max-width:\s*960px\)\s*\{\s*\.fm-cine-popover/,
+  );
+  assert.match(
+    overridesCss,
+    /@media\s*\(max-width:\s*760px\)\s*\{[\s\S]*?\.fm-cine-popover/,
+  );
+});
+
+test("PR #223 Item 7: reconcileCanvasRightDocks collapses docked panel when resizing across 1100px breakpoint", async () => {
+  const typesMod = (await import("../../apps/web/canvas-editor/types.js")) as Record<
+    string,
+    any
+  >;
+  assert.equal(typeof typesMod.reconcileCanvasRightDocks, "function");
+
+  // Wide (>1100px): both split storyboard and docked agent coexist side-by-side
+  assert.deepEqual(
+    typesMod.reconcileCanvasRightDocks({
+      prevWindowWidth: 1440,
+      windowWidth: 1360,
+      viewMode: "split",
+      agentDock: true,
+      prevAgentDockedWidth: 400,
+      agentDockedWidth: 400,
+    }),
+    { closeAgentDock: false, switchSplitToCanvas: false },
+  );
+
+  // Shrinking window from 1360px -> 1040px (<= 1100px) while both are open collapses agentDock
+  assert.deepEqual(
+    typesMod.reconcileCanvasRightDocks({
+      prevWindowWidth: 1360,
+      windowWidth: 1040,
+      viewMode: "split",
+      agentDock: true,
+      prevAgentDockedWidth: 400,
+      agentDockedWidth: 400,
+    }),
+    { closeAgentDock: true, switchSplitToCanvas: false },
+  );
+
+  // Re-docking floating PiP agent (0 -> 400) while already <= 1100px in split view switches split -> canvas
+  assert.deepEqual(
+    typesMod.reconcileCanvasRightDocks({
+      prevWindowWidth: 980,
+      windowWidth: 980,
+      viewMode: "split",
+      agentDock: true,
+      prevAgentDockedWidth: 0,
+      agentDockedWidth: 400,
+    }),
+    { closeAgentDock: false, switchSplitToCanvas: true },
+  );
+});
+
+test("PR #223 Item 8: resolveEffectiveNarrationModel hides 音色描述 when node's saved commercial TTS model is disabled and falls back to edge-tts", async () => {
+  const typesMod = (await import("../../apps/web/canvas-editor/types.js")) as Record<
+    string,
+    any
+  >;
+  assert.equal(typeof typesMod.resolveEffectiveNarrationModel, "function");
+
+  const narrationSource = await readFile(
+    join(process.cwd(), "apps/web/canvas-editor/Narration.tsx"),
+    "utf8",
+  );
+  assert.match(narrationSource, /resolveEffectiveNarrationModel\(/);
+
+  // Node saved historic "tts-1", which is now disabled (only "edge-tts" is in audioModels and activeModel="edge-tts")
+  assert.equal(
+    typesMod.resolveEffectiveNarrationModel({
+      requestedModel: "tts-1",
+      activeModel: "edge-tts",
+      audioModels: [{ id: "edge-tts", label: "Edge 免费神经语音" }],
+    }),
+    "edge-tts",
+  );
+
+  // When "tts-1" IS enabled in audioModels, keep "tts-1"
+  assert.equal(
+    typesMod.resolveEffectiveNarrationModel({
+      requestedModel: "tts-1",
+      activeModel: "tts-1",
+      audioModels: [
+        { id: "tts-1", label: "OpenAI TTS-1" },
+        { id: "edge-tts", label: "Edge 免费神经语音" },
+      ],
+    }),
+    "tts-1",
+  );
+});

@@ -9,6 +9,7 @@ import { DomainError } from "@fumiao/platform/security.js";
 import {
   OriginalRechargeController,
   originalRechargeRequest,
+  prefersHtmlResponse,
 } from "../../apps/api/src/original-recharge.js";
 import type { OriginalAuthRequest } from "../../apps/api/src/original-request.js";
 
@@ -240,12 +241,15 @@ test("CinematographyPanel and canvas-overrides.css support right, left, and top 
   const overridesCss = readRepoFile("apps/web/canvas-editor/canvas-overrides.css");
   const workspaceTsx = readRepoFile("apps/web/canvas-editor/CanvasWorkspace.tsx");
 
-  assert.match(cineTsx, /side\?:\s*"right"\s*\|\s*"left"\s*\|\s*"top"/);
+  assert.match(
+    cineTsx,
+    /side\?:\s*"right"\s*\|\s*"left"\s*\|\s*"top"/,
+  );
   assert.match(
     overridesCss,
     /\.fm-cine-popover\.fm-cine-side-top\s*\{[\s\S]*?left:\s*auto;[\s\S]*?right:\s*0;[\s\S]*?bottom:\s*calc\(100%\s*\+\s*10px\);[\s\S]*?max-height:\s*min\(360px,\s*calc\(100dvh\s*-\s*220px\)\);/,
   );
-  assert.match(workspaceTsx, /resolveCinePopoverSide\(/);
+  assert.match(workspaceTsx, /resolveCinePopover(?:Side|Placement)\(/);
   assert.doesNotMatch(
     workspaceTsx,
     /\(agentDock\s*\?\s*400\s*:\s*0\)\)\s*>=\s*1180/,
@@ -479,8 +483,25 @@ test("OriginalRechargeController.pay returns status-accurate XSS-escaped HTML er
   assert.doesNotMatch(httpErrRes.body, /<b>/i);
   assert.match(httpErrRes.body, /支付通道维护中 &lt;b&gt;请稍候&lt;\/b&gt;/);
 
-  // 3. API / JSON callers (Accept: application/json or */*) rethrow unchanged for OriginalExceptionFilter
-  for (const accept of ["application/json", "*/*", undefined]) {
+  // 3. API / JSON callers (including q=0, xhtml+xml with text/html;q=0, or lower-weight text/html) rethrow unchanged for OriginalExceptionFilter
+  assert.equal(
+    prefersHtmlResponse(
+      "application/xhtml+xml, application/json;q=0.8, text/html;q=0",
+    ),
+    false,
+  );
+  assert.equal(prefersHtmlResponse("application/xhtml+xml"), false);
+  for (const accept of [
+    "application/json",
+    "*/*",
+    "application/json, text/html;q=0",
+    "application/xhtml+xml, application/json;q=0.8, text/html;q=0",
+    "application/xhtml+xml",
+    "text/html;q=0",
+    "text/html;q=0.2, application/json;q=0.9",
+    "application/json, text/html",
+    undefined,
+  ]) {
     const jsonRes = mockResponse();
     await assert.rejects(
       () =>
@@ -493,9 +514,23 @@ test("OriginalRechargeController.pay returns status-accurate XSS-escaped HTML er
           jsonRes.res,
         ),
       (thrown) => thrown === domainErr,
+      `Expected JSON rethrow for Accept: ${String(accept)}`,
     );
     assert.equal(jsonRes.ended, false);
   }
+
+  // Weighted Accept preferring HTML over JSON (e.g. text/html;q=0.9, application/json;q=0.5) renders HTML
+  const weightedHtmlRes = mockResponse();
+  await controller.pay(
+    {
+      actor: { id: "u1" },
+      headers: { accept: "application/json;q=0.5, text/html;q=0.9" },
+    } as unknown as OriginalAuthRequest,
+    "FM00000000000000000000000001",
+    weightedHtmlRes.res,
+  );
+  assert.equal(weightedHtmlRes.ended, true);
+  assert.equal(weightedHtmlRes.statusCode, 409);
 
   // 4. Unexpected internal non-DomainError does not leak internal details in HTML
   const internalController = new OriginalRechargeController({
@@ -555,6 +590,42 @@ test("OriginalRechargeController.pay returns status-accurate XSS-escaped HTML er
     () => {},
   );
   assert.equal(delegatedFailure, 1);
+
+  const unauthQZeroRes = mockResponse();
+  await middleware(
+    {
+      method: "GET",
+      path: "/api/recharge/orders/FM00000000000000000000000005/pay",
+      url: "/api/recharge/orders/FM00000000000000000000000005/pay",
+      headers: { accept: "application/json, text/html;q=0" },
+    } as unknown as OriginalAuthRequest,
+    Object.assign(unauthQZeroRes.res, { locals: {}, headersSent: false }),
+    () => {},
+  );
+  assert.equal(
+    delegatedFailure,
+    2,
+    "Accept: application/json, text/html;q=0 in auth middleware must delegate JSON failure instead of returning HTML",
+  );
+
+  const unauthXhtmlRejectHtmlRes = mockResponse();
+  await middleware(
+    {
+      method: "GET",
+      path: "/api/recharge/orders/FM00000000000000000000000005/pay",
+      url: "/api/recharge/orders/FM00000000000000000000000005/pay",
+      headers: {
+        accept: "application/xhtml+xml, application/json;q=0.8, text/html;q=0",
+      },
+    } as unknown as OriginalAuthRequest,
+    Object.assign(unauthXhtmlRejectHtmlRes.res, { locals: {}, headersSent: false }),
+    () => {},
+  );
+  assert.equal(
+    delegatedFailure,
+    3,
+    "Accept: application/xhtml+xml, application/json;q=0.8, text/html;q=0 in auth middleware must delegate JSON failure",
+  );
 
   // 6. Successful checkout still sends 303 redirect even when Accept: text/html
   const okController = new OriginalRechargeController({

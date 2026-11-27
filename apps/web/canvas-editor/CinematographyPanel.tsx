@@ -1,3 +1,4 @@
+import type React from "react";
 import { Clapperboard, X } from "lucide-react";
 import {
   CINEMATOGRAPHY_DIMENSIONS,
@@ -6,7 +7,7 @@ import {
   updateCinematographyField,
 } from "./composer-options";
 import { OptionSelect } from "./OptionSelect";
-import type { CinematographySpec } from "./types";
+import type { CinematographySpec, CinePopoverSide } from "./types";
 
 export function CinematographyPanel({
   value,
@@ -14,13 +15,17 @@ export function CinematographyPanel({
   compact = false,
   floating = false,
   side = "right",
+  verticalAlign = "bottom",
+  style,
   onClose,
 }: {
   value?: CinematographySpec | null;
   onChange: (next: CinematographySpec | null) => void;
   compact?: boolean;
   floating?: boolean;
-  side?: "right" | "left" | "top";
+  side?: "right" | "left" | "top" | CinePopoverSide;
+  verticalAlign?: "top" | "bottom";
+  style?: React.CSSProperties;
   onClose?: () => void;
 }) {
   const current = value ?? {};
@@ -31,8 +36,11 @@ export function CinematographyPanel({
       className={
         "fm-cine-panel" +
         (compact ? " fm-cine-compact" : "") +
-        (floating ? ` fm-cine-popover fm-cine-side-${side}` : "")
+        (floating
+          ? ` fm-cine-popover fm-cine-side-${side} fm-cine-align-${verticalAlign}`
+          : "")
       }
+      style={style}
       aria-label="导演镜头参数面板"
     >
       <div className="fm-cine-head">

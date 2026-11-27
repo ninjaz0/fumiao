@@ -965,3 +965,211 @@ test("recovering an interrupted batch after a canvas edit preserves accepted job
   const wallet = await f.p.db.query("SELECT held FROM wallets WHERE workspace_id=$1", [f.workspace.id]);
   assert.equal(Number(wallet.rows[0].held), 2);
 });
+
+test("PR #223 Item 1 & 2: Series bible editor pins expectedRevision across episode-refresh loads, preserves 409 drafts, and rejects malformed structured JSON without corrupting notes", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  const seriesSvc = new OriginalSeries(f.p);
+  const wsPublicId = String(f.workspace.public_id);
+
+  const {
+    openSeriesBibleSession,
+    applyLoadedSeriesListToBibleSession,
+    submitSeriesBibleSession,
+    parseBibleDraft,
+  } = await import("../../apps/web/canvas/series-bible.js");
+
+  // 1. P1 concurrency: Actor A opens bible editor at rev 1 -> Actor B saves rev 2 -> Actor A creates an episode triggering list refresh (live rev = 2) -> Actor A submits stale draft -> 409 conflict + draft retained!
+  const created = await seriesSvc.create(
+    f.admin,
+    {
+      title: "双人并发剧集",
+      synopsis: "主线梗概",
+      bible: { notes: "初代世界观 v1" },
+    },
+    wsPublicId,
+  );
+  assert.equal(created.revision, 1);
+
+  let sessionA = openSeriesBibleSession({
+    id: created.id,
+    revision: created.revision,
+    bible: created.bible,
+  });
+  assert.equal(sessionA.expectedRevision, 1);
+  assert.equal(sessionA.mode, "notes");
+  sessionA = { ...sessionA, draft: "Actor A 基于 v1 编写的旧草稿" };
+
+  // Collaborator B saves a new worldbuilding v2 on the server
+  const updatedByB = await seriesSvc.update(f.admin, created.id, {
+    expected_revision: 1,
+    bible: { notes: "队友 B 已保存的新世界观 v2" },
+  });
+  assert.equal(updatedByB.revision, 2);
+
+  // Actor A creates a new episode, which triggers load() and refreshes seriesList to revision = 2!
+  await seriesSvc.createEpisode(f.admin, created.id, {
+    season_no: 1,
+    episode_no: 1,
+    title: "第一集",
+  });
+  const refreshedList = await seriesSvc.list(f.admin, wsPublicId);
+  const refreshedItem = refreshedList.series.find((s) => s.id === created.id)!;
+  assert.equal(refreshedItem.revision, 2);
+
+  sessionA = applyLoadedSeriesListToBibleSession(sessionA, refreshedList.series)!;
+  assert.equal(sessionA.expectedRevision, 1, "expectedRevision must stay pinned to editor-open revision 1");
+  assert.equal(sessionA.draft, "Actor A 基于 v1 编写的旧草稿");
+
+  const outcome = await submitSeriesBibleSession(sessionA, async (id, payload) => {
+    return seriesSvc.update(f.admin, id, payload);
+  });
+  assert.equal(outcome.ok, false, "stale bible save must fail with 409 instead of overwriting B's v2");
+  if (!outcome.ok) {
+    assert.equal(outcome.status, 409);
+    assert.equal(outcome.session.conflicted, true);
+    assert.equal(outcome.session.draft, "Actor A 基于 v1 编写的旧草稿");
+    assert.equal(outcome.session.expectedRevision, 1);
+  }
+
+  // Server must still hold Collaborator B's v2 worldbuilding!
+  const serverAfterConflict = (await seriesSvc.list(f.admin, wsPublicId)).series.find(
+    (s) => s.id === created.id,
+  )!;
+  assert.deepEqual(serverAfterConflict.bible, { notes: "队友 B 已保存的新世界观 v2" });
+
+  // 2. P2 structured vs plain-text notes mode:
+  const legacyStructured = await seriesSvc.create(
+    f.admin,
+    {
+      title: "结构化设定剧集",
+      synopsis: "",
+      bible: {
+        era: "2088",
+        factions: ["霓虹社", "铁幕局"],
+        protagonist: { name: "林默", role: "私家侦探" },
+      },
+    },
+    wsPublicId,
+  );
+  const structuredSession = openSeriesBibleSession(legacyStructured);
+  assert.equal(structuredSession.mode, "structured");
+
+  // Leaving a trailing comma in structured mode MUST reject without calling PUT or injecting broken JSON into notes!
+  let putCalls = 0;
+  const brokenJsonSession = {
+    ...structuredSession,
+    draft: '{\n  "era": "2099",\n  "factions": ["霓虹社"],\n}',
+  };
+  const brokenOutcome = await submitSeriesBibleSession(
+    brokenJsonSession,
+    async (id, payload) => {
+      putCalls += 1;
+      return seriesSvc.update(f.admin, id, payload);
+    },
+  );
+  assert.equal(brokenOutcome.ok, false);
+  assert.equal(putCalls, 0, "invalid structured JSON must not send PUT request");
+  if (!brokenOutcome.ok) {
+    assert.match(brokenOutcome.error, /JSON/);
+    assert.equal(brokenOutcome.session.draft, brokenJsonSession.draft);
+  }
+
+  // Fixing the trailing comma saves cleanly and round-trips structured fields losslessly without extra notes key
+  const validJsonSession = {
+    ...structuredSession,
+    draft: JSON.stringify(
+      {
+        era: "2099",
+        factions: ["霓虹社", "铁幕局"],
+        protagonist: { name: "林默", role: "首席调查员" },
+      },
+      null,
+      2,
+    ),
+  };
+  const validOutcome = await submitSeriesBibleSession(
+    validJsonSession,
+    async (id, payload) => seriesSvc.update(f.admin, id, payload),
+  );
+  assert.equal(validOutcome.ok, true);
+  const savedStructured = (await seriesSvc.list(f.admin, wsPublicId)).series.find(
+    (s) => s.id === legacyStructured.id,
+  )!;
+  assert.deepEqual(savedStructured.bible, {
+    era: "2099",
+    factions: ["霓虹社", "铁幕局"],
+    protagonist: { name: "林默", role: "首席调查员" },
+  });
+  assert.equal("notes" in savedStructured.bible, false);
+
+  // Plain-text mode stores { notes } cleanly even if text contains braces or punctuation
+  assert.deepEqual(parseBibleDraft("纯文本世界观：第一幕{雨夜}", "notes"), {
+    notes: "纯文本世界观：第一幕{雨夜}",
+  });
+});
+
+test("PR #223 Item 3: Standalone scene canvas includes series.bible worldbuilding sticky note even when synopsis and scene summary are empty", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  const seriesSvc = new OriginalSeries(f.p);
+  const wsPublicId = String(f.workspace.public_id);
+
+  // Case A: Series with only plain-text bible ({ notes }) and empty synopsis/summary
+  const notesSeries = await seriesSvc.create(
+    f.admin,
+    {
+      title: "浮空城编年史",
+      synopsis: "",
+      bible: { notes: "蒸汽朋克浮空群岛，全城依赖以太反应堆供能" },
+    },
+    wsPublicId,
+  );
+  const epA = await seriesSvc.createEpisode(f.admin, notesSeries.id, {
+    season_no: 1,
+    episode_no: 1,
+    title: "起航",
+  });
+  const scA = await seriesSvc.createScene(f.admin, notesSeries.id, epA.id, {
+    scene_no: 1,
+    title: "反应堆甲板",
+    summary: "",
+    create_canvas: true,
+  });
+  assert.ok(scA.canvas_id);
+  const canvasA = await f.canvases.get(f.admin, scA.canvas_id!);
+  const stickyA = canvasA.document.nodes.find(
+    (n: { type?: string }) => n.type === "sticky",
+  ) as { text?: string } | undefined;
+  assert.ok(stickyA, "standalone scene canvas must contain a sticky note when bible is set");
+  assert.match(stickyA.text ?? "", /世界观与设定：[\s\S]*蒸汽朋克浮空群岛/);
+
+  // Case B: Series with structured JSON bible and empty synopsis/summary
+  const structSeries = await seriesSvc.create(
+    f.admin,
+    {
+      title: "深海迷航",
+      synopsis: "",
+      bible: { depth: "8000m", lighting: "生物荧光冷蓝" },
+    },
+    wsPublicId,
+  );
+  const epB = await seriesSvc.createEpisode(f.admin, structSeries.id, {
+    season_no: 1,
+    episode_no: 1,
+    title: "下潜",
+  });
+  const scB = await seriesSvc.createScene(f.admin, structSeries.id, epB.id, {
+    scene_no: 1,
+    title: "减压舱",
+    summary: "",
+    create_canvas: true,
+  });
+  assert.ok(scB.canvas_id);
+  const canvasB = await f.canvases.get(f.admin, scB.canvas_id!);
+  const stickyB = canvasB.document.nodes.find(
+    (n: { type?: string }) => n.type === "sticky",
+  ) as { text?: string } | undefined;
+  assert.ok(stickyB, "standalone scene canvas must contain a sticky note for structured bible");
+  assert.match(stickyB.text ?? "", /生物荧光冷蓝/);
+});

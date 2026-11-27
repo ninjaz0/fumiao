@@ -11,7 +11,7 @@ import {
   Req,
   Res,
 } from "@nestjs/common";
-import type { Request, Response } from "express";
+import express, { type Request, type Response } from "express";
 import { DomainError } from "@fumiao/platform/security.js";
 import { pythonJsonText } from "@fumiao/plugin-sdk/json.js";
 import { readOriginalBody } from "@fumiao/original-api/canvas-http.js";
@@ -124,7 +124,7 @@ export function originalRechargeRequest(
       if (
         req.method === "GET" &&
         /^\/api\/recharge\/orders\/[^/]+\/pay$/.test(decodePath(req.path)) &&
-        req.headers.accept?.includes("text/html") &&
+        prefersHtmlResponse(req) &&
         !res.headersSent
       ) {
         const { status, message } = extractRechargePayError(error);
@@ -165,6 +165,41 @@ async function callbackValues(req: Request) {
   // parse_qsl treats a literal initial '?' as part of the first field name.
   return uniqueParams(
     new URLSearchParams(text.startsWith("?") ? "%3F" + text.slice(1) : text),
+  );
+}
+
+export function prefersHtmlResponse(
+  reqOrAccept:
+    | (Pick<Request, "headers"> & { accepts?: Request["accepts"] })
+    | string
+    | string[]
+    | undefined,
+): boolean {
+  if (
+    reqOrAccept &&
+    typeof reqOrAccept === "object" &&
+    !Array.isArray(reqOrAccept)
+  ) {
+    const negotiated =
+      typeof reqOrAccept.accepts === "function"
+        ? reqOrAccept.accepts("application/json", "text/html")
+        : express.request.accepts.call(
+            { headers: reqOrAccept.headers ?? {} } as Request,
+            "application/json",
+            "text/html",
+          );
+    return negotiated === "text/html";
+  }
+  const accept = Array.isArray(reqOrAccept)
+    ? reqOrAccept.join(", ")
+    : reqOrAccept;
+  if (!accept) return false;
+  return (
+    express.request.accepts.call(
+      { headers: { accept } } as Request,
+      "application/json",
+      "text/html",
+    ) === "text/html"
   );
 }
 
@@ -325,7 +360,7 @@ export class OriginalRechargeController {
     try {
       target = await this.recharge.checkout(req.actor, id);
     } catch (error) {
-      if (!req.headers.accept?.includes("text/html")) throw error;
+      if (!prefersHtmlResponse(req)) throw error;
       const { status, message } = extractRechargePayError(error);
       sendRechargeErrorHtml(res, status, message);
       return;

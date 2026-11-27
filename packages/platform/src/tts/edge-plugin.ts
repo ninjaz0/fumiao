@@ -19,6 +19,7 @@ import {
 
 export const edgeTtsForm: ModelForm = {
   parameterObject: true,
+  canvas: true,
   fields: {
     voice: {
       type: "string",

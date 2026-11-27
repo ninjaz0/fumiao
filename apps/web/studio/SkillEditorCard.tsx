@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BookOpen, Plus, Trash2, Upload } from "lucide-react";
 import { api, errorDetail } from "./api";
+import { serializeSkillMarkdown } from "./skill-markdown";
 
 type WorkspaceSkill = {
   id: string;
@@ -181,8 +182,8 @@ export function SkillEditorCard({ workspace }: { workspace: number }) {
         <div style={{ flex: "1 1 260px", minWidth: 0 }}>
           <h3 style={{ margin: 0 }}>工作区技能（SKILL.md）</h3>
           <p className="console-description" style={{ margin: "4px 0 0" }}>
-            支持标准 YAML Frontmatter 与 Markdown 格式的 <code>SKILL.md</code> 及{" "}
-            <code>.zip</code> 技能包（最大 64 KiB），启用后将自动注入工作区对话与外部 MCP 上下文。
+            支持标准 YAML Frontmatter 与 Markdown 格式的 <code>SKILL.md</code>
+            （最大 64 KiB）及 <code>.zip</code> 技能包（最大 256 KiB），启用后将自动注入工作区对话与外部 MCP 上下文。
           </p>
         </div>
         <div style={{ display: "inline-flex", flexWrap: "wrap", gap: 8 }}>
@@ -357,16 +358,7 @@ export function SkillEditorCard({ workspace }: { workspace: number }) {
                   className="secondary"
                   disabled={busy}
                   onClick={() => {
-                    const fm = [
-                      "---",
-                      "name: " + s.name,
-                      "slug: " + s.slug,
-                      ...(s.description ? ["description: " + s.description] : []),
-                      "---",
-                      "",
-                      s.body_md,
-                    ].join("\n");
-                    setRawMd(fm);
+                    setRawMd(serializeSkillMarkdown(s));
                     setEditing(s);
                   }}
                 >

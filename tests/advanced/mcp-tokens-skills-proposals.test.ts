@@ -387,3 +387,82 @@ test("F018 + F031 + F012 Proposal-based Canvas Agent, plan_only safety guardrail
     await f.cleanup();
   }
 });
+
+test("PR #223 Item 9: SkillEditorCard states 64 KiB SKILL.md and 256 KiB ZIP limits and round-trips extra YAML frontmatter fields losslessly", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const skillCardSrc = readFileSync(
+    join(process.cwd(), "apps/web/studio/SkillEditorCard.tsx"),
+    "utf8",
+  );
+  assert.match(skillCardSrc, /64\s*KiB/);
+  assert.match(skillCardSrc, /256\s*KiB/);
+
+  const { serializeSkillMarkdown } = await import(
+    "../../apps/web/studio/skill-markdown.js"
+  );
+
+  const f = await canvasRunsFixture();
+  try {
+    const skills = new OriginalSkills(f.p);
+    const ws = String(f.team.public_id);
+    const created = await skills.create(
+      f.admin,
+      {
+        enabled: true,
+        raw_md: [
+          "---",
+          "name: 高阶导演手册",
+          "slug: pro-director-guide",
+          "description: 包含扩展元数据字段的技能包",
+          "version: 2.1.0",
+          "author: Studio Lead",
+          "strict: true",
+          "tags:",
+          "  - cyberpunk",
+          '  - "noir, rain"',
+          "allowed-tools: [read_canvas, propose_patch]",
+          "---",
+          "",
+          "保持高反差边缘光与紧凑叙事剪辑。",
+        ].join("\n"),
+      },
+      ws,
+    );
+
+    assert.equal(created.frontmatter.version, "2.1.0");
+    assert.equal(created.frontmatter.author, "Studio Lead");
+    assert.equal(created.frontmatter.strict, true);
+    assert.deepEqual(created.frontmatter.tags, ["cyberpunk", "noir, rain"]);
+    assert.deepEqual(created.frontmatter["allowed-tools"], [
+      "read_canvas",
+      "propose_patch",
+    ]);
+
+    // Simulate opening skill in SkillEditorCard edit mode, editing body text, and saving back via raw_md
+    const editorMd = serializeSkillMarkdown(created);
+    const editedMd = editorMd.replace(
+      "保持高反差边缘光与紧凑叙事剪辑。",
+      "保持高反差边缘光、雨夜反光与紧凑叙事剪辑。",
+    );
+    const saved = await skills.update(f.admin, created.id, {
+      expected_revision: created.revision,
+      raw_md: editedMd,
+    });
+
+    assert.equal(saved.name, "高阶导演手册");
+    assert.equal(saved.slug, "pro-director-guide");
+    assert.equal(saved.description, "包含扩展元数据字段的技能包");
+    assert.equal(saved.frontmatter.version, "2.1.0");
+    assert.equal(saved.frontmatter.author, "Studio Lead");
+    assert.equal(saved.frontmatter.strict, true);
+    assert.deepEqual(saved.frontmatter.tags, ["cyberpunk", "noir, rain"]);
+    assert.deepEqual(saved.frontmatter["allowed-tools"], [
+      "read_canvas",
+      "propose_patch",
+    ]);
+    assert.match(saved.body_md, /雨夜反光/);
+  } finally {
+    await f.cleanup();
+  }
+});

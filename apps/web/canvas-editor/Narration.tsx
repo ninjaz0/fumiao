@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Mic, Plus, Trash2, Users, X } from "lucide-react";
-import type { CanvasNode, DialogueLine, Job } from "./types";
+import {
+  resolveEffectiveNarrationModel,
+  type CanvasNode,
+  type DialogueLine,
+  type Job,
+} from "./types";
 
 function parseQuickScript(raw: string): DialogueLine[] {
   const out: DialogueLine[] = [];
@@ -27,6 +32,8 @@ function parseQuickScript(raw: string): DialogueLine[] {
   }
   return out.slice(0, 20);
 }
+
+export { resolveEffectiveNarrationModel };
 
 export function Narration({
   node,
@@ -85,10 +92,15 @@ export function Narration({
   const audioStrategy = node.audio_strategy ?? "replace";
   const origGain = node.original_audio_gain ?? 0.35;
   const lines = node.dialogue_lines ?? [];
-  const resolvedNarrationModel =
-    node.narration_model?.trim() ||
-    activeModel ||
-    (audioModels.length === 1 ? audioModels[0].id : "");
+  const requestedModel = node.narration_model?.trim() || "";
+  const requestedModelAvailable = Boolean(
+    requestedModel && audioModels.some((m) => m.id === requestedModel),
+  );
+  const resolvedNarrationModel = resolveEffectiveNarrationModel({
+    requestedModel,
+    activeModel,
+    audioModels,
+  });
   const isEdgeTts = resolvedNarrationModel === "edge-tts";
 
   const updateLines = (next: DialogueLine[], history = true) => {
@@ -156,7 +168,7 @@ export function Narration({
             语音引擎
             <select
               aria-label="语音引擎"
-              value={node.narration_model || ""}
+              value={requestedModelAvailable ? requestedModel : ""}
               onChange={(e) =>
                 onChange(
                   { narration_model: e.target.value || undefined },

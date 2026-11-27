@@ -485,8 +485,19 @@ export class OriginalSeries {
           0,
           80,
         );
+        const bibleText =
+          series.bible &&
+          typeof series.bible === "object" &&
+          !Array.isArray(series.bible) &&
+          Object.keys(series.bible).length > 0
+            ? Object.keys(series.bible).length === 1 &&
+              typeof (series.bible as Record<string, unknown>).notes === "string"
+              ? ((series.bible as Record<string, string>).notes || "").trim()
+              : JSON.stringify(series.bible)
+            : "";
         const notes = [
           series.synopsis ? `剧集梗概：${series.synopsis}` : "",
+          bibleText ? `世界观与设定：${bibleText}` : "",
           body.summary?.trim() ? `分场梗概：${body.summary.trim()}` : "",
         ]
           .filter(Boolean)

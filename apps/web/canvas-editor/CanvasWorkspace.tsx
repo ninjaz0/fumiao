@@ -111,7 +111,9 @@ import {
   isCanvasComposerOpen,
   hasCanvasSelectionToolbar,
   resolveBatchShots,
-  resolveCinePopoverSide,
+  resolveCinePopoverPlacement,
+  resolveNextShotVideoModel,
+  reconcileCanvasRightDocks,
   linkedValue,
   type CanvasClipboard,
   type CanvasNode,
@@ -461,8 +463,10 @@ const FloatingCinematographyPopover = memo(function FloatingCinematographyPopove
   anchorNode,
   panelHeight,
   windowSize,
+  headerBottom,
   viewMode,
   agentDock,
+  agentDockedWidth,
   mediaPanelRef,
   value,
   onChange,
@@ -471,8 +475,10 @@ const FloatingCinematographyPopover = memo(function FloatingCinematographyPopove
   anchorNode: Pick<CanvasNode, "x" | "y" | "width" | "height" | "type">;
   panelHeight: number;
   windowSize: { w: number; h: number };
+  headerBottom: number;
   viewMode: "canvas" | "split" | "list";
   agentDock: boolean;
+  agentDockedWidth: number;
   mediaPanelRef: React.RefObject<HTMLElement | null>;
   value?: CinematographySpec | null;
   onChange: (next: CinematographySpec | null) => void;
@@ -487,19 +493,40 @@ const FloatingCinematographyPopover = memo(function FloatingCinematographyPopove
   }).composer;
   const rect = mediaPanelRef.current?.getBoundingClientRect();
   const composerLeft = computedComposer?.left ?? rect?.left ?? 76;
+  const composerTop = computedComposer?.top ?? rect?.top;
   const composerWidth = rect && rect.width > 0 ? rect.width : 520;
-  const side = resolveCinePopoverSide({
+  const composerHeight = rect && rect.height > 0 ? rect.height : panelHeight;
+  const placement = resolveCinePopoverPlacement({
     composerLeft,
+    composerTop,
     composerWidth,
+    composerHeight,
     windowWidth: windowSize.w,
+    windowHeight: windowSize.h,
+    headerBottom,
     viewMode,
     agentDock,
+    agentDockedWidth,
   });
+  const popoverStyle: React.CSSProperties =
+    windowSize.w <= 760
+      ? {}
+      : placement.side === "viewport"
+        ? {
+            top: placement.fixedTop,
+            right: placement.fixedRight,
+            maxHeight: placement.maxHeight,
+          }
+        : {
+            maxHeight: placement.maxHeight,
+          };
   return (
     <CinematographyPanel
       compact
       floating
-      side={side}
+      side={placement.side}
+      verticalAlign={placement.verticalAlign}
+      style={popoverStyle}
       value={value}
       onChange={onChange}
       onClose={onClose}
@@ -1331,6 +1358,25 @@ export function CanvasWorkspace({
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
+  const prevWindowWidthRef = useRef(windowSize.w);
+  const prevAgentDockedWidthRef = useRef(agentDockedWidth);
+  useEffect(() => {
+    const decision = reconcileCanvasRightDocks({
+      prevWindowWidth: prevWindowWidthRef.current,
+      windowWidth: windowSize.w,
+      viewMode,
+      agentDock,
+      prevAgentDockedWidth: prevAgentDockedWidthRef.current,
+      agentDockedWidth,
+    });
+    prevWindowWidthRef.current = windowSize.w;
+    prevAgentDockedWidthRef.current = agentDockedWidth;
+    if (decision.closeAgentDock) {
+      setAgentDock(false);
+    } else if (decision.switchSplitToCanvas) {
+      setViewMode("canvas");
+    }
+  }, [windowSize.w, viewMode, agentDock, agentDockedWidth, setViewMode]);
   useEffect(() => {
     if (innerWidth <= 760) {
       const n = doc.ref.current.document.nodes.find(
@@ -1953,6 +1999,20 @@ export function CanvasWorkspace({
   };
   const extractFrame = async ({ node: source, media, run }: Preview, next: boolean) => {
     if (!previewPlayer.current || extracting) return;
+    const desiredRatio = run?.ratio || source.params.ratio;
+    const desiredSeconds = run?.seconds || source.params.seconds;
+    const nextVideoModel = next
+      ? resolveNextShotVideoModel(
+          studio,
+          source.params.model,
+          { ratio: desiredRatio, seconds: desiredSeconds },
+          availableModel,
+        )
+      : "";
+    if (next && !nextVideoModel) {
+      setFrameError("当前空间没有支持参考图首帧的视频模型");
+      return;
+    }
     const checkCapacity = () => {
       const d = doc.ref.current.document;
       if (d.nodes.length + (next ? 2 : 1) > 200 || (next && d.edges.length >= 600))
@@ -1986,15 +2046,23 @@ export function CanvasWorkspace({
       const ordered = [...(d.shots ?? [])];
       let target: CanvasNode = image;
       if (next) {
-        const ratio = run?.ratio || source.params.ratio;
         const point = freePosition(placed, image.x + image.width + 180, image.y, 320, 240);
         target = newNode("video", point.x, point.y, 1);
         target.title = "下一镜头";
-        target.params.model =
-          (source.params.model && availableModel(source.params.model)
-            ? source.params.model
-            : defaultVideoModel) || "";
-        target.params.ratio = studio.ratios.includes(ratio) ? ratio : "16:9";
+        const spec = studio.model_catalog?.[nextVideoModel];
+        if (spec?.provider === "flow") {
+          target.params = {
+            ...target.params,
+            model: nextVideoModel,
+            ratio: spec.ratio || (studio.ratios.includes(desiredRatio) ? desiredRatio : "16:9"),
+            seconds: (spec.seconds || target.params.seconds) as Params["seconds"],
+            resolution: ((spec.resolution === "原生" ? "1K" : spec.resolution) || "1K") as Params["resolution"],
+            flow_source_job: null,
+          };
+        } else {
+          target.params.model = nextVideoModel;
+          target.params.ratio = studio.ratios.includes(desiredRatio) ? desiredRatio : "16:9";
+        }
         placed.push(target);
         edges.push({ id: crypto.randomUUID(), source: image.id, target: target.id });
         if (!ordered.includes(source.id)) ordered.push(source.id);
@@ -2006,7 +2074,18 @@ export function CanvasWorkspace({
       setPreview(null);
       selectOne(target.id);
       requestAnimationFrame(() => reveal(target));
-      notify(next ? "已将当前画面设为新镜头首帧" : "已提取当前帧到画布与素材库");
+      const nextLabel = nextVideoModel
+        ? FlowPicker.label(studio.model_catalog, nextVideoModel) ||
+          studio.video_models?.[nextVideoModel] ||
+          nextVideoModel
+        : "";
+      notify(
+        next
+          ? nextVideoModel !== source.params.model && nextLabel
+            ? `已将当前画面设为新镜头首帧（已选用 ${nextLabel}）`
+            : "已将当前画面设为新镜头首帧"
+          : "已提取当前帧到画布与素材库",
+      );
     } catch (error) {
       setFrameError((error as Error).message);
     } finally {
@@ -2951,6 +3030,16 @@ export function CanvasWorkspace({
   const handleInheritTailFrame = async (shotId: string) => {
     const source = doc.ref.current.document.nodes.find((n) => n.id === shotId);
     if (!source) return;
+    const nextVideoModel = resolveNextShotVideoModel(
+      studio,
+      source.params.model,
+      { ratio: source.params.ratio, seconds: source.params.seconds },
+      availableModel,
+    );
+    if (!nextVideoModel) {
+      notify("当前空间没有支持参考图首帧续接的视频模型");
+      return;
+    }
     await doc.flush();
     const res = await api<{ asset_id: string; width: number; height: number }>(
       `/api/canvases/${project.id}/nodes/${shotId}/tail-frame`,
@@ -2965,14 +3054,29 @@ export function CanvasWorkspace({
     vidNode.title = `${source.title || "镜头"} 续镜`;
     vidNode.tail_inherited = true;
     vidNode.generation_mode = "first_last_frame";
+    const supportsH3Frames = Boolean(
+      studio.model_forms?.[nextVideoModel]?.referenceModes?.includes("frames"),
+    );
+    const nextSpec = studio.model_catalog?.[nextVideoModel];
     vidNode.params = {
       ...source.params,
-      h3: {
-        mode: "frames",
-        first_frame: res.asset_id,
-        last_frame: null,
-        video_audio: [],
-      },
+      model: nextVideoModel,
+      ...(nextSpec?.provider === "flow"
+        ? {
+            ratio: nextSpec.ratio || source.params.ratio,
+            seconds: (nextSpec.seconds || source.params.seconds) as Params["seconds"],
+            resolution: ((nextSpec.resolution === "原生" ? "1K" : nextSpec.resolution) || "1K") as Params["resolution"],
+            flow_source_job: null,
+          }
+        : {}),
+      h3: supportsH3Frames
+        ? {
+            mode: "frames",
+            first_frame: res.asset_id,
+            last_frame: null,
+            video_audio: [],
+          }
+        : null,
     };
     doc.change((d) => ({
       ...d,
@@ -4025,8 +4129,10 @@ export function CanvasWorkspace({
               anchorNode={single}
               panelHeight={panelHeight}
               windowSize={windowSize}
+              headerBottom={headerBottom}
               viewMode={viewMode}
               agentDock={agentDock}
+              agentDockedWidth={agentDockedWidth}
               mediaPanelRef={mediaPanelRef}
               value={single.cinematography}
               onChange={(cinematography) => edit(single.id, { cinematography })}
@@ -5068,7 +5174,25 @@ export function CanvasWorkspace({
           </div>
         </Modal>
       )}
-      {preview && (
+      {preview && (() => {
+        const previewNextVideoModel =
+          preview.node.type === "video"
+            ? resolveNextShotVideoModel(
+                studio,
+                preview.node.params.model,
+                {
+                  ratio: preview.run?.ratio || preview.node.params.ratio,
+                  seconds: preview.run?.seconds || preview.node.params.seconds,
+                },
+                availableModel,
+              )
+            : "";
+        const previewNextVideoLabel = previewNextVideoModel
+          ? FlowPicker.label(studio.model_catalog, previewNextVideoModel) ||
+            studio.video_models?.[previewNextVideoModel] ||
+            previewNextVideoModel
+          : "";
+        return (
         <Modal title={preview.node.title} wide onClose={() => {
           if (!extracting) { setPreview(null); setFrameError(""); }
         }}>
@@ -5089,13 +5213,12 @@ export function CanvasWorkspace({
             )}
           </div>
           {frameError && <p className="error" role="alert">{frameError}</p>}
-          {preview.node.type === "video" && Boolean(defaultVideoModel) && (
+          {preview.node.type === "video" && (
             <p>
-              暂停在想保留的画面，可提取为图片，或设为{" "}
-              {studio.video_models?.[defaultVideoModel] ||
-                studio.model_catalog?.[defaultVideoModel]?.label ||
-                defaultVideoModel}{" "}
-              下一镜头的首帧。
+              暂停在想保留的画面，可提取为图片
+              {previewNextVideoModel
+                ? `，或设为 ${previewNextVideoLabel} 下一镜头的首帧。`
+                : "保存到画布与素材库。"}
             </p>
           )}
           <div className="dialog-actions preview-actions">
@@ -5103,7 +5226,7 @@ export function CanvasWorkspace({
               <button className="secondary" disabled={extracting} onClick={() => extractFrame(preview, false)}>
                 {extracting ? "正在提取…" : "提取当前帧"}
               </button>
-              {Boolean(defaultVideoModel) && (
+              {Boolean(previewNextVideoModel) && (
                 <button className="primary" disabled={extracting} onClick={() => extractFrame(preview, true)}>
                   用作下一镜头首帧
                 </button>
@@ -5126,7 +5249,8 @@ export function CanvasWorkspace({
             </a>
           </div>
         </Modal>
-      )}
+        );
+      })()}
       {confirm && (
         <Modal title="重新载入画布？" onClose={() => setConfirm(null)}>
           <p>将载入团队最新版本。请先下载需要保留的本地修改。</p>
