@@ -81,19 +81,32 @@ export class Executor {
     // A parent can settle before its child's admission commits, or the worker
     // can restart between settlement and extraction. The chain row survives both.
     if (!(await hasTailChainTable(p.db))) return;
-    const parents = await p.db.query(`SELECT DISTINCT j.id,j.state,j.kind,j.owner_id,j.workspace_id,
-        j.result->'assets'->>0 AS asset FROM job_tail_chains link
+    const parents = await p.db.query(`SELECT j.id,j.state,j.kind,j.owner_id,j.workspace_id,j.result
+      FROM job_tail_chains link
       JOIN jobs j ON j.id=link.parent_job_id JOIN jobs child ON child.id=link.child_job_id
       WHERE j.state IN ('completed','failed','cancelled') AND child.state='queued' AND child.deleted_at IS NULL
-        AND (j.plugin_id IS NULL OR child.plugin_id IS NULL) ORDER BY j.id LIMIT 16`);
-    for (const parent of parents.rows)
-      await wakeTailFrameChildren(
-        p,
-        { id: parent.id, workspace_id: parent.workspace_id, owner_id: parent.owner_id, kind: parent.kind },
-        parent.state,
-        parent.asset,
-        AbortSignal.timeout(30_000),
-      ).catch(() => {});
+        AND (j.plugin_id IS NULL OR child.plugin_id IS NULL)
+        AND (child.request_retry_at IS NULL OR child.request_retry_at<=now())
+      GROUP BY j.id ORDER BY min(COALESCE(child.request_retry_at,'-infinity')),j.id LIMIT 16`);
+    for (const parent of parents.rows) {
+      try {
+        await wakeTailFrameChildren(
+          p,
+          { id: parent.id, workspace_id: parent.workspace_id, owner_id: parent.owner_id, kind: parent.kind },
+          parent.state,
+          parent.result?.assets?.[0],
+          AbortSignal.timeout(30_000),
+        );
+      } catch {
+        // The dependency remains durable. Let untouched parents run first when
+        // a store or decoder stays unavailable across many worker sweeps.
+        await p.db.query(`WITH waiting AS (
+          SELECT j.id FROM job_tail_chains c JOIN jobs j ON j.id=c.child_job_id
+          WHERE c.parent_job_id=$1 AND j.state='queued' ORDER BY j.id FOR UPDATE OF c,j
+        ) UPDATE jobs SET request_retry_at=now()+interval '30 seconds',request_note='等待重试前置镜头尾帧'
+          FROM waiting WHERE jobs.id=waiting.id`, [parent.id]);
+      }
+    }
   }
   async recoverOn(sql: Sql, originalOnly = false) {
     const p = this.platform;

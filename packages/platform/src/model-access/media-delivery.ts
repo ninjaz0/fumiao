@@ -1,3 +1,4 @@
+import { DefiniteSubmissionFailure } from "./submission-failure.js";
 import { randomUUID } from "node:crypto";
 
 import { one, type Sql } from "../db.js";
@@ -8,7 +9,6 @@ import { httpChunks, type HttpTransport } from "../plugin-host.js";
 import { requireValue } from "../security.js";
 import { resolveConnectionRevision } from "./connections.js";
 import type { FrozenModelRoute } from "./publication.js";
-export class DefiniteSubmissionFailure extends Error {}
 export type Transport = HttpTransport<string | Uint8Array>;
 
 export const validation = {

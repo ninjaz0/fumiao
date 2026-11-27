@@ -671,6 +671,7 @@ test("GPU package installs its administrator panel while disabled and removes th
       route_revision_id: null,
       price_revision_id: null,
       native_snapshot: null,
+      native_polling_url: null,
       meter: null,
     }));
     await migrate(f.db);

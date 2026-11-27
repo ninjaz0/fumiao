@@ -1,4 +1,4 @@
-import { DefiniteSubmissionFailure } from "./media-delivery.js";
+import { DefiniteSubmissionFailure } from "./submission-failure.js";
 import { jsonParser } from "stream-json/parser.js";
 import { httpChunks, requirePublicHttps } from "../plugin-host.js";
 import { DomainError } from "../security.js";

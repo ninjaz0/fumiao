@@ -70,8 +70,12 @@ async function video(t: test.TestContext, seconds: number) {
   return { bytes, truncated: bytes.subarray(0, Number(packets[97].pos)) };
 }
 
-async function fixture(t: test.TestContext, protocol: Protocol) {
-  const f = await chatsFixture();
+async function fixture(
+  t: test.TestContext,
+  protocol: Protocol,
+  through?: string,
+) {
+  const f = await chatsFixture(through);
   t.after(f.cleanup);
   const api = new OriginalModelAccess(f.identity);
   const c = new ModelAccessConnections(f.db, f.p);
@@ -151,7 +155,7 @@ async function fixture(t: test.TestContext, protocol: Protocol) {
     await Promise.all([worker.execute(id), worker.execute(id)]);
     return one(f.db, "SELECT * FROM jobs WHERE id=$1", [id]);
   };
-  return { ...f, conn, c, model, request, publish, admit, wake };
+  return { ...f, conn, c, model, request, publish, admit, wake, requestAs: f.request };
 }
 
 for (const protocol of ["new-api-videos", "openrouter-videos"] as const) {
@@ -719,5 +723,317 @@ test("视频目录按协议裁剪分辨率、首帧及120秒实际验收边界�
         0,
       ),
     { status: 409 },
+  );
+});
+
+test("已部署 060 的在途单升级后，同一连接的两个上游各自使用编号 1，原站重复核对受阻", async (t) => {
+  const f = await fixture(t, "new-api-videos", "060_model_access_video.sql");
+  const { migrate } = await import("@fumiao/platform/db.js");
+  const { Operations } = await import("@fumiao/platform/operations.js");
+  const alternate = "https://8.8.8.8/v2";
+  await f.db.query("UPDATE connections SET concurrency=4 WHERE id=$1", [
+    f.conn.id,
+  ]);
+  await f.db.query("UPDATE wallets SET balance=200 WHERE workspace_id=$1", [
+    f.memberSpace.id,
+  ]);
+  const first = (await f.admit()).job;
+  const bytes = (await video(t, 7.8)).bytes;
+  const calls: string[] = [];
+  const http: HttpTransport<string | Uint8Array> = async (url, init) => {
+    calls.push(init.method + " " + url.href);
+    if (init.method === "POST") return json({ id: "1" });
+    if (url.href.endsWith("/content"))
+      return { status: 200, contentType: "video/mp4", body: bytes };
+    return json({ id: "1", status: "completed" });
+  };
+  assert.equal((await f.wake(first.id, http)).state, "running");
+  const finalizing = (await f.admit()).job,
+    completed = (await f.admit()).job;
+  let delayContent = true;
+  const older =
+    (id: string): HttpTransport<string | Uint8Array> =>
+    async (url, init) => {
+      if (init.method === "POST") return json({ id });
+      if (url.pathname.endsWith("/content"))
+        return {
+          status: id === "2" && delayContent ? 503 : 200,
+          contentType: "video/mp4",
+          body: bytes,
+        };
+      return json({ id, status: "completed" });
+    };
+  for (const [row, id] of [
+    [finalizing, "2"],
+    [completed, "3"],
+  ] as const) {
+    await f.wake(row.id, older(id));
+    await f.wake(row.id, older(id));
+  }
+  const snapshot = async () =>
+    (
+      await f.db.query(
+        "SELECT id,state,remote_id,native_polling_url,receipt,result FROM jobs ORDER BY id",
+      )
+    ).rows;
+  const before = await snapshot();
+  assert.equal(
+    before.find((row) => row.id === finalizing.id)?.state,
+    "finalizing",
+  );
+  assert.equal(
+    before.find((row) => row.id === completed.id)?.state,
+    "completed",
+  );
+  await migrate(f.db);
+  assert.deepEqual(await snapshot(), before);
+  delayContent = false;
+  assert.equal((await f.wake(finalizing.id, older("2"))).state, "completed");
+
+  const revise = async (
+    base: string,
+    revision: number,
+    publication: number,
+  ) => {
+    await f.c.edit(f.conn.id, {
+      expected_revision: revision,
+      base_url: base,
+      api_key: "fixture-key-" + revision,
+    });
+    const draft = (
+      await one(
+        f.db,
+        "SELECT id FROM model_access_drafts WHERE connection_id=$1 AND upstream_id='movie'",
+        [f.conn.id],
+      )
+    ).id;
+    await f.c.saveDraft(draft, {
+      expected_revision: revision,
+      connection_id: f.conn.id,
+      connection_revision: revision + 1,
+      upstream_id: "movie",
+      purpose: "video",
+      price: "3",
+      overrides: { durations: [8] },
+    });
+    await new OriginalModelAccess(f.identity).publish(f.admin, {
+      uid: randomUUID(),
+      items: [
+        {
+          draft_id: draft,
+          draft_revision: revision + 1,
+          action: "activate",
+          catalog_id: f.model,
+          expected_revision: publication,
+        },
+      ],
+    });
+  };
+  await revise(alternate, 1, 1);
+  const second = (await f.admit()).job;
+  assert.equal((await f.wake(second.id, http)).state, "running");
+  assert.deepEqual(
+    await Promise.all(
+      [first, second].map(async (job) => (await f.wake(job.id, http)).state),
+    ),
+    ["completed", "completed"],
+  );
+  for (const base of [origin, alternate]) {
+    assert.equal(
+      calls.filter((c) => c === "POST " + base + "/videos").length,
+      1,
+    );
+    assert.equal(
+      calls.filter((c) => c === "GET " + base + "/videos/1/content").length,
+      1,
+    );
+  }
+  const spent = await f.db.query(
+    "SELECT amount FROM ledger WHERE action='spend' AND job_id=ANY($1::uuid[])",
+    [[first.id, second.id]],
+  );
+  assert.deepEqual(
+    spent.rows.map((r) => Number(r.amount)),
+    [23.4, 23.4],
+  );
+  await revise(alternate, 2, 2);
+  const duplicate = (await f.admit()).job;
+  assert.equal((await f.wake(duplicate.id, http)).state, "uncertain");
+  const ops = new Operations(f.p);
+  await assert.rejects(
+    ops.resolve(f.admin, duplicate.id, {
+      action: "resume",
+      reason: "在相同来源核对",
+      remoteId: "1",
+    }),
+    { status: 409 },
+  );
+  await ops.resolve(f.admin, duplicate.id, {
+    action: "refund",
+    reason: "重复来源没有可交付的新作品",
+  });
+  assert.equal(Number((await f.p.wallet(f.member, f.memberSpace.id)).held), 0);
+});
+
+test("查询正文中断可恢复，完整无效 JSON 释放预留，创建响应无效仍需人工核查", async (t) => {
+  const f = await fixture(t, "new-api-videos");
+  let creates = 0,
+    polls = 0;
+  const job = (await f.admit()).job;
+  const http: HttpTransport<string | Uint8Array> = async (_url, init) => {
+    if (init.method === "POST") {
+      creates++;
+      return json({ id: "job1" });
+    }
+    polls++;
+    const body =
+      polls === 1
+        ? new ReadableStream<Uint8Array>({
+            start(c) {
+              c.error(new Error("transfer interrupted"));
+            },
+          })
+        : Buffer.from("<html>maintenance</html>");
+    return { status: 200, contentType: "text/html", body };
+  };
+  assert.equal((await f.wake(job.id, http)).state, "running");
+  assert.equal((await f.wake(job.id, http)).state, "running");
+  assert.equal((await f.wake(job.id, http)).state, "failed");
+  assert.equal((await f.wake(job.id, http)).state, "failed");
+  assert.deepEqual([creates, polls], [1, 2]);
+  assert.equal(Number((await f.p.wallet(f.member, f.memberSpace.id)).held), 0);
+  const lost = (await f.admit()).job;
+  const bad: HttpTransport<string | Uint8Array> = async () => {
+    creates++;
+    return {
+      status: 200,
+      contentType: "text/html",
+      body: Buffer.from("lost receipt"),
+    };
+  };
+  assert.equal((await f.wake(lost.id, bad)).state, "uncertain");
+  assert.equal((await f.wake(lost.id, bad)).state, "uncertain");
+  assert.equal(creates, 2);
+  assert.equal(Number((await f.p.wallet(f.member, f.memberSpace.id)).held), 24);
+});
+
+test("尾帧永久缺失释放子单，超过一轮上限的暂时故障让出健康工作区", async (t) => {
+  const f = await fixture(t, "new-api-videos");
+  await f.db.query("UPDATE wallets SET balance=2000");
+  const { bytes } = await video(t, 7.8);
+  const asset = async (available: boolean, admin = false) => {
+    const id = randomUUID();
+    await f.db.query(
+      "INSERT INTO assets(id,workspace_id,owner_id,object_key,mime,size,state,original_kind,metadata) VALUES($1::uuid,$2,$3,$4,'video/mp4',$5,'ready','video','{}')",
+      [
+        id,
+        admin ? f.workspace.id : f.memberSpace.id,
+        admin ? f.admin.id : f.member.id,
+        id,
+        bytes.length,
+      ],
+    );
+    if (available) await f.p.storage.put(id, bytes, "video/mp4");
+    return id;
+  };
+  const badStorage = await asset(true),
+    goodStorage = await asset(true, true),
+    missingStorage = await asset(false);
+  const createChild = async (admin: boolean) => {
+    if (!admin) return (await f.admit()).job;
+    const body = {
+      model: f.model,
+      params: { seconds: 8 },
+      prompt: "另一个工作区",
+      uid: randomUUID(),
+      price_revision: (
+        await one(f.db, "SELECT price_revision FROM studio_policy")
+      ).price_revision,
+    };
+    const res = await f.requestAs("POST", "/api/jobs", body, 0);
+    assert.equal(res.status, 200);
+    return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [res.body.id]);
+  };
+  const children: Record<string, any>[] = [];
+  for (let index = 0; index < 19; index++) {
+    const child = await createChild(index === 18);
+    const parentId =
+      "c0000000-0000-4000-8000-" + String(index).padStart(12, "0");
+    const assetId =
+      index < 16
+        ? badStorage
+        : index === 16
+          ? randomUUID()
+          : index === 17
+            ? missingStorage
+            : goodStorage;
+    await f.db.query(
+      `INSERT INTO jobs(id,workspace_id,owner_id,model_id,connection_id,provider_model,kind,
+      input,idempotency_key,request_hash,price,catalog_id,price_revision,state,source_kind,route_revision_id,price_revision_id,native_snapshot,meter,result)
+      SELECT $2,workspace_id,owner_id,model_id,connection_id,provider_model,kind,input,$3,request_hash,price,catalog_id,
+        price_revision,'completed',source_kind,route_revision_id,price_revision_id,native_snapshot,meter,$4 FROM jobs WHERE id=$1`,
+      [child.id, parentId, randomUUID(), JSON.stringify({ assets: [assetId] })],
+    );
+    if (index !== 16)
+      await f.db.query(
+        "INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')",
+        [parentId, assetId],
+      );
+    await f.db.query(
+      "INSERT INTO job_tail_chains(parent_job_id,child_job_id) VALUES($1,$2)",
+      [parentId, child.id],
+    );
+    children.push(child);
+  }
+  const read = f.p.storage.stream.bind(f.p.storage);
+  let temporary = 0;
+  f.p.storage.stream = async (key, ...args) => {
+    if (key === badStorage) {
+      temporary++;
+      throw Object.assign(new Error("storage unavailable"), {
+        code: "ETIMEDOUT",
+      });
+    }
+    return read(key, ...args);
+  };
+  const worker = new Executor(f.p);
+  await worker.recover();
+  await worker.recover();
+  assert.equal(temporary, 16);
+  const childState = async (index: number) =>
+    one(f.db, "SELECT * FROM jobs WHERE id=$1", [children[index].id]);
+  for (const idx of [16, 17]) {
+    assert.equal((await childState(idx)).state, "failed");
+    assert.equal(
+      (
+        await f.db.query(
+          "SELECT 1 FROM ledger WHERE job_id=$1 AND action='refund'",
+          [children[idx].id],
+        )
+      ).rows.length,
+      1,
+    );
+  }
+  assert.equal(Number((await f.p.wallet(f.member, f.memberSpace.id)).held), 16 * 24);
+  const healthy = await childState(18);
+  assert.equal(healthy.state, "queued");
+  assert.equal(healthy.input.references.length, 1);
+  assert.equal(
+    (await f.db.query("SELECT * FROM job_tail_chains")).rows.length,
+    16,
+  );
+});
+
+test("共享媒体交付模块可作为独立 ESM 入口启动", () => {
+  execFileSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      'await import("@fumiao/platform/model-access/media-delivery.js")',
+    ],
+    { stdio: "pipe" },
   );
 });

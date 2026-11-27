@@ -676,6 +676,7 @@ test("PostgreSQL contribution cutover preserves settled history and quarantines 
         route_revision_id: null,
         price_revision_id: null,
         native_snapshot: null,
+        native_polling_url: null,
         meter: null,
       },
     );

@@ -1,3 +1,4 @@
+import { DefiniteSubmissionFailure } from "./submission-failure.js";
 import { ArtifactValidationError } from "@fumiao/plugin-sdk/preparation.js";
 import { one, type Sql } from "../db.js";
 import type { Platform } from "../platform.js";
@@ -7,7 +8,6 @@ import { DomainError, requireValue } from "../security.js";
 import { prepareVideoParameters } from "./video-parameters.js";
 import { routeScopeAllows, type FrozenModelRoute } from "./publication.js";
 import {
-  DefiniteSubmissionFailure,
   discard,
   interruptedMediaSubmission,
   leased,
@@ -61,7 +61,14 @@ async function jsonResponse(
     throw new InvalidVideo();
   }
   const bytes = await readBody(response.body, 256 * 1024, signal);
-  return JSON.parse(bytes.toString("utf8"));
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    // A lost create response may represent a paid order. A completed GET with
+    // no protocol document cannot identify any deliverable on this job.
+    if (submitting) throw error;
+    throw new InvalidVideo();
+  }
 }
 
 function matchesPolling(raw: unknown, expected: string) {
@@ -145,7 +152,7 @@ async function createVideo(
     if (!current) return;
     await sql.query(
       "UPDATE jobs SET remote_id=$2,native_polling_url=$3 WHERE id=$1",
-      [job.id, result.id, valid ? location : null],
+      [job.id, result.id, location],
     );
     if (!valid) {
       await interruptedMediaSubmission(p, sql, current);

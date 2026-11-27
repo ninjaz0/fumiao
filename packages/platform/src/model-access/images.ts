@@ -1,3 +1,4 @@
+import { DefiniteSubmissionFailure } from "./submission-failure.js";
 import { ArtifactValidationError } from "@fumiao/plugin-sdk/preparation.js";
 import { one } from "../db.js";
 import type { Platform } from "../platform.js";
@@ -13,7 +14,6 @@ import {
   type ImageOutput,
 } from "./image-receipt.js";
 import {
-  DefiniteSubmissionFailure,
   discard,
   interruptedMediaSubmission,
   leased,

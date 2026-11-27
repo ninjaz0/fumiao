@@ -60,7 +60,9 @@ export async function extractTailFrame(
       await run([]);
     }
     const bytes = await readFile(outPath);
-    const meta = await sharp(bytes, { limitInputPixels: 64_000_000 }).metadata();
+    const meta = await sharp(bytes, {
+      limitInputPixels: 64_000_000,
+    }).metadata();
     requireValue(
       meta.width && meta.height && bytes.length > 0,
       422,
@@ -72,13 +74,30 @@ export async function extractTailFrame(
   }
 }
 
+class MissingTailSource extends Error {}
+
 async function materializeStorageObject(
   p: Platform,
   objectKey: string,
   destPath: string,
   signal: AbortSignal,
 ) {
-  const src = await p.storage.stream(objectKey, undefined, undefined, signal);
+  const src = await p.storage
+    .stream(objectKey, undefined, undefined, signal)
+    .catch((error: unknown) => {
+      const fault = error as NodeJS.ErrnoException & {
+        $metadata?: { httpStatusCode?: number };
+      };
+      if (
+        fault.code === "ENOENT" ||
+        [fault.code, fault.name].some(
+          (code) => code === "NoSuchKey" || code === "NotFound",
+        ) ||
+        fault.$metadata?.httpStatusCode === 404
+      )
+        throw new MissingTailSource();
+      throw error;
+    });
   await pipeline(src, createWriteStream(destPath, { mode: 0o600 }), { signal });
 }
 
@@ -95,7 +114,12 @@ export async function createTailFrameAsset(
   const videoPath = join(dir, "source.mp4");
   let frame: TailFrameResult;
   try {
-    await materializeStorageObject(p, sourceAsset.object_key, videoPath, signal);
+    await materializeStorageObject(
+      p,
+      sourceAsset.object_key,
+      videoPath,
+      signal,
+    );
     frame = await extractTailFrame(videoPath, signal);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -141,10 +165,7 @@ export async function createTailFrameAsset(
 
 /** Check whether migration 044 (`job_tail_chains`) has been applied on this database. */
 export async function hasTailChainTable(sql: Sql): Promise<boolean> {
-  const row = await one(
-    sql,
-    "SELECT to_regclass('job_tail_chains') AS name",
-  );
+  const row = await one(sql, "SELECT to_regclass('job_tail_chains') AS name");
   return Boolean(row?.name);
 }
 
@@ -156,84 +177,72 @@ export async function hasTailChainTable(sql: Sql): Promise<boolean> {
  */
 export async function wakeTailFrameChildren(
   p: Platform,
-  parentJob: { id: string; workspace_id: string; owner_id: string; kind: string },
+  parentJob: {
+    id: string;
+    workspace_id: string;
+    owner_id: string;
+    kind: string;
+  },
   parentState: "completed" | "failed" | "cancelled",
   parentVideoAssetId: string | undefined,
   signal: AbortSignal,
 ): Promise<number> {
   if (parentJob.kind !== "video") return 0;
   if (!(await hasTailChainTable(p.db))) return 0;
-  const waiting = (
-    await p.db.query(
-      `SELECT j.id FROM job_tail_chains c
-       JOIN jobs j ON j.id=c.child_job_id
-       WHERE c.parent_job_id=$1 AND j.state='queued' AND j.deleted_at IS NULL`,
-      [parentJob.id],
-    )
-  ).rows;
-  if (!waiting.length) return 0;
-
-  if (parentState !== "completed" || !parentVideoAssetId) {
-    let settledCount = 0;
-    await p.db.transaction(async (sql) => {
-      const children = (
-        await sql.query(
-          `SELECT j.* FROM job_tail_chains c
-           JOIN jobs j ON j.id=c.child_job_id
-           WHERE c.parent_job_id=$1 AND j.state='queued' AND j.deleted_at IS NULL
-           FOR UPDATE OF j`,
-          [parentJob.id],
-        )
-      ).rows;
-      for (const child of children) {
-        await sql.query(
-          "DELETE FROM job_tail_chains WHERE child_job_id=$1",
-          [child.id],
+  return p.db.transaction(async (sql) => {
+    const children = (
+      await sql.query(
+        `SELECT j.* FROM job_tail_chains c JOIN jobs j ON j.id=c.child_job_id
+       WHERE c.parent_job_id=$1 AND j.state='queued' AND j.deleted_at IS NULL
+       ORDER BY j.id FOR UPDATE OF c,j`,
+        [parentJob.id],
+      )
+    ).rows;
+    if (!children.length) return 0;
+    const videoAsset =
+      parentState === "completed" && parentVideoAssetId
+        ? await one(
+            sql,
+            "SELECT id, public_id, object_key FROM assets WHERE id=$1 AND workspace_id=$2 AND state='ready' FOR SHARE",
+            [parentVideoAssetId, parentJob.workspace_id],
+          )
+        : undefined;
+    let tail: Awaited<ReturnType<typeof createTailFrameAsset>> | undefined;
+    if (videoAsset) {
+      try {
+        tail = await createTailFrameAsset(
+          p,
+          sql,
+          parentJob.owner_id,
+          parentJob.workspace_id,
+          {
+            id: videoAsset.id,
+            public_id: videoAsset.public_id,
+            object_key: videoAsset.object_key,
+          },
+          signal,
         );
+      } catch (error) {
+        if (!(error instanceof MissingTailSource)) throw error;
+      }
+    }
+    if (!tail) {
+      for (const child of children) {
+        await sql.query("DELETE FROM job_tail_chains WHERE child_job_id=$1", [
+          child.id,
+        ]);
         await p.settle(
           sql,
           child,
           "failed",
           undefined,
-          "前置镜头生成失败，已自动取消后续串联镜头并退回积分",
+          parentState === "completed"
+            ? "前置镜头成片已不可用，已退回后续镜头的冻结积分"
+            : "前置镜头生成失败，已自动取消后续串联镜头并退回积分",
         );
-        settledCount++;
       }
-    });
-    return settledCount;
-  }
-
-  const videoAsset = await one(
-    p.db,
-    "SELECT id,public_id,object_key FROM assets WHERE id=$1 AND state='ready'",
-    [parentVideoAssetId],
-  );
-  if (!videoAsset) return 0;
-
-  let woken = 0;
-  await p.db.transaction(async (sql) => {
-    const children = (
-      await sql.query(
-        `SELECT j.* FROM job_tail_chains c
-         JOIN jobs j ON j.id=c.child_job_id
-         WHERE c.parent_job_id=$1 AND j.state='queued' AND j.deleted_at IS NULL
-         FOR UPDATE OF j`,
-        [parentJob.id],
-      )
-    ).rows;
-    if (!children.length) return;
-    const tail = await createTailFrameAsset(
-      p,
-      sql,
-      parentJob.owner_id,
-      parentJob.workspace_id,
-      {
-        id: String(videoAsset.id),
-        public_id: String(videoAsset.public_id),
-        object_key: String(videoAsset.object_key),
-      },
-      signal,
-    );
+      return children.length;
+    }
     for (const child of children) {
       const input = structuredClone(child.input ?? {}) as Record<string, any>;
       const refs: string[] = Array.isArray(input.references)
@@ -242,22 +251,25 @@ export async function wakeTailFrameChildren(
       if (!refs.includes(tail.id)) refs.unshift(tail.id);
       input.references = refs;
       input.params = { ...(input.params ?? {}) };
-      if (input.params.h3_inputs && typeof input.params.h3_inputs === "object") {
+      if (
+        input.params.h3_inputs &&
+        typeof input.params.h3_inputs === "object"
+      ) {
         input.params.h3_inputs = {
           ...input.params.h3_inputs,
           mode: "frames",
           first_frame: tail.id,
         };
       }
-      if (child.source_kind !== "builtin") input.params.tail_inherited_from = videoAsset.public_id;
+      if (child.source_kind !== "builtin")
+        input.params.tail_inherited_from = videoAsset!.public_id;
       await sql.query(
-        "UPDATE jobs SET input=$2,updated_at=now() WHERE id=$1",
+        "UPDATE jobs SET input=$2,request_retry_at=NULL,request_note=NULL,updated_at=now() WHERE id=$1",
         [child.id, JSON.stringify(input)],
       );
-      await sql.query(
-        "DELETE FROM job_tail_chains WHERE child_job_id=$1",
-        [child.id],
-      );
+      await sql.query("DELETE FROM job_tail_chains WHERE child_job_id=$1", [
+        child.id,
+      ]);
       await sql.query(
         "INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'input') ON CONFLICT DO NOTHING",
         [child.id, tail.id],
@@ -266,10 +278,9 @@ export async function wakeTailFrameChildren(
         "INSERT INTO outbox(job_id,available_at) VALUES($1,now()) ON CONFLICT (job_id) DO UPDATE SET available_at=now(),sent_at=NULL",
         [child.id],
       );
-      woken++;
     }
+    return children.length;
   });
-  return woken;
 }
 
 export type TailFrameActor = Actor;
