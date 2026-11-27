@@ -200,6 +200,10 @@ export type StudioState = {
   };
   flow: { configured: boolean };
   pricing: {
+    published?: {
+      model: string;
+      price: import("@fumiao/web-compat/model-access.js").PublishedPrice;
+    }[];
     items: {
       key: string;
       model: string;

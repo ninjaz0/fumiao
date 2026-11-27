@@ -35,7 +35,7 @@ export async function listedStudioCatalog(
       : "";
   return `(SELECT c.* FROM studio_catalog c
     LEFT JOIN studio_packages p ON p.id=c.plugin_id
-    WHERE COALESCE(p.installed,
+    WHERE c.plugin_id IS NULL OR COALESCE(p.installed,
       NOT EXISTS (SELECT 1 FROM studio_plugin_profile WHERE mode='compatible')
       OR EXISTS (SELECT 1 FROM connections s WHERE s.plugin_id=c.plugin_id
         AND NOT s.removed AND NOT s.fmworker_resource_driver)
@@ -68,4 +68,25 @@ export async function queuedModelPolicy(sql: Sql) {
   return (await hasStudioPackages(sql))
     ? "(j.package_version IS NOT NULL OR " + current + ")"
     : current;
+}
+
+export async function hasModelAccess(sql: Sql) {
+  return Boolean(
+    (await one(sql, "SELECT to_regclass('model_access_publications') AS name"))
+      .name,
+  );
+}
+
+/** Imports also run against schemas predating native model ownership. */
+export async function adoptedModels(
+  sql: Sql,
+  plugin: string,
+): Promise<Set<string>> {
+  if (!(await hasModelAccess(sql))) return new Set();
+  const rows = await sql.query<{ id: string }>(
+    `SELECT c.id FROM studio_catalog c WHERE c.source_kind='builtin' AND
+     (c.adopted_from_plugin=$1 OR EXISTS (SELECT 1 FROM studio_shared_models s WHERE s.model_id=c.id AND s.plugin_id=$1))`,
+    [plugin],
+  );
+  return new Set(rows.rows.map((row) => row.id));
 }

@@ -1,3 +1,4 @@
+import { adoptedModels } from "./studio-plugin-profile.js";
 import {
   addressPause,
   connectionBase,
@@ -708,6 +709,7 @@ export class StudioPackages {
       revision: number;
       pause: AddressPause | null;
     }[] = [];
+    const adopted = await adoptedModels(this.p.db,file.id);
     for (const s of services) {
       const previous = this.p.vault.open(s.config),
         extra = supplements[s.id] ?? {};
@@ -747,7 +749,13 @@ export class StudioPackages {
           "不能向新的服务地址转发已有密钥",
         );
       }
-      if (adapter.manifest.mode === "request" && !pause)
+      const fullyAdopted =
+        adopted.size > 0 &&
+        adapter.manifest.chat &&
+        connectionModels(adapter, config).every((model) =>
+          adopted.has(model.id),
+        );
+      if (adapter.manifest.mode === "request" && !pause && !fullyAdopted)
         requireValue(
           await adapter.health(config, AbortSignal.timeout(10000)),
           409,
@@ -944,7 +952,8 @@ export class StudioPackages {
           file.id,
         ])
       ).rows;
-      for (const m of inspected.models.filter((m) => m.studio)) {
+      const adopted = await adoptedModels(sql, file.id);
+      for (const m of inspected.models.filter((m) => m.studio && !adopted.has(m.id))) {
         const peers = await sql.query(
           `SELECT v.id,v.manifest FROM studio_catalog c JOIN plugin_versions v ON (v.id,v.version)=(c.plugin_id,c.plugin_version) WHERE c.id=$1 AND c.plugin_id<>$2
           UNION SELECT p.id,v.manifest FROM studio_shared_models s JOIN studio_packages p ON p.id=s.plugin_id AND p.installed JOIN studio_package_releases r ON (r.id,r.version)=(p.id,p.version)
@@ -1063,7 +1072,7 @@ export class StudioPackages {
           "UPDATE models SET catalog_id=NULL,enabled=false WHERE connection_id=$1",
           [service.id],
         );
-        for (const m of connectionModels(adapter, config))
+        for (const m of connectionModels(adapter, config).filter(m => !adopted.has(m.id)))
           await sql.query(
             `INSERT INTO models(id,connection_id,provider_model,label,kind,schema,catalog_id) VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6)
             ON CONFLICT(connection_id,provider_model) DO UPDATE SET label=excluded.label,kind=excluded.kind,schema=excluded.schema,catalog_id=excluded.catalog_id`,
@@ -1090,7 +1099,7 @@ export class StudioPackages {
         );
         const added = Object.fromEntries(
           manifest.models
-            .filter((m) => m.studio && !before.some((r) => r.id === m.id))
+            .filter((m) => m.studio && !adopted.has(m.id) && !before.some((r) => r.id === m.id))
             .map((m) => [m.id, false]),
         );
         await sql.query(
@@ -1139,7 +1148,7 @@ export class StudioPackages {
       CASE WHEN r.package ? 'extensionOnly' THEN 'extension' ELSE v.manifest->>'mode' END AS mode,
       CASE WHEN v.manifest->'queue'->>'strategy'='capacity' THEN 16 ELSE 1 END AS "defaultConcurrency",
       (SELECT COALESCE(jsonb_agg(jsonb_build_object('id',c.id,'label',COALESCE(c.display_label,c.descriptor->>'label'),'kind',c.descriptor->>'kind','enabled',COALESCE((g.flags->>c.id)::boolean,false), 'service',s.connection_id,'services',(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',x.id,'name',x.name) ORDER BY x.name,x.id),'[]'::jsonb) FROM connections x JOIN models m ON m.connection_id=x.id JOIN studio_packages t ON t.id=x.plugin_id AND t.installed AND NOT t.removing WHERE m.catalog_id=c.id AND x.enabled AND NOT x.removed)) ORDER BY c.position,c.id),'[]'::jsonb)
-        FROM studio_catalog c CROSS JOIN studio_policy g LEFT JOIN studio_model_service s ON s.model_id=c.id WHERE (c.plugin_id=p.id OR EXISTS(SELECT 1 FROM studio_shared_models e WHERE e.model_id=c.id AND e.plugin_id=p.id)) AND NOT c.hidden) AS choices, ARRAY(SELECT m->>'label' FROM jsonb_array_elements(v.manifest->'models') m WHERE m ? 'studio' AND COALESCE((m->>'hidden')::boolean,false)=false) AS models
+        FROM studio_catalog c CROSS JOIN studio_policy g LEFT JOIN studio_model_service s ON s.model_id=c.id WHERE c.plugin_id IS NOT NULL AND (c.plugin_id=p.id OR EXISTS(SELECT 1 FROM studio_shared_models e WHERE e.model_id=c.id AND e.plugin_id=p.id)) AND NOT c.hidden) AS choices, ARRAY(SELECT m->>'label' FROM jsonb_array_elements(v.manifest->'models') m WHERE m ? 'studio' AND COALESCE((m->>'hidden')::boolean,false)=false AND NOT EXISTS(SELECT 1 FROM studio_catalog owned WHERE owned.id=m->>'id' AND owned.plugin_id IS NULL)) AS models
       FROM studio_packages p JOIN studio_package_releases r USING(id,version)
       LEFT JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion' WHERE p.installed AND (v.id IS NOT NULL OR r.package ? 'extensionOnly') ORDER BY label,p.id`)
     ).rows;

@@ -1,3 +1,4 @@
+import { publishModels } from "@fumiao/platform/model-access/publication.js";
 import { ModelAccessConnections } from "@fumiao/platform/model-access/connections.js";
 import type { HttpTransport } from "@fumiao/platform/plugin-host.js";
 import type {
@@ -23,11 +24,18 @@ export class OriginalModelAccess {
   }
   async view(actor: OriginalActor): Promise<ModelAccessView> {
     this.identity.p.admin(actor);
-    return this.connections.view();
+    return this.connections.view(this.identity.p);
   }
   async create(actor: OriginalActor, input: unknown): Promise<ModelConnection> {
     this.identity.p.admin(actor);
     return this.connections.create(input);
+  }
+  async reuse(actor: OriginalActor, input: unknown) {
+    this.identity.p.admin(actor);
+    return this.connections.reuse(this.identity.p, input);
+  }
+  async publish(actor: OriginalActor, input: unknown) {
+    return publishModels(this.identity.p, actor, input);
   }
   async edit(
     actor: OriginalActor,

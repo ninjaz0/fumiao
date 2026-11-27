@@ -8,7 +8,7 @@ import {
   requirePublicHttps,
   type HttpTransport,
 } from "../plugin-host.js";
-import { requireValue, type Vault } from "../security.js";
+import { hash, requireValue, type Vault } from "../security.js";
 import {
   discoverModels,
   isOpenRouter,
@@ -17,6 +17,10 @@ import {
   type Discovery,
   type Directory,
 } from "./discovery.js";
+
+import { publicationView } from "./published-routes.js";
+import { ChatProviders, type ChatConnection } from "../chat-providers.js";
+import type { Platform } from "../platform.js";
 
 const purpose = z.enum(["chat", "image", "video"]);
 const videoFormat = z.enum(["new-api-videos", "openrouter-videos"]);
@@ -40,7 +44,7 @@ const fields = {
 const createInput = z.object(fields).strict();
 const editInput = createInput
   .partial()
-  .extend({ expected_revision: revision })
+  .extend({ expected_revision: revision, enabled: z.boolean().optional() })
   .strict();
 const price = z
   .string()
@@ -105,11 +109,12 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 type VideoFormat = z.infer<typeof videoFormat>;
-type Protocol =
+export type Protocol =
   "openai-chat" | "openai-images" | "openrouter-images" | VideoFormat;
 interface Config {
   base_url: string;
   api_key: string;
+  borrowed?: { donor: string; borrower: string; digest: string };
   default_video_protocol: VideoFormat | null;
 }
 const allEndpoints = [
@@ -138,12 +143,16 @@ interface ConnectionRow {
   revision_id: string;
   config: string;
   credential_scope: CredentialScope;
+  original_id: string | null;
+  original_revision: number | null;
+  original_models: Record<string, unknown> | null;
+  enabled: boolean;
 }
 type NativeHttp = HttpTransport<string | Uint8Array>;
 const joinRevision = `FROM connections c JOIN model_access_connection_revisions r
-  ON r.connection_id=c.id AND r.revision=c.revision WHERE c.source_kind='builtin' AND NOT c.removed`;
+  ON r.connection_id=c.id AND r.revision=c.revision LEFT JOIN model_access_reused_connections reuse ON reuse.connection_id=c.id WHERE c.source_kind='builtin' AND NOT c.removed`;
 const selectConnection =
-  "SELECT c.id,c.name,c.revision,r.id revision_id,r.config,r.credential_scope " +
+  "SELECT c.id,c.name,c.revision,c.enabled,r.id revision_id,r.config,r.credential_scope,reuse.original_id,reuse.original_revision,reuse.original_models " +
   joinRevision;
 async function current(
   sql: Sql,
@@ -188,7 +197,16 @@ function connectionView(row: ConnectionRow, config: Config) {
     revision_id: row.revision_id,
     base_url: config.base_url,
     directory_url: config.base_url + "/models",
-    credentials_configured: !!config.api_key,
+    credentials_configured: !!config.api_key || !!config.borrowed,
+    enabled: row.enabled,
+    credential_scope: row.credential_scope,
+    reused_from: row.original_id
+      ? {
+          id: row.original_id,
+          revision: row.original_revision!,
+          models: Object.keys(row.original_models ?? {}),
+        }
+      : null,
     default_video_protocol: config.default_video_protocol,
   };
 }
@@ -204,6 +222,98 @@ async function writeRevision(
     "INSERT INTO model_access_connection_revisions(id,connection_id,revision,config,credential_scope) VALUES($1,$2,$3,$4,$5)",
     [randomUUID(), id, n, vault.seal(config), JSON.stringify(scope)],
   );
+}
+
+// A borrowed revision contains only references and a digest of the originally
+// authorized key. Replacing or removing that grant affects even a cached client.
+async function currentKey(sql: Sql, vault: Vault, config: Config) {
+  if (!config.borrowed) return config.api_key;
+  const grant = config.borrowed;
+  const row = await one(
+    sql,
+    `SELECT donor.config AS donor, borrower.config AS borrower,
+      v.manifest FROM connections donor JOIN connections borrower ON borrower.id=$2
+      JOIN plugin_versions v ON (v.id,v.version)=(borrower.plugin_id,borrower.plugin_version)
+      WHERE donor.id=$1 AND NOT donor.removed AND NOT borrower.removed
+      AND donor.sandbox_address_pause IS NULL AND borrower.sandbox_address_pause IS NULL
+      AND borrower.plugin_id='compatible-chat'
+      AND EXISTS (SELECT 1 FROM studio_catalog c WHERE c.id='gpt-image-2.6-sunburst'
+                  AND (c.plugin_id,c.plugin_version)=(donor.plugin_id,donor.plugin_version))`,
+    [grant.donor, grant.borrower],
+  );
+  const source = row && vault.open(row.borrower);
+  const provider = row?.manifest.chat?.providers?.find(
+    (p: { id: string }) => p.id === "openai",
+  );
+  const key = row && vault.open(row.donor).apiKey;
+  requireValue(
+    source?.provider === "openai" &&
+      !source.apiKey &&
+      provider?.models?.length === 1 &&
+      provider.models[0] === "gpt-4.1" &&
+      provider.defaultConfig.baseUrl === "https://api.openai.com/v1/" &&
+      (row.manifest.chat.sandbox ||
+        (provider.credentialFallback?.model === "gpt-image-2.6-sunburst" &&
+          provider.credentialFallback.field === "apiKey")) &&
+      (source.baseUrl || provider.defaultConfig.baseUrl)?.replace(
+        /\/+$/,
+        "",
+      ) === config.base_url &&
+      config.base_url === "https://api.openai.com/v1" &&
+      typeof key === "string" &&
+      hash(key) === grant.digest,
+    403,
+    "借用凭据的原授权已撤销",
+  );
+  return key as string;
+}
+
+export async function originalModelSnapshots(
+  sql: Sql,
+  ids: string[],
+  plugin: string,
+) {
+  const result = await sql.query(
+    `SELECT c.id, jsonb_build_object('plugin_version',c.plugin_version,
+    'descriptor',c.descriptor,'prices',(SELECT jsonb_object_agg(key,amount::text) FROM studio_prices WHERE model_id=c.id)) AS snapshot
+    FROM studio_catalog c WHERE c.id=ANY($1::text[]) AND c.plugin_id=$2`,
+    [ids, plugin],
+  );
+  return Object.fromEntries(result.rows.map((row) => [row.id, row.snapshot]));
+}
+function reusable(source: ChatConnection) {
+  return (
+    source.plugin.manifest.id === "compatible-chat" &&
+    source.row &&
+    source.configured &&
+    (!source.borrowedFrom ||
+      (source.provider.id === "openai" &&
+        source.provider.models.length === 1 &&
+        source.provider.models[0] === "gpt-4.1" &&
+        String(
+          source.config.baseUrl || source.provider.defaultConfig.baseUrl,
+        ).replace(/\/+$/, "") === "https://api.openai.com/v1"))
+  );
+}
+export async function reusableConnections(sql: Sql, p: Platform) {
+  if (
+    !(await one(
+      sql,
+      "SELECT 1 FROM studio_catalog WHERE plugin_id='compatible-chat' LIMIT 1",
+    ))
+  )
+    return [];
+  const providers = await new ChatProviders(p).read(sql);
+  return [...providers.values()].filter(reusable).map((source) => ({
+    id: String(source.row!.id),
+    revision: Number(source.row!.revision),
+    name: String(source.row!.name),
+    base_url: String(
+      source.config.baseUrl || source.provider.defaultConfig.baseUrl,
+    ).replace(/\/+$/, ""),
+    models: source.provider.models,
+    borrowed: !!source.borrowedFrom,
+  }));
 }
 
 // Resolve by immutable ID, including revisions that no longer accept new work.
@@ -222,11 +332,12 @@ export async function resolveConnectionRevision(
   requireValue(row, 404, "连接修订不存在");
   const config = configOf(vault, row.config);
   const scope: CredentialScope = row.credential_scope;
+  const resolvedKey = await currentKey(sql, vault, config);
   return {
     base_url: config.base_url,
     default_video_protocol: config.default_video_protocol,
     containsCredential(text: string) {
-      return text.includes(config.api_key);
+      return text.includes(resolvedKey);
     },
     async request(
       input: {
@@ -294,7 +405,11 @@ export async function resolveConnectionRevision(
       const url = new URL(config.base_url + "/" + path);
       requirePublicHttps(url);
       const headers: Record<string, string> = {
-        Authorization: "Bearer " + config.api_key,
+        Authorization:
+          "Bearer " +
+          (config.borrowed
+            ? await currentKey(sql, vault, config)
+            : resolvedKey),
       };
       if (input.content_type) headers["Content-Type"] = input.content_type;
       return http(
@@ -330,14 +445,90 @@ export class ModelAccessConnections {
       return connectionView(await current(sql, id), config);
     });
   }
+  async reuse(p: Platform, value: unknown) {
+    const input = parse(
+      z
+        .object({ connection_id: z.uuid(), expected_revision: revision })
+        .strict(),
+      value,
+    );
+    return this.db.transaction(async (sql) => {
+      await sql.query(
+        "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",
+      );
+      await sql.query("SELECT price_revision FROM studio_policy FOR SHARE");
+      const sources = await new ChatProviders(p).read(sql, true);
+      const source = [...sources.values()].find(
+        (s) => s.row?.id === input.connection_id,
+      );
+      requireValue(
+        source && reusable(source),
+        409,
+        "旧连接没有可复用的兼容凭据",
+      );
+      expected(source.row!.revision, input.expected_revision);
+      const address = await baseUrl(
+        String(source.config.baseUrl || source.provider.defaultConfig.baseUrl),
+      );
+      const key = parse(credential, source.config.apiKey);
+      const config: Config = {
+        base_url: address,
+        api_key: source.borrowedFrom ? "" : key,
+        default_video_protocol: null,
+      };
+      let scope = directScope;
+      if (source.borrowedFrom) {
+        config.borrowed = {
+          donor: source.borrowedFrom,
+          borrower: input.connection_id,
+          digest: hash(key),
+        };
+        scope = {
+          endpoints: ["models", "chat/completions"],
+          upstream_ids: ["gpt-4.1"],
+        };
+        await currentKey(sql, this.vault, config);
+      }
+      const id = randomUUID();
+      await sql.query(
+        "INSERT INTO connections(id,name,source_kind,config,enabled) VALUES($1,$2,'builtin',$3,true)",
+        [id, source.row!.name, this.vault.seal({})],
+      );
+      await writeRevision(sql, this.vault, id, 1, config, scope);
+      const snapshots = await originalModelSnapshots(
+        sql,
+        source.provider.models,
+        source.plugin.manifest.id,
+      );
+      await sql.query(
+        "INSERT INTO model_access_reused_connections VALUES($1,$2,$3,$4)",
+        [
+          id,
+          input.connection_id,
+          input.expected_revision,
+          JSON.stringify(snapshots),
+        ],
+      );
+      return connectionView(await current(sql, id), config);
+    });
+  }
   async edit(id: string, value: unknown) {
     const input = parse(editInput, value);
     const address =
       input.base_url === undefined ? undefined : await baseUrl(input.base_url);
     return this.db.transaction(async (sql) => {
+      if (input.enabled !== undefined)
+        await sql.query("SELECT price_revision FROM studio_policy FOR UPDATE");
       const row = await current(sql, id, true);
       expected(row.revision, input.expected_revision);
       const saved = configOf(this.vault, row.config);
+      requireValue(
+        !input.api_key ||
+          !saved.borrowed ||
+          hash(input.api_key) !== saved.borrowed.digest,
+        400,
+        "扩展借用范围须填写独立密钥",
+      );
       requireValue(
         !address || address === saved.base_url || input.api_key,
         400,
@@ -346,6 +537,9 @@ export class ModelAccessConnections {
       const config = {
         base_url: address ?? saved.base_url,
         api_key: input.api_key ?? saved.api_key,
+        ...(!input.api_key && saved.borrowed
+          ? { borrowed: saved.borrowed }
+          : {}),
         default_video_protocol:
           input.default_video_protocol === undefined
             ? saved.default_video_protocol
@@ -360,9 +554,17 @@ export class ModelAccessConnections {
         input.api_key ? directScope : row.credential_scope,
       );
       await sql.query(
-        "UPDATE connections SET name=$2,revision=revision+1 WHERE id=$1",
-        [id, input.name ?? row.name],
+        "UPDATE connections SET name=$2,enabled=$3,revision=revision+1 WHERE id=$1",
+        [id, input.name ?? row.name, input.enabled ?? row.enabled],
       );
+      if (input.enabled !== undefined && input.enabled !== row.enabled) {
+        await sql.query(
+          `UPDATE studio_policy SET price_revision=price_revision+1 WHERE EXISTS (
+          SELECT 1 FROM model_access_publications p JOIN model_access_route_revisions r ON r.id=p.route_revision_id
+          WHERE r.connection_id=$1)`,
+          [id],
+        );
+      }
       const edited = await current(sql, id);
       if (
         saved.base_url === config.base_url &&
@@ -479,7 +681,7 @@ export class ModelAccessConnections {
       return { draft: draftView(row) };
     });
   }
-  async view() {
+  async view(p?: Platform) {
     return this.db.transaction(async (sql) => {
       await sql.query(
         "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
@@ -509,6 +711,8 @@ export class ModelAccessConnections {
           candidates: d.candidates,
         })),
         drafts: drafts.rows.map(draftView),
+        publications: await publicationView(sql),
+        reusable_connections: p ? await reusableConnections(sql, p) : [],
       };
     });
   }
@@ -585,7 +789,7 @@ function draftSelection(
     missing: reasons,
   };
 }
-interface DraftRow {
+export interface DraftRow {
   id: string;
   connection_id: string;
   connection_revision: number;

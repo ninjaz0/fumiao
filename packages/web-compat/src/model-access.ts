@@ -51,6 +51,7 @@ export interface CreateModelConnection {
   default_video_protocol?: VideoProtocol | null;
 }
 export interface EditModelConnection extends Partial<CreateModelConnection> {
+  enabled?: boolean;
   expected_revision: number;
 }
 export interface ModelConnection {
@@ -61,6 +62,12 @@ export interface ModelConnection {
   base_url: string;
   directory_url: string;
   credentials_configured: boolean;
+  reused_from: { id: string; revision: number; models: string[] } | null;
+  enabled: boolean;
+  credential_scope: {
+    endpoints: readonly string[];
+    upstream_ids: readonly string[] | null;
+  };
   default_video_protocol: VideoProtocol | null;
 }
 export interface ModelDiscovery {
@@ -114,7 +121,61 @@ export interface ModelDraft extends Omit<
   status: "ready" | "draft";
   missing: string[];
 }
+export type PublishedPrice =
+  | {
+      kind: "chat";
+      input: string;
+      output: string;
+      cache_read: string | null;
+      cache_write: string | null;
+    }
+  | { kind: "image" | "video"; unit: string };
+export type PublicationItem =
+  | {
+      draft_id: string;
+      draft_revision: number;
+      action: "create" | "standby" | "activate";
+      catalog_id?: string;
+      expected_revision?: number;
+      label?: string;
+      replace_price?: boolean;
+    }
+  | {
+      action: "activate";
+      catalog_id: string;
+      expected_revision: number;
+      route_revision_id: string;
+    };
+export interface ModelPublication {
+  catalog_id: string;
+  revision: number;
+  price_revision_id: string;
+  route_revision_id: string;
+  label: string;
+  price: PublishedPrice;
+  routes: {
+    route_revision_id: string;
+    connection_id: string;
+    connection_revision_id: string;
+    model_id: string;
+    draft_id: string;
+    draft_revision: number;
+    upstream_id: string;
+    protocol: ModelProtocol;
+    capabilities: ModelDraft["parameters"];
+    enabled: boolean;
+  }[];
+}
 export interface ModelAccessView {
+  publications: ModelPublication[];
+  reusable_connections: {
+    id: string;
+    revision: number;
+    name: string;
+    base_url: string;
+    models: string[];
+    borrowed: boolean;
+  }[];
   connections: ModelConnection[];
   discoveries: (ModelDiscovery & {
     connection_id: string;

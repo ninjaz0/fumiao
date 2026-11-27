@@ -1,3 +1,4 @@
+import { adoptedModels } from "./studio-plugin-profile.js";
 import {
   addressPause,
   connectionBase,
@@ -134,7 +135,10 @@ export class Operations {
         );
       if (input.activateCatalog)
         await new StudioCatalog(this.p.db).activate(sql, plugin.manifest);
-      for (const model of plugin.manifest.models.filter((m) => m.studio)) {
+      const adopted = await adoptedModels(sql, plugin.manifest.id);
+      for (const model of plugin.manifest.models.filter(
+        (m) => m.studio && !adopted.has(m.id),
+      )) {
         const active = await one(
           sql,
           "SELECT plugin_version FROM studio_catalog WHERE id=$1 AND plugin_id=$2",
@@ -167,7 +171,7 @@ export class Operations {
         "UPDATE models SET enabled=false,catalog_id=NULL WHERE connection_id=$1",
         [id],
       );
-      for (const model of connectionModels(plugin, input.config))
+      for (const model of connectionModels(plugin, input.config).filter(m => !adopted.has(m.id)))
         await sql.query(
           `INSERT INTO models(id,connection_id,provider_model,label,kind,schema,catalog_id) VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6)
         ON CONFLICT(connection_id,provider_model) DO UPDATE SET label=EXCLUDED.label,kind=EXCLUDED.kind,schema=EXCLUDED.schema,catalog_id=EXCLUDED.catalog_id`,

@@ -1,4 +1,5 @@
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
+import { hasModelAccess } from "@fumiao/platform/studio-plugin-profile.js";
 import { ChatProviders } from "@fumiao/platform/chat-providers.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { requireValue, DomainError } from "@fumiao/platform/security.js";
@@ -29,6 +30,20 @@ export class OriginalChatSettings {
           if (flags[model.id] && configured && row?.enabled !== false)
             models[model.id] = model.studio!.descriptor;
         }
+      }
+      if (await hasModelAccess(sql)) {
+        const native =
+          await sql.query(`SELECT c.id, c.descriptor, c.display_label
+          FROM model_access_publications p JOIN studio_catalog c ON c.id=p.catalog_id
+          JOIN model_access_route_revisions r ON r.id=p.route_revision_id JOIN connections s ON s.id=r.connection_id
+          WHERE p.purpose='chat' AND s.enabled AND NOT s.removed ORDER BY c.position,c.id`);
+        for (const row of native.rows)
+          if (flags[row.id]) {
+            models[row.id] = {
+              ...row.descriptor,
+              label: row.display_label ?? row.descriptor.label,
+            };
+          }
       }
       return {
         models,

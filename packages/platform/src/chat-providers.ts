@@ -1,5 +1,6 @@
 import type { Platform } from "./platform.js";
 import {
+  adoptedModels,
   studioPluginProfile,
   listedStudioCatalog,
 } from "./studio-plugin-profile.js";
@@ -15,6 +16,7 @@ export type ChatConnection = {
   storedConfig: Record<string, unknown>;
   config: Record<string, unknown>;
   configured: boolean;
+  borrowedFrom?: string;
 };
 // Older Studio accounts share the image connection's credential with this exact
 // provider and these two endpoints. Sandbox manifests cannot create such grants.
@@ -65,7 +67,15 @@ export class ChatProviders {
       WHERE v.manifest->'chat' IS NOT NULL ORDER BY v.id,v.version`)
     ).rows;
     const result = new Map<string, ChatConnection>();
-    if (!versions.length && (await studioPluginProfile(sql))) return result;
+    if (
+      !versions.length &&
+      ((await studioPluginProfile(sql)) ||
+        (await one(
+          sql,
+          "SELECT 1 FROM studio_catalog WHERE plugin_id IS NULL AND descriptor->>'kind'='chat' LIMIT 1",
+        )))
+    )
+      return result;
     requireValue(versions.length, 503, "原对话插件尚未完整启用");
     const packaged = await hasStudioPackages(sql);
     const liveConnections = packaged ? " AND NOT removed" : "";
@@ -103,7 +113,13 @@ export class ChatProviders {
         503,
         "原对话连接配置无效",
       );
-      for (const provider of plugin.manifest.chat!.providers) {
+      const adopted = await adoptedModels(sql, v.id);
+      for (const definition of plugin.manifest.chat!.providers) {
+        const provider = {
+          ...definition,
+          models: definition.models.filter((id) => !adopted.has(id)),
+        };
+        if (!provider.models.length) continue;
         requireValue(!result.has(provider.id), 503, "原对话提供方连接存在歧义");
         const active = (
           await sql.query(
@@ -126,7 +142,8 @@ export class ChatProviders {
         let config = { ...storedConfig };
         // An imported service may use a custom host. Only inherit a credential
         // for the provider's declared destination on managed installations.
-        const fallback = inheritedKey(plugin, provider, config, !!managed);
+        let borrowedFrom: string | undefined;
+        const fallback = inheritedKey(plugin, definition, config, !!managed);
         if (!plugin.chatConfigured!(config) && fallback) {
           const model = await one(
             sql,
@@ -136,7 +153,7 @@ export class ChatProviders {
           if (model) {
             const candidates = (
               await sql.query(
-                "SELECT config FROM connections WHERE plugin_id=$1 AND plugin_version=$2" +
+                "SELECT id,config FROM connections WHERE plugin_id=$1 AND plugin_version=$2" +
                   liveConnections +
                   " ORDER BY id" +
                   (lock ? " FOR SHARE" : ""),
@@ -159,6 +176,7 @@ export class ChatProviders {
                 imagePlugin.originalState?.configured(value) &&
                 typeof value[fallback.field] === "string"
               ) {
+                borrowedFrom = candidates[0].id;
                 config = plugin.chatConfigure!(
                   config,
                   value[fallback.field] as string,
@@ -174,6 +192,7 @@ export class ChatProviders {
           provider,
           row: matches[0]?.row,
           storedConfig,
+          borrowedFrom,
           config,
           configured:
             !matches[0]?.row.sandbox_address_pause &&

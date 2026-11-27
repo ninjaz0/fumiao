@@ -30,6 +30,16 @@ export class OriginalModelAccessController {
     return this.service.create(req.actor, body);
   }
 
+  @Post("connections/reuse")
+  @HttpCode(200)
+  reuse(@Req() req: OriginalAuthRequest, @Body() body: unknown) {
+    return this.service.reuse(req.actor, body);
+  }
+  @Post("publications")
+  @HttpCode(200)
+  publish(@Req() req: OriginalAuthRequest, @Body() body: unknown) {
+    return this.service.publish(req.actor, body);
+  }
   @Patch("connections/:id")
   edit(
     @Req() req: OriginalAuthRequest,

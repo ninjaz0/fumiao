@@ -1,3 +1,4 @@
+import { adoptedModels } from "./studio-plugin-profile.js";
 import { creditUnits, formatCredits } from "./credit-amount.js";
 import {
   addressPause,
@@ -604,7 +605,9 @@ export class Platform {
         concurrency,
       ],
     );
+    const adopted = await adoptedModels(sql, input.pluginId);
     for (const model of connectionModels(plugin, input.config)) {
+      if (adopted.has(model.id)) continue;
       if (model.studio) {
         const active = await one(
           sql,
