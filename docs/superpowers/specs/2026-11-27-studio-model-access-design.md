@@ -25,7 +25,7 @@
 ## 从连接到第一次使用
 
 1. **添加或复用连接。** 全站管理员输入 API 根地址及密钥，或选一个已保存的兼容对话连接。名称可由主机名生成。后端统一处理尾部斜杠，界面显示即将请求的模型列表地址。带路径前缀的 API 根地址按原前缀使用。
-2. **拉取模型。** 宿主向该连接发送 `GET models`，按上游 ID 去重。网关明确标注了受支持的类型时预选类型。只有 ID 时，管理员可以批量指定用途。空列表、认证失败和请求超时分别反馈。刷新产生新的候选列表，保留已保存的公开模型、价格和关联。上次出现、本次缺失的模型标记供管理员核查。标准模型列表只承诺提供 ID、所有者等基本信息。[模型列表协议](https://developers.openai.com/api/reference/resources/models/methods/list)
+2. **拉取模型。** 宿主向通用连接发送 `GET models`。对于 OpenRouter 等提供专用视频目录的线路，还读取对应目录并按上游 ID 合并能力。网关明确标注了受支持的类型时预选类型。只有 ID 时，管理员可以批量指定用途。空列表、认证失败和请求超时分别反馈。刷新产生新的候选列表，保留已保存的公开模型、价格和关联。上次出现、本次缺失的模型标记供管理员核查。标准模型列表只承诺提供 ID、所有者等基本信息。[模型列表协议](https://developers.openai.com/api/reference/resources/models/methods/list)
 3. **定价上架。** 对话的普通输入价和输出价、媒体的单位售价都支持显式零价，必填项留空则可保存草稿。首次上架同时保存定价、默认线路和目录状态。新增模型依现有全站及团队模型策略决定可见范围。原先已关闭的团队权限在接管时继续生效。「模型接入」负责这些模型的售价，原有模型管理和定价入口引用同一份生效数据。
 4. **选用和换线。** 对话模型进入对话模型选择器，图片、视频进入相应创作入口和画布节点。估价、提交和 Worker 共享同一份公开模型及能力定义。关联线路要求模型类型一致。对于同类型的能力差异，建议列出变化并允许管理员确认切换。例如旧画布保存了 8 秒，新线只支持 4 秒，打开画布时保留原草稿，提交前指出具体节点和可选时长，让创作者决定如何调整。管理操作携带预期修订，并发编辑或报价过期时提示重新确认。
 
@@ -45,13 +45,34 @@
 | --- | --- | --- |
 | 对话 | `POST chat/completions`，流式接收正文及用量，兼容现有对话历史。支持工具的模型沿用已有工具调用流程 | 一条可回看的回复和一张本轮账单 |
 | 图片 | `POST images/generations`，接收图片数据或可下载的成品链接。支持参考图编辑的线路使用 `images/edits` | 验证格式与内容后写入工作区私有素材，每张有效成品计一次 |
-| 视频 | 实现历史 Videos 协议的兼容网关，`POST videos` 提交，`GET videos/{id}` 查询，完成后从 `GET videos/{id}/content` 下载 | 按同一上游任务号取回成片，验证后读取媒体时长 |
+| 视频 | 建议优先支持 OpenAI Videos 兼容网关和 OpenRouter Videos，各自按线路的协议发送请求和读取回执，具体覆盖范围待确认 | 保存上游任务号，按原线路取回成片，验证后按实际时长结算 |
 
-上述视频路径是第三方网关可以实现的一种协议。OpenAI 官方 Videos 服务已于 2026-09-24 停用。首版可用实现该契约的模拟网关验收，实际运营网关需核对其创建、查询和下载协议。[对话流及用量](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events) · [图片接口](https://developers.openai.com/api/reference/cli/resources/images) · [视频接口与停用说明](https://developers.openai.com/api/reference/resources/videos/methods/create)
+OpenAI 官方 Videos 服务于 2026-09-24 停用，New API 等网关仍发布兼容接口。接入范围以目标网关对外提供的协议为准。[对话流及用量](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events) · [图片接口](https://developers.openai.com/api/reference/cli/resources/images) · [OpenAI 视频接口与停用说明](https://developers.openai.com/api/reference/resources/videos/methods/create) · [New API 视频路由](https://docs.newapi.pro/en/docs/guide/feature-guide/user/log)
 
-建议只有 ID 时也能用基础文本对话、文生图和文生视频上架。额外能力放在线路的可选设置里。认可的网关元数据或旧模型声明可以预填，管理员也可依网关文档勾选工具调用、参考图编辑，并填写允许的尺寸及视频时长。基础视频档建议使用协议的 4 秒预设。保存时校验参数类型、取值及默认值归属。拉取列表或保存设置都只发只读探测。已有任务快照包含受理时实际确认的能力和参数。
+认可的网关元数据或旧模型声明可以预填能力。列表只有 ID 时，管理员可指定用途，按已知协议使用基础能力。工具、参考图、尺寸、时长等可在线路上确认。视频按该模型支持的时长提供选项。若目录缺少时长，优先采用该模型有文档依据的默认值或已有线路配置，也允许管理员补充。上架时只做只读探测。已有任务快照包含受理时确认的能力和参数。
 
 受理时保存公开模型、上游模型、执行器版本、线路与加密配置版本、价格版本、计费方式及输入参数。异步视频同时持久化上游任务号。Worker 重启后按既有任务号恢复查询与下载。提交结果不确定时沿用任务的待核查路径，避免重发产生第二笔上游订单。凭据遵守现有公网 HTTPS 及实际连接目的地检查。跨源媒体下载按既有匿名下载和私有资产权限规则处理。
+
+### 视频接口调研 · 2026-11-27
+
+以下为公开契约与项目源码的对照。查资料时实际读取了 OpenRouter 的公有模型目录，未向这些服务提交生成订单。表中采用各家文档的路径，相对路径从该服务的 API 根地址起算。
+
+| 服务或线路 | 如何创建 | 如何等到结果、取得成片 |
+| --- | --- | --- |
+| OpenAI Videos 兼容网关，以 New API 为例 | `POST /v1/videos`。其 OpenAPI 定义用 multipart 表单，时长为 `seconds`，参考图为 `input_reference` | 用任务 ID 查 `GET /v1/videos/{id}`，完成后经鉴权读取 `/content`。New API 还公开了单独的旧版 `/v1/video/generations` 路由。[请求定义](https://github.com/QuantumNous/new-api/blob/main/docs/openapi/relay.json) · [查询与取片](https://docs.newapi.pro/en/docs/guide/feature-guide/user/log) |
+| OpenRouter | `POST /api/v1/videos` 发 JSON，用 `duration` 表示时长，`frame_images` 区分首尾帧 | 创建返回任务 ID 和 `polling_url`。完成后使用返回的内容地址下载。另有 `GET /api/v1/videos/models` 提供模型级时长、分辨率和宽高比。[视频 API](https://openrouter.ai/docs/guides/overview/multimodal/video-generation) |
+| 火山方舟 Seedance | `POST /api/v3/contents/generations/tasks`，内容数组可区分提示词、首帧与参考素材 | 用 ID 查询同一路径下的任务，成功后读 `content.video_url`。也可指定回调地址接收状态变化。[方舟教程](https://console.volcengine.com/ark/region%3Acn-beijing/docs/video-generation-tutorial) |
+| 阿里云百炼万相及百炼托管的可灵 | `POST /api/v1/services/aigc/video-generation/video-synthesis`，带 `X-DashScope-Async: enable`，模型、输入和生成参数分别传入 | 取 `output.task_id`，查 `GET /api/v1/tasks/{task_id}`。万相示例从成功回执的 `output.video_url` 下载有时效的成片。[万相](https://help.aliyun.com/zh/model-studio/text-to-video-guide) · [百炼托管的可灵](https://docs.bailian.console.aliyun.com/zh/model-studio/kling-video-generation-api-reference) |
+| 可灵 4.0 官方直连 | 如 `POST /text-to-video/kling-4.0`，模型名进入请求路径，不同创作模式有各自入口 | 用 `GET /tasks?task_ids=…` 查询并获取结果地址。同一个可灵模型通过百炼上架时，应使用上一行的百炼协议。[可灵 4.0 调用指南](https://kling.ai/document-api/api/usage-guide/kling-4-0) |
+| xAI 视频 | `POST /v1/videos/generations`，JSON 中传模型、提示词、时长及可选图片 | 返回 `request_id`，查 `GET /v1/videos/{request_id}`，完成后下载 `video.url`。[生成与查询](https://docs.x.ai/developers/model-capabilities/video/generation) |
+| MiniMax | 历史 v1 与 H3 的 v2 均创建异步任务 | v1 查询得到 `file_id`，再用文件接口换下载地址。H3 v2 查询成功直接给出 `task.content.url`。需要把协议版本随单保存。[v1 文件流程](https://github.com/MiniMax-AI/skills/blob/main/skills/frontend-dev/references/minimax-video-guide.md) · [v2 调用示例](https://platform.minimax.io/docs/guides/video-generation) |
+| Google Cloud Veo | 向所选项目、地区和模型的 `:predictLongRunning` 提交任务 | 以 operation 名调用 `:fetchPredictOperation`。配置输出存储时读取 Cloud Storage 对象，省略时可从响应取得 Base64 视频。[Veo REST 示例](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/generate-videos-from-text) |
+
+还有两类接口会持续占用提交时的连接。vLLM-Omni 另提供面向基准测试的 `/v1/videos/sync`，同步返回视频字节。弗淼现有 Flow 通过 `POST /v1/chat/completions` 接收 SSE，在流结束时解析成品地址。Flow 的流属于特定服务约定。Muse 虽同样向 `/v1/videos` 提交，却发送带 `duration` 的 JSON，从查询回执的 URL 取片。仅凭路径无法区分这些行为。[vLLM-Omni 视频接口](https://github.com/vllm-project/vllm-omni/blob/main/docs/serving/videos_api.md) · [Flow](../../../plugins/flow/package/policy.js) · [Muse](../../../plugins/muse/package/policy.js)
+
+**对设置的建议。** 已识别的服务地址直接套用内置调用格式，自定义地址支持在线路上确认一次格式。一条连接可承载不同格式的模型。管理员继续只管理公开模型、售价和当前线路。拉取模型与能力属于只读操作，创建视频是可能产生费用的写操作，两者在设置中分开。OpenRouter 的公开目录本次返回 30 项，例如 Seedance 2.5 Flash 返回了时长、分辨率和画幅，有些条目的时长列表为空。空值表示目录没有给出枚举。[公开目录](https://openrouter.ai/api/v1/videos/models) · [字段说明](https://openrouter.ai/docs/guides/overview/multimodal/video-generation)
+
+**对执行和验收的建议。** 首批用 New API 格式和 OpenRouter 格式分别验证创建、重启后追踪和取片。文生视频与首帧生视频分别验收，确认秒数字段和参考图传递正确。自动时长只在能向用户给出本次扣费上限时开放，最终以私有素材实测时长结算。临时 URL 在有效期内转存，下载失败只重试已有成品。轮询和可选回调共用一条任务和结算记录。只有流式结果的线路若断流且没有可查询的任务号，则标为结果待核查。直连厂商的先后顺序由首批运营线路决定，本表记录的服务均为调研样本。
 
 ## 对话用量、价格和逐轮账单
 
