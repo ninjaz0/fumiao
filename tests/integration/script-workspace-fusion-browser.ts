@@ -1299,6 +1299,36 @@ try {
     let failNextPackPut = false;
     let holdStaleGetOnce = false;
     let releaseStaleGet: (() => void) | null = null;
+    let staleGetFulfilledResolve: (() => void) | null = null;
+    let blockCanvasPutForPackId: string | null = null;
+    await page.route(
+      `**/api/canvases/${canvasPacks.id}/document`,
+      async (route) => {
+        const req = route.request();
+        if (req.method() === "PUT" && blockCanvasPutForPackId) {
+          const body = req.postDataJSON?.() as
+            | {
+                document?: {
+                  nodes?: { asset_packs?: { id: string }[] }[];
+                };
+              }
+            | undefined;
+          const carriesTargetPack = Boolean(
+            body?.document?.nodes?.some((n) =>
+              n.asset_packs?.some((p) => p.id === blockCanvasPutForPackId),
+            ),
+          );
+          if (carriesTargetPack) {
+            await route.fulfill({
+              status: 503,
+              json: { detail: "测试保持待删素材包引用仅在本地草稿" },
+            });
+            return;
+          }
+        }
+        await route.continue();
+      },
+    );
     await page.route(/\/api\/asset-packs(?:\/|$|\?)/, async (route) => {
       const req = route.request();
       if (req.method() === "PUT" && failNextPackPut) {
@@ -1317,6 +1347,7 @@ try {
           releaseStaleGet = resolve;
         });
         await route.fulfill({ response: staleResp, json: staleJson });
+        staleGetFulfilledResolve?.();
         return;
       }
       await route.continue();
@@ -1425,9 +1456,15 @@ try {
     await expect(packDialog).toHaveCount(0);
 
     // Release CanvasWorkspace's older held GET (which carries stale speakerName!) and verify it does NOT overwrite renamedPackName
+    const staleGetFulfilled = new Promise<void>((resolve) => {
+      staleGetFulfilledResolve = resolve;
+    });
     (releaseStaleGet as (() => void) | null)?.();
     releaseStaleGet = null;
-    await page.waitForTimeout(150);
+    await staleGetFulfilled;
+    await page.evaluate(
+      () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+    );
 
     // Shot 1 speaker no longer matches -> falls back to default paid tts-1 (2 credits > 0 available) -> disabled!
     await expect(lineSynthBtn).toBeDisabled();
@@ -1453,7 +1490,16 @@ try {
     await expect(batchSynthBtn).toBeEnabled();
     await expect(sbDock.getByText("当前空间积分不足")).toHaveCount(0);
 
-    // (e) Import whole pack onto shot-pack-sync, re-open modal, delete selected pack -> onRemovePack closes modal AND dialogue flips to disabled!
+    // (e) Import whole pack onto shot-pack-sync (holding draft reference off DB so 800ms auto-save cannot race DELETE 409),
+    //     deterministically wait for the intercepted 503 PUT & .save-error state to settle first, then re-open modal and delete selected pack ->
+    //     real DELETE 200 + onRemovePack closes modal + clean post-remove canvas PUT 200 + dialogue flips to disabled!
+    blockCanvasPutForPackId = createdPack.id;
+    const blockedImportPutWait = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/canvases/${canvasPacks.id}/document`) &&
+        r.request().method() === "PUT" &&
+        r.status() === 503,
+    );
     await openPackBtn.click();
     await expect(packDialog).toBeVisible();
     await packDialog
@@ -1463,20 +1509,204 @@ try {
       .getByRole("button", { name: "导入整个素材包", exact: true })
       .click();
     await expect(packDialog).toHaveCount(0);
+    await blockedImportPutWait;
+    await expect(page.locator(".save-state.save-error")).toBeVisible();
 
     await openPackBtn.click();
     await expect(packDialog).toBeVisible();
     await packDialog
       .getByRole("button", { name: `删除 ${speakerName}`, exact: true })
       .click();
+    const realDeleteWait = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/asset-packs/${createdPack.id}`) &&
+        r.request().method() === "DELETE" &&
+        r.status() === 200,
+    );
+    const cleanPostRemovePutWait = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/canvases/${canvasPacks.id}/document`) &&
+        r.request().method() === "PUT" &&
+        r.status() === 200,
+    );
     await packDialog
       .getByRole("button", { name: "删除素材包", exact: true })
       .click();
+    await realDeleteWait;
     // onRemovePack automatically closes the modal on selected-pack deletion!
     await expect(packDialog).toHaveCount(0);
     await expect(lineSynthBtn).toBeDisabled();
     await expect(batchSynthBtn).toBeDisabled();
     await expect(sbDock.getByText("当前空间积分不足")).toBeVisible();
+    await cleanPostRemovePutWait;
+    await expect(page.locator(".save-state.save-error")).toHaveCount(0);
+    blockCanvasPutForPackId = null;
+
+    // (f) Same-workspace duplicate-name packs with distinct `updated` seconds:
+    //     lock / scope / turnaround-binding mutations bump `updated_at` on the server and flip speaker matching & balance gate in CanvasWorkspace!
+    const waitNextSecondAfter = async (prevUnixSec: number) => {
+      while (Math.floor(Date.now() / 1000) <= prevUnixSec) {
+        await new Promise((r) => setTimeout(r, 40));
+      }
+    };
+    const freeDesc = `同名旧免费包_${runTag}`;
+    const paidDesc = `同名新收费包_${runTag}`;
+    const freePackRes = await context.request.post("/api/asset-packs", {
+      headers,
+      data: {
+        name: speakerName,
+        purpose: "subject",
+        description: freeDesc,
+        media: [refAsset.id],
+        voice_profile: { model: "edge-tts" },
+      },
+    });
+    assert.equal(freePackRes.status(), 200, await freePackRes.text());
+    const olderFreePack = await freePackRes.json();
+
+    await waitNextSecondAfter(Number(olderFreePack.updated));
+    const paidPackRes = await context.request.post("/api/asset-packs", {
+      headers,
+      data: {
+        name: speakerName,
+        purpose: "subject",
+        description: paidDesc,
+        media: [refAsset.id],
+        voice_profile: { model: "tts-1" },
+      },
+    });
+    assert.equal(paidPackRes.status(), 200, await paidPackRes.text());
+    const newerPaidPack = await paidPackRes.json();
+    assert.ok(
+      Number(newerPaidPack.updated) > Number(olderFreePack.updated),
+      `expected newerPaidPack.updated (${newerPaidPack.updated}) > olderFreePack.updated (${olderFreePack.updated})`,
+    );
+
+    // Lock olderFreePack at a strictly newer second -> bumps updated_at -> free edge-tts wins -> enabled!
+    await waitNextSecondAfter(Number(newerPaidPack.updated));
+    await openPackBtn.click();
+    await expect(packDialog).toBeVisible();
+    const freeArticle = packDialog
+      .locator("article")
+      .filter({ hasText: freeDesc });
+    await expect(freeArticle).toBeVisible();
+    const lockWait = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/asset-packs/${olderFreePack.id}/lock`) &&
+        r.request().method() === "POST" &&
+        r.status() === 200,
+    );
+    await freeArticle
+      .getByRole("button", { name: `锁定 ${speakerName}`, exact: true })
+      .click();
+    const lockedFreeJson = await (await lockWait).json();
+    assert.ok(Number(lockedFreeJson.updated) > Number(newerPaidPack.updated));
+    await packDialog.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(packDialog).toHaveCount(0);
+    await expect(lineSynthBtn).toBeEnabled();
+    await expect(batchSynthBtn).toBeEnabled();
+    await expect(sbDock.getByText("当前空间积分不足")).toHaveCount(0);
+
+    // Change scope on newerPaidPack at a strictly newer second -> bumps updated_at -> paid tts-1 wins -> disabled!
+    await waitNextSecondAfter(Number(lockedFreeJson.updated));
+    await openPackBtn.click();
+    await expect(packDialog).toBeVisible();
+    await packDialog
+      .locator("article")
+      .filter({ hasText: paidDesc })
+      .getByRole("button", { name: `打开素材包 ${speakerName}` })
+      .click();
+    const scopeWait = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/asset-packs/${newerPaidPack.id}/scope`) &&
+        r.request().method() === "PUT" &&
+        r.status() === 200,
+    );
+    await packDialog
+      .getByRole("button", { name: "发布到全局", exact: true })
+      .click();
+    const scopedPaidJson = await (await scopeWait).json();
+    assert.ok(Number(scopedPaidJson.updated) > Number(lockedFreeJson.updated));
+    await packDialog.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(packDialog).toHaveCount(0);
+    await expect(lineSynthBtn).toBeDisabled();
+    await expect(batchSynthBtn).toBeDisabled();
+    await expect(sbDock.getByText("当前空间积分不足")).toBeVisible();
+
+    // Unlock olderFreePack & save turnaround view bindings at a strictly newer second -> bumps updated_at -> free edge-tts wins again -> enabled!
+    await waitNextSecondAfter(Number(scopedPaidJson.updated));
+    await openPackBtn.click();
+    await expect(packDialog).toBeVisible();
+    await packDialog
+      .locator("article")
+      .filter({ hasText: freeDesc })
+      .getByRole("button", { name: `打开素材包 ${speakerName}` })
+      .click();
+    const unlockWait = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/asset-packs/${olderFreePack.id}/unlock`) &&
+        r.request().method() === "POST" &&
+        r.status() === 200,
+    );
+    await packDialog
+      .getByRole("button", { name: "解锁素材包", exact: true })
+      .click();
+    const unlockedFreeJson = await (await unlockWait).json();
+
+    // Bring paid pack ahead in the SAME canvas mount via UI toggleScope ("收回工作区") so saveTurnaroundBindings alone is proven to flip disabled -> enabled!
+    await waitNextSecondAfter(Number(unlockedFreeJson.updated));
+    await packDialog
+      .getByRole("button", { name: "返回素材包列表", exact: true })
+      .click();
+    await packDialog
+      .locator("article")
+      .filter({ hasText: paidDesc })
+      .getByRole("button", { name: `打开素材包 ${speakerName}` })
+      .click();
+    const reScopeWait = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/asset-packs/${newerPaidPack.id}/scope`) &&
+        r.request().method() === "PUT" &&
+        r.status() === 200,
+    );
+    await packDialog
+      .getByRole("button", { name: "收回工作区", exact: true })
+      .click();
+    const reScopedPaidJson = await (await reScopeWait).json();
+    assert.ok(Number(reScopedPaidJson.updated) > Number(unlockedFreeJson.updated));
+    await packDialog.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(packDialog).toHaveCount(0);
+    await expect(lineSynthBtn).toBeDisabled();
+
+    await waitNextSecondAfter(Number(reScopedPaidJson.updated));
+    await openPackBtn.click();
+    await expect(packDialog).toBeVisible();
+    await packDialog
+      .locator("article")
+      .filter({ hasText: freeDesc })
+      .getByRole("button", { name: `打开素材包 ${speakerName}` })
+      .click();
+    await packDialog
+      .getByRole("button", { name: "绑定三视图定妆照", exact: true })
+      .click();
+    await packDialog.getByLabel("绑定正面").selectOption(refAsset.id);
+    const turnaroundBindWait = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/asset-packs/${olderFreePack.id}/turnaround`) &&
+        r.request().method() === "POST" &&
+        r.status() === 200,
+    );
+    await packDialog
+      .getByRole("button", { name: "保存三视图绑定", exact: true })
+      .click();
+    const turnJson = await (await turnaroundBindWait).json();
+    assert.equal(turnJson.mode, "attached");
+    assert.ok(Number(turnJson.pack.updated) > Number(reScopedPaidJson.updated));
+    await packDialog.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(packDialog).toHaveCount(0);
+    await expect(lineSynthBtn).toBeEnabled();
+    await expect(batchSynthBtn).toBeEnabled();
+    await expect(sbDock.getByText("当前空间积分不足")).toHaveCount(0);
 
     console.log(
       "PASS script-workspace-fusion-browser: <=760px layout, directory-rename child alignment, slow-search invalidation, draft-safe search/replace, rich+source jump, 2x close/reopen conflict retention, and intra-canvas pack voice/quote sync verified",

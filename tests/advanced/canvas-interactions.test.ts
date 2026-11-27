@@ -1675,7 +1675,7 @@ test("PR #223 Round 5: AssetPacks emits single onPackMutate before modal close/o
     "utf8",
   );
 
-  // Single optional mutation callback emitted on save & delete BEFORE mountedRef early-return and BEFORE onRemovePack
+  // Single optional mutation callback emitted on save, lock/unlock, scope, turnaround-views, & delete BEFORE mountedRef early-return and BEFORE onRemovePack
   assert.match(
     assetPacksSource,
     /onPackMutate\?:\(change:\{kind:'saved';pack:Pack\}\|\{kind:'deleted';id:string\}\)=>void;/,
@@ -1686,6 +1686,25 @@ test("PR #223 Round 5: AssetPacks emits single onPackMutate before modal close/o
   );
   assert.match(
     assetPacksSource,
+    /const toggleLock=async\(target:Pack\)=>\{[\s\S]*?const updated=\(await request\(`\/api\/asset-packs\/\$\{target\.id\}\/\$\{target\.locked\?'unlock':'lock'\}`,\{\},'POST'\)\) as Pack;\s*onPackMutate\?\.\(\{kind:'saved',pack:updated\}\);\s*if\(!mountedRef\.current\)return;/,
+  );
+  assert.match(
+    assetPacksSource,
+    /const toggleScope=async\(target:Pack\)=>\{[\s\S]*?const updated=\(await request\(`\/api\/asset-packs\/\$\{target\.id\}\/scope`,\{scope:nextScope\},'PUT'\)\) as Pack;\s*onPackMutate\?\.\(\{kind:'saved',pack:updated\}\);\s*if\(!mountedRef\.current\)return;/,
+  );
+  const genStart = assetPacksSource.indexOf("const generateTurnaround=");
+  const bindStart = assetPacksSource.indexOf("const saveTurnaroundBindings=");
+  assert.ok(genStart > 0 && bindStart > genStart);
+  assert.doesNotMatch(
+    assetPacksSource.slice(genStart, bindStart),
+    /onPackMutate/,
+  );
+  assert.match(
+    assetPacksSource.slice(bindStart),
+    /const saveTurnaroundBindings=async\(target:Pack\)=>\{[\s\S]*?if\(res\?\.pack\)onPackMutate\?\.\(\{kind:'saved',pack:res\.pack\}\);\s*if\(!mountedRef\.current\)return;/,
+  );
+  assert.match(
+    assetPacksSource,
     /await request\('\/api\/asset-packs\/'\+pack\.id,undefined,'DELETE'\);onPackMutate\?\.\(\{kind:'deleted',id:pack\.id\}\);if\(!mountedRef\.current\)return;[\s\S]*?else if\(wasSelected\)await onRemovePack\(pack\.id\);/,
   );
 
@@ -1693,4 +1712,61 @@ test("PR #223 Round 5: AssetPacks emits single onPackMutate before modal close/o
   assert.match(workspaceSource, /const packsReadSeqRef = useRef\(0\);/);
   assert.match(workspaceSource, /seq === packsReadSeqRef\.current/);
   assert.match(workspaceSource, /onPackMutate=\{\(change\) => \{/);
+
+  // Verify same-workspace duplicate-name packs flip speech quote when lock/scope/turnaround advances `updated`
+  const typesMod = await import("../../apps/web/canvas-editor/types.js");
+  const studioZeroBalance = {
+    workspace_id: 2,
+    canvas_speech_models: ["tts-1", "edge-tts"],
+    canvas_speech_default_models: ["tts-1"],
+    model_catalog: {
+      "tts-1": { kind: "audio", label: "OpenAI TTS-1" },
+      "edge-tts": { kind: "audio", label: "Edge 免费配音" },
+    },
+    model_access: { "tts-1": true, "edge-tts": true },
+    model_policy: { revision: 1, enabled: { "tts-1": true, "edge-tts": true } },
+    pricing: {
+      revision: 1,
+      items: [
+        { key: "tts-1|standard", amount: 2 },
+        { key: "edge-tts|free", amount: 0 },
+      ],
+    },
+    credits: { available: 0, reserved: 0 },
+  };
+  const olderFree = {
+    id: "p_free",
+    workspace: 2,
+    name: "主角",
+    purpose: "subject",
+    updated: 100,
+    media: ["m1"],
+    voice_profile: { model: "edge-tts" },
+  };
+  const newerPaid = {
+    id: "p_paid",
+    workspace: 2,
+    name: "主角",
+    purpose: "subject",
+    updated: 101,
+    media: ["m1"],
+    voice_profile: { model: "tts-1" },
+  };
+  const beforeLock = typesMod.quoteCanvasSpeechPlan({
+    studio: studioZeroBalance,
+    node: { dialogue_lines: [{ id: "d1", speaker: "主角", text: "台词" }] },
+    packs: [newerPaid, olderFree],
+  });
+  assert.equal(beforeLock.dialogue.lineModels.d1, "tts-1");
+  assert.equal(beforeLock.dialogue.unavailableReason, "当前空间积分不足");
+
+  // Locking olderFree bumps its `updated` to 102 -> onPackMutate moves it ahead with updated=102 -> free edge-tts selected!
+  const lockedFree = { ...olderFree, locked: true, updated: 102 };
+  const afterLock = typesMod.quoteCanvasSpeechPlan({
+    studio: studioZeroBalance,
+    node: { dialogue_lines: [{ id: "d1", speaker: "主角", text: "台词" }] },
+    packs: [lockedFree, newerPaid],
+  });
+  assert.equal(afterLock.dialogue.lineModels.d1, "edge-tts");
+  assert.equal(afterLock.dialogue.unavailableReason, "");
 });

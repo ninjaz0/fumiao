@@ -139,7 +139,8 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
  };
  const toggleLock=async(target:Pack)=>{
   setBusy(true);setError('');setNotice('');try{
-   await request(`/api/asset-packs/${target.id}/${target.locked?'unlock':'lock'}`,{},'POST');
+   const updated=(await request(`/api/asset-packs/${target.id}/${target.locked?'unlock':'lock'}`,{},'POST')) as Pack;
+   onPackMutate?.({kind:'saved',pack:updated});
    if(!mountedRef.current)return;
    setNotice(target.locked?`已解锁「${target.name}」`:`已锁定「${target.name}」，防止误改误删`);
    await load();
@@ -148,7 +149,8 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
  const toggleScope=async(target:Pack)=>{
   setBusy(true);setError('');setNotice('');try{
    const nextScope=target.scope==='global'?'workspace':'global';
-   await request(`/api/asset-packs/${target.id}/scope`,{scope:nextScope},'PUT');
+   const updated=(await request(`/api/asset-packs/${target.id}/scope`,{scope:nextScope},'PUT')) as Pack;
+   onPackMutate?.({kind:'saved',pack:updated});
    if(!mountedRef.current)return;
    setNotice(nextScope==='global'?`已将「${target.name}」发布为全局只读资产包`:`已将「${target.name}」收回工作区私有`);
    await load();
@@ -171,7 +173,8 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
     back:turnaroundDraft.back||null,
     sheet:turnaroundDraft.sheet||null,
    };
-   await request(`/api/asset-packs/${target.id}/turnaround`,{views:cleaned},'POST');
+   const res=(await request(`/api/asset-packs/${target.id}/turnaround`,{views:cleaned},'POST')) as {pack?:Pack};
+   if(res?.pack)onPackMutate?.({kind:'saved',pack:res.pack});
    if(!mountedRef.current)return;
    setNotice(`已保存「${target.name}」三视图定妆照绑定`);
    await load();
