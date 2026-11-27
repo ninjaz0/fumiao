@@ -122,11 +122,11 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
    if(lastMessage.current===null&&draft.shots.length){
     const p=pending.current,boundary=s.messages.find((r:any)=>r.role==='assistant'&&(r.state==='running'||(s.conversation.active_turn&&r.turn===s.conversation.active_turn)))||(p?.cid===cid&&s.conversation.revision>p.body.expected_revision?[...s.messages].reverse().find((r:any)=>r.role==='user'&&r.content===p.body.text):null);
     const rows=boundary?s.messages.slice(0,s.messages.indexOf(boundary)):s.messages,previous=[...rows].reverse().find((r:any)=>r.role==='assistant'&&r.state!=='running');
-    if(previous?.state==='complete' && draft.legacy){
+    if(previous?.state==='complete'){
      try{
       parseStoryboard(previous.content);
+      // A bare draft has no original reply ID. Track updates from this point.
       setShotMessage(previous.id);
-      setShotSource({cid,message:previous.id,turn:previous.turn||undefined});
      }catch{/* An invalid reply cannot identify a storyboard. */}
     }
     lastMessage.current=previous?.id||0;
@@ -143,7 +143,7 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
   if(!shots.length)return;
   // Keep the legacy shape while awaiting verification; source:null explicitly
   // marks an edit whose reply is tracked without an attributable receipt.
-  const retainLegacy=draft.legacy && shotMessage===draft.message && !shotSource?.cid;
+  const retainLegacy=draft.legacy && draft.message!==null && shotMessage===draft.message && !shotSource?.cid;
   const source=shotSource??(shotMessage===draft.message?draft.source:null);
   localStorage.setItem(key+'-proposal',JSON.stringify({message:shotMessage,shots,...(retainLegacy?{}:{source})}));
  },[shots,key,draft,shotMessage,shotSource]);

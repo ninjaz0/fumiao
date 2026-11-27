@@ -461,6 +461,11 @@ test("SQLite imports before and after 059 attribute the same settled chat charge
       null,
     ],
     [
+      "escaped duplicate explicit key cannot claim a receipt",
+      (d) => context(d, `{"\\u0070roject":"${project}","project":"${project}"}`),
+      null,
+    ],
+    [
       "cross-workspace project cannot fall back to a linked canvas",
       (d) => {
         Object.assign(d.tables.canvas_projects[1], {
@@ -503,6 +508,29 @@ test("SQLite imports before and after 059 attribute the same settled chat charge
           { public_id: expected, original_amount: true, spends: 1 },
           name + " at " + version,
         );
+        const admin = (await one(
+          f.db,
+          "SELECT * FROM users WHERE public_id=7",
+        )) as OriginalActor;
+        const chats = new OriginalChats(f.p);
+        const message = String(d.tables.chat_turns[0].assistant_message);
+        for (const target of [project, other]) {
+          if (expected === target) {
+            const source = await chats.replySource(
+              admin,
+              message,
+              undefined,
+              target,
+            );
+            assert.equal(source.bill?.charged, "1", name);
+          } else {
+            await assert.rejects(
+              chats.replySource(admin, message, undefined, target),
+              { status: 404 },
+              name,
+            );
+          }
+        }
       } finally {
         await f.cleanup();
       }

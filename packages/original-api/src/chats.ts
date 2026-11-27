@@ -435,7 +435,8 @@ export class OriginalChats {
         const row = await one(
           sql,
           `SELECT c.id,c.public_id,m.content,m.state,t.public_id AS turn,
-          author.public_id AS actor_number,u.context,charge.project_id,d.id AS canvas_id
+          author.public_id AS actor_number,charge.turn_id IS NOT NULL AS has_charge,charge.project_id,d.id AS canvas_id,
+          model_access_legacy_chat_project(COALESCE(NULLIF(u.context,''),'{}')) AS context_project
           FROM chat_messages m JOIN chat_conversations c ON c.id=m.conversation_id
           JOIN documents d ON d.public_id=$3 AND d.workspace_id=c.workspace_id AND d.kind='canvas' AND NOT d.deleted
           LEFT JOIN chat_turns t ON t.assistant_message=m.id
@@ -449,19 +450,14 @@ export class OriginalChats {
         );
         requireValue(row, 404, "内容不存在或无权访问");
         await this.access(sql, actor, row.public_id, workspace.id);
-        // The admission/import charge already carries the historical project,
-        // including provable links. An archived reply may have only user context.
-        let contextProject: unknown;
-        try {
-          contextProject = JSON.parse(row.context ?? "{}")?.project;
-        } catch {
-          /* historical text */
-        }
+        // A recorded charge with unknown ownership stays unassigned. Only an
+        // archive without a charge can establish ownership from the message alone.
+        const contextMatches = row.context_project === project;
         requireValue(
-          (contextProject == null || contextProject === project) &&
-            (row.project_id
-              ? row.project_id === row.canvas_id
-              : contextProject === project),
+          row.has_charge
+            ? row.project_id === row.canvas_id &&
+              (contextMatches || row.context_project === "")
+            : contextMatches,
           404,
           "内容不存在或无权访问",
         );

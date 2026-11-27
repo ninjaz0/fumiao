@@ -705,4 +705,87 @@ test("真实固定价分镜编辑后保留原账单，复制到另一真实画�
       "实扣 1 积分",
     ]);
   });
+  await t.test(
+    "同画布两笔实扣，裸数组只有跟踪游标，重载后不认领后一次账单",
+    async () => {
+      const context = { project: a.id, expected_revision: a.revision };
+      const chat = await f.chats.create(f.admin, { context });
+      const cid = chat.conversation.id;
+      const titles = ["第一轮山林", "第二轮海岸"];
+      let snapshot = chat;
+      let message = 0;
+      for (const [index, title] of titles.entries()) {
+        await f.db.query(
+          "UPDATE studio_prices SET amount=$1 WHERE key='deepseek-flash|reply'",
+          [index + 1],
+        );
+        const sent = await f.chats.send(
+          f.admin,
+          cid,
+          await f.draft(snapshot, { context }),
+        );
+        const turn = await f.turn(sent.conversation.active_turn);
+        await f.chats.finish(turn.id, {
+          state: "complete",
+          text: JSON.stringify([{ ...shot, title }]),
+        });
+        message = sent.messages.at(-1)!.id;
+        const receipt = await f.request(
+          "GET",
+          "/api/chat/messages/" + message + "/source?project=" + a.id,
+        );
+        assert.equal(receipt.body.bill.charged, String(index + 1));
+        snapshot = await f.chats.get(f.admin, cid);
+      }
+      const key = prefix + a.id;
+      const shots = [{ ...shot, title: titles[0] + "（编辑过）" }];
+      await page.evaluate(
+        ({ key, shots }) => {
+          localStorage.removeItem(key + "-chat");
+          localStorage.setItem(key + "-proposal", JSON.stringify(shots));
+        },
+        { key, shots },
+      );
+      await page.reload();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (key) => JSON.parse(localStorage.getItem(key + "-proposal")!),
+            key,
+          ),
+        )
+        .toEqual({ message: null, shots, source: null });
+      await page.evaluate(
+        ({ key, cid }) => localStorage.setItem(key + "-chat", cid),
+        { key, cid },
+      );
+      // Recover the offline draft, then open a bare array directly with the
+      // same active chat and reload its upgraded representation.
+      for (const restoreBareArray of [false, true, false]) {
+        if (restoreBareArray)
+          await page.evaluate(
+            ({ key, shots }) =>
+              localStorage.setItem(key + "-proposal", JSON.stringify(shots)),
+            { key, shots },
+          );
+        const read = page.waitForResponse(
+          (r) => new URL(r.url()).pathname === "/api/chats/" + cid,
+        );
+        await page.reload();
+        await read;
+        await expect(
+          page.locator(".storyboard-proposal input").first(),
+        ).toHaveValue(shots[0].title);
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (key) => JSON.parse(localStorage.getItem(key + "-proposal")!),
+              key,
+            ),
+          )
+          .toEqual({ message, shots, source: null });
+        await expect(page.locator("summary")).toHaveCount(0);
+      }
+    },
+  );
 });

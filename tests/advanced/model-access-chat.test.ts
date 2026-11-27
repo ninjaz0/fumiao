@@ -1323,8 +1323,9 @@ test("分镜来源按实际画布、回合发起人与工作区返回单笔账�
     JSON.stringify(context),
   ]);
   assert.equal(
-    (await f.request("GET", path + a.public_id)).body.bill.charged,
-    "1",
+    (await f.request("GET", path + a.public_id)).status,
+    404,
+    "An adjudicated charge with an unknown project cannot inherit a source from user context",
   );
   const historic = await one(
     f.db,
@@ -1346,6 +1347,43 @@ test("分镜来源按实际画布、回合发起人与工作区返回单笔账�
   assert.equal(archive.status, 200);
   assert.equal(archive.body.turn, null);
   assert.equal(archive.body.bill, null);
+  const archivedPath =
+    "/api/chat/messages/" +
+    historic.public_id +
+    "/source?project=" +
+    a.public_id;
+  await f.db.query("UPDATE chat_charges SET project_id=$2 WHERE turn_id=$1", [
+    turn.id,
+    a.id,
+  ]);
+  for (const value of [
+    `{"project":"${b.public_id}","project":"${a.public_id}"}`,
+    `{"project":"${a.public_id}","\\u0070roject":"${a.public_id}"}`,
+    `{"project":"${b.public_id}"}`,
+    '{"project":null}',
+    "{",
+    "null",
+  ]) {
+    await f.db.query("UPDATE chat_messages SET context=$2 WHERE id=$1", [
+      turn.user_message,
+      value,
+    ]);
+    assert.equal((await f.request("GET", archivedPath)).status, 404, value);
+    assert.equal(
+      (await f.request("GET", path + a.public_id)).status,
+      404,
+      value,
+    );
+  }
+  await f.db.query("UPDATE chat_messages SET context=$2 WHERE id=$1", [
+    turn.user_message,
+    `{"nested":{"project":null},"note":1,"note":2,"\\u0070roject":"${a.public_id}"}`,
+  ]);
+  assert.equal((await f.request("GET", archivedPath)).status, 200);
+  assert.equal(
+    (await f.request("GET", path + a.public_id)).body.bill.charged,
+    "1",
+  );
 });
 
 test("原生画布建议在写入前校验业务对象，拒绝时没有提案或画布变动", async (t) => {
