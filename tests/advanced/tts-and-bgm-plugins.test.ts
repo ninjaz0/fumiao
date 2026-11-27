@@ -1543,3 +1543,361 @@ test("PR #223 Round 3 Item 1 & Item 2: accepted dialogue retries survive disable
   assert.equal(preWithPortable.items[0].model, "portable-tts-pro");
   assert.equal(preWithPortable.items[0].credits, 4);
 });
+
+test("PR #223 Round 4 Items 1, 2 & 4: dialogue old UID + bumped revision rejects 409, unexecutable default speech blocks precheckCanvas, and multi-tier speech pricing matches server tiers without misusing first tier", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+
+  const { OriginalBatchPrecheck } = await import("@fumiao/original-api/batch-precheck.js");
+  const { OriginalState } = await import("@fumiao/original-api/state.js");
+  const typesMod = (await import("../../apps/web/canvas-editor/types.js")) as Record<
+    string,
+    any
+  >;
+
+  // Disable built-in gpu audio connection (breeze-tts-2) so speech models are controlled explicitly
+  await f.p.db.query(
+    `UPDATE connections SET enabled = FALSE
+      WHERE id IN (SELECT connection_id FROM models WHERE kind = 'audio')`,
+  );
+
+  // Install tts-commercial with tts-1 declared as defaultForKind: true (sole policy-allowed speech default!)
+  const pkgs = new StudioPackages(f.p);
+  const ttsPkg = JSON.parse(
+    await readFile("plugins/tts-commercial/tts-commercial.fmplugin.json", "utf8"),
+  );
+  ttsPkg.manifest.canvasSubmission.models[0].defaultForKind = true;
+  await pkgs.install(f.admin, ttsPkg);
+
+  const ttsConn = randomUUID();
+  await f.p.db.query(
+    "INSERT INTO connections(id,name,plugin_id,plugin_version,config,enabled) VALUES ($1,'Default TTS','tts-commercial',$2,$3,true)",
+    [
+      ttsConn,
+      ttsPkg.adapterVersion,
+      f.p.vault.seal({
+        baseUrl: "https://tts.example.invalid",
+        apiKey: "", // Empty apiKey -> schema passes, requireConfigured fails!
+      }),
+    ],
+  );
+  await f.p.db.query(
+    "INSERT INTO models(id,connection_id,catalog_id,provider_model,label,kind,schema,enabled) VALUES ($1,$2,'tts-1','tts-1','OpenAI TTS-1','audio',$3,true)",
+    [randomUUID(), ttsConn, { type: "object", additionalProperties: true }],
+  );
+  await f.p.db.query(
+    `UPDATE studio_policy SET flags = (flags || '{"breeze-tts-2":false,"tts-1":true}'::jsonb) WHERE singleton`,
+  );
+  const ttsInstalled = (
+    await f.p.db.query("SELECT revision FROM studio_packages WHERE id='tts-commercial'")
+  ).rows[0];
+  await pkgs.change(f.admin, "tts-commercial", Number(ttsInstalled.revision), "enable");
+
+  const wsPublicId = String(f.workspace.public_id);
+  await f.p.db.query("UPDATE wallets SET balance = 10, held = 0 WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+
+  const canvasId = await f.project(
+    [
+      {
+        id: "shot1",
+        type: "video",
+        title: "镜头 1",
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 220,
+        prompt: "alley",
+        narration_text: "默认语音未配置密钥时预检应阻断",
+        dialogue_lines: [
+          {
+            id: "line1",
+            speaker: "侦探",
+            text: "第一版对白台词",
+          },
+        ],
+        params: {},
+      },
+    ],
+    [],
+    wsPublicId,
+    f.admin,
+  );
+
+  const stateSvc = new OriginalState(f.p);
+  const precheck = new OriginalBatchPrecheck(f.p);
+
+  // --- Item 2: tts-1 is sole policy-allowed default, connection enabled with apiKey="", no Edge TTS ---
+  const stateUnconfigured = (await stateSvc.read(f.admin, wsPublicId)) as any;
+  assert.deepEqual(stateUnconfigured.canvas_speech_models, []);
+
+  // Direct submit keeps legacy 503 behavior
+  await assert.rejects(
+    f.runs.narrate(f.admin, canvasId, "shot1", {
+      expected_revision: 2,
+      uid: randomUUID(),
+    }),
+    (err: any) => err?.status === 503,
+  );
+  await assert.rejects(
+    f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 2,
+      uid: randomUUID(),
+    }),
+    (err: any) => err?.status === 503,
+  );
+
+  // precheckCanvas MUST block both narration and dialogue with 0 credits!
+  const preUnconfigured = await precheck.precheckCanvas(f.admin, canvasId, {
+    expected_revision: 2,
+    node_ids: ["shot1"],
+    stages: ["narration", "dialogue"],
+  });
+  for (const stage of ["narration", "dialogue"] as const) {
+    const item = preUnconfigured.items.find((i) => i.stage === stage)!;
+    assert.equal(item.status, "blocked", `${stage} must be blocked when default speech has empty apiKey`);
+    assert.equal(item.credits, 0);
+  }
+
+  // --- Item 4: Configure valid apiKey on tts-1, add earlier conditional 50-credit wav tier & 15-credit vip voice tier ---
+  await f.p.db.query(
+    "UPDATE connections SET config = $2 WHERE id = $1",
+    [
+      ttsConn,
+      f.p.vault.seal({
+        baseUrl: "https://tts.example.invalid",
+        apiKey: "sk-valid-tts",
+      }),
+    ],
+  );
+  // Existing tts-1|standard is position=0, amount=2; place wav (50) and vip-clone (15) ahead of standard (2)
+  await f.p.db.query(
+    `UPDATE studio_prices
+        SET position = 10,
+            amount = 2,
+            matcher = $1::jsonb
+      WHERE key = 'tts-1|standard'`,
+    [
+      JSON.stringify({
+        type: "object",
+        not: {
+          anyOf: [
+            { required: ["response_format"], properties: { response_format: { const: "wav" } } },
+            { required: ["voice"], properties: { voice: { const: "vip-clone" } } },
+          ],
+        },
+      }),
+    ],
+  );
+  await f.p.db.query(
+    `INSERT INTO studio_prices(key, model_id, tier, label, position, matcher, amount)
+     VALUES
+       ('tts-1|wav', 'tts-1', 'wav', 'WAV 高清档', -2, $1::jsonb, 50),
+       ('tts-1|vip', 'tts-1', 'vip', 'VIP 声线档', -1, $2::jsonb, 15)`,
+    [
+      JSON.stringify({
+        type: "object",
+        required: ["response_format"],
+        properties: { response_format: { const: "wav" } },
+      }),
+      JSON.stringify({
+        type: "object",
+        required: ["voice"],
+        properties: { voice: { const: "vip-clone" } },
+      }),
+    ],
+  );
+
+  // Wallet balance is 10: multi-tier tts-1 must NOT guess the first 50-credit wav tier or falsely block UI;
+  // real server submission quotes 2 credits for ordinary narration/dialogue (accepted!) and 15 credits (> 10 -> 402!) for vip-clone!
+  const stateMultiTier = (await stateSvc.read(f.admin, wsPublicId)) as any;
+  assert.equal("canvas_speech_price_tiers" in stateMultiTier, false);
+  const ordinaryPlan = typesMod.quoteCanvasSpeechPlan({
+    studio: stateMultiTier,
+    node: {
+      narration_model: undefined,
+      dialogue_lines: [{ id: "line1", speaker: "侦探", text: "普通对白 2 积分" }],
+    },
+    packs: [],
+  });
+  assert.equal(ordinaryPlan.narration.cost, null);
+  assert.equal(ordinaryPlan.narration.costIndeterminate, true);
+  assert.equal(ordinaryPlan.narration.unavailableReason, "");
+  assert.equal(ordinaryPlan.dialogue.lineCosts.line1, null);
+  assert.equal(ordinaryPlan.dialogue.lineReasons.line1, "");
+  assert.equal(ordinaryPlan.dialogue.batchCost, null);
+  assert.equal(ordinaryPlan.dialogue.costIndeterminate, true);
+  assert.equal(ordinaryPlan.dialogue.unavailableReason, "");
+
+  // Real server narration submit quotes 2-credit standard tier (wallet 10 -> held 2, NOT blocked at 50!)
+  const narrRes = await f.runs.narrate(f.admin, canvasId, "shot1", {
+    expected_revision: 2,
+    uid: randomUUID(),
+  });
+  assert.ok(narrRes.id > 0);
+  const heldAfterNarr = Number(
+    (
+      await f.p.db.query("SELECT held FROM wallets WHERE workspace_id = $1", [
+        f.workspace.id,
+      ])
+    ).rows[0].held,
+  );
+  assert.equal(heldAfterNarr, 2);
+  await f.p.db.query(
+    "UPDATE jobs SET state = 'cancelled' WHERE workspace_id = $1",
+    [f.workspace.id],
+  );
+  await f.p.db.query(
+    "UPDATE wallets SET balance = 10, held = 0 WHERE workspace_id = $1",
+    [f.workspace.id],
+  );
+
+  // --- Item 1: Accept dialogue at revision=2 with uidRev2 (also verifies real server 2-credit dialogue quote), edit same line to revision=3, retry with old uidRev2 + expected_revision=3 -> MUST reject 409! ---
+  const uidRev2 = randomUUID();
+  const acceptedRev2 = await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+    expected_revision: 2,
+    uid: uidRev2,
+  });
+  assert.equal(acceptedRev2.items.length, 1);
+  assert.equal(acceptedRev2.items[0].model, "tts-1");
+
+  // Cancel queued job so node isn't busy, then edit line1 text -> canvas becomes revision=3
+  await f.p.db.query("UPDATE jobs SET state = 'cancelled' WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+  const loadedCanvas = await f.canvases.get(f.admin, canvasId);
+  await f.canvases.save(f.admin, canvasId, {
+    title: loadedCanvas.title,
+    expected_revision: 2,
+    document: {
+      ...loadedCanvas.document,
+      nodes: loadedCanvas.document.nodes.map((n: any) =>
+        n.id === "shot1"
+          ? {
+              ...n,
+              dialogue_lines: [
+                {
+                  id: "line1",
+                  speaker: "侦探",
+                  text: "修改到 revision=3 的全新对白台词",
+                },
+              ],
+            }
+          : n,
+      ),
+    },
+  });
+
+  const walletBeforeStaleUid = (
+    await f.p.db.query("SELECT balance, held FROM wallets WHERE workspace_id = $1", [
+      f.workspace.id,
+    ])
+  ).rows[0];
+  const jobsBeforeStaleUid = Number(
+    (
+      await f.p.db.query("SELECT count(*)::int AS c FROM jobs WHERE workspace_id = $1", [
+        f.workspace.id,
+      ])
+    ).rows[0].c,
+  );
+
+  // Re-submitting old uidRev2 with expected_revision=3 MUST reject 409 instead of returning revision=2's job!
+  await assert.rejects(
+    f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 3,
+      uid: uidRev2,
+    }),
+    (err: any) => err?.status === 409,
+  );
+
+  const walletAfterStaleUid = (
+    await f.p.db.query("SELECT balance, held FROM wallets WHERE workspace_id = $1", [
+      f.workspace.id,
+    ])
+  ).rows[0];
+  const jobsAfterStaleUid = Number(
+    (
+      await f.p.db.query("SELECT count(*)::int AS c FROM jobs WHERE workspace_id = $1", [
+        f.workspace.id,
+      ])
+    ).rows[0].c,
+  );
+  assert.deepEqual(walletAfterStaleUid, walletBeforeStaleUid);
+  assert.equal(jobsAfterStaleUid, jobsBeforeStaleUid);
+
+  // Same UID + same revision=3 (both with persisted inputs.revision=3 AND legacy receipt without inputs.revision) still replays cleanly even when all speech engines are disabled!
+  const uidRev3 = randomUUID();
+  const acceptedRev3 = await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+    expected_revision: 3,
+    uid: uidRev3,
+  });
+  await f.p.db.query("UPDATE connections SET enabled = FALSE WHERE id = $1", [ttsConn]);
+  assert.deepEqual(
+    await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 3,
+      uid: uidRev3,
+    }),
+    acceptedRev3,
+  );
+
+  // Strip `revision` from inputs to verify legacy receipt without inputs.revision still replays idempotently
+  await f.p.db.query(
+    `UPDATE canvas_job_links
+        SET inputs = convert_to((convert_from(inputs, 'utf8')::jsonb - 'revision')::text, 'utf8')
+      WHERE uid = $1`,
+    [
+      (
+        await f.p.db.query(
+          "SELECT uid FROM canvas_job_links ORDER BY id DESC LIMIT 1",
+        )
+      ).rows[0].uid,
+    ],
+  );
+  assert.deepEqual(
+    await f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 3,
+      uid: uidRev3,
+    }),
+    acceptedRev3,
+  );
+
+  // Re-enable connection, cancel job, and verify conditional high-price tier (voice_id="vip-clone" -> 15 credits > 10 balance) is rejected by real server submit!
+  await f.p.db.query("UPDATE connections SET enabled = TRUE WHERE id = $1", [ttsConn]);
+  await f.p.db.query("UPDATE jobs SET state = 'cancelled' WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+  await f.p.db.query("UPDATE wallets SET balance = 10, held = 0 WHERE workspace_id = $1", [
+    f.workspace.id,
+  ]);
+  const loadedRev3 = await f.canvases.get(f.admin, canvasId);
+  await f.canvases.save(f.admin, canvasId, {
+    title: loadedRev3.title,
+    expected_revision: 3,
+    document: {
+      ...loadedRev3.document,
+      nodes: loadedRev3.document.nodes.map((n: any) =>
+        n.id === "shot1"
+          ? {
+              ...n,
+              dialogue_lines: [
+                {
+                  id: "line1",
+                  speaker: "VIP",
+                  voice_id: "vip-clone",
+                  text: "命中 15 积分 VIP 声线档位",
+                },
+              ],
+            }
+          : n,
+      ),
+    },
+  });
+  await assert.rejects(
+    f.runs.narrateDialogue(f.admin, canvasId, "shot1", {
+      expected_revision: 4,
+      uid: randomUUID(),
+    }),
+    (err: any) => err?.status === 402 || /积分不足/.test(String(err?.message)),
+  );
+});

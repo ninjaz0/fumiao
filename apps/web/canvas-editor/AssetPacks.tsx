@@ -21,6 +21,8 @@ export type PackTurnaroundViews = {
 };
 export type Pack = {
   id:string;name:string;purpose:string;description:string;media:string[];revision:number;owner:number;
+  workspace?:number;
+  updated?:number;
   voice_profile?:PackVoiceProfile|null;
   turnaround_views?:PackTurnaroundViews|null;
   locked?:boolean;

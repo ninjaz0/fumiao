@@ -39,6 +39,7 @@ export function Narration({
   node,
   runs,
   cost,
+  costIndeterminate = false,
   unavailableReason,
   dialogueUnavailableReason,
   dialogueLineUnavailableReasons,
@@ -53,6 +54,7 @@ export function Narration({
   node: CanvasNode;
   runs: Job[];
   cost: number | null;
+  costIndeterminate?: boolean;
   unavailableReason: string;
   dialogueUnavailableReason?: string;
   dialogueLineUnavailableReasons?: Record<string, string>;
@@ -534,7 +536,7 @@ export function Narration({
                 pending ||
                 !node.narration_text?.trim() ||
                 !!unavailableReason ||
-                cost === null
+                (cost === null && !costIndeterminate)
               }
               onClick={async () => {
                 onEditEnd?.();
@@ -554,7 +556,13 @@ export function Narration({
                 ? "旁白生成中"
                 : busy
                   ? "提交中…"
-                  : `${failed ? "重新生成" : "生成旁白"} · ${cost ?? "未定价"}`}
+                  : `${failed ? "重新生成" : "生成旁白"}${
+                      cost !== null
+                        ? ` · ${cost}`
+                        : costIndeterminate
+                          ? ""
+                          : " · 未定价"
+                    }`}
             </button>
           </div>
         </>

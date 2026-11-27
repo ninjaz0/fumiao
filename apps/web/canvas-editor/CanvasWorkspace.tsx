@@ -837,6 +837,7 @@ export function CanvasWorkspace({
   const [retryingLeave, setRetryingLeave] = useState(false);
   const [headerBottom, setHeaderBottom] = useState(60);
   const [workspaceTop, setWorkspaceTop] = useState(60);
+  const [rightObstruction, setRightObstruction] = useState(0);
   const leaveInFlight = useRef(false);
   const [activeTextNodes,setActiveTextNodes]=useState<string[]>([]);
   const textApplyQueue=useRef<Promise<void>>(Promise.resolve());
@@ -2723,12 +2724,41 @@ export function CanvasWorkspace({
     setWorkspaceTop((prev) =>
       prev === resolved.workspaceTop ? prev : resolved.workspaceTop,
     );
-  }, []);
+    let nextRightObstruction = 0;
+    if (rootRect.width > 760) {
+      const agentEl = root.querySelector<HTMLElement>(
+        ".fm-floating-agent.is-docked",
+      );
+      const sbEl = root.querySelector<HTMLElement>(
+        ".fm-docked-storyboard:not(.fm-full-list)",
+      );
+      const agentInset = agentEl
+        ? Math.max(
+            0,
+            Math.ceil(rootRect.right - agentEl.getBoundingClientRect().left),
+          )
+        : agentDockedWidth;
+      const sbInset = sbEl
+        ? Math.max(
+            0,
+            Math.ceil(rootRect.right - sbEl.getBoundingClientRect().left),
+          )
+        : 0;
+      const rawInset = Math.max(agentInset, sbInset);
+      if (rootRect.width - rawInset >= 260) {
+        nextRightObstruction = rawInset;
+      }
+    }
+    setRightObstruction((prev) =>
+      prev === nextRightObstruction ? prev : nextRightObstruction,
+    );
+  }, [agentDockedWidth]);
   useLayoutEffect(() => {
     measureTopChrome();
   }, [
     measureTopChrome,
     headerBottom,
+    agentDock,
     agentDockedWidth,
     windowSize.w,
     windowSize.h,
@@ -2739,13 +2769,19 @@ export function CanvasWorkspace({
     const root = workspaceRef.current;
     const headerEl = root?.querySelector<HTMLElement>(".canvas-header");
     const switcherEl = root?.querySelector<HTMLElement>(".fm-surface-switcher");
+    const agentEl = root?.querySelector<HTMLElement>(
+      ".fm-floating-agent.is-docked",
+    );
+    const sbEl = root?.querySelector<HTMLElement>(".fm-docked-storyboard");
     if (!root || !headerEl || typeof ResizeObserver === "undefined") return;
     const obs = new ResizeObserver(measureTopChrome);
     obs.observe(headerEl);
     if (switcherEl) obs.observe(switcherEl);
+    if (agentEl) obs.observe(agentEl);
+    if (sbEl) obs.observe(sbEl);
     obs.observe(root);
     return () => obs.disconnect();
-  }, [measureTopChrome]);
+  }, [measureTopChrome, agentDock, viewMode]);
 
   const downloadLocalBackup = (baseDraft: {
     title: string;
@@ -3176,6 +3212,7 @@ export function CanvasWorkspace({
         node={node}
         runs={runs}
         cost={speechPlan.narration.cost}
+        costIndeterminate={speechPlan.narration.costIndeterminate}
         unavailableReason={speechPlan.narration.unavailableReason}
         dialogueUnavailableReason={speechPlan.dialogue.unavailableReason}
         dialogueLineUnavailableReasons={speechPlan.dialogue.lineReasons}
@@ -3249,11 +3286,13 @@ export function CanvasWorkspace({
       ref={workspaceRef}
       className="canvas-workspace"
       data-surface={surface}
+      data-view-mode={viewMode}
       data-composer-open={composerOpen ? "true" : "false"}
       data-selection-toolbar={selectionToolbarOpen ? "true" : "false"}
       style={
         {
           "--fm-agent-width": `${agentDockedWidth}px`,
+          "--fm-right-obstruction": `${rightObstruction}px`,
           "--fm-header-bottom": `${headerBottom}px`,
           "--fm-workspace-top": `${workspaceTop}px`,
         } as React.CSSProperties

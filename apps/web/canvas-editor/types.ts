@@ -7,6 +7,8 @@ import {
 import {
   isBgmMusicModel,
   pickSpeechAudioModel,
+  resolveDialogueVoiceProfile,
+  type SpeechPackCandidate,
 } from "@fumiao/plugin-sdk/speech-routing";
 export type Kind = "text" | "image" | "video" | "sticky" | "plugin" | "group";
 export type CanvasGenerationMode =
@@ -1032,50 +1034,100 @@ export function resolveCanvasSpeechModels(
 function quoteSingleSpeechModel(
   studio: Pick<Studio, "pricing" | "credits">,
   modelId: string,
-): { cost: number | null; unavailableReason: string } {
+): {
+  cost: number | null;
+  costIndeterminate: boolean;
+  unavailableReason: string;
+} {
   if (!modelId) {
-    return { cost: null, unavailableReason: "当前空间未开放语音模型" };
+    return {
+      cost: null,
+      costIndeterminate: false,
+      unavailableReason: "当前空间未开放语音模型",
+    };
   }
-  const priceItem = studio.pricing?.items?.find((p) =>
+  const modelPrices = (studio.pricing?.items ?? []).filter((p) =>
     p.key.startsWith(modelId + "|"),
   );
-  const cost = priceItem
-    ? priceItem.amount
-    : modelId === "edge-tts"
-      ? 0
-      : null;
-  if (cost === null) {
-    return { cost: null, unavailableReason: "语音生成尚未定价" };
+  if (modelPrices.length === 0) {
+    if (modelId === "edge-tts") {
+      return { cost: 0, costIndeterminate: false, unavailableReason: "" };
+    }
+    return {
+      cost: null,
+      costIndeterminate: false,
+      unavailableReason: "语音生成尚未定价",
+    };
   }
-  if ((studio.credits?.available ?? 0) < cost) {
-    return { cost, unavailableReason: "当前空间积分不足" };
+  if (modelPrices.length === 1) {
+    const cost = modelPrices[0].amount;
+    if (cost === null) {
+      return {
+        cost: null,
+        costIndeterminate: false,
+        unavailableReason: "语音生成尚未定价",
+      };
+    }
+    if ((studio.credits?.available ?? 0) < cost) {
+      return {
+        cost,
+        costIndeterminate: false,
+        unavailableReason: "当前空间积分不足",
+      };
+    }
+    return { cost, costIndeterminate: false, unavailableReason: "" };
   }
-  return { cost, unavailableReason: "" };
+
+  const pricedAmounts = modelPrices
+    .map((p) => p.amount)
+    .filter((amount): amount is number => amount !== null);
+  if (pricedAmounts.length === 0) {
+    return {
+      cost: null,
+      costIndeterminate: false,
+      unavailableReason: "语音生成尚未定价",
+    };
+  }
+  const uniqueAmounts = new Set(pricedAmounts);
+  if (
+    pricedAmounts.length === modelPrices.length &&
+    uniqueAmounts.size === 1
+  ) {
+    const cost = pricedAmounts[0];
+    if ((studio.credits?.available ?? 0) < cost) {
+      return {
+        cost,
+        costIndeterminate: false,
+        unavailableReason: "当前空间积分不足",
+      };
+    }
+    return { cost, costIndeterminate: false, unavailableReason: "" };
+  }
+  // Multi-tier speech models depend on plugin-prepared parameters; defer exact
+  // amount & balance enforcement to server precheck/submit rather than guessing.
+  return { cost: null, costIndeterminate: true, unavailableReason: "" };
 }
 
 export function quoteCanvasSpeechPlan(input: {
-  studio: Pick<
-    Studio,
-    | "canvas_speech_models"
-    | "canvas_speech_default_models"
-    | "model_catalog"
-    | "model_access"
-    | "model_policy"
-    | "pricing"
-    | "credits"
-  >;
+  studio: Partial<Pick<Studio, "workspace_id">> &
+    Pick<
+      Studio,
+      | "canvas_speech_models"
+      | "canvas_speech_default_models"
+      | "model_catalog"
+      | "model_access"
+      | "model_policy"
+      | "pricing"
+      | "credits"
+    >;
   node: Pick<CanvasNode, "narration_model" | "dialogue_lines">;
-  packs?: readonly {
-    id: string;
-    name: string;
-    purpose?: string;
-    voice_profile?: { model?: string } | null;
-  }[];
+  packs?: readonly SpeechPackCandidate[];
 }): {
   speechModels: { id: string; label: string }[];
   narration: {
     activeModel: string;
     cost: number | null;
+    costIndeterminate: boolean;
     unavailableReason: string;
   };
   dialogue: {
@@ -1083,6 +1135,7 @@ export function quoteCanvasSpeechPlan(input: {
     lineCosts: Record<string, number | null>;
     lineReasons: Record<string, string>;
     batchCost: number | null;
+    costIndeterminate: boolean;
     unavailableReason: string;
   };
 } {
@@ -1097,33 +1150,24 @@ export function quoteCanvasSpeechPlan(input: {
   });
   const narrationQuote = quoteSingleSpeechModel(input.studio, narrationActive);
 
-  const subjectPacks = (input.packs ?? []).filter(
-    (p) => (p.purpose ?? "subject") === "subject",
-  );
   const lineModels: Record<string, string> = {};
   const lineCosts: Record<string, number | null> = {};
   const lineReasons: Record<string, string> = {};
 
   let batchSum = 0;
   let batchUnpriced = false;
+  let batchIndeterminate = false;
   let batchNoModel = false;
   let nonEmptyCount = 0;
 
   for (const line of input.node.dialogue_lines ?? []) {
-    let packModel: string | undefined;
-    if (line.pack_id) {
-      packModel = subjectPacks.find((p) => p.id === line.pack_id)?.voice_profile
-        ?.model;
-    }
-    if (!packModel && line.speaker?.trim()) {
-      const norm = line.speaker.trim().toLowerCase();
-      packModel = subjectPacks.find(
-        (p) => p.name.trim().toLowerCase() === norm,
-      )?.voice_profile?.model;
-    }
-    const preferred = line.model?.trim() || packModel?.trim() || "";
+    const resolvedVoice = resolveDialogueVoiceProfile({
+      workspaceId: input.studio.workspace_id,
+      packs: input.packs,
+      line,
+    });
     const resolvedModel = pickSpeechAudioModel({
-      preferredModel: preferred,
+      preferredModel: resolvedVoice.model,
       availableSpeechIds,
       defaultModelIds,
     });
@@ -1136,6 +1180,8 @@ export function quoteCanvasSpeechPlan(input: {
       nonEmptyCount++;
       if (!resolvedModel) {
         batchNoModel = true;
+      } else if (lineQuote.costIndeterminate) {
+        batchIndeterminate = true;
       } else if (lineQuote.cost === null) {
         batchUnpriced = true;
       } else {
@@ -1145,14 +1191,16 @@ export function quoteCanvasSpeechPlan(input: {
   }
 
   let dialogueReason = "";
-  let batchCost: number | null = batchSum;
+  let batchCost: number | null = batchIndeterminate ? null : batchSum;
   if (availableSpeechIds.length === 0 || batchNoModel) {
     batchCost = null;
     dialogueReason = "当前空间未开放语音模型";
   } else if (nonEmptyCount === 0) {
     batchCost = narrationQuote.cost;
     dialogueReason =
-      narrationQuote.cost === null ? "语音生成尚未定价" : "";
+      narrationQuote.cost === null && !narrationQuote.costIndeterminate
+        ? "语音生成尚未定价"
+        : "";
   } else if (batchUnpriced) {
     batchCost = null;
     dialogueReason = "语音生成尚未定价";
@@ -1165,6 +1213,7 @@ export function quoteCanvasSpeechPlan(input: {
     narration: {
       activeModel: narrationActive,
       cost: narrationQuote.cost,
+      costIndeterminate: narrationQuote.costIndeterminate,
       unavailableReason: narrationQuote.unavailableReason,
     },
     dialogue: {
@@ -1172,6 +1221,7 @@ export function quoteCanvasSpeechPlan(input: {
       lineCosts,
       lineReasons,
       batchCost,
+      costIndeterminate: batchIndeterminate,
       unavailableReason: dialogueReason,
     },
   };

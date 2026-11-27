@@ -440,8 +440,12 @@ export class OriginalBatchPrecheck {
             } catch {
               model = "";
             }
-            if (!model) {
-              issues.push("音频配音服务尚未配置");
+            if (!model || !bindings.hasEnabledAudio(model)) {
+              issues.push(
+                model
+                  ? "音频配音服务尚未配置或连接已停用"
+                  : "音频配音服务尚未配置",
+              );
               status = "blocked";
             } else {
               const q = await this.catalog.quoteReadOnly(
@@ -490,9 +494,11 @@ export class OriginalBatchPrecheck {
                 } catch {
                   lineModel = "";
                 }
-                if (!lineModel) {
+                if (!lineModel || !bindings.hasEnabledAudio(lineModel)) {
                   issues.push(
-                    `对白「${line.speaker || line.id}」缺少可用的语音配音服务`,
+                    lineModel
+                      ? `对白「${line.speaker || line.id}」(${lineModel})：音频配音服务尚未配置或连接已停用`
+                      : `对白「${line.speaker || line.id}」缺少可用的语音配音服务`,
                   );
                   status = "blocked";
                   continue;

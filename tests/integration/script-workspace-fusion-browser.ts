@@ -971,6 +971,218 @@ try {
     assert.match(serverDocAfter2Reopens.body_md, /> 协作者远端备注/);
     assert.doesNotMatch(serverDocAfter2Reopens.body_md, new RegExp(conflictMarker));
 
+    // 7. PR #223 Round 4 Items 5 & 6:
+    //    - Item 5: 375x812 with single generatable node selected (data-composer-open="true"):
+    //      .insert-toolbar clears .fm-surface-switcher AND .node-composer; both "添加文本" and .fm-surface-switcher tabs are genuinely clickable!
+    //    - Item 6: .multi-toolbar across 375x812, 1080x800, and 1440x900 (with docked Agent + widened docked Agent):
+    //      clears .canvas-header, .fm-surface-switcher, and .fm-floating-agent.is-docked; both "预检并批量生成" and "建工作流组" are genuinely clickable!
+    const createLayoutRes = await context.request.post("/api/canvases", {
+      headers,
+      data: { title: `布局多选验收_${runTag}` },
+    });
+    assert.equal(createLayoutRes.status(), 200, await createLayoutRes.text());
+    const canvasLayout = await createLayoutRes.json();
+    const putLayoutRes = await context.request.put(
+      `/api/canvases/${canvasLayout.id}/document`,
+      {
+        headers,
+        data: {
+          title: canvasLayout.title,
+          expected_revision: canvasLayout.revision,
+          document: {
+            schemaVersion: 1,
+            nodes: [
+              {
+                ...newNode("video", 62, 245, 1),
+                id: "layout-vid-1",
+                title: "分镜视频 1",
+                width: 160,
+                height: 100,
+                prompt: "雨夜霓虹街道",
+              },
+              {
+                ...newNode("image", 62, 365, 1),
+                id: "layout-img-1",
+                title: "参考画面 1",
+                width: 160,
+                height: 100,
+                prompt: "青石板特写",
+              },
+            ],
+            edges: [],
+            shots: ["layout-vid-1"],
+          },
+        },
+      },
+    );
+    assert.equal(putLayoutRes.status(), 200, await putLayoutRes.text());
+
+    const rectsOverlap = (
+      a: { x: number; y: number; width: number; height: number },
+      b: { x: number; y: number; width: number; height: number },
+    ) =>
+      a.x < b.x + b.width - 1 &&
+      a.x + a.width > b.x + 1 &&
+      a.y < b.y + b.height - 1 &&
+      a.y + a.height > b.y + 1;
+
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto(`/canvas/${canvasLayout.id}?workspace=${workspace}`);
+    await page
+      .locator(".fm-view-switch")
+      .getByRole("button", { name: "画布", exact: true })
+      .click();
+    const vidLocator = page.locator('.react-flow__node[data-id="layout-vid-1"]');
+    await expect(vidLocator).toBeVisible();
+
+    // --- Item 5: Select single generatable video node at 375x812 -> data-composer-open="true" ---
+    await vidLocator.click();
+    await expect(page.locator(".canvas-workspace")).toHaveAttribute(
+      "data-composer-open",
+      "true",
+    );
+    await expect(page.locator(".node-composer")).toBeVisible();
+    await page.waitForTimeout(80);
+
+    const hdItem5 = await page.locator(".canvas-header").boundingBox();
+    const swItem5 = await page.locator(".fm-surface-switcher").boundingBox();
+    const insItem5 = await page.locator(".insert-toolbar").boundingBox();
+    const selItem5 = await page.locator(".selection-toolbar").boundingBox();
+    const compItem5 = await page.locator(".node-composer").boundingBox();
+    assert.ok(hdItem5 && swItem5 && insItem5 && selItem5 && compItem5);
+    assert.equal(
+      rectsOverlap(insItem5, swItem5),
+      false,
+      `375x812 composer-open: .insert-toolbar (${JSON.stringify(insItem5)}) must NOT overlap .fm-surface-switcher (${JSON.stringify(swItem5)})`,
+    );
+    assert.ok(
+      insItem5.y >= swItem5.y + swItem5.height - 1,
+      `375x812 composer-open: .insert-toolbar top (${insItem5.y}) must sit below .fm-surface-switcher (${swItem5.y + swItem5.height})`,
+    );
+    assert.ok(
+      insItem5.y + insItem5.height <= compItem5.y + 1,
+      `375x812 composer-open: .insert-toolbar bottom (${insItem5.y + insItem5.height}) must stay above .node-composer (${compItem5.y})`,
+    );
+    assert.ok(
+      selItem5.y >= swItem5.y + swItem5.height - 1,
+      `375x812 composer-open: .selection-toolbar top (${selItem5.y}) must sit below .fm-surface-switcher (${swItem5.y + swItem5.height})`,
+    );
+
+    // Genuinely click .fm-surface-switcher tabs while composer is open at 375x812
+    await page
+      .locator(".fm-surface-switcher")
+      .getByRole("tab", { name: "文档", exact: true })
+      .click();
+    await expect(page.locator(".fm-doc-workspace")).toBeVisible();
+    await page
+      .locator(".fm-surface-switcher")
+      .getByRole("tab", { name: "画布", exact: true })
+      .click();
+    await expect(page.locator(".node-composer")).toBeVisible();
+
+    // Genuinely click "添加文本" inside .insert-toolbar while composer is open at 375x812
+    await expect(page.locator(".content-node.kind-text")).toHaveCount(0);
+    await page
+      .locator(".insert-toolbar")
+      .getByRole("button", { name: "添加文本", exact: true })
+      .click();
+    await expect(page.locator(".content-node.kind-text")).toHaveCount(1);
+
+    // --- Item 6: Multi-select .multi-toolbar across 375x812, 1080x800, and 1440x900 (docked & widened Agent) ---
+    const verifyMultiToolbarAtViewport = async (
+      label: string,
+      vw: number,
+      vh: number,
+      opts: { withDockedAgent?: boolean; widenAgent?: boolean } = {},
+    ) => {
+      await page.setViewportSize({ width: vw, height: vh });
+      await page.waitForTimeout(80);
+      const multiBar = page.getByRole("toolbar", { name: "多选批量操作" });
+      if (!(await multiBar.isVisible())) {
+        await page.keyboard.press("Escape");
+        await page.locator(".canvas-workspace").focus();
+        await page.keyboard.press("Control+a");
+      }
+      await expect(multiBar).toBeVisible();
+      await expect(multiBar).toContainText("已选 3 个节点");
+
+      if (opts.withDockedAgent) {
+        if (!(await page.locator(".fm-floating-agent.is-docked").isVisible())) {
+          await page.getByRole("button", { name: "AI 创作助手" }).first().click();
+        }
+        const dockedAgent = page.locator(".fm-floating-agent.is-docked");
+        await expect(dockedAgent).toBeVisible();
+        if (opts.widenAgent) {
+          const handle = page.locator(".fm-agent-resize-handle");
+          const hBox = await handle.boundingBox();
+          assert.ok(hBox, `${label}: expected .fm-agent-resize-handle`);
+          await page.mouse.move(hBox.x + hBox.width / 2, hBox.y + 80);
+          await page.mouse.down();
+          await page.mouse.move(hBox.x - 130, hBox.y + 80, { steps: 5 });
+          await page.mouse.up();
+          await page.waitForTimeout(80);
+        }
+      }
+
+      const hd = await page.locator(".canvas-header").boundingBox();
+      const sw = await page.locator(".fm-surface-switcher").boundingBox();
+      const mb = await multiBar.boundingBox();
+      assert.ok(hd && sw && mb);
+      assert.ok(
+        mb.x >= 0 && mb.x + mb.width <= vw + 1,
+        `${label}: .multi-toolbar must stay within viewport [0..${vw}]: ${JSON.stringify(mb)}`,
+      );
+      assert.ok(
+        mb.y >= hd.y + hd.height - 1,
+        `${label}: .multi-toolbar top (${mb.y}) must sit below .canvas-header (${hd.y + hd.height})`,
+      );
+      assert.equal(
+        rectsOverlap(mb, sw),
+        false,
+        `${label}: .multi-toolbar (${JSON.stringify(mb)}) must NOT overlap .fm-surface-switcher (${JSON.stringify(sw)})`,
+      );
+      if (opts.withDockedAgent) {
+        const ag = await page
+          .locator(".fm-floating-agent.is-docked")
+          .boundingBox();
+        assert.ok(ag);
+        assert.ok(
+          mb.x + mb.width <= ag.x - 2,
+          `${label}: .multi-toolbar right (${mb.x + mb.width}) must stay left of docked Agent (${ag.x})`,
+        );
+      }
+
+      // Genuinely click "预检并批量生成" -> opens PrecheckCostModal -> close modal
+      await multiBar
+        .getByRole("button", { name: "预检并批量生成", exact: true })
+        .click();
+      const precheckDialog = page
+        .locator("dialog[open]")
+        .filter({ hasText: "多选批量预检" });
+      await expect(precheckDialog).toBeVisible();
+      await precheckDialog
+        .getByRole("button", { name: "取消", exact: true })
+        .click();
+      await expect(precheckDialog).toHaveCount(0);
+    };
+
+    await verifyMultiToolbarAtViewport("375x812", 375, 812);
+    await verifyMultiToolbarAtViewport("1080x800", 1080, 800);
+    await verifyMultiToolbarAtViewport("1440x900 docked-agent", 1440, 900, {
+      withDockedAgent: true,
+    });
+    await verifyMultiToolbarAtViewport("1440x900 widened-agent", 1440, 900, {
+      withDockedAgent: true,
+      widenAgent: true,
+    });
+
+    // Also genuinely click "建工作流组" at 1440x900 with widened docked Agent!
+    const multiBarFinal = page.getByRole("toolbar", { name: "多选批量操作" });
+    await multiBarFinal
+      .getByRole("button", { name: "建工作流组", exact: true })
+      .click();
+    await expect(page.locator(".fm-group-node")).toHaveCount(1);
+
     console.log(
       "PASS script-workspace-fusion-browser: <=760px layout, directory-rename child alignment, slow-search invalidation, draft-safe search/replace, rich+source jump, and 2x close/reopen conflict retention verified",
     );

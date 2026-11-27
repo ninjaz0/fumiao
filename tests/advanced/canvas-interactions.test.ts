@@ -1442,3 +1442,224 @@ test("PR #223 Round 3 Item 3: resolveCanvasWorkspaceTop reserves dedicated sub-h
     /\.fm-docked-storyboard\s*\{[\s\S]*?top:\s*var\(\s*--fm-workspace-top,/,
   );
 });
+
+test("PR #223 Round 4 Items 3 & 4: quoteCanvasSpeechPlan scopes voice packs to current workspace (updated DESC, non-null profile stops speaker fallback) and handles multi-tier indeterminate fallback safely", async () => {
+  const typesMod = (await import("../../apps/web/canvas-editor/types.js")) as Record<
+    string,
+    any
+  >;
+
+  const baseStudio = {
+    workspace_id: 2,
+    canvas_speech_models: ["breeze-tts-2", "tts-1", "edge-tts"],
+    canvas_speech_default_models: ["breeze-tts-2"],
+    model_forms: {},
+    model_catalog: {
+      "breeze-tts-2": { kind: "audio", label: "Breeze TTS 2" },
+      "tts-1": { kind: "audio", label: "OpenAI TTS-1" },
+      "edge-tts": { kind: "audio", label: "Edge 免费语音" },
+    },
+    model_access: {
+      "breeze-tts-2": true,
+      "tts-1": true,
+      "edge-tts": true,
+    },
+    model_policy: { revision: 1, enabled: {} },
+    credits: { available: 1, reserved: 0 },
+    pricing: {
+      revision: 1,
+      items: [
+        { key: "breeze-tts-2|standard", amount: 2 },
+        { key: "tts-1|standard", amount: 3 },
+        { key: "edge-tts|free", amount: 0 },
+      ],
+    },
+  };
+
+  // 1) External global pack (workspace: 1 !== 2) with same speaker name OR bound pack_id MUST be ignored!
+  const externalGlobalPacks = [
+    {
+      id: "ext_global_pack_01",
+      workspace: 1,
+      scope: "global",
+      name: "Speaker",
+      purpose: "subject",
+      updated: 9999,
+      voice_profile: { model: "edge-tts", voice_id: "zh-CN-XiaoxiaoNeural" },
+    },
+  ];
+  const extPlan = typesMod.quoteCanvasSpeechPlan({
+    studio: baseStudio,
+    node: {
+      id: "shot1",
+      type: "video",
+      dialogue_lines: [
+        { id: "by_name", speaker: "Speaker", text: "同名外部全局包不应生效" },
+        {
+          id: "by_id",
+          speaker: "Other",
+          pack_id: "ext_global_pack_01",
+          text: "绑定外部全局包 ID 也不应跨空间读取声线",
+        },
+      ],
+    },
+    packs: externalGlobalPacks,
+  });
+  // Both resolve to workspace default "breeze-tts-2" (2 credits > 1 available -> blocked), NOT external "edge-tts"!
+  assert.equal(extPlan.dialogue.lineModels.by_name, "breeze-tts-2");
+  assert.equal(extPlan.dialogue.lineCosts.by_name, 2);
+  assert.equal(extPlan.dialogue.lineReasons.by_name, "当前空间积分不足");
+  assert.equal(extPlan.dialogue.lineModels.by_id, "breeze-tts-2");
+
+  // Reverse direction: external global "Speaker" has paid tts-1 (3 credits), local default is free edge-tts -> must NOT block!
+  const reverseExtPlan = typesMod.quoteCanvasSpeechPlan({
+    studio: {
+      ...baseStudio,
+      canvas_speech_models: ["edge-tts", "tts-1"],
+      canvas_speech_default_models: ["edge-tts"],
+      credits: { available: 0, reserved: 0 },
+    },
+    node: {
+      id: "shot1",
+      type: "video",
+      dialogue_lines: [{ id: "l1", speaker: "Speaker", text: "免费请求不应被外部包拦住" }],
+    },
+    packs: [
+      {
+        id: "ext_paid",
+        workspace: 1,
+        scope: "global",
+        name: "Speaker",
+        purpose: "subject",
+        updated: 9999,
+        voice_profile: { model: "tts-1" },
+      },
+    ],
+  });
+  assert.equal(reverseExtPlan.dialogue.lineModels.l1, "edge-tts");
+  assert.equal(reverseExtPlan.dialogue.lineReasons.l1, "");
+  assert.equal(reverseExtPlan.dialogue.unavailableReason, "");
+
+  // 2) Local workspace (workspace: 2) subject packs:
+  //    - Same speaker name picks highest `updated` DESC
+  //    - Bound pack_id with non-null voice_profile { voice_id: "alloy" } (no model) stops speaker-name fallback!
+  //    - Bound pack_id with null/empty voice_profile DOES fall back by speaker name!
+  //    - Explicit line.model ALWAYS wins!
+  const localPacks = [
+    {
+      id: "local_older",
+      workspace: 2,
+      name: "Speaker",
+      purpose: "subject",
+      updated: 100,
+      voice_profile: { model: "tts-1" },
+    },
+    {
+      id: "local_newer",
+      workspace: 2,
+      scope: "global",
+      name: "Speaker",
+      purpose: "subject",
+      updated: 200,
+      voice_profile: { model: "edge-tts" },
+    },
+    {
+      id: "local_voice_only",
+      workspace: 2,
+      name: "Other",
+      purpose: "subject",
+      updated: 300,
+      voice_profile: { voice_id: "alloy" },
+    },
+    {
+      id: "local_no_profile",
+      workspace: 2,
+      name: "Other",
+      purpose: "subject",
+      updated: 300,
+      voice_profile: null,
+    },
+  ];
+  const localPlan = typesMod.quoteCanvasSpeechPlan({
+    studio: { ...baseStudio, credits: { available: 10, reserved: 0 } },
+    node: {
+      id: "shot2",
+      type: "video",
+      dialogue_lines: [
+        { id: "name_sort", speaker: "Speaker", text: "取 updated=200 的 edge-tts" },
+        {
+          id: "nonnull_profile",
+          speaker: "Speaker",
+          pack_id: "local_voice_only",
+          text: "有 voice_id 无 model 时不再按同名回退到 Speaker",
+        },
+        {
+          id: "null_profile",
+          speaker: "Speaker",
+          pack_id: "local_no_profile",
+          text: "无 voice_profile 时继续按同名回退到 Speaker",
+        },
+        {
+          id: "explicit_line",
+          speaker: "Speaker",
+          pack_id: "local_newer",
+          model: "tts-1",
+          text: "行级显式 model 优先",
+        },
+      ],
+    },
+    packs: localPacks,
+  });
+  assert.equal(localPlan.dialogue.lineModels.name_sort, "edge-tts");
+  assert.equal(localPlan.dialogue.lineModels.nonnull_profile, "breeze-tts-2");
+  assert.equal(localPlan.dialogue.lineModels.null_profile, "edge-tts");
+  assert.equal(localPlan.dialogue.lineModels.explicit_line, "tts-1");
+
+  // 3) Multi-tier pricing WITHOUT matcher/form info -> indeterminate: does NOT guess first tier (50) and does NOT falsely block!
+  const indeterminatePlan = typesMod.quoteCanvasSpeechPlan({
+    studio: {
+      ...baseStudio,
+      credits: { available: 10, reserved: 0 },
+      pricing: {
+        revision: 1,
+        items: [
+          { key: "breeze-tts-2|wav", amount: 50 },
+          { key: "breeze-tts-2|standard", amount: 2 },
+        ],
+      },
+    },
+    node: {
+      id: "shot3",
+      type: "video",
+      narration_text: "缺少计费参数时不猜测 50 积分也不误拦截",
+      dialogue_lines: [{ id: "d1", speaker: "A", text: "交给服务端核定" }],
+    },
+    packs: [],
+  });
+  assert.equal(indeterminatePlan.narration.cost, null);
+  assert.equal(indeterminatePlan.narration.costIndeterminate, true);
+  assert.equal(indeterminatePlan.narration.unavailableReason, "");
+  assert.equal(indeterminatePlan.dialogue.lineReasons.d1, "");
+  assert.equal(indeterminatePlan.dialogue.unavailableReason, "");
+
+  // 4) Items 5 & 6 CSS layout contracts: mobile .insert-toolbar & .selection-toolbar clear --fm-workspace-top,
+  //    and .canvas-workspace .multi-toolbar clears --fm-workspace-top & centers in unobstructed width (--fm-right-obstruction)
+  const root = process.cwd();
+  const overridesCss = await readFile(
+    join(root, "apps/web/canvas-editor/canvas-overrides.css"),
+    "utf8",
+  );
+  const workspaceSource = await readFile(
+    join(root, "apps/web/canvas-editor/CanvasWorkspace.tsx"),
+    "utf8",
+  );
+  assert.match(
+    overridesCss,
+    /\.canvas-workspace\[data-composer-open="true"\] \.insert-toolbar\s*\{[\s\S]*?top:\s*calc\(var\(--fm-workspace-top,\s*96px\)\s*\+\s*6px\)/,
+  );
+  assert.match(
+    overridesCss,
+    /\.canvas-workspace \.multi-toolbar\s*\{[\s\S]*?top:\s*max\(74px,\s*calc\(var\(--fm-workspace-top,\s*60px\)\s*\+\s*8px\)\)[\s\S]*?--fm-right-obstruction/,
+  );
+  assert.match(workspaceSource, /"--fm-right-obstruction":\s*`\$\{rightObstruction\}px`/);
+});

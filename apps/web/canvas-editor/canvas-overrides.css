@@ -147,18 +147,24 @@
     height: 30px;
   }
 
-  /* #110: Move left insert toolbar to the top safe area when the bottom composer is open. */
+  /* #110 / PR #223: Move left insert toolbar below header + switcher when the bottom composer is open, bounded above .node-composer. */
   .canvas-workspace[data-composer-open="true"] .insert-toolbar {
-    top: 96px;
+    top: calc(var(--fm-workspace-top, 96px) + 6px);
     transform: none;
-    max-height: calc(100dvh - 46dvh - 156px);
+    max-height: max(120px, calc(100dvh - 46dvh - var(--fm-workspace-top, 96px) - 82px));
     overflow-y: auto;
+  }
+
+  /* Keep mobile selection-toolbar below wrapped header, switcher, and orb. */
+  .canvas-workspace .selection-toolbar {
+    top: calc(var(--fm-workspace-top, 64px) + 6px) !important;
+    max-width: calc(100vw - 68px);
   }
 
   /* #110: Reposition mobile minimap to the upper-right free area so the bottom composer never covers it. */
   .canvas-workspace[data-composer-open="true"]
     .react-flow__panel.react-flow__minimap {
-    top: 64px !important;
+    top: calc(var(--fm-workspace-top, 64px) + 6px) !important;
     right: 12px !important;
     bottom: auto !important;
     left: auto !important;
@@ -170,7 +176,7 @@
 
   .canvas-workspace[data-composer-open="true"][data-selection-toolbar="true"]
     .react-flow__panel.react-flow__minimap {
-    top: 118px !important;
+    top: calc(var(--fm-workspace-top, 64px) + 54px) !important;
   }
 
   .canvas-workspace[data-composer-open="true"]
@@ -453,8 +459,21 @@
   line-height: 15px;
   text-align: center;
 }
-.multi-toolbar {
+.canvas-workspace .multi-toolbar {
+  top: max(74px, calc(var(--fm-workspace-top, 60px) + 8px));
+  left: calc((100% - var(--fm-right-obstruction, var(--fm-agent-width, 0px))) / 2);
+  right: auto;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - var(--fm-right-obstruction, var(--fm-agent-width, 0px)) - 24px);
   flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 4px;
+  z-index: 24;
+}
+.canvas-workspace[data-view-mode="list"] .multi-toolbar {
+  visibility: hidden;
+  pointer-events: none;
 }
 .multi-toolbar .fm-multi-action {
   min-height: 30px;

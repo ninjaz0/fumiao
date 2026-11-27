@@ -870,6 +870,17 @@ export class OriginalCanvasRuns {
                 unknown
               > | null)
             : null;
+          if (
+            savedInputs &&
+            (typeof savedInputs.revision === "number" ||
+              typeof savedInputs.revision === "bigint")
+          ) {
+            requireValue(
+              Number(savedInputs.revision) === Number(body.expected_revision),
+              409,
+              "这次提交已处理，请刷新后重试",
+            );
+          }
           const savedModel =
             (typeof savedInputs?.model === "string" && savedInputs.model) ||
             (typeof old.catalog_id === "string" && old.catalog_id) ||
