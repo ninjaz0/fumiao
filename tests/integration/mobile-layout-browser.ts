@@ -42,6 +42,33 @@ async function checkDrawerClosesAfterNavigation(page: Page) {
   await expect(page.locator(".rail-backdrop")).toBeHidden();
   await expect(menu).toBeFocused();
   await expect(page.locator('.mobile-tabbar [data-tab="library"]')).toHaveAttribute("aria-current", "page");
+  // Keyboard: navigating to Settings via the drawer's Account menu (#popover)
+  // closes the drawer and returns focus to the mobile menu opener.
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".side .collapse-button")).toBeFocused();
+  await page.locator(".side .account").focus();
+  await page.keyboard.press("Enter");
+  const popoverSettings = page.locator('#popover [data-nav="settings"]');
+  await expect(popoverSettings).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(popoverSettings).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".rail-backdrop")).toBeHidden();
+  await expect(page.locator("#popover")).toBeHidden();
+  await expect(page.locator(".workspace")).toHaveJSProperty("inert", false);
+  await expect(page.locator(".ledger-settings")).toBeVisible();
+  await expect(menu).toBeFocused();
+  // Same-page keyboard selection via drawer Account -> Settings also returns focus.
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".side .collapse-button")).toBeFocused();
+  await page.locator(".side .account").focus();
+  await page.keyboard.press("Enter");
+  await expect(popoverSettings).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(popoverSettings).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".rail-backdrop")).toBeHidden();
+  await expect(menu).toBeFocused();
 }
 
 async function checkLongWorkspaceName(page: Page) {
@@ -140,8 +167,11 @@ async function checkLongDraft(page: Page) {               // Review Focus 1
     return range.toString().length === element.textContent!.length;
   });
   await expect.poll(caretAtEnd).toBe(true);
+  const expandedScrollTop = await prompt.evaluate((element) => element.scrollTop);
+  assert.ok(expandedScrollTop > 0, `展开态长草稿应滚动到底部: scrollTop=${expandedScrollTop}`);
   await page.keyboard.press("Escape");
   await expect(dock).toHaveAttribute("data-expanded", "false");
+  assert.equal(await prompt.evaluate((element) => element.scrollTop), 0, "Escape 收起后 #prompt.scrollTop 归零");
   const collapsed = await page.locator("#home-composer .composer-dock-sheet").boundingBox();
   assert.ok(collapsed!.height <= 160, `收起态高度 ${collapsed!.height}`);
   const promptBox = await prompt.boundingBox();
@@ -155,17 +185,67 @@ async function checkLongDraft(page: Page) {               // Review Focus 1
   assert.equal((await prompt.innerText()).trimEnd(), longDraft.trimEnd());
   await expect(prompt).toHaveAttribute("data-mount-probe", "kept");
   await expect.poll(caretAtEnd, { message: "caret returns after Escape fold" }).toBe(true);
+  await expect
+    .poll(() => prompt.evaluate((element) => element.scrollTop), { message: "scrollTop restores after Escape fold" })
+    .toBe(expandedScrollTop);
   if (withRefs) {
     await expect(dock.locator(".reference-layer").first()).toBeVisible();
   }
-  // Folding via the handle button (which blurs #prompt before click) also preserves caret.
+  // Folding via the handle button (which blurs #prompt before click) also preserves caret and resets scrollTop.
   await page.locator(".composer-dock-handle").tap();
   await expect(dock).toHaveAttribute("data-expanded", "false");
+  assert.equal(await prompt.evaluate((element) => element.scrollTop), 0, "手柄收起后 #prompt.scrollTop 归零");
   await prompt.tap();
   await expect(dock).toHaveAttribute("data-expanded", "true");
   await expect.poll(caretAtEnd, { message: "caret returns after handle fold" }).toBe(true);
-  if (withRefs) await clearReferences(page);
+  await expect
+    .poll(() => prompt.evaluate((element) => element.scrollTop), { message: "scrollTop restores after handle fold" })
+    .toBe(expandedScrollTop);
+  await page.locator(".composer-dock-backdrop").tap({ position: { x: 10, y: 10 } });
+  await expect(dock).toHaveAttribute("data-expanded", "false");
+  assert.equal(await prompt.evaluate((element) => element.scrollTop), 0, "遮罩收起后 #prompt.scrollTop 归零");
+  if (withRefs) {
+    await prompt.tap();
+    await clearReferences(page);
+    if (await dock.locator(".generate-button").isEnabled()) {
+      const interceptSubmit = (route: import("@playwright/test").Route) =>
+        route.request().method() === "POST" ? route.fulfill({ json: { id: 999999 } }) : route.continue();
+      await page.route("**/api/*jobs", interceptSubmit);
+      try {
+        await dock.locator(".generate-button").tap();
+        await expect(dock).toHaveAttribute("data-expanded", "false");
+        assert.equal(await prompt.evaluate((element) => element.scrollTop), 0, "提交收起后 #prompt.scrollTop 归零");
+      } finally {
+        await page.unroute("**/api/*jobs", interceptSubmit);
+      }
+    } else {
+      await page.keyboard.press("Escape");
+    }
+  }
+  await clearPrompt(page);
+  // Pressing Enter in contentEditable creates child block elements (<div>) that must also truncate with ellipsis when collapsed.
+  await prompt.tap();
+  await page.keyboard.type("第一行非常非常长的提示词内容用于验证回车生成子块元素时的单行省略号截断效果");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("第二行内容");
   await page.keyboard.press("Escape");
+  await expect(dock).toHaveAttribute("data-expanded", "false");
+  const blockEllipsis = await prompt.evaluate((element) => {
+    const block = element.querySelector<HTMLElement>("div, p");
+    const style = block ? getComputedStyle(block) : getComputedStyle(element);
+    return {
+      hasBlock: !!block,
+      scrollTop: element.scrollTop,
+      textOverflow: style.textOverflow,
+      whiteSpace: style.whiteSpace,
+      overflow: style.overflow,
+    };
+  });
+  assert.equal(blockEllipsis.hasBlock, true);
+  assert.equal(blockEllipsis.scrollTop, 0);
+  assert.equal(blockEllipsis.textOverflow, "ellipsis");
+  assert.equal(blockEllipsis.whiteSpace, "nowrap");
+  assert.equal(blockEllipsis.overflow, "hidden");
   await clearPrompt(page);
 }
 
@@ -180,6 +260,16 @@ async function checkWidenClearsDock(page: Page) {         // Review Focus 2
   assert.equal(await page.evaluate(() => document.querySelector<HTMLElement>(".shell")!.style.getPropertyValue("--mobile-dock-height")), "");
   await page.setViewportSize({ width: 375, height: 667 });
   await expect(page.locator("#home-composer .composer-dock")).toHaveAttribute("data-expanded", "false");
+  // Opening the mobile drawer and widening to desktop clears backdrop and workspace inertness.
+  await page.getByRole("button", { name: "打开导航" }).tap();
+  await expect(page.locator(".rail-backdrop")).toBeVisible();
+  await expect(page.locator(".workspace")).toHaveJSProperty("inert", true);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.locator(".rail-backdrop")).toBeHidden();
+  await expect(page.locator(".workspace")).toHaveJSProperty("inert", false);
+  await page.setViewportSize({ width: 375, height: 667 });
+  await expect(page.locator(".rail-backdrop")).toBeHidden();
+  await expect(page.locator(".workspace")).toHaveJSProperty("inert", false);
 }
 
 async function checkPickingReturnsExpanded(page: Page) {  // Review Focus 5
@@ -259,6 +349,98 @@ async function checkMenuSheet(page: Page) {
     await expect(sheet).toBeHidden();
     await expect(dock).toHaveAttribute("data-expanded", "true");
     await expect(trigger).toBeFocused();
+  }
+  // Verify #popover[data-sheet] .advanced-mode-row .model-switch hit target (>= 44×44px) and 36×20px pill track.
+  const measureSwitch = () =>
+    page.evaluate(() => {
+      const label = document.querySelector<HTMLElement>("#popover .advanced-mode-row .model-switch")!;
+      const track = label.querySelector<HTMLElement>(":scope > span")!;
+      const thumb = getComputedStyle(track, "::before");
+      const labelRect = label.getBoundingClientRect();
+      const trackRect = track.getBoundingClientRect();
+      return {
+        labelW: labelRect.width,
+        labelH: labelRect.height,
+        trackW: trackRect.width,
+        trackH: trackRect.height,
+        trackCenteredY: Math.abs(trackRect.top + trackRect.height / 2 - (labelRect.top + labelRect.height / 2)) <= 1,
+        trackRightAligned: Math.abs(labelRect.right - trackRect.right) <= 1,
+        thumbW: thumb.width,
+        thumbH: thumb.height,
+      };
+    });
+  const advancedTrigger = page.locator('#home-composer [data-menu="advanced"]');
+  let checkedLiveAdvancedSwitch = false;
+  if (await advancedTrigger.isVisible()) {
+    await advancedTrigger.tap();
+    await expect(sheet).toHaveAttribute("data-sheet", "");
+    const switchLabel = sheet.locator(".advanced-mode-row .model-switch");
+    if (await switchLabel.count()) {
+      checkedLiveAdvancedSwitch = true;
+      const metrics = await measureSwitch();
+      assert.ok(
+        metrics.labelW >= 43.5 && metrics.labelH >= 43.5,
+        `快速模式开关触控尺寸 >= 44×44px: ${JSON.stringify(metrics)}`,
+      );
+      assert.equal(Math.round(metrics.trackW), 36, `快速模式开关胶囊轨道宽度保持 36px: ${metrics.trackW}`);
+      assert.equal(Math.round(metrics.trackH), 20, `快速模式开关胶囊轨道高度保持 20px: ${metrics.trackH}`);
+      assert.equal(metrics.trackCenteredY, true, "快速模式开关胶囊轨道垂直居中");
+      assert.equal(metrics.trackRightAligned, true, "快速模式开关胶囊轨道右对齐");
+      assert.equal(metrics.thumbW, "14px");
+      assert.equal(metrics.thumbH, "14px");
+      const fastInput = sheet.locator("#fast-mode");
+      const initialChecked = await fastInput.isChecked();
+      // Tap the outer expanded hit area (x: 4, y: 4 is outside the 36×20px track).
+      await switchLabel.tap({ position: { x: 4, y: 4 } });
+      assert.equal(await fastInput.isChecked(), !initialChecked, "点击扩展触控区域可切换快速模式开关");
+      await switchLabel.tap({ position: { x: 4, y: 4 } });
+      assert.equal(await fastInput.isChecked(), initialChecked);
+    }
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+  }
+  if (!checkedLiveAdvancedSwitch) {
+    await page.locator("#home-composer .creation-type").tap();
+    await expect(sheet).toHaveAttribute("data-sheet", "");
+    const metrics = await page.evaluate(() => {
+      const pop = document.querySelector("#popover")!;
+      const probe = document.createElement("div");
+      probe.className = "advanced-mode-row";
+      probe.innerHTML =
+        '<span>快速模式</span><label class="model-switch"><input type="checkbox" role="switch" aria-label="快速模式"><span aria-hidden="true"></span></label>';
+      pop.appendChild(probe);
+      try {
+        const label = probe.querySelector<HTMLElement>(".model-switch")!;
+        const track = label.querySelector<HTMLElement>(":scope > span")!;
+        const thumb = getComputedStyle(track, "::before");
+        const labelRect = label.getBoundingClientRect();
+        const trackRect = track.getBoundingClientRect();
+        return {
+          labelW: labelRect.width,
+          labelH: labelRect.height,
+          trackW: trackRect.width,
+          trackH: trackRect.height,
+          trackCenteredY: Math.abs(trackRect.top + trackRect.height / 2 - (labelRect.top + labelRect.height / 2)) <= 1,
+          trackRightAligned: Math.abs(labelRect.right - trackRect.right) <= 1,
+          thumbW: thumb.width,
+          thumbH: thumb.height,
+        };
+      } finally {
+        probe.remove();
+      }
+    });
+    assert.ok(
+      metrics.labelW >= 43.5 && metrics.labelH >= 43.5,
+      `快速模式开关触控尺寸 >= 44×44px: ${JSON.stringify(metrics)}`,
+    );
+    assert.equal(Math.round(metrics.trackW), 36, `快速模式开关胶囊轨道宽度保持 36px: ${metrics.trackW}`);
+    assert.equal(Math.round(metrics.trackH), 20, `快速模式开关胶囊轨道高度保持 20px: ${metrics.trackH}`);
+    assert.equal(metrics.trackCenteredY, true, "快速模式开关胶囊轨道垂直居中");
+    assert.equal(metrics.trackRightAligned, true, "快速模式开关胶囊轨道右对齐");
+    assert.equal(metrics.thumbW, "14px");
+    assert.equal(metrics.thumbH, "14px");
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
   }
   await page.keyboard.press("Escape");
   await expect(dock).toHaveAttribute("data-expanded", "false");
@@ -424,6 +606,30 @@ async function checkNoOverflowAndNoCover(page: Page) {
           await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1),
           "chat 无多余纵向页面滚动",
         );
+        // Pinch-zoom (visualViewport.scale !== 1) clears --visual-viewport-height instead of shrinking #chat-root.
+        const chatFullHeight = (await page.locator("#chat-root").boundingBox())!.height;
+        const cdp = await page.context().newCDPSession(page);
+        try {
+          await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 2 });
+          await expect
+            .poll(() => page.evaluate(() => Math.round((window.visualViewport?.scale ?? 1) * 100)))
+            .toBe(200);
+          assert.equal(
+            await page.evaluate(() => document.documentElement.style.getPropertyValue("--visual-viewport-height")),
+            "",
+            "双指缩放时移除 --visual-viewport-height",
+          );
+          const zoomedLayoutHeight = await page.evaluate(
+            () => parseFloat(getComputedStyle(document.querySelector("#chat-root")!).height),
+          );
+          assert.ok(
+            Math.abs(zoomedLayoutHeight - chatFullHeight) <= 1,
+            `双指缩放不压缩 #chat-root 高度: ${zoomedLayoutHeight} vs ${chatFullHeight}`,
+          );
+        } finally {
+          await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
+          await cdp.detach();
+        }
       }
       if (evidence) {
         await page.evaluate(() => scrollTo({ top: 0, behavior: "instant" }));
@@ -782,6 +988,86 @@ async function checkCanvasList(page: Page) {
   await expect(page.locator(".list-header")).toBeVisible();
   await expect(page.locator(".project-list-body .empty")).toHaveCount(0);
   await hideDevPortal(page);
+
+  // 嵌套分集与分场表单（.fm-ep-form）：创建临时剧集与分集，检查 375px 下按钮不溢出且位于 .fm-series-card 内，随后清理
+  const reqHeaders = {
+    Origin: editorUrl.origin,
+    ...(workspace ? { "X-Workspace-Id": workspace } : {}),
+  };
+  const seriesRes = await page.context().request.post("/api/series", {
+    headers: reqHeaders,
+    data: { title: "移动端分场按钮验证", synopsis: "" },
+  });
+  assert.ok(seriesRes.ok(), `创建临时剧集失败: ${seriesRes.status()}`);
+  const tempSeries = (await seriesRes.json()) as { id: string };
+  let tempEpCanvasId: string | null = null;
+  try {
+    const epRes = await page.context().request.post(`/api/series/${encodeURIComponent(tempSeries.id)}/episodes`, {
+      headers: reqHeaders,
+      data: { season_no: 1, episode_no: 1, title: "第一集" },
+    });
+    assert.ok(epRes.ok(), `创建临时分集失败: ${epRes.status()}`);
+    const tempEp = (await epRes.json()) as { id: string; canvas_id: string | null };
+    tempEpCanvasId = tempEp.canvas_id;
+
+    await page.goto(`/canvas${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ""}`);
+    await expect(page.locator(".list-header")).toBeVisible();
+    await hideDevPortal(page);
+
+    const card = page.locator(".fm-series-card").filter({ hasText: "移动端分场按钮验证" });
+    await expect(card).toBeVisible();
+    if ((await card.locator(".fm-series-toggle").first().getAttribute("aria-expanded")) !== "true") {
+      await card.locator(".fm-series-toggle").first().tap();
+    }
+    const seasonGroup = card.locator(".fm-season-group").first();
+    if ((await seasonGroup.locator(".fm-series-toggle").first().getAttribute("aria-expanded")) !== "true") {
+      await seasonGroup.locator(".fm-series-toggle").first().tap();
+    }
+    await card.getByRole("button", { name: "加一集", exact: true }).tap();
+    await seasonGroup.getByRole("button", { name: "加一场", exact: true }).tap();
+    const sceneCreateBtn = seasonGroup.locator(".fm-ep-form button.primary", { hasText: "创建并打开分场画布" });
+    await expect(sceneCreateBtn).toBeVisible();
+
+    const formMetrics = await card.evaluate((cardEl) => {
+      const cardRect = cardEl.getBoundingClientRect();
+      const buttons = [...cardEl.querySelectorAll<HTMLButtonElement>(".fm-ep-form > button")];
+      return {
+        pageNoOverflow: document.documentElement.scrollWidth <= innerWidth,
+        buttonCount: buttons.length,
+        buttons: buttons.map((btn) => {
+          const r = btn.getBoundingClientRect();
+          return {
+            text: btn.textContent?.trim() ?? "",
+            scrollW: btn.scrollWidth,
+            clientW: btn.clientWidth,
+            height: r.height,
+            withinCard: r.left >= cardRect.left - 0.5 && r.right <= cardRect.right + 0.5,
+          };
+        }),
+      };
+    });
+    assert.equal(formMetrics.pageNoOverflow, true, "展开分集/分场创建表单后页面无横向溢出");
+    assert.equal(formMetrics.buttonCount, 4, "分集与嵌套分场表单共渲染 4 个操作按钮");
+    for (const btn of formMetrics.buttons) {
+      assert.ok(
+        btn.scrollW <= btn.clientW + 1,
+        `按钮 "${btn.text}" 文字不溢出: scrollWidth=${btn.scrollW}, clientWidth=${btn.clientW}`,
+      );
+      assert.ok(btn.height >= 43.5, `按钮 "${btn.text}" 触控高度 >= 44px: ${btn.height}`);
+      assert.equal(btn.withinCard, true, `按钮 "${btn.text}" 完全位于 .fm-series-card 内`);
+    }
+  } finally {
+    const delSeries = await page.context().request.delete(`/api/series/${encodeURIComponent(tempSeries.id)}`, {
+      headers: reqHeaders,
+    });
+    assert.ok([200, 204, 404].includes(delSeries.status()), `清理临时剧集失败: ${delSeries.status()}`);
+    if (tempEpCanvasId) {
+      const delCanvas = await page.context().request.delete(`/api/canvases/${encodeURIComponent(tempEpCanvasId)}`, {
+        headers: reqHeaders,
+      });
+      assert.ok([200, 204, 404].includes(delCanvas.status()), `清理临时分集画布失败: ${delCanvas.status()}`);
+    }
+  }
 }
 
 async function checkHomeAndLogin(browser: Browser, origin: string) {

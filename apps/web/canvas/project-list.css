@@ -325,6 +325,18 @@
 
   #canvas-root .fm-ep-form > input {
     grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  #canvas-root .fm-ep-form > button {
+    grid-column: 1 / -1;
+    min-width: 0;
+    min-height: 44px;
+    white-space: normal;
+  }
+
+  #canvas-root .fm-season-group .fm-ep-form {
+    margin-left: 8px !important;
   }
 
   #canvas-root .project-list-heading {

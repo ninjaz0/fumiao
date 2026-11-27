@@ -33,17 +33,31 @@ export function ComposerDock({
   const sheet = useRef<HTMLDivElement>(null);
   const caret = useRef<Range | null>(null);
   const lastOpenCaret = useRef<Range | null>(null);
+  const savedScrollTop = useRef<number | null>(null);
+  const lastOpenScrollTop = useRef(0);
   const open = narrow && expanded;
   const latest = useRef({ narrow, expanded, setExpanded });
   useLayoutEffect(() => {
     latest.current = { narrow, expanded, setExpanded };
   });
 
+  const snapshotOpenScrollTop = () => {
+    const dock = sheet.current?.closest<HTMLElement>(".composer-dock");
+    if (dock?.dataset.expanded !== "true") return;
+    const promptEl = sheet.current?.querySelector<HTMLElement>("#prompt");
+    if (promptEl) lastOpenScrollTop.current = promptEl.scrollTop;
+  };
+
   // Any interaction inside the collapsed bar opens the sheet, except sending.
   // Clicks count too: iOS Safari does not focus buttons it taps.
   useEffect(() => {
     const node = sheet.current!;
-    let pending: { target: HTMLElement; range: Range; frame: number } | null = null;
+    let pending: {
+      target: HTMLElement;
+      range: Range | null;
+      scrollTop: number | null;
+      frame: number;
+    } | null = null;
     const clearPending = () => {
       if (!pending) return;
       cancelAnimationFrame(pending.frame);
@@ -52,6 +66,7 @@ export function ComposerDock({
     const trackSelection = () => {
       const current = latest.current;
       if (!current.narrow || !current.expanded) return;
+      snapshotOpenScrollTop();
       const active = document.activeElement;
       const selection = getSelection();
       if (
@@ -65,14 +80,41 @@ export function ComposerDock({
         lastOpenCaret.current = selection.getRangeAt(0).cloneRange();
       }
     };
+    const onScroll = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || target.id !== "prompt") return;
+      const current = latest.current;
+      if (!current.narrow) return;
+      if (current.expanded) {
+        snapshotOpenScrollTop();
+      } else if (!pending && target.scrollTop !== 0) {
+        target.scrollTop = 0;
+      }
+    };
     const onPointerDown = (event: PointerEvent) => {
       clearPending();
+      if (latest.current.narrow && latest.current.expanded) {
+        snapshotOpenScrollTop();
+      }
       if (
         latest.current.expanded &&
         event.target instanceof Element &&
         event.target.closest("[contenteditable]")
       ) {
         caret.current = null;
+        savedScrollTop.current = null;
+      }
+    };
+    const onKeyDown = () => {
+      clearPending();
+      if (latest.current.narrow && latest.current.expanded) {
+        snapshotOpenScrollTop();
+      }
+    };
+    const onFocusOut = () => {
+      clearPending();
+      if (latest.current.narrow && latest.current.expanded) {
+        snapshotOpenScrollTop();
       }
     };
     const expand = (event: Event) => {
@@ -82,27 +124,42 @@ export function ComposerDock({
         return;
       current.setExpanded(true);
     };
-    // Returning to the prompt puts the caret back where folding left it,
-    // not where the one-line preview was tapped; any edit cancels the replay.
+    // Returning to the prompt puts the caret and scroll offset back where folding
+    // left them, not where the one-line preview was tapped; any edit cancels replay.
     const restoreCaret = (event: FocusEvent) => {
       const range = caret.current;
+      const scroll = savedScrollTop.current;
       const target = event.target;
-      if (!range || !(target instanceof HTMLElement) || !target.isContentEditable) return;
+      if (
+        (!range && scroll === null) ||
+        !(target instanceof HTMLElement) ||
+        !target.isContentEditable
+      )
+        return;
       caret.current = null;
+      savedScrollTop.current = null;
       clearPending();
-      applyCaret(target, range);
+      if (range) applyCaret(target, range);
+      if (scroll !== null) target.scrollTop = scroll;
       const frame = requestAnimationFrame(() => {
         if (pending?.frame === frame) {
-          applyCaret(target, range);
+          if (range) applyCaret(target, range);
+          if (scroll !== null) {
+            target.scrollTop = scroll;
+            lastOpenScrollTop.current = target.scrollTop;
+          }
           pending = null;
         }
       });
-      pending = { target, range, frame };
+      pending = { target, range, scrollTop: scroll, frame };
     };
     const reapplyPending = () => {
-      if (pending) applyCaret(pending.target, pending.range);
+      if (!pending) return;
+      if (pending.range) applyCaret(pending.target, pending.range);
+      if (pending.scrollTop !== null) pending.target.scrollTop = pending.scrollTop;
     };
     document.addEventListener("selectionchange", trackSelection);
+    node.addEventListener("scroll", onScroll, true);
     node.addEventListener("pointerdown", onPointerDown, true);
     node.addEventListener("focusin", restoreCaret);
     node.addEventListener("focusin", expand);
@@ -112,12 +169,13 @@ export function ComposerDock({
     node.addEventListener("beforeinput", clearPending, true);
     node.addEventListener("input", clearPending, true);
     node.addEventListener("input", trackSelection);
-    node.addEventListener("keydown", clearPending, true);
+    node.addEventListener("keydown", onKeyDown, true);
     node.addEventListener("keyup", trackSelection);
-    node.addEventListener("focusout", clearPending);
+    node.addEventListener("focusout", onFocusOut);
     return () => {
       clearPending();
       document.removeEventListener("selectionchange", trackSelection);
+      node.removeEventListener("scroll", onScroll, true);
       node.removeEventListener("pointerdown", onPointerDown, true);
       node.removeEventListener("focusin", restoreCaret);
       node.removeEventListener("focusin", expand);
@@ -127,9 +185,9 @@ export function ComposerDock({
       node.removeEventListener("beforeinput", clearPending, true);
       node.removeEventListener("input", clearPending, true);
       node.removeEventListener("input", trackSelection);
-      node.removeEventListener("keydown", clearPending, true);
+      node.removeEventListener("keydown", onKeyDown, true);
       node.removeEventListener("keyup", trackSelection);
-      node.removeEventListener("focusout", clearPending);
+      node.removeEventListener("focusout", onFocusOut);
     };
   }, []);
 
@@ -160,10 +218,13 @@ export function ComposerDock({
   }, [narrow, expanded]);
 
   // Folding the sheet dismisses the soft keyboard instead of leaving it over
-  // the one-line bar, and remembers the caret for the next time it opens.
+  // the one-line bar, resets #prompt.scrollTop to 0 so the first line renders
+  // cleanly, and remembers caret + scrollTop for the next time it opens.
   const wasOpen = useRef(open);
   useLayoutEffect(() => {
+    const promptEl = sheet.current?.querySelector<HTMLElement>("#prompt");
     if (narrow && wasOpen.current && !open) {
+      const nextScrollTop = promptEl?.textContent ? lastOpenScrollTop.current : 0;
       const active = document.activeElement;
       if (
         active instanceof HTMLElement &&
@@ -181,10 +242,22 @@ export function ComposerDock({
       } else {
         caret.current = lastOpenCaret.current;
       }
+      savedScrollTop.current = nextScrollTop;
       lastOpenCaret.current = null;
+      lastOpenScrollTop.current = 0;
+      if (promptEl) promptEl.scrollTop = 0;
+    } else if (narrow && !open) {
+      if (promptEl) promptEl.scrollTop = 0;
+    } else if (narrow && !wasOpen.current && open) {
+      if (savedScrollTop.current !== null && promptEl) {
+        promptEl.scrollTop = savedScrollTop.current;
+        lastOpenScrollTop.current = savedScrollTop.current;
+      }
     } else if (!narrow) {
       caret.current = null;
       lastOpenCaret.current = null;
+      savedScrollTop.current = null;
+      lastOpenScrollTop.current = 0;
     }
     wasOpen.current = open;
   }, [narrow, open]);
@@ -201,7 +274,11 @@ export function ComposerDock({
           className="composer-dock-backdrop"
           aria-label="收起创作框"
           tabIndex={-1}
-          onClick={() => setExpanded(false)}
+          onPointerDown={snapshotOpenScrollTop}
+          onClick={() => {
+            snapshotOpenScrollTop();
+            setExpanded(false);
+          }}
         />
       )}
       <div className="composer-dock-sheet" ref={sheet}>
@@ -210,7 +287,10 @@ export function ComposerDock({
             type="button"
             className="composer-dock-handle"
             aria-label="收起创作框"
-            onClick={() => setExpanded(false)}
+            onClick={() => {
+              snapshotOpenScrollTop();
+              setExpanded(false);
+            }}
           />
         )}
         {children}

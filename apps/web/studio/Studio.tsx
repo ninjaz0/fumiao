@@ -241,13 +241,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const mobileDrawerOpen = narrowScreen && !collapsed;
   const keyboardOpen = useSoftKeyboard();
   // The docked composer is on screen: creation or asset page on a phone,
-  // outside details, reference picking and multi-select.
+  // outside the drawer, details, reference picking and library multi-select.
   const composerDocked =
     narrowScreen &&
+    !mobileDrawerOpen &&
     !detail &&
     !referencePicking &&
-    !library.selecting &&
-    (page === "home" || page === "library");
+    (page === "home" || (page === "library" && !library.selecting));
   useEffect(() => {
     // Widening to desktop or leaving the dock (another page, a detail,
     // picking, multi-select) folds it; flows that return open it again.
@@ -720,18 +720,20 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   function navigate(destination: Destination | "settings") {
     const space = active.current;
     if (!space || leaving.current) return;
+    // Closing the phone drawer returns focus to its opener for keyboard users,
+    // including selections inside the drawer's #popover (e.g. Account → Settings).
+    const restoreDrawerFocus =
+      mobileDrawerOpen &&
+      !!document.activeElement?.matches(
+        ".side :focus-visible, #popover :focus-visible",
+      );
+    const closeDrawer = () => changeSidebar(true, restoreDrawerFocus);
     if (destination === page && !detail && !referencePicking) {
-      closeMenu();
-      if (mobileDrawerOpen) changeSidebar(true, true);
+      if (mobileDrawerOpen) closeDrawer();
+      else closeMenu();
       return;
     }
     setReferencePicking(null);
-    // Closing the phone drawer returns focus to its opener for keyboard users.
-    const closeDrawer = () =>
-      changeSidebar(
-        true,
-        !!document.activeElement?.matches(".side :focus-visible"),
-      );
     if (destination === "canvas") {
       if (mobileDrawerOpen) closeDrawer();
       openCanvas();

@@ -9,8 +9,8 @@ function editing(element: Element | null) {
 /**
  * Reports whether a soft keyboard covers the page: the visual viewport is
  * more than 150px shorter than the layout viewport while an editable element
- * has focus. Also publishes the visual viewport height as
- * `--visual-viewport-height` on the root element.
+ * has focus (ignoring pinch-zoom). Also publishes the visual viewport height
+ * as `--visual-viewport-height` on the root element.
  */
 export function useSoftKeyboard(): boolean {
   const [open, setOpen] = useState(false);
@@ -19,6 +19,11 @@ export function useSoftKeyboard(): boolean {
     if (!viewport) return;
     const root = document.documentElement;
     const update = () => {
+      if (Math.abs(viewport.scale - 1) > 0.05) {
+        root.style.removeProperty("--visual-viewport-height");
+        setOpen(false);
+        return;
+      }
       root.style.setProperty("--visual-viewport-height", `${viewport.height}px`);
       setOpen(
         innerHeight - viewport.height > keyboardThreshold &&
