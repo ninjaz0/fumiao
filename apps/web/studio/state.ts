@@ -93,6 +93,7 @@ export type Job = {
   prompt: string;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
   result?: string;
+  results?: string[];
   result_mime?: string;
   refs: string[];
   seconds: number;
@@ -1537,6 +1538,9 @@ export function estimateBody(state: StudioState, session: DraftSession) {
   return {
     kind: draft.kind,
     model: selectedModel(draft),
+    ...(state.pricing?.published?.some((entry) => entry.model === selectedModel(draft))
+      ? { params: draft.params ?? {} }
+      : {}),
     ratio: draft.ratio,
     quality: Number(draft.quality),
     seconds: Number(draft.seconds),

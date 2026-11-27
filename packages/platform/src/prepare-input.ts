@@ -114,3 +114,91 @@ export async function prepareSubmission(
     throw e;
   }
 }
+
+/** Validate only explicitly offered image controls. References travel separately
+ * from caller parameters so data URLs and provider routing fields cannot be injected. */
+export function prepareImageParameters(
+  route: import("./model-access/publication.js").FrozenModelRoute,
+  raw: Record<string, unknown>,
+  referenceCount: number,
+) {
+  const caps = route.capabilities;
+  const fields: Record<string, unknown> = {};
+  const options: Record<string, string[] | undefined> = {
+    size: caps.sizes,
+    resolution: caps.resolutions,
+    aspect_ratio: caps.aspect_ratios,
+  };
+  const controls = new Set([
+    "n",
+    "size",
+    "aspect_ratio",
+    "resolution",
+    "quality",
+    "background",
+    "output_format",
+    "output_compression",
+    "seed",
+    "style",
+    "moderation",
+    "input_fidelity",
+  ]);
+  for (const [name, value] of Object.entries(raw)) {
+    const choices = options[name];
+    const def = Object.hasOwn(caps.definitions ?? {}, name)
+      ? caps.definitions![name]
+      : undefined;
+    requireValue(
+      controls.has(name) && (caps.names?.includes(name) || choices?.length),
+      400,
+      "线路不支持此图片参数",
+    );
+    requireValue(
+      typeof value === "boolean" ||
+        (typeof value === "string" &&
+          value.length <= 128 &&
+          !value.includes("\0")) ||
+        (typeof value === "number" && Number.isSafeInteger(value)),
+      400,
+      "图片参数无效",
+    );
+    if (choices?.length)
+      requireValue(
+        typeof value === "string" && choices.includes(value),
+        400,
+        "图片参数超出线路范围",
+      );
+    if (def) {
+      const valid =
+        def.type === "enum"
+          ? typeof value !== "boolean" && def.values.includes(value)
+          : def.type === "range"
+            ? typeof value === "number" && value >= def.min && value <= def.max
+            : typeof value === "boolean";
+      requireValue(valid, 400, "图片参数超出线路范围");
+    }
+    fields[name] = value;
+  }
+  const count = fields.n ?? 1;
+  requireValue(
+    typeof count === "number" &&
+      Number.isInteger(count) &&
+      count >= 1 &&
+      count <= 16,
+    400,
+    "图片张数无效",
+  );
+  const def = caps.definitions?.input_references;
+  const refs =
+    caps.input_references ?? (def?.type === "range" ? def : undefined);
+  const supportsEdits =
+    caps.input_modalities?.includes("image") ||
+    caps.names?.includes("input_references");
+  requireValue(
+    referenceCount >= (refs?.min ?? 0) &&
+      referenceCount <= Math.min(9, refs?.max ?? (supportsEdits ? 9 : 0)),
+    400,
+    "参考图片数量不符合线路要求",
+  );
+  return { params: fields, count };
+}

@@ -352,10 +352,19 @@ export class OriginalCanvasRuns {
       node.generation_mode,
       node.grid_layout,
     );
-    const bindings = await CanvasSubmissionModels.read(sql),
-      params = node.params,
-      model = params.model || bindings.default(node.type),
-      rule = bindings.rules.get(model);
+    const params = node.params;
+    const builtin =
+      params.model &&
+      (await one(
+        sql,
+        "SELECT id FROM studio_catalog WHERE id=$1 AND plugin_id IS NULL",
+        [params.model],
+      ));
+    const bindings = builtin
+      ? undefined
+      : await CanvasSubmissionModels.read(sql);
+    const model = params.model || bindings!.default(node.type);
+    const rule = bindings?.rules.get(model);
 
     // F011: Honor explicit node.generation_mode instead of letting stale params.h3.mode override it.
     let native =

@@ -98,6 +98,7 @@ export class OriginalBatchPrecheck {
         image_quality?: string;
         ratio?: string;
         count?: number;
+        params?: Record<string, unknown>;
       }[];
     };
     return this.p.db.transaction(async (sql) => {
@@ -148,7 +149,9 @@ export class OriginalBatchPrecheck {
           ...(item.ratio ? { ratio: item.ratio } : {}),
         };
         const q = model
-          ? await this.catalog.quoteReadOnly(sql, model, workspace.id, params)
+          ? await this.catalog.quoteReadOnly(sql, model, workspace.id, params, {
+              nativeParams: item.params,
+            })
           : {
               allowed: false,
               priced: false,
@@ -158,7 +161,8 @@ export class OriginalBatchPrecheck {
               reason: `缺少可用的 ${item.kind} 默认模型`,
             };
         priceRevision = q.revision;
-        const subtotal = creditUnits(String(q.amount)) * BigInt(count);
+        const subtotal =
+          creditUnits(String(q.exactAmount ?? q.amount)) * BigInt(count);
         if (q.allowed && q.priced) totalUnits += subtotal;
         items.push({
           index,
@@ -398,12 +402,16 @@ export class OriginalBatchPrecheck {
                       quality: node.params.quality,
                       ratio: node.params.ratio,
                     },
+                {
+                  nativeParams: node.extra_params ?? {},
+                  referenceCount: totalRefs,
+                },
               );
               if (!q.allowed || !q.priced) {
                 issues.push(q.reason || "当前模型不可用或未定价");
                 status = "blocked";
               } else {
-                units = creditUnits(String(q.amount));
+                units = creditUnits(String(q.exactAmount ?? q.amount));
               }
             }
           } else if (stage === "narration") {
@@ -434,7 +442,7 @@ export class OriginalBatchPrecheck {
                 issues.push(q.reason || "音频配音服务尚未配置或连接已停用");
                 status = "blocked";
               } else {
-                units = creditUnits(String(q.amount));
+                units = creditUnits(String(q.exactAmount ?? q.amount));
                 if (model === "edge-tts") {
                   issues.push("使用内置免费 Edge TTS 兜底引擎（0 积分）");
                   if (status === "ready") status = "warning";

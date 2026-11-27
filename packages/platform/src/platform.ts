@@ -1,3 +1,7 @@
+import {
+  mediaCharge,
+  type DeliveredMedia,
+} from "./model-access/media-billing.js";
 import { adoptedModels } from "./studio-plugin-profile.js";
 import { creditUnits, formatCredits } from "./credit-amount.js";
 import {
@@ -981,7 +985,7 @@ export class Platform {
     result?: unknown,
     error?: string,
     timing?: TimingReport["timing"],
-    options: { preserveTiming?: boolean } = {},
+    options: { preserveTiming?: boolean; delivered?: DeliveredMedia } = {},
   ) {
     if (["completed", "failed", "cancelled"].includes(job.state)) return;
     if (!options.preserveTiming)
@@ -992,10 +996,23 @@ export class Platform {
         Date.now() / 1000,
         timing,
       );
+    let charged = state === "completed" ? job.price : "0";
+    if (job.source_kind === "builtin" && state === "completed") {
+      requireValue(
+        options.delivered && job.meter in options.delivered,
+        500,
+        "缺少实际交付计量",
+      );
+      charged = mediaCharge(
+        job.native_snapshot.price.unit,
+        options.delivered,
+        String(job.price),
+      ).charged;
+    }
     const settledWallet = await one(
       sql,
       "UPDATE wallets SET held=held-$2,balance=balance-$3 WHERE workspace_id=$1 RETURNING balance,held",
-      [job.workspace_id, job.price, state === "completed" ? job.price : 0],
+      [job.workspace_id, job.price, charged],
     );
     await sql.query(
       "INSERT INTO ledger(id,workspace_id,job_id,key,action,amount,actor_id,balance_snapshot,held_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
@@ -1005,7 +1022,7 @@ export class Platform {
         job.id,
         "settle:" + job.id,
         state === "completed" ? "spend" : "refund",
-        job.price,
+        state === "completed" ? charged : job.price,
         job.owner_id,
         settledWallet.balance,
         settledWallet.held,

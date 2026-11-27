@@ -458,7 +458,7 @@ export class OriginalChats {
       ]),
     );
     return this.p.db.transaction(async (sql) => {
-      // Policy -> admission -> conversation -> wallet -> canvas. Match existing
+      // Policy -> admission -> conversation -> canvas -> wallet. Match canvas generation's
       // catalog/financial lock order; global admission serializes only new turns.
       const global = await one(
         sql,
@@ -573,17 +573,17 @@ export class OriginalChats {
         "这段对话已很长，请新建对话",
       );
       const stamp = this.clock();
-      const wallet = await one(
-        sql,
-        "SELECT * FROM wallets WHERE workspace_id=$1 FOR UPDATE",
-        [workspace.id],
-      );
       const context = await chatCanvasContext(
         this.p,
         sql,
         actor,
         workspace.id,
         body.context,
+      );
+      const wallet = await one(
+        sql,
+        "SELECT * FROM wallets WHERE workspace_id=$1 FOR UPDATE",
+        [workspace.id],
       );
       requireValue(wallet, 404, "积分账户不存在");
       const native = route

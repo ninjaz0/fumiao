@@ -1,3 +1,5 @@
+import { resolvePublishedRoute } from "@fumiao/platform/model-access/publication.js";
+import { prepareNativeMedia } from "./native-media.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one } from "@fumiao/platform/db.js";
 import { requireValue, DomainError } from "@fumiao/platform/security.js";
@@ -29,12 +31,43 @@ const virtualConnectionId = "00000000-0000-4000-8000-000000000002";
 export class OriginalEstimates {
   constructor(readonly p: Platform) {}
   async read(user: OriginalActor, value: unknown, selected?: string) {
-    const draft = parseBody(value, estimateFields) as EstimateDraft;
+    const draft = parseBody(value, estimateFields) as EstimateDraft & {
+      params?: Record<string, unknown>;
+    };
     try {
       return await this.p.db.transaction(async (sql) => {
         await sql.query(
           "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
         );
+        const route =
+          draft.model && (await resolvePublishedRoute(sql, draft.model));
+        if (route) {
+          const workspace = await new OriginalIdentity(this.p).activeWorkspace(
+            sql,
+            user,
+            selected,
+          );
+          const prepared = await prepareNativeMedia(
+            this.p,
+            sql,
+            user,
+            workspace.id,
+            route,
+            { kind: draft.kind, refs: draft.refs, params: draft.params },
+          );
+          const policy = await one(
+            sql,
+            "SELECT price_revision FROM studio_policy",
+          );
+          return {
+            duration: { ...unobservedDuration },
+            queue: null,
+            price_revision: Number(policy.price_revision),
+            route_revision: route.routeRevisionId,
+            price_revision_id: route.priceRevisionId,
+            max_charge: prepared.amount,
+          };
+        }
         const hasPackages = await hasStudioPackages(sql);
         const pluginPaused = async (pluginId: string) =>
           hasPackages &&

@@ -266,6 +266,7 @@ export const canvasGridCropFields: Fields = {
   col: { ...integer(0), min: 0, max: 2 },
 };
 export const batchQuoteItemFields: Fields = {
+  params: { kind: "dictionary", optional: true },
   kind: literal(["image", "video", "audio"]),
   model: text(180, ""),
   seconds: { ...integer(5), min: 0, max: 15, optional: true },

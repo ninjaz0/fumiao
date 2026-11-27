@@ -1,13 +1,11 @@
+import { resolvePublishedRoute } from "@fumiao/platform/model-access/publication.js";
+import { acceptNativeMedia } from "./native-media.js";
 import { hasStudioPackages } from "@fumiao/platform/studio-plugin-profile.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
 import { randomUUID } from "node:crypto";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
-import {
-  requireValue,
-  DomainError,
-  hash,
-} from "@fumiao/platform/security.js";
+import { requireValue, DomainError, hash } from "@fumiao/platform/security.js";
 import { canonical, validator } from "@fumiao/platform/plugins.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { ReferencePacks, packPurposes } from "@fumiao/platform/packs.js";
@@ -90,7 +88,7 @@ export class OriginalGeneration {
     try {
       const catalog = await one(
         sql,
-        "SELECT c.*,v.manifest FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE c.id=$1",
+        "SELECT c.*,v.manifest FROM studio_catalog c LEFT JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE c.id=$1",
         [draft.model],
       );
       requireValue(
@@ -103,19 +101,22 @@ export class OriginalGeneration {
         user,
         selected,
       );
-      const plugin = await this.p.registry.resolve(
-        sql,
-        catalog.plugin_id,
-        catalog.plugin_version,
-      );
-      const adapter = plugin.originalSubmission;
+      const native = catalog.source_kind === "builtin";
+      const plugin = native
+        ? undefined
+        : await this.p.registry.resolve(
+            sql,
+            catalog.plugin_id,
+            catalog.plugin_version,
+          );
+      const adapter = plugin?.originalSubmission;
       requireValue(
-        catalog.manifest.originalSubmission && adapter,
+        native || (catalog.manifest.originalSubmission && adapter),
         503,
         "原生成提交适配器尚未启用",
       );
-      adapter.validate(draft, "before-packs");
-      const namespace = adapter.namespace(draft);
+      adapter?.validate(draft, "before-packs");
+      const namespace = native ? "-builtin" : adapter!.namespace(draft);
       requireValue(
         /^(?:|-[a-z0-9-]{1,80})$/.test(namespace),
         500,
@@ -124,7 +125,10 @@ export class OriginalGeneration {
       const uid = `${user.public_id}${namespace}-${draft.uid}`;
       // Global policy -> owner identity -> workspace wallet. Configuration and
       // queue admission remain stable through acceptance; no external calls.
-      await sql.query("SELECT price_revision FROM studio_policy FOR SHARE");
+      const policy = await one(
+        sql,
+        "SELECT price_revision FROM studio_policy FOR SHARE",
+      );
       await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
         "original-submit:" + user.id,
       ]);
@@ -132,7 +136,7 @@ export class OriginalGeneration {
         "SELECT workspace_id FROM wallets WHERE workspace_id=$1 FOR UPDATE",
         [workspace.id],
       );
-      if (!draft.asset_packs.length) adapter.validate(draft, "before-retry");
+      if (!draft.asset_packs.length) adapter?.validate(draft, "before-retry");
       const packages = await hasStudioPackages(sql);
       const previous = await one(
         sql,
@@ -141,6 +145,9 @@ export class OriginalGeneration {
           : "SELECT * FROM jobs WHERE original_uid=$1 AND deleted_at IS NULL",
         packages ? [uid, user.id, draft.model, draft.uid] : [uid],
       );
+      const fingerprint = native
+        ? hash(canonical({ ...draft, provided: undefined }))
+        : "";
       if (previous) {
         await new OriginalLibrary(this.p).access(
           sql,
@@ -148,6 +155,12 @@ export class OriginalGeneration {
           { kind: "job", row: previous },
           workspace.id,
         );
+        if (native && previous.native_snapshot)
+          requireValue(
+            previous.request_hash === fingerprint,
+            409,
+            "请求编号已用于其他生成任务",
+          );
         return { id: Number(previous.public_id) };
       }
       let snapshots: unknown[] = [];
@@ -202,8 +215,38 @@ export class OriginalGeneration {
           400,
           "参考图片合计最多 9 张，提示词和素材说明合计最多 12000 字",
         );
-        adapter.validate(draft, "before-retry");
+        adapter?.validate(draft, "before-retry");
       }
+      if (native) {
+        const route = await resolvePublishedRoute(sql, draft.model);
+        requireValue(route, 409, "模型线路已更新");
+        requireValue(
+          priceRevision != null &&
+            BigInt(priceRevision) === BigInt(policy.price_revision),
+          409,
+          "积分价格已更新，请确认新价格后重新提交",
+        );
+        if (draft.parent)
+          requireValue(
+            await this.task(sql, user, workspace.id, draft.parent),
+            404,
+            "来源任务不可访问",
+          );
+        return acceptNativeMedia(
+          this.p,
+          sql,
+          user,
+          workspace.id,
+          route,
+          draft,
+          uid,
+          fingerprint,
+          Number(policy.price_revision),
+          snapshots,
+          meta,
+        );
+      }
+      requireValue(plugin && adapter, 503, "原生成提交适配器尚未启用");
       // The policy check precedes reference validation and billing in the original.
       if (packages)
         requireValue(

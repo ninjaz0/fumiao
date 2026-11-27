@@ -37,8 +37,8 @@ export class CanvasModels {
   static async read(sql: Sql, options?: { allowIncomplete?: boolean }) {
     const allowIncomplete = options?.allowIncomplete ?? false;
     const rows = (
-      await sql.query(`SELECT c.id,c.descriptor->>'kind' AS kind,v.manifest->'canvas' AS policy, v.manifest->'originalSubmission'->>'version' AS submission
-      FROM ${await listedStudioCatalog(sql, "models")} c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
+      await sql.query(`SELECT c.id,c.plugin_id,c.descriptor->>'kind' AS kind,v.manifest->'canvas' AS policy, v.manifest->'originalSubmission'->>'version' AS submission
+      FROM ${await listedStudioCatalog(sql, "models")} c LEFT JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version
       WHERE c.descriptor->>'kind' IN ('image','video') ORDER BY c.position,c.id`)
     ).rows;
     const rules: CanvasModelRule[] = [];
@@ -49,7 +49,11 @@ export class CanvasModels {
       );
       if (rule) {
         rules.push(rule as CanvasModelRule);
-      } else if (r.submission === "2" || r.submission === "3") {
+      } else if (
+        r.plugin_id == null ||
+        r.submission === "2" ||
+        r.submission === "3"
+      ) {
         rules.push({ model: r.id, kind: r.kind });
       } else if (allowIncomplete) {
         incomplete.set(r.id, r.kind);

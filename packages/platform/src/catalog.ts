@@ -1,3 +1,5 @@
+import { creditUnits, formatCredits } from "./credit-amount.js";
+import { prepareImageParameters } from "./prepare-input.js";
 import {
   adoptedModels,
   hasModelAccess,
@@ -6,10 +8,11 @@ import {
 } from "./studio-plugin-profile.js";
 import type { Database, Sql } from "./db.js";
 import { one } from "./db.js";
-import { requireValue } from "./security.js";
+import { DomainError, requireValue } from "./security.js";
 import type { Manifest, StudioModel } from "@fumiao/plugin-sdk/index.js";
 import {
   publishedPrice,
+  resolvePublishedRoute,
   type PublishedPrice,
 } from "./model-access/published-routes.js";
 import { matcher } from "./schema.js";
@@ -526,11 +529,16 @@ export class StudioCatalog {
     modelId: string,
     workspace: string,
     params: Record<string, unknown>,
-    options?: { requireConnection?: boolean },
+    options?: {
+      requireConnection?: boolean;
+      nativeParams?: Record<string, unknown>;
+      referenceCount?: number;
+    },
   ): Promise<{
     allowed: boolean;
     priced: boolean;
     amount: number;
+    exactAmount?: string;
     key: string | null;
     revision: number;
     reason?: string;
@@ -550,6 +558,49 @@ export class StudioCatalog {
         revision,
         reason: `模型“${modelId}”未安装或已下架`,
       };
+    }
+    if (catalog.source_kind === "builtin") {
+      try {
+        const route = await resolvePublishedRoute(sql, modelId);
+        requireValue(
+          route?.price.kind === "image",
+          409,
+          "该线路不支持图片估价",
+        );
+        const access = await one(
+          sql,
+          `SELECT studio_model_allowed($1,$2) AND NOT EXISTS (
+          SELECT 1 FROM model_permissions WHERE workspace_id=$2 AND model_id=$3 AND NOT enabled) AS ok`,
+          [modelId, workspace, route.modelId],
+        );
+        requireValue(access.ok, 403, "当前空间未开放该模型");
+        const { count } = prepareImageParameters(
+          route,
+          options?.nativeParams ?? {},
+          options?.referenceCount ?? 0,
+        );
+        const amount = formatCredits(
+          creditUnits(route.price.unit) * BigInt(count),
+        );
+        return {
+          allowed: true,
+          priced: true,
+          amount: Number(amount),
+          exactAmount: amount,
+          key: null,
+          revision,
+        };
+      } catch (error) {
+        if (!(error instanceof DomainError)) throw error;
+        return {
+          allowed: false,
+          priced: false,
+          amount: 0,
+          key: null,
+          revision,
+          reason: error.message,
+        };
+      }
     }
     const hasPackages = await hasStudioPackages(sql);
     if (hasPackages) {
