@@ -137,12 +137,14 @@ export class OriginalGeneration {
         [workspace.id],
       );
       if (!draft.asset_packs.length) adapter?.validate(draft, "before-retry");
-      const packages = await hasStudioPackages(sql);
+      const packages = !native && (await hasStudioPackages(sql));
       const previous = await one(
         sql,
-        packages
-          ? `SELECT * FROM jobs WHERE deleted_at IS NULL AND (original_uid=$1 OR (owner_id=$2 AND catalog_id=$3 AND studio_client_uid=$4 AND EXISTS(SELECT 1 FROM studio_shared_models WHERE model_id=$3))) LIMIT 1`
-          : "SELECT * FROM jobs WHERE original_uid=$1 AND deleted_at IS NULL",
+        native
+          ? "SELECT j.public_id,j.workspace_id,j.deleted_at,j.request_hash FROM model_access_job_uids i JOIN jobs j ON j.id=i.job_id WHERE i.uid=$1"
+          : packages
+            ? `SELECT * FROM jobs WHERE deleted_at IS NULL AND (original_uid=$1 OR (owner_id=$2 AND catalog_id=$3 AND studio_client_uid=$4 AND EXISTS(SELECT 1 FROM studio_shared_models WHERE model_id=$3))) LIMIT 1`
+            : "SELECT * FROM jobs WHERE original_uid=$1 AND deleted_at IS NULL",
         packages ? [uid, user.id, draft.model, draft.uid] : [uid],
       );
       const fingerprint = native
@@ -155,12 +157,18 @@ export class OriginalGeneration {
           { kind: "job", row: previous },
           workspace.id,
         );
-        if (native && previous.native_snapshot)
+        if (native) {
+          requireValue(
+            !previous.deleted_at,
+            409,
+            "已删除作品的请求编号不能再次生成",
+          );
           requireValue(
             previous.request_hash === fingerprint,
             409,
             "请求编号已用于其他生成任务",
           );
+        }
         return { id: Number(previous.public_id) };
       }
       let snapshots: unknown[] = [];

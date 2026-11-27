@@ -665,6 +665,14 @@ test("GPU package installs its administrator panel while disabled and removes th
         ),
       );
     const prior = await snapshot();
+    prior[0] = prior[0].map((row) => ({
+      ...row,
+      source_kind: "plugin",
+      route_revision_id: null,
+      price_revision_id: null,
+      native_snapshot: null,
+      meter: null,
+    }));
     await migrate(f.db);
     assert.deepEqual(await snapshot(), prior);
     assert.equal(

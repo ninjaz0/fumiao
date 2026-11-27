@@ -8,8 +8,12 @@ import { OriginalModelAccess } from "@fumiao/original-api/model-access.js";
 import { Executor } from "@fumiao/platform/executor.js";
 import { one } from "@fumiao/platform/db.js";
 
-async function fixture(t: test.TestContext, router = false) {
-  const f = await chatsFixture();
+async function fixture(
+  t: test.TestContext,
+  router = false,
+  throughMigration?: string,
+) {
+  const f = await chatsFixture(throughMigration);
   t.after(f.cleanup);
   await f.db.query(
     "INSERT INTO studio_plugin_profile(mode) VALUES('compatible') ON CONFLICT DO NOTHING",
@@ -654,7 +658,547 @@ test("删除已交付作品时存储短断，重启后清除每一个待删对�
     await new OriginalJobs(f.p).remove(f.member, accepted.body.id),
     { ok: true },
   );
+  const replay = await f.request("/api/image-jobs", body);
+  assert.equal(replay.status, 409, JSON.stringify(replay.body));
+  assert.equal(
+    (
+      await f.db.query("SELECT id FROM jobs WHERE studio_client_uid=$1", [
+        body.uid,
+      ])
+    ).rows.length,
+    1,
+  );
   f.p.storage.remove = remove;
   await runner.recover();
   for (const a of out) await assert.rejects(f.p.storage.stat(a.object_key));
 });
+
+async function imageJob(f: Awaited<ReturnType<typeof fixture>>, count = 1) {
+  const response = await f.request("/api/image-jobs", {
+    model: f.model,
+    prompt: "生成",
+    uid: randomUUID(),
+    params: { n: count },
+    price_revision: (
+      await one(f.db, "SELECT price_revision FROM studio_policy")
+    ).price_revision,
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [response.body.id]);
+}
+
+for (const restart of [false, true])
+  test(`上游接单后${restart ? "进程重启" : "响应中断"}保留人工核查与唯一预留`, async (t) => {
+    const f = await fixture(t);
+    const job = await imageJob(f);
+    let posts = 0;
+    const runner = new Executor(f.p, async () => {
+      posts++;
+      if (restart) {
+        await f.db.query(
+          "UPDATE jobs SET lease_until=now()-interval '1 hour' WHERE id=$1",
+          [job.id],
+        );
+        await runner.recover();
+        throw new Error("process lost");
+      }
+      return {
+        status: 200,
+        contentType: "application/json",
+        body: new ReadableStream({
+          pull(controller) {
+            controller.error(new Error("connection reset"));
+          },
+        }),
+      };
+    });
+    await runner.execute(job.id);
+    await runner.execute(job.id);
+    const row = await one(
+      f.db,
+      "SELECT state,request_uncertain FROM jobs WHERE id=$1",
+      [job.id],
+    );
+    assert.deepEqual(row, { state: "uncertain", request_uncertain: true });
+    assert.equal(
+      Number((await f.p.wallet(f.member, f.memberSpace.id)).held),
+      0.25,
+    );
+    const { OriginalObservability } =
+      await import("@fumiao/original-api/admin-observability.js");
+    const ops = new OriginalObservability(f.p);
+    const listed = (await ops.uncertainJobs(f.admin)).jobs.find(
+      (row) => row.id === job.id,
+    );
+    assert.ok(listed);
+    assert.equal(listed.plugin_id, "");
+    assert.equal(listed.price, 0.25);
+    await assert.rejects(
+      ops.reconcileJob(f.admin, job.id, {
+        action: "resume",
+        reason: "synthetic verify",
+        remoteId: "unused",
+      }),
+      { status: 400 },
+    );
+    await ops.reconcileJob(f.admin, job.id, {
+      action: "refund",
+      reason: "synthetic verified refund",
+    });
+    await assert.rejects(
+      ops.reconcileJob(f.admin, job.id, {
+        action: "refund",
+        reason: "repeated reason",
+      }),
+      { status: 409 },
+    );
+    assert.equal(posts, 1);
+    assert.equal(
+      Number((await f.p.wallet(f.member, f.memberSpace.id)).held),
+      0,
+    );
+  });
+
+async function samplePng() {
+  return sharp({
+    create: { width: 48, height: 48, channels: 3, background: "#776633" },
+  })
+    .png()
+    .toBuffer();
+}
+function imageResponse(png: Buffer) {
+  const item = { b64_json: png.toString("base64") };
+  return {
+    status: 200,
+    contentType: "application/json",
+    body: Buffer.from(JSON.stringify({ data: [item, item] })),
+  };
+}
+
+test("累计暂存字节受工作区配额限制，公布可交付子集并结算一次", async (t) => {
+  const f = await fixture(t);
+  const job = await imageJob(f, 2),
+    png = await samplePng();
+  await f.db.query(
+    "UPDATE workspaces SET storage_limit=storage_used+$2 WHERE id=$1",
+    [job.workspace_id, png.length],
+  );
+  const runner = new Executor(f.p, async () => imageResponse(png));
+  await runner.execute(job.id);
+  await runner.execute(job.id);
+  assert.deepEqual(
+    await one(
+      f.db,
+      "SELECT state,json_array_length(result->'assets') n FROM jobs WHERE id=$1",
+      [job.id],
+    ),
+    { state: "completed", n: 1 },
+  );
+  assert.equal(
+    Number(
+      (
+        await one(
+          f.db,
+          "SELECT amount FROM ledger WHERE job_id=$1 AND action='spend'",
+          [job.id],
+        )
+      ).amount,
+    ),
+    0.25,
+  );
+  await runner.recover();
+  assert.equal(
+    await one(f.db, "SELECT 1 FROM model_access_staging WHERE job_id=$1", [
+      job.id,
+    ]),
+    undefined,
+  );
+});
+
+test("工作台、画布与素材库按已交付顺序选择第一张", async (t) => {
+  const f = await fixture(t);
+  const job = await imageJob(f, 2),
+    png = await samplePng();
+  const runner = new Executor(f.p, async () => imageResponse(png));
+  await runner.execute(job.id);
+  const ids = (await one(f.db, "SELECT result FROM jobs WHERE id=$1", [job.id]))
+    .result.assets;
+  const first = "f".repeat(32),
+    second = "0".repeat(32);
+  await f.db.query(
+    "UPDATE assets SET public_id=CASE WHEN id=$1 THEN $3 ELSE $4 END WHERE id IN ($1,$2)",
+    [...ids, first, second],
+  );
+  const { OriginalCanvases } = await import("@fumiao/original-api/canvases.js");
+  const canvases = new OriginalCanvases(f.p);
+  const canvas = await canvases.create(f.member, { title: "交付顺序" });
+  const project = await one(
+    f.db,
+    "SELECT id FROM documents WHERE public_id=$1",
+    [canvas.id],
+  );
+  await f.db.query(
+    "INSERT INTO canvas_job_links(project_id,node,job_id,owner_id,uid,inputs,created) VALUES($1,'img',$2,$3,gen_random_uuid(),'{}',0)",
+    [project.id, job.id, job.owner_id],
+  );
+  const node = {
+    id: "img",
+    use_media: false,
+    active_job: null,
+    media_id: null,
+  } as Parameters<typeof canvases.mediaForNode>[2];
+  assert.equal(await canvases.mediaForNode(f.db, project.id, node), first);
+  const { OriginalLibrary } = await import("@fumiao/original-api/library.js");
+  assert.equal(
+    (await new OriginalLibrary(f.p).result(f.db, job)).public_id,
+    first,
+  );
+  const state = await f.request("/api/state");
+  assert.deepEqual(
+    state.body.jobs.find((j: any) => j.id === Number(job.public_id)).results,
+    [first, second],
+  );
+});
+
+for (const quota of ["both", "stage", "commit"])
+  test(
+    `分块回执内两张 34 MiB 图片，全局配额 ${quota}`,
+    { skip: !process.env.TEST_DATABASE_URL },
+    async (t) => {
+      const f = await fixture(t);
+      const job = await imageJob(f, 2);
+      const png = await sharp(randomBytes(3500 * 2560 * 4), {
+        raw: { width: 3500, height: 2560, channels: 4 },
+      })
+        .png({ compressionLevel: 0 })
+        .toBuffer();
+      assert.ok(png.length > 34 * 1024 * 1024);
+      const encoded = png.toString("base64");
+      function* body() {
+        yield '{"data":[';
+        for (let i = 0; i < 2; i++) {
+          yield (i ? "," : "") + '{"b64_json":"';
+          for (let j = 0; j < encoded.length; j += 65536)
+            yield encoded.slice(j, j + 65536);
+          yield '"}';
+        }
+        yield "]}";
+      }
+      // Simulate a quota change from another connection after the assets and
+      // wallet were updated, immediately before PG checks its deferred trigger.
+      let deferredConflicts = 0,
+        reduced = false;
+      const restrict = () =>
+        f.db.query(
+          "UPDATE storage_capacity SET quota=used+reserved WHERE singleton",
+        );
+      if (quota === "stage") await restrict();
+      if (quota === "commit") {
+        const transaction = f.db.transaction.bind(f.db);
+        f.db.transaction = async (fn) => {
+          try {
+            return await transaction(async (sql) => {
+              const result = await fn(sql);
+              if (
+                !reduced &&
+                (await one(sql, "SELECT state FROM jobs WHERE id=$1", [job.id]))
+                  .state === "completed"
+              ) {
+                reduced = true;
+                await restrict();
+              }
+              return result;
+            });
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "P1002")
+              deferredConflicts++;
+            throw error;
+          }
+        };
+      }
+      let writes = 0,
+        receiptBytes = 0;
+      const put = f.p.storage.put.bind(f.p.storage);
+      f.p.storage.put = async (key, bytes, mime) => {
+        if (!writes)
+          receiptBytes = (
+            await one(
+              f.db,
+              "SELECT pg_column_size(receipt) bytes FROM jobs WHERE id=$1",
+              [job.id],
+            )
+          ).bytes;
+        writes++;
+        await put(key, bytes, mime);
+      };
+      const parts = body();
+      let posts = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const part = parts.next();
+          if (part.done) controller.close();
+          else controller.enqueue(Buffer.from(part.value));
+        },
+      });
+      const runner = new Executor(f.p, async () => {
+        posts++;
+        return {
+          status: 200,
+          contentType: "application/json",
+          body: stream,
+        };
+      });
+      await runner.execute(job.id);
+      const done = await one(
+        f.db,
+        "SELECT state,result,pg_column_size(receipt) bytes FROM jobs WHERE id=$1",
+        [job.id],
+      );
+      assert.equal(done.state, "completed", JSON.stringify(done));
+      const delivered = quota === "both" ? 2 : 1;
+      assert.equal(done.result.assets.length, delivered);
+      assert.equal(deferredConflicts, quota === "commit" ? 1 : 0);
+      assert.equal(writes, quota === "stage" ? 1 : 2);
+      assert.equal(posts, 1);
+      assert.equal(
+        Number(
+          (
+            await one(
+              f.db,
+              "SELECT amount FROM ledger WHERE job_id=$1 AND action='spend'",
+              [job.id],
+            )
+          ).amount,
+        ),
+        0.25 * delivered,
+      );
+      assert.equal(
+        Number((await f.p.wallet(f.member, job.workspace_id)).held),
+        0,
+      );
+      const leftovers = (
+        await f.db.query(
+          "SELECT object_key FROM model_access_staging WHERE job_id=$1 AND metadata IS NOT NULL",
+          [job.id],
+        )
+      ).rows;
+      assert.equal(leftovers.length, quota === "commit" ? 1 : 0);
+      await runner.recover();
+      for (const obj of leftovers)
+        await assert.rejects(f.p.storage.stat(obj.object_key));
+      assert.equal(
+        await one(
+          f.db,
+          "SELECT 1 FROM model_access_image_parts WHERE job_id=$1",
+          [job.id],
+        ),
+        undefined,
+      );
+      assert.ok(receiptBytes > 0 && receiptBytes < 4096);
+      assert.equal(done.bytes, null);
+    },
+  );
+
+test("发送前中断、明确拒绝和完整无效回执均释放预留", async (t) => {
+  const f = await fixture(t);
+  for (const scenario of ["before-send", "rejected", "invalid"]) {
+    const job = await imageJob(f);
+    let posts = 0;
+    const runner = new Executor(f.p, async () => {
+      posts++;
+      return {
+        status: scenario === "rejected" ? 400 : 200,
+        contentType: "application/json",
+        body: Buffer.from('{"data":oops}'),
+      };
+    });
+    if (scenario === "before-send") {
+      assert.ok(await runner.claim(job.id));
+      await f.db.query(
+        "UPDATE jobs SET lease_until=now()-interval '1 hour' WHERE id=$1",
+        [job.id],
+      );
+      await runner.recover();
+    } else await runner.execute(job.id);
+    const row = await one(
+      f.db,
+      "SELECT state,request_uncertain FROM jobs WHERE id=$1",
+      [job.id],
+    );
+    assert.deepEqual(row, { state: "failed", request_uncertain: false });
+    assert.equal(posts, scenario === "before-send" ? 0 : 1);
+    assert.equal(
+      Number((await f.p.wallet(f.member, job.workspace_id)).held),
+      0,
+    );
+  }
+});
+
+test("060 在途图片升级后保留旧回执、发送不明的预留及永久 UID", async (t) => {
+  const f = await fixture(t, false, "060_model_access_jobs.sql");
+  const { resolvePublishedRoute } =
+    await import("@fumiao/platform/model-access/publication.js");
+  const { acceptTask } = await import("@fumiao/platform/accept.js");
+  const { migrate } = await import("@fumiao/platform/db.js");
+  const route = await resolvePublishedRoute(f.db, f.model);
+  assert.ok(route);
+  const png = await samplePng();
+  const seed = async (hasReceipt: boolean) =>
+    f.db.transaction(async (sql) => {
+      const accepted = await acceptTask(
+        f.p,
+        sql,
+        f.member,
+        f.memberSpace.id,
+        {
+          id: route.modelId,
+          connection_id: route.connectionId,
+          catalog_id: route.catalogId,
+          provider_model: route.upstreamId,
+          kind: "image",
+        },
+        { key: randomUUID(), prompt: "旧单", params: { n: 1 }, references: [] },
+        "old-request",
+        { amount: "0.25", key: null, revision: 1 },
+        [],
+        {},
+        route,
+      );
+      const uid = randomUUID();
+      await sql.query(
+        `UPDATE jobs SET original_uid=$2,state=$3,lease_until=now()-interval '1 second',
+      lease_token=gen_random_uuid(),receipt=$4 WHERE id=$1`,
+        [
+          accepted.id,
+          uid,
+          hasReceipt ? "finalizing" : "dispatching",
+          hasReceipt
+            ? JSON.stringify({ outputs: [{ b64: png.toString("base64") }] })
+            : null,
+        ],
+      );
+      return { id: accepted.id, uid };
+    });
+  const saved = await seed(true),
+    uncertain = await seed(false);
+  await migrate(f.db);
+  assert.equal(
+    (
+      await one(f.db, "SELECT job_id FROM model_access_job_uids WHERE uid=$1", [
+        saved.uid,
+      ])
+    ).job_id,
+    saved.id,
+  );
+  let posts = 0;
+  const runner = new Executor(f.p, async () => {
+    posts++;
+    throw new Error("no generation required");
+  });
+  await runner.recover();
+  await runner.execute(saved.id);
+  assert.equal(posts, 0);
+  assert.equal(
+    (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [uncertain.id]))
+      .state,
+    "uncertain",
+  );
+  assert.equal(
+    (await one(f.db, "SELECT state FROM jobs WHERE id=$1", [saved.id])).state,
+    "completed",
+  );
+  assert.equal(
+    Number((await f.p.wallet(f.member, f.memberSpace.id)).held),
+    0.25,
+  );
+});
+
+test("受理后全局配额低于原 64 MiB 预留时只交付剩余空间可放下的一张", async (t) => {
+  const f = await fixture(t),
+    job = await imageJob(f, 2),
+    png = await samplePng();
+  await f.db.query(
+    "UPDATE storage_capacity SET quota=used+$1 WHERE singleton",
+    [png.length],
+  );
+  const runner = new Executor(f.p, async () => imageResponse(png));
+  await runner.execute(job.id);
+  const done = await one(f.db, "SELECT state,result FROM jobs WHERE id=$1", [
+    job.id,
+  ]);
+  assert.equal(done.state, "completed");
+  assert.equal(done.result.assets.length, 1);
+});
+
+test(
+  "工作区在发布中降低配额后，跳过过大的首图并交付较小的第二张",
+  { skip: !process.env.TEST_DATABASE_URL },
+  async (t) => {
+    const f = await fixture(t),
+      job = await imageJob(f, 2),
+      small = await samplePng();
+    const large = await sharp(randomBytes(128 * 128 * 3), {
+      raw: { width: 128, height: 128, channels: 3 },
+    })
+      .png()
+      .toBuffer();
+    assert.ok(large.length > small.length);
+    let shrunk = false;
+    const transaction = f.db.transaction.bind(f.db);
+    f.db.transaction = (fn) =>
+      transaction((sql) => {
+        let publishing = false;
+        return fn({
+          query: async <T extends Record<string, any>>(
+            query: string,
+            params?: any[],
+          ) => {
+            const result = await sql.query<T>(query, params);
+            if (
+              query.includes("FROM model_access_staging") &&
+              query.includes("ORDER BY output_index")
+            )
+              publishing = true;
+            if (
+              publishing &&
+              !shrunk &&
+              query.includes("w.storage_limit-w.storage_used")
+            ) {
+              shrunk = true;
+              await f.db.query(
+                "UPDATE workspaces SET storage_limit=storage_used+$2 WHERE id=$1",
+                [job.workspace_id, small.length],
+              );
+            }
+            return result;
+          },
+        });
+      });
+    const runner = new Executor(f.p, async () => ({
+      status: 200,
+      contentType: "application/json",
+      body: Buffer.from(
+        JSON.stringify({
+          data: [large, small].map((bytes) => ({
+            b64_json: bytes.toString("base64"),
+          })),
+        }),
+      ),
+    }));
+    await runner.execute(job.id);
+    assert.ok(shrunk);
+    const done = await one(f.db, "SELECT state,result FROM jobs WHERE id=$1", [
+      job.id,
+    ]);
+    assert.equal(done.state, "completed");
+    assert.equal(done.result.assets.length, 1);
+    assert.equal(
+      (
+        await one(f.db, "SELECT metadata FROM assets WHERE id=$1", [
+          done.result.assets[0],
+        ])
+      ).metadata.outputIndex,
+      1,
+    );
+  },
+);

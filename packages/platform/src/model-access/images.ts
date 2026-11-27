@@ -1,24 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { ArtifactValidationError } from "@fumiao/plugin-sdk/preparation.js";
-import { artifactCapacity } from "../capacity.js";
 import { one, type Sql } from "../db.js";
 import { ensureDerivativeQueued } from "../derivatives.js";
 import type { Platform } from "../platform.js";
 import {
   generationTransport,
   httpChunks,
-  requirePublicHttps,
   type HttpTransport,
 } from "../plugin-host.js";
 import { inspectProviderOutput } from "../provider-output.js";
 import { DomainError, requireValue } from "../security.js";
 import { resolveConnectionRevision } from "./connections.js";
 import { routeScopeAllows, type FrozenModelRoute } from "./publication.js";
+import {
+  decodeInline,
+  DefiniteImageFailure,
+  maxImageBytes,
+  readImageReceipt,
+  type ImageOutput,
+} from "./image-receipt.js";
 
 type Transport = HttpTransport<string | Uint8Array>;
-type Output = { b64: string } | { url: string } | null;
-const maxMediaBytes = 64 * 1024 * 1024;
-const maxReceiptBytes = Math.ceil(maxMediaBytes / 3) * 4 + 1024 * 1024;
+
 const validation = {
   version: 3 as const,
   errors: {
@@ -62,7 +65,38 @@ async function submitImages(
     p.db,
     p,
     route.connectionRevisionId,
-    http,
+    async (url, init, signal) => {
+      signal.throwIfAborted();
+      await p.db.transaction(async (sql) => {
+        requireValue(await leased(sql, job), 409, "生成租约已移交");
+        requireValue(
+          await one(
+            sql,
+            "INSERT INTO model_access_submissions(job_id) VALUES($1) ON CONFLICT DO NOTHING RETURNING job_id",
+            [job.id],
+          ),
+          409,
+          "请求已开始发送",
+        );
+      });
+      try {
+        return await http(url, init, signal);
+      } catch (error) {
+        // DNS rejection or a refused TCP connection cannot have sent a POST.
+        if (
+          [
+            "ENOTFOUND",
+            "EAI_AGAIN",
+            "EINTERNAL",
+            "ECONNREFUSED",
+            "ENETUNREACH",
+            "EHOSTUNREACH",
+          ].includes((error as NodeJS.ErrnoException).code ?? "")
+        )
+          throw new DefiniteImageFailure();
+        throw error;
+      }
+    },
   );
   requireValue(
     routeScopeAllows(client.scope, route.protocol, route.upstreamId),
@@ -84,7 +118,7 @@ async function submitImages(
       "参考图片不可用",
     );
     total += Number(asset.size);
-    requireValue(total <= maxMediaBytes, 413, "参考图片合计过大");
+    requireValue(total <= maxImageBytes, 413, "参考图片合计过大");
     const bytes = await p.storage.read(asset.object_key);
     requireValue(bytes.length === Number(asset.size), 409, "参考图片已变化");
     references.push({ bytes: new Uint8Array(bytes), mime: asset.mime });
@@ -137,53 +171,49 @@ async function submitImages(
   );
   if (response.status < 200 || response.status >= 300) {
     await discard(response.body);
-    throw new DomainError(502, "上游未返回图片");
+    if (response.status >= 500 || response.status === 408)
+      throw new Error("提交结果待核查");
+    throw new DefiniteImageFailure();
   }
-  const json = JSON.parse(
-    (await readBody(response.body, maxReceiptBytes, signal)).toString("utf8"),
+  return readImageReceipt(
+    response.body,
+    Number(job.input.params.n ?? 1),
+    signal,
+    client.containsCredential,
+    async (index, bytes) => {
+      await p.db.transaction(async (sql) => {
+        requireValue(await leased(sql, job), 409, "生成租约已移交");
+        await sql.query(
+          "INSERT INTO model_access_image_parts(job_id,output_index,bytes) VALUES($1,$2,$3)",
+          [job.id, index, bytes],
+        );
+      });
+    },
   );
-  requireValue(Array.isArray(json?.data), 502, "上游图片回执无效");
-  const count = Number(job.input.params.n ?? 1);
-  const outputs: Output[] = json.data.slice(0, count).map((item: any) => {
-    if (
-      typeof item?.b64_json === "string" &&
-      item.b64_json.length &&
-      item.b64_json.length <= 4 * Math.ceil(maxMediaBytes / 3) &&
-      !client.containsCredential(item.b64_json)
-    )
-      return { b64: item.b64_json };
-    if (
-      typeof item?.url === "string" &&
-      item.url.length <= 8192 &&
-      !client.containsCredential(item.url)
-    ) {
-      try {
-        const url = new URL(item.url);
-        requirePublicHttps(url);
-        if (!client.containsCredential(decodeURIComponent(url.href)))
-          return { url: url.href };
-      } catch {
-        /* Discard just this invalid output. */
-      }
-    }
-    return null;
-  });
-  return { outputs };
 }
 async function outputBytes(
-  output: NonNullable<Output>,
+  p: Platform,
+  jobId: string,
+  index: number,
+  output: NonNullable<ImageOutput>,
   http: Transport,
   signal: AbortSignal,
 ) {
-  if ("b64" in output) {
-    if (
-      !/^[A-Za-z0-9+/]+={0,2}$/.test(output.b64) ||
-      output.b64.length % 4 === 1
-    )
-      return null;
-    const bytes = Buffer.from(output.b64, "base64");
-    return bytes.length <= maxMediaBytes ? bytes : null;
+  if ("inline" in output) {
+    const part = await one(
+      p.db,
+      "SELECT bytes FROM model_access_image_parts WHERE job_id=$1 AND output_index=$2",
+      [jobId, index],
+    );
+    return part
+      ? Buffer.from(
+          part.bytes.buffer,
+          part.bytes.byteOffset,
+          part.bytes.byteLength,
+        )
+      : null;
   }
+  if ("b64" in output) return decodeInline(output.b64); // Version 060 persisted inline JSON.
   let response;
   try {
     response = await http(
@@ -202,7 +232,7 @@ async function outputBytes(
     return null;
   }
   try {
-    return await readBody(response.body, maxMediaBytes, signal);
+    return await readBody(response.body, maxImageBytes, signal);
   } catch (error) {
     if (error instanceof DomainError && error.status === 413) return null;
     throw error;
@@ -215,6 +245,46 @@ async function leased(sql: Sql, job: Record<string, any>) {
     "SELECT id,state,price,workspace_id,owner_id,source_kind,native_snapshot,meter,receipt IS NOT NULL AS has_receipt FROM jobs WHERE id=$1 AND lease_token=$2 FOR UPDATE",
     [job.id, job.lease_token],
   );
+}
+
+/** This job can use its own hold once across the complete delivery. Recheck
+ * inside publication; a concurrent writer may still win at deferred COMMIT. */
+async function remainingStorage(sql: Sql, job: Record<string, any>) {
+  const row = await one(
+    sql,
+    `SELECT LEAST(w.storage_limit-w.storage_used,
+    c.quota-c.used-c.reserved+GREATEST(0,COALESCE(h.budget-h.materialized,0))) AS bytes
+    FROM workspaces w CROSS JOIN storage_capacity c LEFT JOIN storage_holds h ON h.job_id=$1
+    WHERE w.id=$2 AND c.singleton`,
+    [job.id, job.workspace_id],
+  );
+  return Number(row.bytes);
+}
+
+export async function interruptedImageSubmission(
+  p: Platform,
+  sql: Sql,
+  job: Record<string, any>,
+  definite = false,
+) {
+  if (
+    !definite &&
+    (await one(sql, "SELECT 1 FROM model_access_submissions WHERE job_id=$1", [
+      job.id,
+    ]))
+  ) {
+    const note = "图片请求已开始发送，提交结果未知，请核对上游记录";
+    await sql.query(
+      `UPDATE jobs SET state='uncertain',request_uncertain=true,lease_token=NULL,lease_until=NULL,
+      error=$2,request_note=$2,updated_at=now() WHERE id=$1`,
+      [job.id, note],
+    );
+    await sql.query(
+      "INSERT INTO job_events(job_id,state) VALUES($1,'uncertain')",
+      [job.id],
+    );
+  } else
+    await p.settle(sql, job, "failed", undefined, "图片生成未取得有效回执");
 }
 
 /** Reserve the key durably before the put. Reacquire the same job lock while
@@ -239,8 +309,29 @@ async function stage(
   if (!slot || slot.metadata) return;
   await p.db.transaction(async (sql) => {
     if (!(await leased(sql, job))) return;
-    await artifactCapacity(sql, p.storage, job.id, bytes.length);
-    await p.storage.put(slot.object_key, bytes, metadata.mime);
+    const staged = await one(
+      sql,
+      "SELECT COALESCE(sum(size),0) AS bytes FROM model_access_staging WHERE job_id=$1",
+      [job.id],
+    );
+    const total = Number(staged.bytes) + bytes.length;
+    if (total > (await remainingStorage(sql, job))) return;
+    if (
+      p.storage.availableBytes &&
+      (await p.storage.availableBytes()) < bytes.length + (1 << 30)
+    )
+      return;
+    try {
+      await p.storage.put(slot.object_key, bytes, metadata.mime);
+    } catch (error) {
+      if (
+        ["ENOSPC", "EDQUOT"].includes(
+          (error as NodeJS.ErrnoException).code ?? "",
+        )
+      )
+        return;
+      throw error;
+    }
     await sql.query(
       "UPDATE model_access_staging SET metadata=$3,size=$4 WHERE job_id=$1 AND output_index=$2",
       [
@@ -276,7 +367,7 @@ export async function executeNativeImages(
   signal: AbortSignal,
   http: Transport = generationTransport,
 ) {
-  let receipt: { outputs: Output[] } | null = job.receipt;
+  let receipt: { outputs: ImageOutput[] } | null = job.receipt;
   try {
     if (!receipt) {
       receipt = await submitImages(p, job, http, signal);
@@ -302,7 +393,7 @@ export async function executeNativeImages(
         continue;
       let bytes: Buffer | null;
       try {
-        bytes = await outputBytes(output, http, signal);
+        bytes = await outputBytes(p, job.id, index, output, http, signal);
       } catch {
         signal.throwIfAborted();
         retryDownload = true;
@@ -326,55 +417,8 @@ export async function executeNativeImages(
       await stage(p, job, index, bytes, metadata);
     }
     if (retryDownload) throw new Error("图片下载暂不可用");
-    await p.db.transaction(async (sql) => {
-      const current = await leased(sql, job);
-      if (!current) return;
-      const rows = (
-        await sql.query(
-          "SELECT * FROM model_access_staging WHERE job_id=$1 AND metadata IS NOT NULL ORDER BY output_index",
-          [job.id],
-        )
-      ).rows;
-      const assets: string[] = [];
-      for (const r of rows) {
-        await sql.query(
-          `INSERT INTO assets(id,workspace_id,owner_id,object_key,mime,size,state,metadata,original_kind)
-          VALUES($1,$2,$3,$4,$5,$6,'ready',$7,'ref')`,
-          [
-            r.asset_id,
-            job.workspace_id,
-            job.owner_id,
-            r.object_key,
-            r.metadata.mime,
-            r.size,
-            JSON.stringify(r.metadata),
-          ],
-        );
-        await sql.query(
-          "INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')",
-          [job.id, r.asset_id],
-        );
-        await ensureDerivativeQueued(sql, r.asset_id, r.metadata.mime);
-        assets.push(r.asset_id);
-      }
-      await sql.query(
-        "DELETE FROM model_access_staging WHERE job_id=$1 AND metadata IS NOT NULL",
-        [job.id],
-      );
-      if (assets.length)
-        await p.settle(
-          sql,
-          current,
-          "completed",
-          { assets },
-          undefined,
-          undefined,
-          { delivered: { images: assets.length } },
-        );
-      else
-        await p.settle(sql, current, "failed", undefined, "没有通过验收的图片");
-    });
-  } catch {
+    await publishImages(p, job, receipt.outputs.length);
+  } catch (error) {
     // A durable receipt can be consumed again without a new generation request.
     await p.db.transaction(async (sql) => {
       const current = await leased(sql, job);
@@ -386,13 +430,97 @@ export async function executeNativeImages(
           [job.id],
         );
       else
-        await p.settle(
+        await interruptedImageSubmission(
+          p,
           sql,
           current,
-          "failed",
-          undefined,
-          "图片生成未取得有效回执",
+          error instanceof DefiniteImageFailure,
         );
     });
+  }
+}
+
+async function publishImages(
+  p: Platform,
+  job: Record<string, any>,
+  limit: number,
+) {
+  // PG checks workspace capacity during INSERT and global capacity at COMMIT.
+  // Re-read quotas after the first rollback: a smaller later image may now
+  // fit. Further conflicts reduce the candidate count to guarantee settlement.
+  let firstConflict = true;
+  for (;;) {
+    let attempted = 0;
+    try {
+      await p.db.transaction(async (sql) => {
+        const current = await leased(sql, job);
+        if (!current) return;
+        const rows = (
+          await sql.query(
+            "SELECT * FROM model_access_staging WHERE job_id=$1 AND metadata IS NOT NULL ORDER BY output_index",
+            [job.id],
+          )
+        ).rows;
+        const assets: string[] = [];
+        let remaining = await remainingStorage(sql, job);
+        for (const r of rows) {
+          if (assets.length >= limit || Number(r.size) > remaining) continue;
+          remaining -= Number(r.size);
+          attempted++;
+          await sql.query(
+            `INSERT INTO assets(id,workspace_id,owner_id,object_key,mime,size,state,metadata,original_kind)
+          VALUES($1,$2,$3,$4,$5,$6,'ready',$7,'ref')`,
+            [
+              r.asset_id,
+              job.workspace_id,
+              job.owner_id,
+              r.object_key,
+              r.metadata.mime,
+              r.size,
+              JSON.stringify(r.metadata),
+            ],
+          );
+          await sql.query(
+            "INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')",
+            [job.id, r.asset_id],
+          );
+          await ensureDerivativeQueued(sql, r.asset_id, r.metadata.mime);
+          assets.push(r.asset_id);
+        }
+        await sql.query(
+          "DELETE FROM model_access_staging WHERE job_id=$1 AND asset_id=ANY($2::uuid[])",
+          [job.id, assets],
+        );
+        if (assets.length)
+          await p.settle(
+            sql,
+            current,
+            "completed",
+            { assets },
+            undefined,
+            undefined,
+            { delivered: { images: assets.length } },
+          );
+        else
+          await p.settle(
+            sql,
+            current,
+            "failed",
+            undefined,
+            "没有通过验收的图片",
+          );
+      });
+      return;
+    } catch (error) {
+      if (
+        !attempted ||
+        !["P1001", "P1002"].includes(
+          (error as NodeJS.ErrnoException).code ?? "",
+        )
+      )
+        throw error;
+      if (!firstConflict) limit--;
+      firstConflict = false;
+    }
   }
 }

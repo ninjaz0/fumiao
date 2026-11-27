@@ -1,5 +1,6 @@
 import {
   executeNativeImages,
+  interruptedImageSubmission,
   cleanupNativeStaging,
 } from "./model-access/images.js";
 import type { HttpTransport } from "./plugin-host.js";
@@ -175,14 +176,7 @@ export class Executor {
             "UPDATE jobs SET state=$2,lease_token=NULL,lease_until=NULL WHERE id=$1",
             [job.id, job.receipt ? "finalizing" : "running"],
           );
-        else
-          await p.settle(
-            sql,
-            job,
-            "failed",
-            undefined,
-            "生成中断，未取得可验收回执",
-          );
+        else await interruptedImageSubmission(p,sql,job);
         continue;
       }
       const { manifest } = job;

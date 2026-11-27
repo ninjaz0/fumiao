@@ -39,6 +39,7 @@ import {
 } from "./canvas-values.js";
 import { OriginalCanvases, canvasConflict } from "./canvases.js";
 import { OriginalGeneration } from "./generation.js";
+import { nativeOutputIndex } from "./library.js";
 import { OriginalState } from "./state.js";
 
 const namespaceUrl = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
@@ -432,7 +433,7 @@ export class OriginalCanvasRuns {
           `SELECT j.id, j.state,
                   (SELECT a.id FROM job_assets ja JOIN assets a ON a.id=ja.asset_id
                     WHERE ja.job_id=j.id AND ja.role='output' AND a.state='ready'
-                    ORDER BY a.created_at ASC LIMIT 1) AS output_asset_id
+                    ORDER BY ${nativeOutputIndex},a.created_at ASC LIMIT 1) AS output_asset_id
              FROM canvas_job_links l
              JOIN jobs j ON j.id = l.job_id
             WHERE l.project_id = $1 AND l.node = $2 AND j.kind = 'video' AND j.deleted_at IS NULL

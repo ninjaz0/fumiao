@@ -25,6 +25,7 @@
     "pg": "catalog:",
     "quickjs-emscripten": "catalog:",
     "sharp": "catalog:",
+    "stream-json": "catalog:",
     "zod": "catalog:"
   }
 }

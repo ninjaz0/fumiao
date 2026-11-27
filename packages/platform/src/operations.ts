@@ -44,6 +44,11 @@ export class Operations {
         );
       else {
         requireValue(job.executable, 409, "退役任务只能人工核对退款");
+        requireValue(
+          job.source_kind !== "builtin",
+          400,
+          "同步图片请求没有可恢复的上游任务编号",
+        );
         const plugin = await this.p.registry.resolve(
           sql,
           job.plugin_id,

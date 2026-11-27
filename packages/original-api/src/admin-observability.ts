@@ -250,7 +250,7 @@ export class OriginalObservability {
         workspace_name: String(r.workspace_name),
         owner_name: r.owner_name ? String(r.owner_name) : null,
         model: String(r.model ?? ""),
-        plugin_id: String(r.plugin_id),
+        plugin_id: String(r.plugin_id ?? ""),
         kind: String(r.kind),
         price: Number(r.price),
         error: r.error ? String(r.error) : null,

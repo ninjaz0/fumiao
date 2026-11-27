@@ -193,5 +193,9 @@ export async function acceptNativeMedia(
     "UPDATE jobs SET original_uid=$2,studio_client_uid=$3,original_parent=$4,original_view=$5 WHERE id=$1 RETURNING public_id",
     [accepted.id, uid, draft.uid, draft.parent, JSON.stringify(view)],
   );
+  await sql.query(
+    "INSERT INTO model_access_job_uids(uid,job_id) VALUES($1,$2)",
+    [uid, accepted.id],
+  );
   return { id: Number(row.public_id) };
 }

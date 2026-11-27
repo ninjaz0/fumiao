@@ -13,6 +13,7 @@ import {
 import type { Response } from "express";
 import { one } from "@fumiao/platform/db.js";
 import { DomainError, requireValue } from "@fumiao/platform/security.js";
+import { nativeOutputIndex } from "@fumiao/original-api/library.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
 import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
@@ -326,7 +327,7 @@ export class OriginalMcpController {
           `SELECT j.public_id, j.kind, j.state, j.provider_model, j.price, j.error,
                   j.created_at, j.updated_at,
                   (SELECT a.public_id FROM job_assets ja JOIN assets a ON a.id=ja.asset_id
-                   WHERE ja.job_id=j.id AND ja.role='output' ORDER BY a.created_at LIMIT 1) AS result_asset
+                   WHERE ja.job_id=j.id AND ja.role='output' ORDER BY ${nativeOutputIndex},a.created_at LIMIT 1) AS result_asset
            FROM jobs j
            WHERE j.public_id=$1 AND j.workspace_id=$2 AND j.deleted_at IS NULL`,
           [args.job_id, ctx.workspaceId],
