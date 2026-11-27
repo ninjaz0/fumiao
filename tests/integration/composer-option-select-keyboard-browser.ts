@@ -24,6 +24,7 @@ test(
           contents: `
             import React, { useState } from "react";
             import { createRoot } from "react-dom/client";
+            import { LayoutGrid } from "lucide-react";
             import { CinematographyPanel } from "./apps/web/canvas-editor/CinematographyPanel";
             import { OptionSelect } from "./apps/web/canvas-editor/OptionSelect";
             import { GENERATION_MODE_OPTIONS } from "./apps/web/canvas-editor/composer-options";
@@ -37,6 +38,7 @@ test(
                     <div className="fm-composer-wave3-bar">
                       <OptionSelect
                         ariaLabel="分镜生成链路"
+                        icon={LayoutGrid}
                         value={mode}
                         options={GENERATION_MODE_OPTIONS}
                         onChange={setMode}
@@ -96,6 +98,7 @@ test(
         exact: true,
       });
       await expect(modeBtn).toBeVisible();
+      const initialWidth = (await modeBtn.boundingBox())?.width;
       await expect(modeBtn).toHaveAttribute("aria-expanded", "false");
       await modeBtn.click();
       const modeMenu = page.getByRole("listbox", { name: "分镜生成链路" });
@@ -111,14 +114,25 @@ test(
         exact: true,
       });
       await expect(modeGridBtn).toBeVisible();
+      assert.equal((await modeGridBtn.boundingBox())?.width, initialWidth);
       await expect(modeGridBtn).toHaveAttribute("aria-expanded", "false");
       await modeGridBtn.click();
       await expect(modeOptions).toHaveText(order);
       const after = await gridOption.locator("span").boundingBox();
       assert.ok(after);
       assert.equal(after.x, before.x, "the label stays put when selected");
+      const labelLineCount = await gridOption.locator("span").evaluate((label) => {
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        return range.getClientRects().length;
+      });
+      assert.equal(labelLineCount, 1, "the longest label fits on one line");
       await expect(gridOption).toHaveAttribute("aria-selected", "true");
       await expect(gridOption).not.toBeFocused();
+      await page.mouse.move(0, 0);
+      const selectedBackground = await gridOption.evaluate((el) => getComputedStyle(el).backgroundColor);
+      await gridOption.hover();
+      await expect(gridOption).toHaveCSS("background-color", selectedBackground);
       await page.keyboard.press("Escape");
 
       const shotSizeUnset = page.getByRole("button", {
@@ -292,6 +306,8 @@ test(
         exact: true,
       });
       await expect(lightingListbox).toBeVisible();
+      await expect(lightingBtn).toHaveAttribute("data-choice-direction", "up");
+      await expect(lightingBtn.locator(".fm-choice-chevron")).toHaveCSS("transform", "matrix(-1, 0, 0, -1, 0, 0)");
       const popBox = await page.locator(".fm-cine-popover").boundingBox();
       const upMenuBox = await lightingListbox.boundingBox();
       const lightingButtonBox = await lightingBtn.boundingBox();
@@ -345,6 +361,8 @@ test(
         exact: true,
       });
       await expect(shotListbox).toBeVisible();
+      await expect(shotSizeBtn).toHaveAttribute("data-choice-direction", "down");
+      await expect(shotSizeBtn.locator(".fm-choice-chevron")).toHaveCSS("transform", "none");
       const allShotOpts = shotListbox.getByRole("option");
       const lastShotOpt = allShotOpts.nth((await allShotOpts.count()) - 1);
       await lastShotOpt.scrollIntoViewIfNeeded();

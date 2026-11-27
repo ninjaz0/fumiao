@@ -598,7 +598,7 @@
   transition: transform 0.15s;
   flex: none;
 }
-button[aria-expanded="true"] > .fm-ui-chevron {
+button[aria-expanded="true"] > .fm-ui-chevron:not(.fm-choice-chevron) {
   transform: rotate(180deg);
 }
 .fm-chip-badge {

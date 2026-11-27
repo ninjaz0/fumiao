@@ -213,6 +213,7 @@ export function OptionSelect<T extends string = string>({
           type="button"
           className={"fm-cine-trigger" + (open ? " open" : "")}
           data-filled={active ? "true" : "false"}
+          data-choice-direction={resolvedDir}
           aria-label={triggerAriaLabel}
           aria-haspopup="listbox"
           aria-expanded={open}
@@ -223,13 +224,14 @@ export function OptionSelect<T extends string = string>({
         >
           {prefixLabel && <span className="fm-cine-label">{prefixLabel}</span>}
           <span className="fm-cine-val">{displayLabel}</span>
-          <ChevronDown size={12} className="fm-ui-chevron" />
+          <ChevronDown size={12} className="fm-ui-chevron fm-choice-chevron" />
         </button>
       ) : (
         <button
           ref={buttonRef}
           type="button"
-          className={"fm-ui-chip fm-choice-trigger fm-choice-trigger-wide" + (active || open ? " active" : "")}
+          className={"fm-ui-chip fm-choice-trigger fm-choice-trigger-chip" + (active || open ? " active" : "")}
+          data-choice-direction={resolvedDir}
           aria-label={triggerAriaLabel}
           aria-haspopup="listbox"
           aria-expanded={open}
@@ -240,7 +242,7 @@ export function OptionSelect<T extends string = string>({
         >
           {Icon && <Icon size={14} />}
           <span>{displayLabel}</span>
-          <ChevronDown size={13} className="fm-ui-chevron" />
+          <ChevronDown size={13} className="fm-ui-chevron fm-choice-chevron" />
         </button>
       )}
       {open && (

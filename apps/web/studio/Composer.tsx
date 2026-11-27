@@ -751,7 +751,7 @@ export function Composer({
                     ]
                   : draft.seconds + "s"}
             </span>
-            {(audio || image) && <Chevron />}
+            {(audio || image || !fixed) && <Chevron />}
           </button>
         </div>
         <div className="composer-actions">

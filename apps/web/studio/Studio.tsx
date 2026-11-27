@@ -582,6 +582,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     );
     let top = beside ? box.top : box.bottom + 8;
     const above = top + element.offsetHeight > innerHeight - 14;
+    if (choice) trigger.dataset.choiceDirection = above ? "up" : "down";
     if (above) top = Math.max(12, box.top - element.offsetHeight - 8);
     Object.assign(element.style, {
       left: left + "px",

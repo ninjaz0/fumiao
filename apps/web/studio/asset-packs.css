@@ -86,7 +86,7 @@
   transition: transform 0.15s;
 }
 
-.fm-packs button[aria-expanded="true"] > .fm-ui-chevron {
+.fm-packs button[aria-expanded="true"] > .fm-ui-chevron:not(.fm-choice-chevron) {
   transform: rotate(180deg);
 }
 
