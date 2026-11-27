@@ -14,33 +14,35 @@ export type StoryboardApplyOptions={
 
 const MAX_STORYBOARD_SHOTS = 120;
 
-type ReplySource={cid:string;message:number};
+type ReplySource={cid:string;message:number;turn?:string};
 function StoryboardBill({workspace,source}:{workspace:number;source:ReplySource}){
- const {cid,message}=source;
+ const {cid,message,turn}=source;
  const [bill,setBill]=useState<TurnBill>();
  const [error,setError]=useState(false),[retry,setRetry]=useState(0);
  useEffect(()=>{
   let current=true;
   setBill(undefined);setError(false);
   void chatRequest<{bills:TurnBill[]}>(workspace,'/api/chats/'+cid+'/bills').then(r=>{
-   if(current)setBill(r.bills.find(b=>b.message===message));
+   if(current)setBill(r.bills.find(b=>b.message===message&&(!turn||b.turn===turn)));
   },()=>{if(current)setError(true)});
   return ()=>{current=false};
- },[workspace,cid,message,retry]);
+ },[workspace,cid,message,turn,retry]);
  if(error)return <button type="button" onClick={()=>setRetry(n=>n+1)}>重新载入分镜账单</button>;
  return bill?<ChatBill bill={bill}/>:null;
 }
 
-function restoreStoryboard(text:string):{message:number|null;shots:SuggestedShot[];source:ReplySource|null}{
+function restoreStoryboard(text:string):{message:number|null;shots:SuggestedShot[];source:ReplySource|null;legacy:boolean}{
  try{
   const data=JSON.parse(text),rows=Array.isArray(data)?data:data?.shots;
   if(Array.isArray(rows)&&rows.length<=MAX_STORYBOARD_SHOTS&&rows.every(r=>r&&typeof r.title==='string'&&typeof r.prompt==='string'&&typeof r.narration==='string'&&[5,10,15].includes(r.seconds))){
    const message=Array.isArray(data)||data.message===null?null:Number.isSafeInteger(data.message)&&data.message>0?data.message:0;
-   const source=typeof data.source?.cid==='string'&&Number.isSafeInteger(data.source.message)?data.source:null;
-   return {message,shots:rows,source};
+   const legacy=Array.isArray(data)||(!Object.hasOwn(data,'source')&&!Object.hasOwn(data,'turn'));
+   const source=data.source?.message===message && message && typeof data.source.cid==='string' && data.source.cid.length>0 &&
+    (!Object.hasOwn(data.source,'turn') || (typeof data.source.turn==='string'&&data.source.turn.length>0)) ? data.source:null;
+   return {message,shots:rows,source,legacy};
   }
  }catch{}
- return {message:0,shots:[],source:null};
+ return {message:0,shots:[],source:null,legacy:false};
 }
 export function parseStoryboard(text:string):SuggestedShot[]{
  const raw=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
@@ -58,38 +60,51 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
  const key=`fm-storyboard-${userId}-${workspace}-${project}`;
  const [draft]=useState(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]'));
  const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(draft.shots),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
- const [shotSource,setShotSource]=useState<ReplySource|null>(draft.source);
+ const [shotMessage,setShotMessage]=useState(draft.message);
+ const [shotSource,setShotSource]=useState<ReplySource|null>(null);
  const [sourceRetry,setSourceRetry]=useState(0),[sourceError,setSourceError]=useState(false);
  // Pre-upgrade proposals recorded only the globally unique assistant message.
  // The most recent chat can belong to a different (failed) attempt.
  useEffect(()=>{
-  if(!draft.shots.length || !draft.message || draft.source || shotSource)return;
+  if(!draft.shots.length || !draft.message || draft.message!==shotMessage || (!draft.legacy && !draft.source) || shotSource)return;
   let current=true;
   setSourceError(false);
   void chatRequest<ReplySource & {content:string}>(workspace,'/api/chat/messages/'+draft.message+'/source')
-   .then(({cid,message,content})=>{
-    if(!current || message!==draft.message)return;
-    try{parseStoryboard(content)}catch{return}
-    setShotSource(existing=>existing??{cid,message});
-   },e=>{if(current && e.status!==403 && e.status!==404)setSourceError(true)});
+   .then(async(source)=>{
+    if(!current || source.message!==draft.message || (draft.source && draft.source.cid!==source.cid))return;
+    let original:SuggestedShot[];
+    try{original=parseStoryboard(source.content)}catch{return}
+    // Edits may change every shot. A different chat needs additional evidence
+    // from the original user message before an edited draft can display its bill.
+    if(source.cid!==cid && JSON.stringify(original)!==JSON.stringify(draft.shots)){
+     const chat=await chatRequest(workspace,'/api/chats/'+source.cid);
+     const reply=chat.messages.find((m:any)=>m.id===source.message&&m.role==='assistant'&&m.state==='complete');
+     const user=chat.messages.find((m:any)=>m.id===reply?.reply_to&&m.role==='user');
+     let context;try{context=JSON.parse(user?.context||'{}')}catch{return}
+     if(chat.conversation.id!==source.cid || chat.conversation.workspace!==workspace || user?.author!==userId ||
+       context.project!==project || !reply || (draft.source?.turn && reply.turn!==draft.source.turn))return;
+    }
+    if(current)setShotSource(existing=>existing??{cid:source.cid,message:source.message,turn:draft.source?.turn});
+   }).catch(e=>{if(current && e.status!==403 && e.status!==404)setSourceError(true)});
   return ()=>{current=false};
- },[workspace,draft.message,draft.source,draft.shots.length,shotSource,sourceRetry]);
+ },[workspace,userId,project,cid,draft,shotMessage,shotSource,sourceRetry]);
  const [latestReceipt,setLatestReceipt]=useState<ReplySource|null>(null);
  const showReceipt=(source:ReplySource|null)=>source&&<StoryboardBill key={source.cid+'-'+source.message} workspace={workspace} source={source}/>;
  const setResult=(chat:string,m:any)=>{
-  const source={cid:chat,message:m.id};
-  setLatestReceipt(current=>current?.cid===chat&&current.message===m.id?current:source);
+  const source={cid:chat,message:m.id,turn:m.turn||undefined};
+  if(m.state!=='complete' || lastMessage.current!==m.id)
+   setLatestReceipt(current=>current?.cid===chat&&current.message===m.id?current:source);
   if(m.state!=='complete'){lastMessage.current=m.id;setError(m.error||'生成未完成，积分已退回');return}
   if(lastMessage.current===m.id){
    // Older local drafts carried the globally unique assistant message ID.
-   if(draft.message===m.id && draft.shots.length && !draft.source){
+   if(draft.message===m.id && draft.shots.length && (draft.legacy || (draft.source?.cid===chat && (!draft.source.turn || draft.source.turn===m.turn)))){
     try{parseStoryboard(m.content);setShotSource(current=>current??source)}
     catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}
    }
    return;
   }
   lastMessage.current=m.id;setComplete(true);
-  try{setShots(parseStoryboard(m.content));setShotSource(source);setError('')}
+  try{setShots(parseStoryboard(m.content));setShotMessage(m.id);setShotSource(source);setError('')}
   catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}
  };
  const [targetCount,setTargetCount]=useState<number>(12);
@@ -106,14 +121,19 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
  useEffect(()=>{
   if(!cid)return;let closed=false;
   const accept=(s:any)=>{
-   if(closed)return;setRunning(!!s.conversation.active_turn);
+   if(closed || s.conversation.id!==cid || (s.conversation.workspace!=null&&s.conversation.workspace!==workspace) || (s.conversation.owner!=null&&s.conversation.owner!==userId))return;
+   setRunning(!!s.conversation.active_turn);
    const m=[...s.messages].reverse().find((m:any)=>m.role==='assistant');
    if(!m)return;
    if(lastMessage.current===null&&draft.shots.length){
-    const p=pending.current,boundary=s.messages.find((r:any)=>r.role==='assistant'&&(r.state==='running'||r.turn===s.conversation.active_turn))||(p?.cid===cid&&s.conversation.revision>p.body.expected_revision?[...s.messages].reverse().find((r:any)=>r.role==='user'&&r.content===p.body.text):null);
+    const p=pending.current,boundary=s.messages.find((r:any)=>r.role==='assistant'&&(r.state==='running'||(s.conversation.active_turn&&r.turn===s.conversation.active_turn)))||(p?.cid===cid&&s.conversation.revision>p.body.expected_revision?[...s.messages].reverse().find((r:any)=>r.role==='user'&&r.content===p.body.text):null);
     const rows=boundary?s.messages.slice(0,s.messages.indexOf(boundary)):s.messages,previous=[...rows].reverse().find((r:any)=>r.role==='assistant'&&r.state!=='running');
-    if(previous?.state==='complete' && !draft.source){
-     try{if(JSON.stringify(parseStoryboard(previous.content))===JSON.stringify(draft.shots))setShotSource({cid,message:previous.id})}catch{/* Legacy draft has no verifiable source. */}
+    if(previous?.state==='complete' && draft.legacy){
+     try{
+      const original=parseStoryboard(previous.content);
+      setShotMessage(previous.id);
+      if(JSON.stringify(original)===JSON.stringify(draft.shots))setShotSource({cid,message:previous.id,turn:previous.turn||undefined});
+     }catch{/* An invalid reply cannot identify a storyboard. */}
     }
     lastMessage.current=previous?.id||0;
    }
@@ -125,7 +145,14 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
   const events=new EventSource('/api/chats/'+cid+'/events?workspace='+workspace);events.onmessage=e=>accept(JSON.parse(e.data));
   return()=>{closed=true;events.close()};
  },[cid,workspace]);
- useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:shotSource?.message??draft.message,shots,source:shotSource}))},[shots,key,draft.message,shotSource]);
+ useEffect(()=>{
+  if(!shots.length)return;
+  // Keep the legacy shape while awaiting verification; source:null explicitly
+  // marks an edit whose reply is tracked without an attributable receipt.
+  const retainLegacy=draft.legacy && shotMessage===draft.message && !shotSource;
+  const source=shotSource??(shotMessage===draft.message?draft.source:null);
+  localStorage.setItem(key+'-proposal',JSON.stringify({message:shotMessage,shots,...(retainLegacy?{}:{source})}));
+ },[shots,key,draft,shotMessage,shotSource]);
  const trackHint = generationMode === 'omni_ref'
       ? '采用全能多参考链路（可在画面描述中引用 @角色名/@场景名 或 <Picture N>）。'
       : generationMode === 'grid_preview'
