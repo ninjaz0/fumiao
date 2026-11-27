@@ -63,6 +63,7 @@ import {
 import {
   buildPersistedScriptDraftForSession,
   computeScriptDescendantsSignature,
+  directorMemberForScriptShot,
   directorSyncPreview,
   extractScriptAnchorsMap,
   parseScriptBreakdown,
@@ -486,7 +487,7 @@ type ScriptWorkspaceProps = {
     activeScript: { id: string; path: string; body_md: string } | null,
   ) => void;
   onChangeCanvasDoc: (updater: (current: Doc) => Doc) => void;
-  flushCanvas: () => Promise<number>;
+  flushCanvas: (expectedScriptRevision?: number) => Promise<number>;
   onOpenDirector: (request: { docId: string; nodeId?: string }) => void;
   onOpenAssistant: () => void;
   onEditCanvasNode: (
@@ -597,47 +598,51 @@ export const ScriptWorkspace = forwardRef<
   const [focusedPane, setFocusedPane] = useState<"left" | "right">("left");
 
   // Modals
-  const [syncRequest, setSyncRequest] = useState<{ docId: string; director?: boolean } | null>(null);
+  const [syncRequest, setSyncRequest] = useState<{ docId: string; director?: boolean; reviewedBody?: string } | null>(null);
   const syncModalDocId = syncRequest?.docId;
   const [workspaceSearchOpen, setWorkspaceSearchOpen] = useState(false);
 
   const ensureScriptLoaded = useCallback(
-    async (docId: string) => {
-      if (sessionsRef.current[docId]) return sessionsRef.current[docId];
-      const detail = await scriptApi.get(docId);
-      const persisted = readPersistedScriptDraft(userId, workspace, docId);
-      const reconciled = reconcileLoadedScriptDraft(detail, persisted);
-      if (reconciled.storageAction === "clear") {
-        clearPersistedScriptDraft(userId, workspace, docId);
-      } else if (
-        reconciled.storageAction === "persist_conflict" &&
-        reconciled.nextPersisted
-      ) {
-        writePersistedScriptDraft(
-          userId,
-          workspace,
-          docId,
-          reconciled.nextPersisted,
-        );
-      }
-      const loaded: LoadedScriptState = {
-        detail,
-        draftBody: reconciled.draftBody,
-        savedBody: reconciled.savedBody,
-        baseRevision: reconciled.baseRevision,
-        revision: reconciled.revision,
-        status: reconciled.status,
-        error: reconciled.error,
-        undoStack: [],
-        redoStack: [],
-      };
-      commitSessions((prev) =>
-        prev[docId] ? prev : { ...prev, [docId]: loaded },
-      );
-      return sessionsRef.current[docId] ?? loaded;
+    async (docId: string, freshDetail?: ScriptDocumentDetail) => {
+      if (!freshDetail && sessionsRef.current[docId]) return sessionsRef.current[docId];
+      const detail = freshDetail ?? await scriptApi.get(docId);
+      return commitSessions((prev) => {
+        const current = prev[docId];
+        if (current && (!freshDetail || detail.revision <= current.revision)) return prev;
+        const persisted = current
+          ? buildPersistedScriptDraftForSession(current)
+          : readPersistedScriptDraft(userId, workspace, docId);
+        const { storageAction, nextPersisted, ...reconciled } = reconcileLoadedScriptDraft(detail, persisted);
+        if (storageAction === "clear") clearPersistedScriptDraft(userId, workspace, docId);
+        else if (storageAction === "persist_conflict" && nextPersisted) {
+          writePersistedScriptDraft(userId, workspace, docId, nextPersisted);
+        }
+        return { ...prev, [docId]: {
+          ...reconciled,
+          detail,
+          undoStack: current?.undoStack ?? [],
+          redoStack: current?.redoStack ?? [],
+        } };
+      })[docId];
     },
     [commitSessions, userId, workspace],
   );
+
+  const startDirectorPreview = useCallback((session: LoadedScriptState) => {
+    if (session.status === "conflict") {
+      onNotify(session.error);
+      return;
+    }
+    setSyncRequest({ docId: session.detail.id, director: true, reviewedBody: session.draftBody });
+  }, [onNotify]);
+  const openSyncPreview = (docId: string, director?: boolean) => {
+    if (!director) {
+      setSyncRequest({ docId });
+      return;
+    }
+    void scriptApi.get(docId).then((detail) => ensureScriptLoaded(docId, detail)).then(startDirectorPreview)
+      .catch((error) => onNotify(error instanceof Error ? error.message : "无法读取最新剧本版本"));
+  };
 
   const loadWorkspaceTree = useCallback(async () => {
     setLoadingTree(true);
@@ -829,8 +834,9 @@ export const ScriptWorkspace = forwardRef<
     void scriptApi
       .get(externalOpenRequest.docId)
       .then(async (detail) => {
+        const session = await ensureScriptLoaded(detail.id, detail);
         await openScriptTab(
-          { id: detail.id, name: detail.name, path: detail.path },
+          session.detail,
           {
             pane: "left",
             targetLine: externalOpenRequest.line,
@@ -838,12 +844,12 @@ export const ScriptWorkspace = forwardRef<
             targetShotId: externalOpenRequest.shotId,
           },
         );
-        if (externalOpenRequest.directorPreview) setSyncRequest({ docId: detail.id, director: true });
+        if (externalOpenRequest.directorPreview) startDirectorPreview(session);
       })
       .catch((e) =>
         onNotify(e instanceof Error ? e.message : "无法打开关联剧本文档"),
       );
-  }, [externalOpenRequest, onNotify, openScriptTab]);
+  }, [ensureScriptLoaded, externalOpenRequest, onNotify, openScriptTab, startDirectorPreview]);
 
   // Serialized per-document save queue with synchronous follow-up edit chaining
   const flushScript = useCallback(
@@ -1820,8 +1826,16 @@ export const ScriptWorkspace = forwardRef<
       ? await ensureFreshRuns()
       : { runs, runsKnown };
 
-    if (directorOptions && sessionsRef.current[syncModalDocId]?.draftBody !== curSession.draftBody) {
-      throw new Error("剧本有新的本地修改，请重新打开预览确认分镜。");
+    if (directorOptions) {
+      const remote = await scriptApi.get(syncModalDocId);
+      if (remote.revision !== sessionsRef.current[syncModalDocId]?.revision) {
+        await ensureScriptLoaded(syncModalDocId, remote);
+        throw new Error("剧本已更新，请重新打开预览确认分镜。");
+      }
+      if (sessionsRef.current[syncModalDocId]?.draftBody !== syncRequest?.reviewedBody ||
+          sessionsRef.current[syncModalDocId]?.draftBody !== curSession.draftBody) {
+        throw new Error("剧本有新的本地修改，请重新打开预览确认分镜。");
+      }
     }
 
     const preferredLines = directorOptions ? Object.fromEntries(directorSyncPreview(canvasDoc, syncModalState.breakdown, {
@@ -1882,8 +1896,9 @@ export const ScriptWorkspace = forwardRef<
     });
 
     if (destination === "director") {
+      setSyncRequest((current) => current?.docId === syncModalDocId ? { ...current, reviewedBody: syncedBody } : current);
       try {
-        await flushCanvas();
+        await flushCanvas(scriptRevision);
       } catch (error) {
         throw new Error(`剧本已保存，画布保存失败。本集改动已保留为画布草稿。${error instanceof Error ? error.message : "请重试。"}`);
       }
@@ -2433,7 +2448,7 @@ export const ScriptWorkspace = forwardRef<
                   }));
                 }}
                 onOverwriteScriptConflict={overwriteScriptConflict}
-                onOpenSyncModal={(docId, director) => setSyncRequest({ docId, director })}
+                onOpenSyncModal={openSyncPreview}
                 onOpenDirector={onOpenDirector}
                 onEditCanvasNode={onEditCanvasNode}
                 onFocusCanvasNode={onFocusCanvasNode}
@@ -2539,7 +2554,7 @@ export const ScriptWorkspace = forwardRef<
                     }));
                   }}
                   onOverwriteScriptConflict={overwriteScriptConflict}
-                  onOpenSyncModal={(docId, director) => setSyncRequest({ docId, director })}
+                  onOpenSyncModal={openSyncPreview}
                 onOpenDirector={onOpenDirector}
                   onEditCanvasNode={onEditCanvasNode}
                   onFocusCanvasNode={onFocusCanvasNode}
@@ -3005,6 +3020,11 @@ function MarkdownScriptEditor({
   );
 
   const linkedShotCount = Object.keys(anchorLinks).length;
+  const directorLinks = useMemo(() => breakdown.shots.flatMap((shot) => {
+    if (!shot.shotId || breakdown.shots.filter((item) => item.shotId === shot.shotId).length !== 1) return [];
+    const nodeId = directorMemberForScriptShot(canvasDoc, session.detail.id, shot.shotId);
+    return nodeId ? [{ shot, nodeId }] : [];
+  }), [breakdown, canvasDoc, session.detail.id]);
 
   const richBlocks = useMemo(
     () =>
@@ -3658,6 +3678,18 @@ function MarkdownScriptEditor({
                 const cleanEditableText = stripShotCommentMarkers(
                   block.rawText,
                 ).trimEnd();
+                const directorButtons = directorLinks
+                  .filter(({ shot }) => shot.lineStart >= block.lineStart && shot.lineStart <= block.lineEnd)
+                  .map(({ shot, nodeId }) => (
+                    <button key={shot.shotId} type="button" className="fm-canvas-jump-pill secondary"
+                      aria-label={`在导演台查看 ${shot.anchor}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenDirectorShot(nodeId);
+                      }}>
+                      在导演台查看 {block.blockType === "markdown" ? shot.anchor : ""}
+                    </button>
+                  ));
 
                 if (isEditing) {
                   return (
@@ -3748,12 +3780,6 @@ function MarkdownScriptEditor({
                               <Crosshair size={12} />
                               画布聚焦 {linkedShot.hasMedia ? "· 已出片" : ""}
                             </button>
-                            {canvasDoc.director?.script_id === session.detail.id &&
-                              canvasDoc.director.shot_ids.includes(linkedShot.videoNodeId) && (
-                                <button type="button" className="fm-canvas-jump-pill secondary" onClick={() => onOpenDirectorShot(linkedShot.videoNodeId)}>
-                                  在导演台查看
-                                </button>
-                              )}
                             <button
                               type="button"
                               className="fm-canvas-jump-pill secondary"
@@ -3766,6 +3792,7 @@ function MarkdownScriptEditor({
                             </button>
                           </span>
                         )}
+                        {directorButtons}
                       </div>
                       <p>
                         {cleanEditableText.replace(/^[△▲]\s*/, "").trim()}
@@ -3800,6 +3827,7 @@ function MarkdownScriptEditor({
                           {linkedShot.anchor}
                         </button>
                       )}
+                      {directorButtons}
                     </div>
                   );
                 }
@@ -3810,10 +3838,10 @@ function MarkdownScriptEditor({
                     data-block-id={block.id}
                     className={"fm-rich-markdown-block" + highlightClass}
                     onClick={() => setEditingBlockId(block.id)}
-                    dangerouslySetInnerHTML={{
-                      __html: renderSafeMarkdown(cleanEditableText),
-                    }}
-                  />
+                  >
+                    <div dangerouslySetInnerHTML={{ __html: renderSafeMarkdown(cleanEditableText) }} />
+                    {directorButtons}
+                  </div>
                 );
               })
             )}

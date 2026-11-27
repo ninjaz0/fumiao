@@ -1324,7 +1324,7 @@ export function CanvasWorkspace({
         for(const line of node.dialogue_lines){
           if(!line.audio_pending)continue;
           const job=runById.get(line.audio_pending);
-          if(job?.status==='done'&&job.result){
+          if(job?.status==='done'&&job.result&&job.prompt.trim()===line.text.trim()&&!line.audio_stale?.includes(job.id)){
             let map=dialogueUpdates.get(node.id);
             if(!map){map=new Map();dialogueUpdates.set(node.id,map);}
             map.set(line.id,job.id);
@@ -1346,7 +1346,7 @@ export function CanvasWorkspace({
               ...(nextNarr?{narration_job:nextNarr,narration_pending:null}:{}),
               ...(nextDlg&&n.dialogue_lines?{
                 dialogue_lines:n.dialogue_lines.map(l=>
-                  nextDlg.has(l.id)?{...l,audio_job:nextDlg.get(l.id)!,audio_pending:null}:l
+                  nextDlg.has(l.id)?{...l,audio_job:nextDlg.get(l.id)!,audio_pending:null,audio_stale:undefined}:l
                 ),
               }:{}),
             };
@@ -4534,7 +4534,7 @@ export function CanvasWorkspace({
       )}
       {doc.status === "conflict" && (
         <div className="save-banner" role="alert">
-          <span>画布已被其他成员修改，你的修改尚未保存到服务器。</span>
+          <span>{doc.error || "画布已被其他成员修改，你的修改尚未保存到服务器。"}</span>
           <button onClick={() => downloadLocalBackup(doc.value)}>
             下载本地副本
           </button>
@@ -5312,6 +5312,7 @@ export function CanvasWorkspace({
       {directorMounted && (
         <DirectorDesk
           active={surface === "director"}
+          canvasSaved={doc.status === "saved"}
           document={doc.value.document}
           activeShotId={directorShotId}
           onSelectShot={setDirectorShotId}

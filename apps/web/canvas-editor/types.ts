@@ -76,6 +76,7 @@ export type DialogueLine = {
   instruction?: string;
   audio_job?: number | null;
   audio_pending?: number | null;
+  audio_stale?: number[];
 };
 export type CanvasBgm = {
   asset_id: string | null;

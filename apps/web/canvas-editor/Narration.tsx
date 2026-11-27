@@ -197,6 +197,7 @@ export function Narration({
         <div className="dialogue-editor">
           {lines.map((line, idx) => {
             const lineJob = runs.find((j) => j.id === line.audio_job);
+            const lineStale = Boolean(line.audio_stale?.length || (lineJob && lineJob.prompt.trim() !== line.text.trim()));
             const linePendingRun = runs.find((j) => j.id === line.audio_pending);
             const linePending =
               Boolean(
@@ -283,10 +284,11 @@ export function Narration({
                 {lineFailed && (
                   <p className="error" role="alert">
                     {linePendingRun.note || "该句对白生成失败"}
-                    {lineJob?.result ? "，已保留原有效音轨。" : "。"}
+                    {lineJob?.result && !lineStale ? "，已保留原有效音轨。" : "。"}
                   </p>
                 )}
-                {lineJob?.status === "done" && lineJob.result && (
+                {lineStale && <p>对白已修改，请重新生成音轨。</p>}
+                {!lineStale && lineJob?.status === "done" && lineJob.result && (
                   <audio
                     aria-label={`${line.speaker || "角色"}配音`}
                     src={"/media/" + lineJob.result}

@@ -239,6 +239,7 @@ export function stampScriptShotIds(
     }
   }
   const keptDuplicateIds = new Set<string>();
+  const preferredIdByLine = new Map(Object.entries(preferredLineByShotId).map(([id, line]) => [line, id]));
   let pendingIdForNextBeat = false;
   const out: string[] = [];
 
@@ -277,7 +278,10 @@ export function stampScriptShotIds(
 
     if (isShotStart) {
       if (!match && !pendingIdForNextBeat) {
-        const shotUid = `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+        const preferred = preferredIdByLine.get(lineNum);
+        const shotUid = preferred && !idCounts.has(preferred)
+          ? preferred
+          : `sh_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
         const marker = `<!-- fm-shot:${shotUid} -->`;
         out.push(trimmed.startsWith("|") && trimmed.endsWith("|")
           ? lines[i].replace(/\|(\s*)$/, ` ${marker} |$1`)
@@ -325,6 +329,14 @@ export function stampDirectorScriptShotIds(
   preferredLineByShotId?: Record<string, number>,
 ) {
   return stampScriptShotIds(markdown, preferredLineByShotId, new Set(breakdown.shots.map((shot) => shot.lineStart)));
+}
+
+export function directorMemberForScriptShot(doc: Doc, docId: string, shotId: string): string | undefined {
+  if (!shotId || doc.director?.script_id !== docId) return undefined;
+  const members = doc.nodes.filter((node) => node.type === "video" &&
+    doc.director?.shot_ids.includes(node.id) && node.extra_params?.script_doc_id === docId &&
+    node.extra_params?.script_shot_id === shotId);
+  return members.length === 1 ? members[0].id : undefined;
 }
 
 export function resolvePreferredShotIdLines(
@@ -1182,20 +1194,7 @@ export function syncScriptBreakdownToCanvas(
         if (merge.write.has("title")) existingVideo.title = shot.title;
         if (merge.write.has("narration")) existingVideo.narration_text = shot.narration;
         if (merge.write.has("seconds")) existingVideo.params.seconds = shot.seconds;
-        if (merge.write.has("dialogues")) {
-          const previous = [...(existingVideo.dialogue_lines ?? [])];
-          const reusedIds = new Set<string>();
-          existingVideo.dialogue_lines = dialogueLines.map((line) => {
-            const same = previous.find((entry) =>
-              !reusedIds.has(entry.id) && entry.speaker === line.speaker && entry.text === line.text,
-            );
-            if (same) {
-              reusedIds.add(same.id);
-              return same;
-            }
-            return { ...line, id: `dlg_${crypto.randomUUID().slice(0, 12)}` };
-          });
-        }
+        if (merge.write.has("dialogues")) existingVideo.dialogue_lines = mergeDirectorDialogue(existingVideo, dialogueLines, runs);
         for (const key of directorCinematographyFields) {
           if (merge.write.has(key)) {
             existingVideo.cinematography = { ...existingVideo.cinematography, [key]: shot.cinematography[key] };
@@ -1901,6 +1900,61 @@ function directorCanvasFields(doc: Doc, video: CanvasNode): Record<string, strin
   };
 }
 
+function sameDirectorDialogue(a: Pick<DialogueLine, "speaker" | "text">, b: Pick<DialogueLine, "speaker" | "text">): boolean {
+  return a.speaker === b.speaker && a.text === b.text;
+}
+
+function directorDialogueMatches(previous: DialogueLine[], incoming: Pick<DialogueLine, "speaker" | "text">[]) {
+  const matched = new Map<number, DialogueLine>();
+  const available = new Set(previous);
+  const match = (predicate: (old: DialogueLine, line: typeof incoming[number], index: number) => boolean) => {
+    incoming.forEach((line, index) => {
+      if (matched.has(index)) return;
+      const original = [...available].find((old) => predicate(old, line, index));
+      if (original) {
+        available.delete(original);
+        matched.set(index, original);
+      }
+    });
+  };
+  match(sameDirectorDialogue);
+  match((old, line) => old.speaker === line.speaker);
+  if (previous.length === incoming.length) match((old, _line, index) => old === previous[index]);
+  return matched;
+}
+
+function directorDialogueAudio(nodeId: string, line: DialogueLine, runs: Job[]) {
+  const associated = runs.filter((run) => run.canvas_node === `dialogue:${nodeId}:${line.id}` && run.prompt.trim() === line.text.trim());
+  return {
+    audio_job: line.audio_job ?? associated.find((run) => run.status === "done" && run.result)?.id,
+    audio_pending: line.audio_pending ?? associated.find((run) => ACTIVE_RUN_STATUSES.has(run.status))?.id,
+  };
+}
+
+function directorDialogueWouldReplaceAudio(video: CanvasNode, incoming: Pick<DialogueLine, "speaker" | "text">[], runs: Job[], runsKnown = true): boolean {
+  const previous = video.dialogue_lines ?? [];
+  const untouched = new Set([...directorDialogueMatches(previous, incoming)].flatMap(([index, line]) =>
+    sameDirectorDialogue(line, incoming[index]) ? [line] : [],
+  ));
+  return previous.some((line) => {
+    if (untouched.has(line)) return false;
+    const audio = directorDialogueAudio(video.id, line, runs);
+    return !runsKnown || Boolean(audio.audio_job || audio.audio_pending);
+  });
+}
+
+function mergeDirectorDialogue(video: CanvasNode, incoming: DialogueLine[], runs: Job[]): DialogueLine[] {
+  const matched = directorDialogueMatches(video.dialogue_lines ?? [], incoming);
+  return incoming.map((line, index) => {
+    const previous = matched.get(index);
+    if (!previous) return { ...line, id: `dlg_${crypto.randomUUID().slice(0, 12)}` };
+    if (sameDirectorDialogue(previous, line)) return previous;
+    const audio = directorDialogueAudio(video.id, previous, runs);
+    const stale = [audio.audio_job, audio.audio_pending].filter((id): id is number => id != null);
+    return { ...previous, speaker: line.speaker, text: line.text, ...audio, audio_stale: stale.length ? [...new Set(stale)] : undefined };
+  });
+}
+
 const directorFieldDigests = (fields: Record<string, string>) =>
   Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, sha256HexUtf8(value)]));
 
@@ -1947,6 +2001,12 @@ export function directorSyncPreview(
     const changes = node
       ? directorSourceChanges(base, directorFieldDigests(current), directorFieldDigests(incoming))
       : { takeScript: [], preserve: [], conflicts: [] };
+    const audioAffected = Boolean(node && (changes.takeScript.includes("dialogues") || changes.conflicts.includes("dialogues")) &&
+      directorDialogueWouldReplaceAudio(node, shot.dialogues, options.runs ?? [], options.runsKnown));
+    if (audioAffected && !changes.conflicts.includes("dialogues")) {
+      changes.takeScript = changes.takeScript.filter((key) => key !== "dialogues");
+      changes.conflicts.push("dialogues");
+    }
     return {
       anchor: shot.anchor,
       nodeId: node?.id,
@@ -1956,6 +2016,7 @@ export function directorSyncPreview(
       current,
       incoming,
       changes,
+      audioAffected,
       missingBaseline: changes.conflicts.filter((key) => !Object.hasOwn(base, key)),
     };
   });
@@ -1982,6 +2043,9 @@ export function syncDirectorBreakdownToCanvas(
   }
   const merge = new Map(selectedRows.map((row) => {
     const choices = options.choices?.[row.anchor];
+    if (row.audioAffected && !choices?.dialogues) {
+      throw new Error("请先确认如何处理已有的对白音轨或生成任务。");
+    }
     if (row.missingBaseline.some((key) => !choices?.[key] && !(key === "prompt" && Object.hasOwn(options.prompts ?? {}, row.anchor)))) {
       throw new Error("请先选择没有同步基线的差异如何处理。");
     }
@@ -1989,7 +2053,12 @@ export function syncDirectorBreakdownToCanvas(
     if (Object.hasOwn(options.prompts ?? {}, row.anchor)) write.add("prompt");
     return [row.anchor, { nodeId: row.nodeId, write }];
   }));
-  const detached = new Set(selectedRows.flatMap((row) => row.duplicateClaims).filter((id) => !matched.includes(id)));
+  const detached = new Set(selectedRows.flatMap((row) => [
+    ...row.duplicateClaims,
+    ...(options.bindings?.[row.anchor] === null ? row.candidates.filter((node) =>
+      node.extra_params?.script_anchor === row.anchor,
+    ).map((node) => node.id) : []),
+  ]).filter((id) => !matched.includes(id)));
   const result = syncScriptBreakdownToCanvas({
     ...doc,
     nodes: doc.nodes.map((node) => detached.has(node.id) ? detachScriptShotClaim(node) : node),

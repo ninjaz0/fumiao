@@ -6,6 +6,7 @@ import {
   buildPersistedScriptDraftForSession,
   createCanvasRunsTracker,
   detectAmbiguousShotMatches,
+  directorMemberForScriptShot,
   directorSourceChanges,
   directorSyncPreview,
   extractScriptAnchorsMap,
@@ -75,6 +76,63 @@ test("director stamps stable IDs on table rows and dialogue-only beats", () => {
   assert.equal(stampDirectorScriptShotIds(first.markdown, saved).changed, false);
   const replacement = parseScriptBreakdown(first.markdown.replace("镜头推近怀表", "镜头推近收据"), { docId: "doc_ep01" });
   assert.equal(replacement.shots[0].shotId, saved.shots[0].shotId);
+});
+
+test("director takes over selected outputs from ordinary sync when stamping unmarked dialogue and table shots", () => {
+  const markdown = `### S01 钟表铺 夜 内\n| 01 | S01 | 缓推 | 5s | 镜头推近怀表。 | |\n\n### S02 街道 夜 外\n韩青：有人吗？\n`;
+  const breakdown = parseScriptBreakdown(markdown, { docId: "doc_ep01" });
+  const legacy = syncScriptBreakdownToCanvas({ schemaVersion: 1, nodes: [], edges: [], shots: [] }, breakdown);
+  const videos = legacy.document.nodes.filter((node) => node.type === "video");
+  videos.forEach((video, index) => { video.media_id = String(index).repeat(32); video.use_media = true; });
+  const preferred = resolvePreferredShotIdLines(legacy.document, breakdown);
+  const stamped = stampDirectorScriptShotIds(markdown, breakdown, preferred);
+  const ready = parseScriptBreakdown(stamped.markdown, { docId: "doc_ep01" });
+  assert.deepEqual(ready.shots.map((shot) => shot.shotId), videos.map((video) => video.extra_params?.script_shot_id));
+  const synced = syncDirectorBreakdownToCanvas(legacy.document, ready, { scriptRevision: 1 });
+  assert.deepEqual(synced.shotNodeIds, videos.map((node) => node.id));
+  assert.deepEqual(synced.document.nodes.filter((node) => node.use_media).map((node) => node.media_id), videos.map((node) => node.media_id));
+  const inserted = parseScriptBreakdown("### S01 钟表铺 夜 内\n△补镜。\n" + stamped.markdown, { docId: breakdown.docId });
+  assert.equal(inserted.shots[0].anchor, "S01-01");
+  assert.equal(inserted.shots[1].anchor, "S01-02");
+  assert.equal(directorMemberForScriptShot(synced.document, breakdown.docId, inserted.shots[0].shotId), undefined);
+  assert.equal(directorMemberForScriptShot(synced.document, breakdown.docId, inserted.shots[1].shotId), videos[0].id);
+  assert.equal(directorMemberForScriptShot(synced.document, breakdown.docId, inserted.shots[2].shotId), videos[1].id);
+});
+
+test("director requires a choice for edited audio and preserves a matching line's configuration and jobs", () => {
+  const empty: Doc = { schemaVersion: 1, nodes: [], edges: [], shots: [] };
+  const script = "### S01 钟表铺 夜 内\n△推门。\n韩青：你好。\n林秋：进来吧。";
+  const body = stampScriptShotIds(script).markdown;
+  const parse = (text: string) => parseScriptBreakdown(text, { docId: "doc_ep01" });
+  const saved = syncDirectorBreakdownToCanvas(empty, parse(body), { scriptRevision: 1 }).document;
+  const video = saved.nodes.find((node) => node.type === "video")!;
+  const previous = video.dialogue_lines![0];
+  Object.assign(previous, { voice_id: "voice-q", model: "voice-model", instruction: "耳语", pack_id: "a".repeat(32), audio_job: 12, audio_pending: 14 });
+  const revised = parse(body.replace("你好。", "晚上好。"));
+  assert.ok(directorSyncPreview(saved, revised)[0].changes.conflicts.includes("dialogues"));
+  assert.throws(() => syncDirectorBreakdownToCanvas(saved, revised, { scriptRevision: 2 }), /对白/);
+  const synced = syncDirectorBreakdownToCanvas(saved, revised, { scriptRevision: 2, choices: { "S01-01": { dialogues: "script" } } }).document;
+  const actual = synced.nodes.find((node) => node.id === video.id)!.dialogue_lines!;
+  assert.deepEqual(actual[0], { ...previous, text: "晚上好。", audio_stale: [12, 14] });
+  assert.deepEqual(actual[1], video.dialogue_lines![1]);
+});
+
+test("director can keep a superseded media node independently without reopening the same ambiguity", () => {
+  const base = parseScriptBreakdown("### S01 夜 内\n△旧镜头。 <!-- fm-shot:old_shot -->", { docId: "doc_ep01" });
+  const legacy = syncScriptBreakdownToCanvas({ schemaVersion: 1, nodes: [], edges: [], shots: [] }, base);
+  const old = legacy.document.nodes.find((node) => node.type === "video")!;
+  old.media_id = "c".repeat(32);
+  old.use_media = true;
+  const incoming = parseScriptBreakdown("### S01 夜 内\n△另一镜。 <!-- fm-shot:new_shot -->", { docId: "doc_ep01" });
+  assert.equal(directorSyncPreview(legacy.document, incoming)[0].unresolved, true);
+  const resolved = syncDirectorBreakdownToCanvas(legacy.document, incoming, { scriptRevision: 2, bindings: { "S01-01": null } });
+  const retained = resolved.document.nodes.find((node) => node.id === old.id)!;
+  assert.equal(retained.extra_params?.script_doc_id, undefined);
+  assert.equal(scriptSourceJump(retained)?.docId, base.docId);
+  assert.equal(retained.media_id, old.media_id);
+  assert.equal(directorSyncPreview(resolved.document, incoming)[0].unresolved, false);
+  const repeated = syncDirectorBreakdownToCanvas(resolved.document, incoming, { scriptRevision: 2 });
+  assert.deepEqual(repeated.shotNodeIds, resolved.shotNodeIds);
 });
 
 test("director resolves duplicate legacy claims and keeps source jumps, media, and hand-wired edges on resync", () => {

@@ -216,6 +216,11 @@ test("episode export freezes adopted shots in canvas order", async () => {
       ],
     });
     await assert.rejects(create(), { status: 409, message: /对白尚未生成/ });
+    await setCanvas(f, {
+      ...doc,
+      nodes: [{ ...s1, dialogue_lines: [{ ...s1.dialogue_lines[0], speaker: "换成其他角色", audio_stale: [900] }] }, s2, trialNode],
+    });
+    await assert.rejects(create(), { status: 409, message: /对白台词已修改.*重新生成/ });
     await setCanvas(f, doc);
     await assert.rejects(f.service.create(f.member, f.project.id, request), {
       status: 404,

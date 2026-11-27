@@ -612,6 +612,7 @@ export class OriginalCanvases {
     row: any,
     document: CanvasDocument,
     previousDirector: DirectorProduction | null = canvasDocumentJson(row.document).director ?? null,
+    expectedScriptRevision?: number,
   ) {
     await validateCanvasDefinitions(
       sql,
@@ -627,9 +628,12 @@ export class OriginalCanvases {
       previousDirector ?? undefined,
     );
     const director = document.director;
+    if (expectedScriptRevision !== undefined) {
+      requireValue(director?.script_revision === expectedScriptRevision, 400, "本集剧本版本与同步预览不一致");
+    }
     if (
       director &&
-      (director.script_id !== previousDirector?.script_id ||
+      (expectedScriptRevision !== undefined || director.script_id !== previousDirector?.script_id ||
         director.script_revision !== previousDirector.script_revision)
     ) {
       const script = await this.directorScript(
@@ -644,6 +648,9 @@ export class OriginalCanvases {
         { kind: "asset", row: script },
         row.workspace_id,
       );
+      if (expectedScriptRevision !== undefined) {
+        requireValue(director.script_revision === script.revision, 409, "主剧本已更新，请重新预览后同步。");
+      }
       requireValue(
         director.script_revision <= script.revision,
         409,
@@ -686,7 +693,7 @@ export class OriginalCanvases {
         409,
         canvasConflict,
       );
-      return this.saveLocked(sql, user, row, title, body.document);
+      return this.saveLocked(sql, user, row, title, body.document, body.expected_script_revision);
     });
   }
   async saveLocked(
@@ -695,8 +702,9 @@ export class OriginalCanvases {
     row: Record<string, any>,
     title: string,
     document: CanvasDocument,
+    expectedScriptRevision?: number,
   ) {
-    await this.references(sql, user, row, document);
+    await this.references(sql, user, row, document, undefined, expectedScriptRevision);
     const stamp = Math.floor(this.clock());
     await sql.query(
       "UPDATE canvas_documents SET title=$2,document=$3,updated=$4,last_editor=$5 WHERE project_id=$1",

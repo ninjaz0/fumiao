@@ -14,6 +14,7 @@ import type { Doc } from "./types";
 type DirectorDeskProps = {
   document: Doc;
   active: boolean;
+  canvasSaved: boolean;
   activeShotId: string | null;
   onSelectShot: (nodeId: string) => void;
   onChooseScript: () => void;
@@ -27,6 +28,7 @@ type DirectorDeskProps = {
 export function DirectorDesk({
   document,
   active,
+  canvasSaved,
   activeShotId,
   onSelectShot,
   onChooseScript,
@@ -146,7 +148,7 @@ export function DirectorDesk({
   };
 
   const activeIndex = order.indexOf(node?.id ?? "");
-  const orderConfirmed = !error && Boolean(production?.order_basis && production.order_basis === confirmedOrder);
+  const orderConfirmed = canvasSaved && !error && Boolean(production?.order_basis && production.order_basis === confirmedOrder);
 
   return (
     <section className="fm-director-desk" aria-label="导演台" hidden={!active}>

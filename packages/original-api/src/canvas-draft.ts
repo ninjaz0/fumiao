@@ -84,6 +84,7 @@ export const dialogueLineFields: Fields = {
   instruction: { ...text(300), optional: true },
   audio_job: { ...positive, optional: true },
   audio_pending: { ...positive, optional: true },
+  audio_stale: { ...list({ ...integer(), min: 1 }, 2), optional: true },
 };
 export const canvasBgmFields: Fields = {
   asset_id: { ...media, nullable: true, default: null },
@@ -205,6 +206,7 @@ export const canvasNewFields: Fields = {
 };
 export const canvasSaveFields: Fields = {
   expected_revision: { ...integer(), min: 1 },
+  expected_script_revision: { ...integer(), min: 1, exactInteger: true, optional: true },
   title: { ...text(80), min: 1 },
   document: object(canvasDocumentFields),
 };
@@ -398,6 +400,7 @@ export type DialogueLine = {
   instruction?: string;
   audio_job?: number | null;
   audio_pending?: number | null;
+  audio_stale?: number[];
 };
 export type CanvasBgm = {
   asset_id: string | null;
@@ -502,6 +505,7 @@ export function parseCanvasSave(value: unknown) {
   const body = parseBody(value, canvasSaveFields, true);
   return {
     expected_revision: body.expected_revision as number,
+    expected_script_revision: body.expected_script_revision as number | undefined,
     title: body.title as string,
     document: canvasDocumentValue(body.document),
   };

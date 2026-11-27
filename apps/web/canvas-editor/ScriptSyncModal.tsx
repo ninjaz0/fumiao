@@ -80,7 +80,7 @@ export function ScriptSyncModal({
   const previous = canvasDoc.director?.script_id === breakdown.docId ? canvasDoc.director : undefined;
   const [selectedAnchors, setSelectedAnchors] = useState<Set<string>>(() => new Set(
     director
-      ? directorRows.filter((row) => !row.unresolved && (!row.nodeId || !previous || previous.shot_ids.includes(row.nodeId))).map((row) => row.anchor)
+      ? directorRows.filter((row) => !row.unresolved && (!previous || Boolean(row.nodeId && previous.shot_ids.includes(row.nodeId)))).map((row) => row.anchor)
       : breakdown.shots.map((shot) => shot.anchor),
   ));
   const [requestedOrder, setRequestedOrder] = useState<string[] | null>(null);
@@ -148,6 +148,10 @@ export function ScriptSyncModal({
     const participating = directorRows.filter((row) => selectedAnchors.has(row.anchor));
     if (participating.some((row) => row.unresolved)) {
       setError("请先确认本集镜头的归属。");
+      return;
+    }
+    if (participating.some((row) => row.audioAffected && !choices[row.anchor]?.dialogues)) {
+      setError("请选择如何处理已有的对白音轨或生成任务。");
       return;
     }
     if (participating.some((row) => row.missingBaseline.some((field) =>
@@ -458,7 +462,8 @@ export function ScriptSyncModal({
                       </label>}
                       {[...row.changes.takeScript, ...row.changes.preserve, ...row.changes.conflicts].map((field) => {
                         const conflict = row.changes.conflicts.includes(field);
-                        const required = row.missingBaseline.includes(field);
+                        const audioAffected = field === "dialogues" && row.audioAffected;
+                        const required = audioAffected || row.missingBaseline.includes(field);
                         return (
                           <div key={field} className="fm-director-sync-diff">
                             <strong>{directorFieldLabels[field]}</strong>
@@ -469,9 +474,9 @@ export function ScriptSyncModal({
                                 const value = event.target.value === "script" ? "script" : "preserve";
                                 setChoices((current) => ({ ...current, [anchor]: { ...current[anchor], [field]: value } }));
                               }}>
-                                {required && <option value="" disabled>无同步基线，请选择</option>}
+                                {required && <option value="" disabled>{audioAffected ? "已有音轨或任务，请选择" : "无同步基线，请选择"}</option>}
                                 <option value="preserve">保留画布修改</option>
-                                <option value="script">采用剧本内容</option>
+                                <option value="script">{audioAffected ? "采用新对白，需要重新生成音轨" : "采用剧本内容"}</option>
                               </select>
                             ) : <small>{row.changes.takeScript.includes(field) ? "采用剧本更新" : "保留画布修改"}</small>}
                           </div>

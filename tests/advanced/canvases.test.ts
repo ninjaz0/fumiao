@@ -414,6 +414,28 @@ test("Canvas saves replace the node index with exactly the saved node IDs", asyn
     await f.cleanup();
   }
 });
+test("director synchronization requires the reviewed script revision when guarded", async () => {
+  const f = await canvasesFixture();
+  try {
+    const project = await f.canvases.create(f.admin, {});
+    const scripts = new OriginalScriptDocuments(f.p);
+    const original = await scripts.create(f.admin, { path: "本集.md", body_md: "△旧稿。" });
+    const revised = await scripts.update(f.admin, original.id, { expected_revision: original.revision, body_md: "△新稿。" });
+    const save = (scriptRevision: number) => f.canvases.save(f.admin, project.id, {
+      expected_revision: project.revision,
+      expected_script_revision: scriptRevision,
+      title: "本集",
+      document: { nodes: [], director: { script_id: original.id, script_revision: scriptRevision, shot_ids: [] } },
+    });
+    await assert.rejects(save(original.revision), { status: 409, message: /主剧本.*更新/ });
+    assert.equal((await f.canvases.get(f.admin, project.id)).revision, project.revision);
+    const saved = await save(revised.revision);
+    assert.equal(saved.document.director?.script_revision, revised.revision);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("director state round-trips and cannot reference off-list shots", async () => {
   const f = await canvasesFixture();
   try {

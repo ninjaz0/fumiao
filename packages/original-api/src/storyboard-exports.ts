@@ -334,6 +334,11 @@ export class OriginalStoryboardExports {
             if (!pythonStrip(line.text) && (isEpisode || !line.audio_job))
               continue;
             requireValue(
+              !line.audio_job || !line.audio_stale?.includes(line.audio_job),
+              409,
+              `镜头 ${i + 1} 的第 ${dIdx + 1} 句对白台词已修改，请重新生成语音`,
+            );
+            requireValue(
               !line.audio_pending || !(await voiceInProgress(line.audio_pending)),
               409,
               `镜头 ${i + 1} 的第 ${dIdx + 1} 句对白仍在生成，请完成后合成`,

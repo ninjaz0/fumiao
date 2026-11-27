@@ -716,6 +716,30 @@ try {
       return Boolean(switcher && desk && desk.y >= switcher.y + switcher.height - 2);
     }).toBe(true);
     await page.setViewportSize({ width: 1360, height: 860 });
+
+    const freshEdit = await (await context.request.get(`/api/workspace/scripts/${docA.id}`, { headers })).json();
+    const remoteShot = "远端补写尾声";
+    const reloadPreview = await context.request.put(`/api/workspace/scripts/${docA.id}`, {
+      headers,
+      data: { expected_revision: freshEdit.revision, body_md: `${freshEdit.body_md}\n\n△${remoteShot}。` },
+    });
+    assert.equal(reloadPreview.status(), 200, await reloadPreview.text());
+    await director.getByRole("button", { name: "更新本集分镜" }).click();
+    const freshRow = directorSync.getByRole("article").filter({ hasText: remoteShot });
+    await expect(freshRow).toBeVisible();
+    await expect(freshRow.getByRole("checkbox", { name: "纳入本集" })).not.toBeChecked();
+    const afterPreview = await reloadPreview.json();
+    const raceEdit = await context.request.put(`/api/workspace/scripts/${docA.id}`, {
+      headers,
+      data: { expected_revision: afterPreview.revision, body_md: `${afterPreview.body_md}\n\n> 预览之后协作者又更新了剧本。` },
+    });
+    assert.equal(raceEdit.status(), 200, await raceEdit.text());
+    await directorSync.getByRole("button", { name: "保存并进入导演台" }).click();
+    await expect(directorSync.getByRole("alert")).toContainText(/剧本.*更新/);
+    const freshCanvas: Project = await (await context.request.get(`/api/canvases/${canvasA.id}`, { headers })).json();
+    assert.equal(freshCanvas.document.director?.script_revision, episode.script_revision);
+    await directorSync.getByRole("button", { name: "关闭同步窗口" }).click();
+    await directorTab.click();
     await director.getByRole("button", { name: "在文档中编辑" }).click();
     await expect(highlightedBeat).toBeVisible();
 
@@ -958,6 +982,28 @@ try {
     // The script must already be committed when the canvas PUT conflicts, and the local episode must stay recoverable.
     await page.getByRole("treeitem").filter({ hasText: fileBName }).dblclick();
     await expect(page.getByRole("tab", { selected: true }).filter({ hasText: fileBName })).toBeVisible();
+    const cachedDocB = await (await context.request.get(`/api/workspace/scripts/${docB.id}`, { headers })).json();
+    const documentPane = page.locator(".fm-md-editor");
+    await documentPane.getByRole("button", { name: "原文", exact: true }).click();
+    const unsavedDirectorNote = "这条本地导演草稿必须保留";
+    failDocBSave = true;
+    await sourceEditor.fill(`${cachedDocB.body_md}\n> ${unsavedDirectorNote}`);
+    const updatedDocB = await context.request.put(`/api/workspace/scripts/${docB.id}`, {
+      headers,
+      data: {
+        expected_revision: cachedDocB.revision,
+        body_md: `${cachedDocB.body_md}\n\n### S02 雨巷 夜 外\n| 镜号 | 场次 | 运镜 | 时长 | 画面 | 台词 |\n| --- | --- | --- | --- | --- | --- |\n| 01 | S02 | 固定 | 5s | 路灯倒映在水洼中 | |\n\n### S03 天台 夜 外\n陌生人：雨终于停了。`,
+      },
+    });
+    assert.equal(updatedDocB.status(), 200, await updatedDocB.text());
+    await page.getByRole("button", { name: "用于本集制作" }).click();
+    await expect(documentPane.getByRole("alert")).toContainText("服务器新版本冲突");
+    await expect(sourceEditor).toHaveValue(new RegExp(unsavedDirectorNote));
+    await expect(directorSync).toHaveCount(0);
+    failDocBSave = false;
+    await documentPane.getByRole("button", { name: "读取服务器最新版" }).click();
+    await expect(sourceEditor).toHaveValue(/路灯倒映在水洼中/);
+    await documentPane.getByRole("button", { name: "富文本", exact: true }).click();
     const beforeDirectorConflict: Project = await (
       await context.request.get(`/api/canvases/${canvasA.id}`, { headers })
     ).json();
@@ -976,11 +1022,24 @@ try {
     const stampedDocB = await (await context.request.get(`/api/workspace/scripts/${docB.id}`, { headers })).json();
     assert.match(stampedDocB.body_md, /<!-- fm-shot:sh_[a-f0-9]+ -->/);
     const recoveredEpisode = await page.evaluate(({ id }) => {
-      const key = Object.keys(localStorage).find((item) => item.startsWith("fm-canvas-") && item.includes(id));
+      const editor = sessionStorage.getItem("fm-canvas-editor");
+      const key = Object.keys(localStorage).find((item) => item.startsWith("fm-canvas-") && item.endsWith(`-${id}-${editor}`));
       return key ? JSON.parse(localStorage.getItem(key) ?? "null")?.draft?.document?.director : null;
     }, { id: canvasA.id });
     assert.equal(recoveredEpisode?.script_id, docB.id);
     assert.equal(recoveredEpisode?.script_revision, stampedDocB.revision);
+    await directorSync.getByRole("button", { name: "关闭同步窗口" }).click();
+    await expect(documentPane.getByRole("button", { name: "在导演台查看 S02-01", exact: true })).toBeVisible();
+    await documentPane.getByRole("button", { name: "在导演台查看 S03-01", exact: true }).click();
+    await expect(director.getByRole("button", { name: /^S03-01/ })).toHaveAttribute("aria-pressed", "true");
+    await directorTab.click();
+    await director.getByRole("button", { name: "保存并确认顺序" }).click();
+    await expect(director.getByRole("alert")).toContainText("保存冲突");
+    await page.goto(editPath);
+    await expect(page.locator(".canvas-header")).toContainText("保存冲突");
+    await directorTab.click();
+    await expect(director.getByRole("button", { name: "保存并确认顺序" })).toBeVisible();
+    await expect(director.getByRole("button", { name: "顺序已确认" })).toHaveCount(0);
 
     console.log(
       "PASS script-workspace-fusion-browser: mobile layout, directory rename, search and replace, rich and source jumps, director navigation and order, and script and director draft conflict recovery",
