@@ -1003,11 +1003,22 @@ export class Platform {
         500,
         "缺少实际交付计量",
       );
-      charged = mediaCharge(
+      const bill = mediaCharge(
         job.native_snapshot.price.unit,
         options.delivered,
         String(job.price),
-      ).charged;
+      );
+      charged = bill.charged;
+      if ("milliseconds" in options.delivered)
+        result = {
+          ...(result as object),
+          media_bill: {
+            ...options.delivered,
+            unit: job.native_snapshot.price.unit,
+            reserved: formatCredits(creditUnits(String(job.price))),
+            ...bill,
+          },
+        };
     }
     const settledWallet = await one(
       sql,

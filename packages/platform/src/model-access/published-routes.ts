@@ -1,3 +1,4 @@
+import { videoCapabilities } from "./video-parameters.js";
 import { creditUnits, formatCredits } from "../credit-amount.js";
 import { one, type Sql } from "../db.js";
 import { requireValue } from "../security.js";
@@ -51,7 +52,10 @@ export async function resolvePublishedRoute(
     purpose: row.purpose,
     protocol: row.protocol,
     executorVersion: row.executor_version,
-    capabilities: row.capabilities,
+    capabilities:
+      row.purpose === "video"
+        ? videoCapabilities(row.protocol, row.capabilities)
+        : row.capabilities,
     priceRevisionId: row.price_revision_id,
     price: publishedPrice(row),
   };
@@ -78,6 +82,14 @@ export async function publicationView(sql: Sql) {
     FROM model_access_route_revisions r JOIN connections c ON c.id=r.connection_id ORDER BY r.catalog_id,r.draft_id,r.draft_revision DESC`);
   const byCatalog = new Map<string, typeof routes.rows>();
   for (const route of routes.rows) {
+    if (
+      route.protocol === "new-api-videos" ||
+      route.protocol === "openrouter-videos"
+    )
+      route.capabilities = videoCapabilities(
+        route.protocol,
+        route.capabilities,
+      );
     const group = byCatalog.get(route.catalog_id);
     if (group) group.push(route);
     else byCatalog.set(route.catalog_id, [route]);

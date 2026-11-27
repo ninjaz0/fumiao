@@ -10,7 +10,7 @@ import {
   type FrozenModelRoute,
 } from "@fumiao/platform/model-access/publication.js";
 import type { Platform } from "@fumiao/platform/platform.js";
-import { prepareImageParameters } from "@fumiao/platform/prepare-input.js";
+import { prepareMediaParameters } from "@fumiao/platform/prepare-input.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import type { OriginalActor } from "./identity.js";
 import { OriginalLibrary } from "./library.js";
@@ -21,15 +21,25 @@ export async function prepareNativeMedia(
   user: OriginalActor,
   workspace: string,
   route: FrozenModelRoute,
-  draft: { kind: string; params?: Record<string, unknown>; refs: string[] },
+  draft: {
+    kind: string;
+    params?: Record<string, unknown>;
+    refs: string[];
+    seconds?: number;
+    provided?: string[];
+  },
   admission = false,
+  pendingTail = false,
 ) {
   requireValue(
     route.executorVersion === 1 &&
       route.purpose === draft.kind &&
-      route.price.kind === "image" &&
-      (route.protocol === "openai-images" ||
-        route.protocol === "openrouter-images"),
+      ((route.price.kind === "image" &&
+        (route.protocol === "openai-images" ||
+          route.protocol === "openrouter-images")) ||
+        (route.price.kind === "video" &&
+          (route.protocol === "new-api-videos" ||
+            route.protocol === "openrouter-videos"))),
     409,
     "线路不支持该生成请求",
   );
@@ -68,10 +78,15 @@ export async function prepareNativeMedia(
     403,
     "凭据未授权此模型或用途",
   );
-  const { params, count } = prepareImageParameters(
+  const { params, count } = prepareMediaParameters(
     route,
-    draft.params ?? {},
-    draft.refs.length,
+    {
+      ...(route.purpose === "video" && draft.provided?.includes("seconds")
+        ? { seconds: draft.seconds }
+        : {}),
+      ...draft.params,
+    },
+    draft.refs.length + Number(pendingTail),
   );
   requireValue(
     new Set(draft.refs).size === draft.refs.length,
@@ -125,6 +140,7 @@ export async function acceptNativeMedia(
     route,
     draft,
     true,
+    Boolean(meta?.tailParentJobId),
   );
   requireValue(pythonStrip(draft.prompt), 400, "请输入提示词");
   if (meta?.projectId) {
@@ -153,6 +169,7 @@ export async function acceptNativeMedia(
     prompt: pythonStrip(draft.prompt),
     params: prepared.params,
     references: prepared.references,
+    ...(meta?.tailParentJobId ? { tailParentJobId: meta.tailParentJobId } : {}),
   };
   const accepted = await acceptTask(
     p,
@@ -176,9 +193,12 @@ export async function acceptNativeMedia(
   const view = {
     params: prepared.params,
     refs: draft.refs,
-    ratio: draft.ratio,
+    ratio:
+      route.purpose === "video"
+        ? (prepared.params.aspect_ratio ?? draft.ratio)
+        : draft.ratio,
     quality: null,
-    seconds: null,
+    seconds: prepared.params.seconds ?? null,
     sampling_steps: null,
     seed: null,
     width: null,

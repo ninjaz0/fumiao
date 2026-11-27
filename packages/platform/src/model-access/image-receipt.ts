@@ -1,3 +1,4 @@
+import { DefiniteSubmissionFailure } from "./media-delivery.js";
 import { jsonParser } from "stream-json/parser.js";
 import { httpChunks, requirePublicHttps } from "../plugin-host.js";
 import { DomainError } from "../security.js";
@@ -7,7 +8,7 @@ const maxEncoded = 4 * Math.ceil(maxImageBytes / 3);
 const fieldLimits = { status: 64, url: 8192, b64_json: maxEncoded };
 export type ImageOutput =
   { inline: true } | { url: string } | { b64: string } | null;
-export class DefiniteImageFailure extends Error {}
+export class DefiniteImageFailure extends DefiniteSubmissionFailure {}
 class InterruptedReceipt extends Error {}
 
 export function decodeInline(value: string) {

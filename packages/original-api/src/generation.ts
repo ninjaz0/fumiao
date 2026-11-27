@@ -147,8 +147,12 @@ export class OriginalGeneration {
             : "SELECT * FROM jobs WHERE original_uid=$1 AND deleted_at IS NULL",
         packages ? [uid, user.id, draft.model, draft.uid] : [uid],
       );
+      // A legacy draft defaults to 5 seconds. A native draft without an explicit
+      // duration selects the route default, which must remain distinct on replay.
+      const useRouteDuration = native && draft.kind === "video" &&
+        !Object.hasOwn(draft.params ?? {}, "seconds") && !draft.provided.includes("seconds");
       const fingerprint = native
-        ? hash(canonical({ ...draft, provided: undefined }))
+        ? hash(canonical({ ...draft, ...(useRouteDuration ? { seconds: undefined } : {}), provided: undefined }))
         : "";
       if (previous) {
         await new OriginalLibrary(this.p).access(

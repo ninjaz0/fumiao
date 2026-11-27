@@ -249,7 +249,7 @@ export async function wakeTailFrameChildren(
           first_frame: tail.id,
         };
       }
-      input.params.tail_inherited_from = videoAsset.public_id;
+      if (child.source_kind !== "builtin") input.params.tail_inherited_from = videoAsset.public_id;
       await sql.query(
         "UPDATE jobs SET input=$2,updated_at=now() WHERE id=$1",
         [child.id, JSON.stringify(input)],

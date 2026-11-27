@@ -235,9 +235,12 @@ export class OriginalObservability {
     const { rows } = await this.p.db.query(
       `SELECT j.id, j.public_id, j.workspace_id, w.name AS workspace_name,
               u.name AS owner_name, COALESCE(j.catalog_id, j.provider_model) AS model,
-              j.plugin_id, j.kind, j.price, j.error, j.remote_id, j.created_at, j.updated_at
+              j.plugin_id, j.kind, j.price, j.error, j.remote_id, j.created_at, j.updated_at,
+              j.connection_id, j.provider_model, CASE WHEN j.plugin_id IS NULL THEN to_jsonb(j)->'native_snapshot'->>'connectionRevisionId' END AS connection_revision_id,
+              c.name AS connection_name
          FROM jobs j
          JOIN workspaces w ON w.id = j.workspace_id
+         JOIN connections c ON c.id=j.connection_id
          LEFT JOIN users u ON u.id = j.owner_id
         WHERE j.state = 'uncertain'
         ORDER BY j.created_at DESC
@@ -254,6 +257,14 @@ export class OriginalObservability {
         kind: String(r.kind),
         price: Number(r.price),
         error: r.error ? String(r.error) : null,
+        ...(r.kind === "video" && r.connection_revision_id
+          ? { video_route: {
+              connection_id: String(r.connection_id),
+              connection_name: String(r.connection_name),
+              connection_revision_id: String(r.connection_revision_id),
+              upstream_id: String(r.provider_model),
+            } }
+          : {}),
         remote_id: r.remote_id ? String(r.remote_id) : null,
         created_at: new Date(r.created_at).toISOString(),
         updated_at: new Date(r.updated_at).toISOString(),

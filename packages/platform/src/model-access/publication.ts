@@ -1,3 +1,4 @@
+import { videoCapabilities } from "./video-parameters.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -198,6 +199,17 @@ async function publishOne(
     400,
     "请先补齐用途、调用格式、售价及有界参数",
   );
+  const capabilities =
+    purpose === "video" ? videoCapabilities(protocol, parameters) : parameters;
+  requireValue(
+    purpose !== "video" ||
+      ((capabilities.durations?.length || capabilities.duration_range) &&
+        !capabilities.upscale_only &&
+        (!capabilities.requires_first_frame ||
+          capabilities.frame_images?.includes("first_frame"))),
+    400,
+    "请先补齐可执行的视频参数",
+  );
   const client = await resolveConnectionRevision(sql, p, conn.id);
   requireValue(
     routeScopeAllows(client.scope, protocol, draft.upstream_id),
@@ -274,7 +286,7 @@ async function publishOne(
         draft.revision,
         purpose,
         protocol,
-        JSON.stringify(parameters),
+        JSON.stringify(capabilities),
       ],
     );
   const revision = (existing?.revision ?? 0) + 1;

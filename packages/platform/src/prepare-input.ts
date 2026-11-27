@@ -1,3 +1,4 @@
+import { prepareVideoParameters } from "./model-access/video-parameters.js";
 import { z } from "zod";
 import type { Platform } from "./platform.js";
 import type { Sql } from "./db.js";
@@ -201,4 +202,14 @@ export function prepareImageParameters(
     "参考图片数量不符合线路要求",
   );
   return { params: fields, count };
+}
+
+export function prepareMediaParameters(
+  route: import("./model-access/publication.js").FrozenModelRoute,
+  raw: Record<string, unknown>,
+  referenceCount: number,
+) {
+  return route.purpose === "video"
+    ? prepareVideoParameters(route, raw, referenceCount)
+    : prepareImageParameters(route, raw, referenceCount);
 }

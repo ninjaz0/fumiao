@@ -1,5 +1,5 @@
 import { creditUnits, formatCredits } from "./credit-amount.js";
-import { prepareImageParameters } from "./prepare-input.js";
+import { prepareMediaParameters } from "./prepare-input.js";
 import {
   adoptedModels,
   hasModelAccess,
@@ -563,9 +563,9 @@ export class StudioCatalog {
       try {
         const route = await resolvePublishedRoute(sql, modelId);
         requireValue(
-          route?.price.kind === "image",
+          route && (route.price.kind === "image" || route.price.kind === "video"),
           409,
-          "该线路不支持图片估价",
+          "该线路不支持媒体估价",
         );
         const access = await one(
           sql,
@@ -574,9 +574,12 @@ export class StudioCatalog {
           [modelId, workspace, route.modelId],
         );
         requireValue(access.ok, 403, "当前空间未开放该模型");
-        const { count } = prepareImageParameters(
+        const { count } = prepareMediaParameters(
           route,
-          options?.nativeParams ?? {},
+          {
+            ...(route.purpose === "video" && params.seconds !== undefined ? { seconds: params.seconds } : {}),
+            ...options?.nativeParams,
+          },
           options?.referenceCount ?? 0,
         );
         const amount = formatCredits(

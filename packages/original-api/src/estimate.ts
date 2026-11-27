@@ -53,7 +53,13 @@ export class OriginalEstimates {
             user,
             workspace.id,
             route,
-            { kind: draft.kind, refs: draft.refs, params: draft.params },
+            {
+              kind: draft.kind,
+              refs: draft.refs,
+              params: draft.params,
+              seconds: draft.seconds,
+              provided: Object.keys(value as object),
+            },
           );
           const policy = await one(
             sql,

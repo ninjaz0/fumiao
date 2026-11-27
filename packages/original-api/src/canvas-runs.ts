@@ -34,6 +34,7 @@ import { resolveSpeakerVoice } from "./dialogue.js";
 import {
   canvasBytes,
   canvasDocumentJson,
+  tailParentNode,
   canvasText,
   parseCanvasRunJson,
 } from "./canvas-values.js";
@@ -394,20 +395,7 @@ export class OriginalCanvasRuns {
     // Never touches shots where `tail_inherited` is falsy (preserves explicit first frames).
     let pendingTailParentJobId: string | null = null;
     if (node.type === "video" && node.tail_inherited) {
-      const fallbackVideoOrder = doc.nodes
-        .filter((n) => n.type === "video")
-        .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
-        .map((n) => n.id);
-      const shotOrder = doc.shots?.length ? doc.shots : fallbackVideoOrder;
-      const shotIdx = shotOrder.indexOf(nid);
-      const prevNodeId =
-        shotIdx > 0
-          ? shotOrder[shotIdx - 1]
-          : (doc.edges.find(
-              (e) =>
-                e.target === nid &&
-                nodes.get(e.source)?.type === "video",
-            )?.source ?? null);
+      const prevNodeId = tailParentNode(doc, nid);
       if (prevNodeId) {
         const prevJob = await one(
           sql,
@@ -567,6 +555,7 @@ export class OriginalCanvasRuns {
         projectId: String(p.id),
         nodeId: nid,
         executionKey: `canvas-run:${p.id}:${nid}:${body.uid}`,
+        tailParentJobId: pendingTailParentJobId,
       },
     );
     await this.link(sql, p, user, nid, body.uid, result.id, {

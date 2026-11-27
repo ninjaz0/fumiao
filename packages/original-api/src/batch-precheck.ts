@@ -17,7 +17,7 @@ import {
   parseCanvasDocument,
   type CanvasNode,
 } from "./canvas-draft.js";
-import { canvasDocumentJson } from "./canvas-values.js";
+import { canvasDocumentJson, tailParentNode } from "./canvas-values.js";
 import { parseBody } from "./validation.js";
 
 const ACTIVE_STATES = [
@@ -408,6 +408,14 @@ export class OriginalBatchPrecheck {
               }
             }
             if (model) {
+              const tailNodeId =
+                stage === "video" && node.tail_inherited && tailParentNode(doc, node.id);
+              const tailNode = tailNodeId && nodesById.get(tailNodeId);
+              const tailReference = tailNode && (
+                busyNodes.has(tailNode.id) ||
+                targets.some((target) => target.id === tailNode.id) ||
+                await this.canvases.mediaForNode(sql, project.id, tailNode)
+              );
               const q = await this.catalog.quoteReadOnly(
                 sql,
                 model,
@@ -425,7 +433,7 @@ export class OriginalBatchPrecheck {
                     },
                 {
                   nativeParams: node.extra_params ?? {},
-                  referenceCount: totalRefs,
+                  referenceCount: totalRefs + Number(Boolean(tailReference)),
                 },
               );
               if (!q.allowed || !q.priced) {

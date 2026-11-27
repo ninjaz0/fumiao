@@ -1,3 +1,5 @@
+import { resolveConnectionRevision } from "./model-access/connections.js";
+import { videoPollingUrl } from "./model-access/videos.js";
 import { adoptedModels } from "./studio-plugin-profile.js";
 import {
   addressPause,
@@ -44,25 +46,54 @@ export class Operations {
         );
       else {
         requireValue(job.executable, 409, "退役任务只能人工核对退款");
-        requireValue(
-          job.source_kind !== "builtin",
-          400,
-          "同步图片请求没有可恢复的上游任务编号",
-        );
-        const plugin = await this.p.registry.resolve(
-          sql,
-          job.plugin_id,
-          job.plugin_version,
-        );
-        requireValue(
-          plugin.inspect && input.remoteId,
-          400,
-          "需要支持查询的插件及上游任务编号",
-        );
-        await sql.query(
-          "UPDATE jobs SET state='running',remote_id=$2,error=NULL,lease_token=NULL,lease_until=NULL WHERE id=$1",
-          [id, input.remoteId],
-        );
+        if (job.source_kind === "builtin") {
+          requireValue(
+            job.kind === "video" &&
+              job.native_snapshot.executorVersion === 1 &&
+              ["new-api-videos", "openrouter-videos"].includes(
+                job.native_snapshot.protocol,
+              ),
+            400,
+            "同步图片请求没有可恢复的上游任务编号",
+          );
+          requireValue(
+            !job.remote_id || job.remote_id === input.remoteId,
+            409,
+            "只能恢复原上游任务",
+          );
+          const client = await resolveConnectionRevision(
+            sql,
+            this.p,
+            job.native_snapshot.connectionRevisionId,
+          );
+          const polling = videoPollingUrl(client, input.remoteId);
+          try {
+            await sql.query(
+              `UPDATE jobs SET state='running',remote_id=$2,native_polling_url=$3,request_uncertain=false,
+              request_note=NULL,request_retry_at=NULL,error=NULL,lease_token=NULL,lease_until=NULL WHERE id=$1`,
+              [id, input.remoteId, polling],
+            );
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "23505")
+              requireValue(false, 409, "上游编号已关联其他任务");
+            throw error;
+          }
+        } else {
+          const plugin = await this.p.registry.resolve(
+            sql,
+            job.plugin_id,
+            job.plugin_version,
+          );
+          requireValue(
+            plugin.inspect && input.remoteId,
+            400,
+            "需要支持查询的插件及上游任务编号",
+          );
+          await sql.query(
+            "UPDATE jobs SET state='running',remote_id=$2,error=NULL,lease_token=NULL,lease_until=NULL WHERE id=$1",
+            [id, input.remoteId],
+          );
+        }
       }
       await sql.query(
         "INSERT INTO job_events(job_id,state,detail) VALUES($1,'reconciled',$2)",

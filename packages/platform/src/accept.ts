@@ -15,6 +15,7 @@ export type AcceptTaskMeta = {
   projectId?: string | null;
   nodeId?: string | null;
   executionKey?: string | null;
+  tailParentJobId?: string | null;
 };
 
 async function checkPlugin(sql: Sql, model: any) {

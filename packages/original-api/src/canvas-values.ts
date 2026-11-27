@@ -66,3 +66,21 @@ export function canvasVoiceIds(
   // Difference builds a new small set by iterating the initial set.
   return tableOrder(tableOrder(values));
 }
+
+export function tailParentNode(doc: CanvasDocument, nodeId: string) {
+  const order = doc.shots?.length
+    ? doc.shots
+    : doc.nodes
+        .filter((node) => node.type === "video")
+        .sort((a, b) => a.x - b.x || a.y - b.y)
+        .map((node) => node.id);
+  const index = order.indexOf(nodeId);
+  if (index > 0) return order[index - 1];
+  return doc.edges.find(
+    (edge) =>
+      edge.target === nodeId &&
+      doc.nodes.some(
+        (node) => node.id === edge.source && node.type === "video",
+      ),
+  )?.source;
+}

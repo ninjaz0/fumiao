@@ -43,6 +43,7 @@ export class OriginalCredits {
     const rows = (
       await sql.query(
         `SELECT l.*,w.public_id AS workspace_number,u.public_id AS actor_number,COALESCE(NULLIF(u.nickname,''),u.name) AS actor_name,
+      CASE WHEN l.action='spend' THEN j.result->'media_bill' END AS media_bill,
       COALESCE(l.original_job_id,j.public_id) AS job_number FROM ledger l JOIN workspaces w ON w.id=l.workspace_id
       LEFT JOIN users u ON u.id=l.actor_id LEFT JOIN jobs j ON j.id=l.job_id
       WHERE w.public_id=$1 AND l.public_id IS NOT NULL AND l.public_id<$2 ORDER BY l.public_id DESC LIMIT 50`,
@@ -72,6 +73,7 @@ export class OriginalCredits {
         balance: formatCredits(creditUnits(String(r.balance_snapshot))),
         reserved: formatCredits(creditUnits(String(r.held_snapshot))),
       },
+      ...(r.media_bill ? { media_bill: r.media_bill } : {}),
       amount: Number(r.amount),
       balance: Number(r.balance_snapshot),
       reserved: Number(r.held_snapshot),

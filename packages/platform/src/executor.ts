@@ -1,8 +1,9 @@
+import { executeNativeImages } from "./model-access/images.js";
+import { executeNativeVideos } from "./model-access/videos.js";
 import {
-  executeNativeImages,
-  interruptedImageSubmission,
+  interruptedMediaSubmission,
   cleanupNativeStaging,
-} from "./model-access/images.js";
+} from "./model-access/media-delivery.js";
 import type { HttpTransport } from "./plugin-host.js";
 import { creditUnits } from "./credit-amount.js";
 import {
@@ -75,7 +76,24 @@ export class Executor {
     ).rows;
   }
   async recover() {
-    return this.platform.db.transaction((sql) => this.recoverOn(sql));
+    const p = this.platform;
+    await p.db.transaction((sql) => this.recoverOn(sql));
+    // A parent can settle before its child's admission commits, or the worker
+    // can restart between settlement and extraction. The chain row survives both.
+    if (!(await hasTailChainTable(p.db))) return;
+    const parents = await p.db.query(`SELECT DISTINCT j.id,j.state,j.kind,j.owner_id,j.workspace_id,
+        j.result->'assets'->>0 AS asset FROM job_tail_chains link
+      JOIN jobs j ON j.id=link.parent_job_id JOIN jobs child ON child.id=link.child_job_id
+      WHERE j.state IN ('completed','failed','cancelled') AND child.state='queued' AND child.deleted_at IS NULL
+        AND (j.plugin_id IS NULL OR child.plugin_id IS NULL) ORDER BY j.id LIMIT 16`);
+    for (const parent of parents.rows)
+      await wakeTailFrameChildren(
+        p,
+        { id: parent.id, workspace_id: parent.workspace_id, owner_id: parent.owner_id, kind: parent.kind },
+        parent.state,
+        parent.asset,
+        AbortSignal.timeout(30_000),
+      ).catch(() => {});
   }
   async recoverOn(sql: Sql, originalOnly = false) {
     const p = this.platform;
@@ -176,7 +194,7 @@ export class Executor {
             "UPDATE jobs SET state=$2,lease_token=NULL,lease_until=NULL WHERE id=$1",
             [job.id, job.receipt ? "finalizing" : "running"],
           );
-        else await interruptedImageSubmission(p,sql,job);
+        else await interruptedMediaSubmission(p, sql, job);
         continue;
       }
       const { manifest } = job;
@@ -665,7 +683,8 @@ export class Executor {
     }, 15000);
     try {
       if (job.source_kind === "builtin") {
-        await executeNativeImages(p, job, controller.signal, this.nativeHttp);
+        const execute = job.kind === "video" ? executeNativeVideos : executeNativeImages;
+        await execute(p, job, controller.signal, this.nativeHttp);
         return;
       }
       const plugin = await p.registry.resolve(

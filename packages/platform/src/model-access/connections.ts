@@ -1,3 +1,4 @@
+import { videoCapabilities } from "./video-parameters.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { publicAddressPause } from "../connection-address.js";
@@ -431,7 +432,7 @@ export async function resolveConnectionRevision(
         endpoint: Endpoint;
         method: "GET" | "POST";
         model?: string;
-        video_resource?: { id: string; content?: boolean };
+        video_resource?: { id: string; content?: boolean; index?: number };
         body?: string | Uint8Array;
         content_type?: string;
       },
@@ -482,6 +483,16 @@ export async function resolveConnectionRevision(
           "/" +
           encodeURIComponent(resource.id) +
           (resource.content ? "/content" : "");
+        if (resource.index !== undefined) {
+          requireValue(
+            resource.content &&
+              Number.isSafeInteger(resource.index) &&
+              resource.index >= 0,
+            400,
+            "视频内容索引无效",
+          );
+          path += "?index=" + resource.index;
+        }
       }
       requireValue(
         input.method === (directory || input.video_resource ? "GET" : "POST") &&
@@ -846,6 +857,10 @@ function draftSelection(
     const unconfirmed = new Set(declared.unconfirmed_parameters);
     parameters.names = declared.names.filter((name) => !unconfirmed.has(name));
   }
+  const effective: typeof parameters =
+    kind === "video" && protocol
+      ? videoCapabilities(protocol, parameters)
+      : parameters;
   const reasons: string[] = [];
   if (!kind) reasons.push("purpose");
   if (!protocol) reasons.push("protocol");
@@ -858,10 +873,15 @@ function draftSelection(
     reasons.push("price");
   if (
     kind === "video" &&
-    !parameters.durations?.length &&
-    !parameters.duration_range
+    !effective.durations?.length &&
+    !effective.duration_range
   )
     reasons.push("durations");
+  if (
+    effective.requires_first_frame &&
+    !effective.frame_images?.includes("first_frame")
+  )
+    reasons.push("first_frame");
   if (parameters.upscale_only) reasons.push("upscale_only");
   return {
     purpose: kind,
@@ -869,7 +889,7 @@ function draftSelection(
     chat_prices: prices ?? null,
     overrides: options,
     protocol,
-    parameters,
+    parameters: effective,
     status: reasons.length ? ("draft" as const) : ("ready" as const),
     missing: reasons,
   };
