@@ -307,6 +307,45 @@ test("episode receipt remains available when the renderer is down", async () => 
     await f.cleanup();
   }
 });
+test("a stalled renderer probe does not lock an existing export receipt", async () => {
+  const f = await fixture();
+  const enteredProbe = deferred();
+  const releaseProbe = deferred();
+  let probe: Promise<unknown> | undefined;
+  let replay: Promise<unknown> | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const request = { uid: randomUUID(), expected_revision: f.project.revision };
+    const accepted = await f.service.create(f.admin, f.project.id, request);
+    const slow = new OriginalStoryboardExports(f.p, [
+      {
+        ...originalStoryboard,
+        health: async () => {
+          enteredProbe.resolve();
+          await releaseProbe.promise;
+          return false;
+        },
+      },
+    ]);
+    probe = slow
+      .create(f.admin, f.project.id, { ...request, uid: randomUUID() })
+      .catch((error: unknown) => error);
+    await enteredProbe.promise;
+    replay = f.service.create(f.admin, f.project.id, request);
+    const timedOut = new Promise((_, reject) => {
+      deadline = setTimeout(
+        () => reject(new Error("renderer probe locked receipt lookup")),
+        5000,
+      );
+    });
+    assert.deepEqual(await Promise.race([replay, timedOut]), accepted);
+  } finally {
+    clearTimeout(deadline);
+    releaseProbe.resolve();
+    await Promise.allSettled([probe, replay]);
+    await f.cleanup();
+  }
+});
 test("episode exporter requires MP4 composition output", async () => {
   const f = await fixture();
   try {

@@ -138,35 +138,50 @@ export class OriginalStoryboardExports {
       };
     });
   }
+  private async existingReceipt(
+    sql: Sql,
+    ownerId: string,
+    projectId: string,
+    request: { uid: string; scope: ExportScope; exporter: string },
+  ) {
+    const old = await one(
+      sql,
+      "SELECT e.*,a.public_id AS result FROM storyboard_exports e LEFT JOIN assets a ON a.id=e.result_id WHERE e.owner_id=$1 AND e.uid=$2",
+      [ownerId, request.uid],
+    );
+    if (!old) return null;
+    const receipt = this.public(old);
+    requireValue(
+      old.project_id === projectId &&
+        receipt.scope === request.scope &&
+        receipt.exporter === request.exporter,
+      409,
+      "提交编号已使用",
+    );
+    return receipt;
+  }
   async create(user: Actor, key: string, value: unknown) {
     const body = parseBody(value, storyboardExportFields);
     const scope = body.scope as ExportScope;
     const isEpisode = scope === "episode";
+    const request = { uid: body.uid, scope, exporter: body.exporter };
+    const accepted = await this.p.db.transaction(async (sql) => {
+      const project = await this.canvases.project(sql, user, key);
+      return this.existingReceipt(sql, user.id, project.id, request);
+    });
+    if (accepted) return accepted;
+
+    // Probe external processes before acquiring the canvas and admission locks.
+    const rendererHealthy = await this.plugins.get("original-storyboard@1.0.0")?.health();
     return this.p.db.transaction(async (sql) => {
       const project = await this.canvases.project(sql, user, key, true);
       await sql.query(
         "SELECT pg_advisory_xact_lock(hashtextextended('storyboard-accept',0))",
       );
-      const old = await one(
-        sql,
-        "SELECT e.*,a.public_id AS result FROM storyboard_exports e LEFT JOIN assets a ON a.id=e.result_id WHERE e.owner_id=$1 AND e.uid=$2",
-        [user.id, body.uid],
-      );
-      if (old) {
-        requireValue(
-          old.project_id === project.id &&
-            old.scope === scope &&
-            (old.exporter_plugin
-              ? old.exporter_plugin + "/" + old.exporter_id
-              : "storyboard/mp4") === body.exporter,
-          409,
-          "提交编号已使用",
-        );
-        return this.public(old);
-      }
-      const renderer = this.plugins.get("original-storyboard@1.0.0");
+      const old = await this.existingReceipt(sql, user.id, project.id, request);
+      if (old) return old;
       requireValue(
-        renderer && (await renderer.health()),
+        rendererHealthy,
         503,
         "成片合成服务尚未配置，请联系管理员",
       );
