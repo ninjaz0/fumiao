@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdir } from "node:fs/promises";
-import { chromium, expect, type Page } from "@playwright/test";
+import { chromium, expect, type Browser, type Page } from "@playwright/test";
 
 // STUDIO_URL (origin without /studio), STUDIO_USER and STUDIO_PASSWORD point
 // the checks at a running Studio, such as a worktree's Docker environment.
@@ -784,6 +784,162 @@ async function checkCanvasList(page: Page) {
   await hideDevPortal(page);
 }
 
+async function checkHomeAndLogin(browser: Browser, origin: string) {
+  const context = await browser.newContext({
+    viewport: { width: 375, height: 667 },
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 1,
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto(origin + "/");
+    await hideDevPortal(page);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "首页无横向滚动");
+    const topRow = (await page.locator(".top-row").boundingBox())!;
+    assert.ok(topRow.height <= 60, "首页顶栏一行放下");
+    const ctas = await page.locator(".cta-row .button").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().width));
+    for (const w of ctas) assert.ok(w >= 375 - 32 - 1, "CTA 占满宽度");
+    const ctaHeights = await page.locator(".cta-row .button").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
+    for (const h of ctaHeights) assert.ok(Math.abs(h - 48) <= 1, `CTA 高度 48px: ${h}`);
+    await expect(page.locator(".stage")).toBeInViewport({ ratio: 0.05 });   // 首屏能看到示例画布上沿
+
+    // 功能卡片、步骤首行对齐与首页触控热区
+    const homeMetrics = await page.evaluate(() => {
+      const featureCards = [...document.querySelectorAll<HTMLElement>("#main .features > li")];
+      const cardsOk = featureCards.length === 4 && featureCards.every((li) => {
+        const s = getComputedStyle(li);
+        return (
+          s.borderRadius === "14px" &&
+          s.borderTopWidth === "1px" &&
+          s.borderRightWidth === "1px" &&
+          s.backgroundColor !== "rgba(0, 0, 0, 0)"
+        );
+      });
+      const stepRow = document.querySelector<HTMLElement>("#main .steps > li")!;
+      const stepNo = stepRow.querySelector<HTMLElement>(".step-no")!.getBoundingClientRect();
+      const stepTitle = stepRow.querySelector<HTMLElement>("h3")!.getBoundingClientRect();
+      const stepAligned = Math.abs(stepNo.top + stepNo.height / 2 - (stepTitle.top + stepTitle.height / 2)) <= 3;
+
+      const controls = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".top-row .brand, .top-actions button, .top-actions a, .cta-row .button, .foot .brand, .foot-links a",
+        ),
+      ].filter((e) => e.getClientRects().length > 0);
+      const smallHit = controls
+        .map((e) => {
+          const r = e.getBoundingClientRect();
+          const after = getComputedStyle(e, "::after");
+          const hasAfter = after.content !== "none" && after.content !== "normal";
+          const w = hasAfter ? r.width - (parseFloat(after.left) || 0) - (parseFloat(after.right) || 0) : r.width;
+          const h = hasAfter ? r.height - (parseFloat(after.top) || 0) - (parseFloat(after.bottom) || 0) : r.height;
+          return { tag: e.textContent?.trim() || e.getAttribute("aria-label") || e.tagName, w, h };
+        })
+        .filter((m) => m.w < 43.5 || m.h < 43.5);
+      return { cardsOk, stepAligned, smallHit };
+    });
+    assert.equal(homeMetrics.cardsOk, true, "首页功能列表改为 14px 圆角四边卡片");
+    assert.equal(homeMetrics.stepAligned, true, "步骤列表编号与正文标题首行对齐");
+    assert.deepEqual(homeMetrics.smallHit, [], `首页交互元素触控尺寸均 >= 44×44px: ${JSON.stringify(homeMetrics.smallHit)}`);
+
+    // 首页深色模式表面检查
+    await setTheme(page, "dark");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    const homeDarkCardBg = await page.evaluate(() =>
+      getComputedStyle(document.querySelector("#main .features > li")!).backgroundColor,
+    );
+    assert.notEqual(homeDarkCardBg, "rgb(255, 255, 255)", "深色下首页功能卡片不发白");
+    assert.notEqual(homeDarkCardBg, "rgba(0, 0, 0, 0)", "深色下首页功能卡片具有实体背景");
+    if (evidence) await page.screenshot({ path: `${evidence}/page-home-dark.png`, animations: "disabled" });
+    await setTheme(page, "light");
+    if (evidence) await page.screenshot({ path: `${evidence}/page-home.png`, animations: "disabled" });
+
+    // 320×568：覆盖 ≤380px 的顶栏规则与窄屏无横向滚动
+    await page.setViewportSize({ width: 320, height: 568 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "320×568 首页无横向滚动");
+    const narrowTopRow = (await page.locator(".top-row").boundingBox())!;
+    assert.ok(narrowTopRow.height <= 60, `320×568 首页顶栏一行放下: ${narrowTopRow.height}`);
+    await expect(page.locator(".top-actions .text-link.guest-only")).toBeHidden();
+
+    // 1440×900 桌面端首页保持原布局不变
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const desktopTopRow = (await page.locator(".top-row").boundingBox())!;
+    assert.ok(Math.abs(desktopTopRow.height - 64) <= 1, `桌面端首页顶栏保持 64px: ${desktopTopRow.height}`);
+    await expect(page.locator(".top-row .nav")).toBeVisible();
+    await page.setViewportSize({ width: 375, height: 667 });
+
+    // 登录与注册页检查
+    await page.goto(origin + "/studio#login");
+    await expect(page.getByRole("heading", { name: "登录工作台" })).toBeVisible();
+    await hideDevPortal(page);
+    await expect(page.locator('[name="user"]')).toHaveCSS("font-size", "16px");
+    await expect(page.locator('[name="user"]')).toHaveCSS("height", "48px");
+    await expect(page.locator('[name="pw"]')).toHaveCSS("font-size", "16px");
+    await expect(page.locator('[name="pw"]')).toHaveCSS("height", "48px");
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "登录无横向滚动");
+
+    const authMetrics = await page.evaluate(() => {
+      const wrap = document.querySelector<HTMLElement>(".auth-wrap")!;
+      const wrapStyle = getComputedStyle(wrap);
+      const art = document.querySelector<HTMLElement>(".auth-art")!.getBoundingClientRect();
+      const form = document.querySelector<HTMLElement>(".auth-form")!.getBoundingClientRect();
+      const controls = [
+        ...document.querySelectorAll<HTMLElement>(
+          '.auth .appearance, .auth .auth-home, .auth [data-act="toggle-password"], .auth-form .primary, #auth-switch',
+        ),
+      ];
+      const smallHit = controls
+        .map((e) => {
+          const r = e.getBoundingClientRect();
+          const after = getComputedStyle(e, "::after");
+          const hasAfter = after.content !== "none" && after.content !== "normal";
+          const w = hasAfter ? r.width - (parseFloat(after.left) || 0) - (parseFloat(after.right) || 0) : r.width;
+          const h = hasAfter ? r.height - (parseFloat(after.top) || 0) - (parseFloat(after.bottom) || 0) : r.height;
+          return { id: e.id || e.className, w, h };
+        })
+        .filter((m) => m.w < 43.5 || m.h < 43.5);
+      return {
+        borderTop: wrapStyle.borderTopWidth,
+        boxShadow: wrapStyle.boxShadow,
+        artHeight: art.height,
+        formLeft: form.left,
+        formWidth: form.width,
+        smallHit,
+      };
+    });
+    assert.equal(authMetrics.borderTop, "0px", "手机端登录卡片去掉边框");
+    assert.equal(authMetrics.boxShadow, "none", "手机端登录卡片去掉阴影");
+    assert.ok(authMetrics.artHeight <= 88, `登录品牌横幅高度 <= 88px: ${authMetrics.artHeight}`);
+    assert.ok(
+      Math.abs(authMetrics.formLeft - 16) <= 1 && Math.abs(authMetrics.formWidth - (375 - 32)) <= 1,
+      `登录表单左右留白 16px: left=${authMetrics.formLeft}, width=${authMetrics.formWidth}`,
+    );
+    assert.deepEqual(authMetrics.smallHit, [], `登录页交互元素触控尺寸均 >= 44×44px: ${JSON.stringify(authMetrics.smallHit)}`);
+
+    await setTheme(page, "dark");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    const authDarkBg = await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor);
+    assert.notEqual(authDarkBg, "rgb(255, 255, 255)", "深色下登录页背景不发白");
+    if (evidence) await page.screenshot({ path: `${evidence}/page-login-dark.png`, animations: "disabled" });
+    await setTheme(page, "light");
+    if (evidence) await page.screenshot({ path: `${evidence}/page-login.png`, animations: "disabled" });
+
+    // 1440×900 桌面端登录页保持双栏有边框卡片
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const desktopAuth = await page.evaluate(() => {
+      const wrap = document.querySelector<HTMLElement>(".auth-wrap")!;
+      return {
+        borderTop: getComputedStyle(wrap).borderTopWidth,
+        artHeight: document.querySelector<HTMLElement>(".auth-art")!.getBoundingClientRect().height,
+      };
+    });
+    assert.notEqual(desktopAuth.borderTop, "0px", "桌面端登录卡片保留边框");
+    assert.ok(desktopAuth.artHeight >= 400, `桌面端登录卡片保留双栏高度: ${desktopAuth.artHeight}`);
+  } finally {
+    await context.close();
+  }
+}
+
 const checks = [
   checkTabBar, checkDrawerClosesAfterNavigation, checkLongWorkspaceName,
   checkDockCollapseExpand, checkLongDraft, checkWidenClearsDock, checkPickingReturnsExpanded,
@@ -820,6 +976,8 @@ try {
     : [external!.replace(/\/+$/, ""), process.env.STUDIO_USER ?? "admin", process.env.STUDIO_PASSWORD ?? ""];
   if (evidence) await mkdir(evidence, { recursive: true });
   browser = await chromium.launch();
+  await checkHomeAndLogin(browser, origin);
+  console.log("checkHomeAndLogin: passed");
   const context = await browser.newContext({
     baseURL: origin, viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1,
   });
