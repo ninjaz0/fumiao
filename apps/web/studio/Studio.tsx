@@ -696,8 +696,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       return;
     }
     setReferencePicking(null);
+    // Closing the phone drawer returns focus to its opener for keyboard users.
+    const closeDrawer = () =>
+      changeSidebar(
+        true,
+        !!document.activeElement?.matches(".side :focus-visible"),
+      );
     if (destination === "canvas") {
-      if (mobileDrawerOpen) changeSidebar(true, false);
+      if (mobileDrawerOpen) closeDrawer();
       openCanvas();
       return;
     }
@@ -713,7 +719,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       else url.searchParams.delete("page");
       history.replaceState(history.state, "", url);
     }
-    if (mobileDrawerOpen) changeSidebar(true, false);
+    if (mobileDrawerOpen) closeDrawer();
     setPage(destination);
     scrollAfterRender.current = () => scrollTo({ top: 0, behavior: "instant" });
   }

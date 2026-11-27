@@ -32,6 +32,16 @@ async function checkDrawerClosesAfterNavigation(page: Page) {
   await expect(page.locator(".rail-backdrop")).toBeHidden();
   await expect(page.locator(".workspace")).toHaveJSProperty("inert", false);
   await expect(page.locator('.mobile-tabbar [data-tab="queue"]')).toHaveAttribute("aria-current", "page");
+  // Keyboard: choosing a page closes the drawer and returns focus to its opener.
+  const menu = page.getByRole("button", { name: "打开导航" });
+  await menu.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".side .collapse-button")).toBeFocused();
+  await page.locator('.side [data-nav="library"]').focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".rail-backdrop")).toBeHidden();
+  await expect(menu).toBeFocused();
+  await expect(page.locator('.mobile-tabbar [data-tab="library"]')).toHaveAttribute("aria-current", "page");
 }
 
 async function checkLongWorkspaceName(page: Page) {

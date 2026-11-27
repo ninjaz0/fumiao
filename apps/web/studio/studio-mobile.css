@@ -2,7 +2,9 @@
    drawer instead of the 64px icon rail. Loaded after studio-polish.css and
    overrides the fixed baseline studio.css; desktop is unchanged.
    The baseline stylesheet may load after this one, so rules that override
-   it start at #app to outrank it regardless of order. */
+   it start at #app to outrank it regardless of order.
+   Convention: selectors that override baseline studio.css rules need the
+   #app prefix; new class names (.mobile-*) and #view rules don't. */
 @media (max-width: 760px) {
   #app .shell {
     /* No rail on phones: fixed layers such as .detail-view and
