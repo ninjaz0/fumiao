@@ -18,6 +18,7 @@ import {
   chatRates,
   directoryLabels,
   formats,
+  groupRoutes,
   priceText,
   purposes,
   ratesOf,
@@ -361,7 +362,10 @@ export function PublicationCard({
     setPricing(false);
     await reload();
   }
-  const routes = [active, ...model.routes.filter((r) => r !== active)];
+  const groups = groupRoutes(model.routes, model.route_revision_id);
+  const routes = groups.flatMap(({ active, latest }) =>
+    active && active !== latest ? [active, latest] : [latest],
+  );
   return (
     <article className="ledger-card" id={"access-" + model.catalog_id}>
       <header className="access-card-head">
@@ -402,14 +406,19 @@ export function PublicationCard({
         <strong>当前线路</strong>　{name(active)} · {active.upstream_id}
       </p>
       <details open={startPricing || undefined}>
-        <summary>管理线路（{routes.length}）</summary>
+        <summary>管理线路（{groups.length}）</summary>
         {routes.map((r) => (
           <div className="access-route" key={r.route_revision_id}>
             <strong>
-              {r === active ? "当前线路" : "备用线路"} · {name(r)}
+              {r === active
+                ? "当前线路"
+                : r.draft_id === active.draft_id
+                  ? "待切换的新版本"
+                  : "备用线路"}{" "}
+              · {name(r)}
             </strong>
             <span>
-              {r.upstream_id} · 修订 {r.draft_revision}
+              {r.upstream_id} · 线路版本 {r.draft_revision}
               {!r.enabled && " · 已停接新单"}
             </span>
             <small>{capabilities(r)}</small>
@@ -474,7 +483,9 @@ export function PublicationCard({
             )}
             {switchTo?.route === r && (
               <div className="access-switch">
-                <strong>确认新请求使用 {name(r)}</strong>
+                <strong>
+                  确认新请求使用 {name(r)}（线路版本 {r.draft_revision}）
+                </strong>
                 <p>原线路能力 · {capabilities(active)}</p>
                 <p>新线路能力 · {capabilities(r)}</p>
                 <p>公开售价 · {priceText(model.price)}</p>

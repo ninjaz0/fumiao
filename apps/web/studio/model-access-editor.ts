@@ -196,3 +196,27 @@ export function sampleCost(r: Rates) {
   const s = sum.toString().padStart(13, "0");
   return (s.slice(0, -12) + "." + s.slice(-12)).replace(/\.?0+$/, "") || "0";
 }
+
+type RouteVersion = {
+  draft_id: string;
+  draft_revision: number;
+  route_revision_id: string;
+};
+
+/** Publication snapshots stay immutable; the switcher offers one latest version per source. */
+export function groupRoutes<T extends RouteVersion>(
+  routes: readonly T[],
+  activeId: string,
+) {
+  const groups = new Map<string, { active?: T; latest: T }>();
+  for (const route of routes) {
+    const group = groups.get(route.draft_id) ?? { latest: route };
+    if (route.draft_revision > group.latest.draft_revision)
+      group.latest = route;
+    if (route.route_revision_id === activeId) group.active = route;
+    groups.set(route.draft_id, group);
+  }
+  return [...groups.values()].sort(
+    (a, b) => Number(!!b.active) - Number(!!a.active),
+  );
+}

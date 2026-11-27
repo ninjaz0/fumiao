@@ -448,3 +448,31 @@ test("选中十个视频沿用一次指定的连接默认格式，保留单个�
     cache_write: null,
   });
 });
+
+test("管理线路按来源展示生效版和最新备选版，历史修订不再占用切换入口", async () => {
+  const editor = await import("../../apps/web/studio/model-access-editor.js");
+  const rows = [
+    { draft_id: "A", draft_revision: 1, route_revision_id: "A1" },
+    { draft_id: "B", draft_revision: 1, route_revision_id: "B1" },
+    { draft_id: "A", draft_revision: 3, route_revision_id: "A3" },
+    { draft_id: "B", draft_revision: 2, route_revision_id: "B2" },
+    { draft_id: "A", draft_revision: 2, route_revision_id: "A2" },
+  ];
+  assert.equal(typeof editor.groupRoutes, "function");
+  function displayed(active: string) {
+    return editor
+      .groupRoutes(rows, active)
+      .map(({ active, latest }) => [
+        active?.route_revision_id ?? null,
+        latest.route_revision_id,
+      ]);
+  }
+  assert.deepEqual(displayed("B2"), [
+    ["B2", "B2"],
+    [null, "A3"],
+  ]);
+  assert.deepEqual(displayed("A1"), [
+    ["A1", "A3"],
+    [null, "B2"],
+  ]);
+});
