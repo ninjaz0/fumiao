@@ -874,13 +874,11 @@ export function resolveOptionMenuFloatingRect(input: {
     top: number;
     bottom: number;
     left: number;
-    right: number;
     width: number;
   };
   windowWidth: number;
   windowHeight: number;
   preferredDirection?: "down" | "up";
-  align?: "left" | "right";
   menuWidth?: number;
   safeTop?: number;
   safeBottomMargin?: number;
@@ -903,12 +901,8 @@ export function resolveOptionMenuFloatingRect(input: {
   const maxHeight = Math.min(320, Math.max(96, available));
   const minWidth = Math.max(164, Math.round(input.triggerRect.width));
   const estWidth = Math.max(minWidth, Math.round(input.menuWidth ?? minWidth));
-  const desiredLeft =
-    input.align === "right"
-      ? input.triggerRect.right - estWidth
-      : input.triggerRect.left;
   const left = Math.round(
-    Math.max(8, Math.min(desiredLeft, input.windowWidth - estWidth - 8)),
+    Math.max(8, Math.min(input.triggerRect.left, input.windowWidth - estWidth - 8)),
   );
 
   if (direction === "up") {

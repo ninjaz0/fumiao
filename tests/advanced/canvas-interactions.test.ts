@@ -1099,11 +1099,10 @@ test("PR #223 Item 5: resolveCinePopoverPlacement considers both horizontal and 
   assert.equal(typeof typesMod.resolveOptionMenuFloatingRect, "function");
   // Upward menu ("光影" / "镜头" / "氛围") in floating CinematographyPanel on 1440x900 desktop stays fully within [safeTop, trigger.top - 5]
   const upwardDesktop = typesMod.resolveOptionMenuFloatingRect({
-    triggerRect: { top: 680, bottom: 714, left: 260, right: 410, width: 150 },
+    triggerRect: { top: 680, bottom: 714, left: 260, width: 150 },
     windowWidth: 1440,
     windowHeight: 900,
     preferredDirection: "up",
-    align: "right",
     menuWidth: 180,
   });
   assert.equal(upwardDesktop.direction, "up");
@@ -1113,23 +1112,26 @@ test("PR #223 Item 5: resolveCinePopoverPlacement considers both horizontal and 
       900 - upwardDesktop.bottom - upwardDesktop.maxHeight >= 8,
     "upward menu top edge must remain inside viewport",
   );
-  assert.ok(
-    typeof upwardDesktop.left === "number" &&
-      upwardDesktop.left >= 8 &&
-      upwardDesktop.left + 180 <= 1440 - 8,
-  );
+  assert.equal(upwardDesktop.left, 260);
 
   // When trigger is near viewport top (e.g. top-docked popover at y=110) and preferredDirection="up" lacks room, auto-flips to "down"!
   const flippedDown = typesMod.resolveOptionMenuFloatingRect({
-    triggerRect: { top: 110, bottom: 144, left: 100, right: 250, width: 150 },
+    triggerRect: { top: 110, bottom: 144, left: 100, width: 150 },
     windowWidth: 1280,
     windowHeight: 800,
     preferredDirection: "up",
-    align: "left",
   });
   assert.equal(flippedDown.direction, "down");
   assert.ok(typeof flippedDown.top === "number" && flippedDown.top >= 149);
   assert.equal(flippedDown.maxHeight, 320);
+
+  const atRightEdge = typesMod.resolveOptionMenuFloatingRect({
+    triggerRect: { top: 110, bottom: 144, left: 1130, width: 120 },
+    windowWidth: 1280,
+    windowHeight: 800,
+    menuWidth: 180,
+  });
+  assert.equal(atRightEdge.left, 1092);
 });
 
 test("PR #223 Item 7: reconcileCanvasRightDocks collapses docked panel when resizing across 1100px breakpoint", async () => {

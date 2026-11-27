@@ -20,7 +20,6 @@ export function OptionSelect<T extends string = string>({
   active = false,
   disabled = false,
   direction = "down",
-  align = "left",
   variant = "chip",
 }: {
   ariaLabel: string;
@@ -32,7 +31,6 @@ export function OptionSelect<T extends string = string>({
   active?: boolean;
   disabled?: boolean;
   direction?: "down" | "up";
-  align?: "left" | "right";
   variant?: "chip" | "field";
 }) {
   const [open, setOpen] = useState(false);
@@ -60,7 +58,6 @@ export function OptionSelect<T extends string = string>({
       windowWidth: window.innerWidth,
       windowHeight: window.innerHeight,
       preferredDirection: direction,
-      align,
       menuWidth: measuredWidth,
     });
     setResolvedDir(floating.direction);
@@ -73,7 +70,7 @@ export function OptionSelect<T extends string = string>({
       minWidth: floating.minWidth,
       maxHeight: floating.maxHeight,
     });
-  }, [align, direction]);
+  }, [direction]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -87,7 +84,6 @@ export function OptionSelect<T extends string = string>({
         windowWidth: window.innerWidth,
         windowHeight: window.innerHeight,
         preferredDirection: direction,
-        align,
         menuWidth: menuEl.offsetWidth || undefined,
       });
       menuEl.style.left = `${floating.left}px`;
@@ -119,7 +115,7 @@ export function OptionSelect<T extends string = string>({
         }
       }
     }
-  }, [open, options.length, align, direction, updateFloatingPosition]);
+  }, [open, options.length, direction, updateFloatingPosition]);
 
   useEffect(() => {
     if (!open) return;
@@ -226,7 +222,6 @@ export function OptionSelect<T extends string = string>({
     "fm-option-fixed",
     "fm-choice-menu",
     resolvedDir === "up" ? "fm-option-up" : "",
-    align === "right" ? "fm-option-right" : "",
   ]
     .filter(Boolean)
     .join(" ");

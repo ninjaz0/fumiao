@@ -848,6 +848,10 @@ export async function studioBrowser(
       "图片生成",
       "语音生成",
     ]);
+    const creationBox = await composerCreation.boundingBox();
+    const creationMenuBox = await composerPopover.boundingBox();
+    assert.ok(creationBox && creationMenuBox);
+    assert.ok(Math.abs(creationMenuBox.x - creationBox.x) <= 1);
     await expect(composerPopover.locator('[aria-selected="true"]')).not.toBeFocused();
     await page.keyboard.press("Escape");
     await expect(composerCreation).toBeFocused();

@@ -21,6 +21,7 @@ import {H3Prompt} from './H3Prompt';
 import {portableReferences,remapH3Prompt} from './h3References';
 import {H3Inputs,mediaType} from './H3Inputs';
 import * as FlowPicker from './flowPicker';
+import { alignChoiceMenuToTrigger } from "./choice-menu-position";
 import {
   ReactFlow,
   Handle,
@@ -4512,6 +4513,7 @@ export function CanvasWorkspace({
               </button>
               {menu === "duration" && (
                 <div
+                  ref={alignChoiceMenuToTrigger}
                   className="cv-menu duration-menu fm-choice-menu"
                   role="group"
                   aria-label={single.type === "image" ? "图片质量" : "视频时长"}
@@ -4613,7 +4615,7 @@ export function CanvasWorkspace({
               <button className={'parameter ' + (menu === 'candidates' ? 'active' : '')}
                 aria-label="候选数量" aria-expanded={menu === 'candidates'}
                 onClick={() => setMenu(menu === 'candidates' ? null : 'candidates')}>{candidateCount} 个<ChevronDown size={13} /></button>
-              {menu === 'candidates' && <div className="cv-menu duration-menu candidate-menu fm-choice-menu" role="group" aria-label="候选数量">
+              {menu === 'candidates' && <div ref={alignChoiceMenuToTrigger} className="cv-menu duration-menu candidate-menu fm-choice-menu" role="group" aria-label="候选数量">
                 {([1, 2] as const).map(count => <button key={count} aria-pressed={candidateCount === count}
                   onClick={() => {setCandidateCount(count); setMenu(null);}}><span>{count} 个候选</span>{candidateCount === count && <Check size={16} aria-hidden="true" />}</button>)}
               </div>}

@@ -10,6 +10,11 @@ html :is(.cv-menu, .fm-chat-model-menu).fm-choice-menu {
   border-radius: 16px;
 }
 
+html :is(.cv-menu.duration-menu, .fm-chat-model-menu).fm-choice-menu {
+  left: var(--choice-menu-shift, 0px);
+  right: auto;
+}
+
 html .fm-choice-menu[role] > button {
   display: flex;
   align-items: center;

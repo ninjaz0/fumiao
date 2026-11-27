@@ -294,7 +294,12 @@ test(
       await expect(lightingListbox).toBeVisible();
       const popBox = await page.locator(".fm-cine-popover").boundingBox();
       const upMenuBox = await lightingListbox.boundingBox();
-      assert.ok(popBox && upMenuBox);
+      const lightingButtonBox = await lightingBtn.boundingBox();
+      assert.ok(popBox && upMenuBox && lightingButtonBox);
+      assert.ok(
+        Math.abs(upMenuBox.x - lightingButtonBox.x) <= 1,
+        "the dropdown and the right-column trigger have the same left edge",
+      );
       assert.ok(
         upMenuBox.y < popBox.y,
         `Upward menu (${upMenuBox.y}) must extend above .fm-cine-popover top (${popBox.y}) without clipping`,

@@ -1,5 +1,6 @@
 import {useEffect,useId,useRef,useState} from 'react';
 import {Box,Check,ChevronDown} from 'lucide-react';
+import {alignChoiceMenuToTrigger} from '../choice-menu-position';
 
 export function ModelSelect({models,value,onChange,disabled}:{models:Record<string,{label:string}>;value:string;onChange:(value:string)=>void;disabled:boolean}){
  const [open,setOpen]=useState(false),root=useRef<HTMLDivElement>(null),trigger=useRef<HTMLButtonElement>(null),id=useId();
@@ -19,7 +20,7 @@ export function ModelSelect({models,value,onChange,disabled}:{models:Record<stri
  },[open]);
  return <div ref={root} className="fm-chat-model" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setOpen(false)}}>
   <button ref={trigger} type="button" className="fm-chat-model-trigger" aria-label={'对话模型：'+(models[value]?.label||'无模型')} aria-haspopup="listbox" aria-expanded={open} aria-controls={open?id:undefined} disabled={unavailable} onClick={e=>{keyboardOpen.current=e.detail===0;setOpen(!open)}} onKeyDown={e=>{if(['ArrowDown','ArrowUp'].includes(e.key)){e.preventDefault();keyboardOpen.current=true;setOpen(true)}}}><Box size={15}/><span>{models[value]?.label||'无模型'}</span><ChevronDown size={14}/></button>
-  {open&&<div id={id} className="fm-chat-model-menu fm-choice-menu" role="listbox" aria-label="对话模型" tabIndex={-1} onKeyDown={e=>{
+  {open&&<div ref={alignChoiceMenuToTrigger} id={id} className="fm-chat-model-menu fm-choice-menu" role="listbox" aria-label="对话模型" tabIndex={-1} onKeyDown={e=>{
    if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close(true);return}
    const options=Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]')),index=options.indexOf(document.activeElement as HTMLButtonElement);
    const next=e.key==='ArrowDown'?(index+1)%options.length:e.key==='ArrowUp'?((index<0?0:index)-1+options.length)%options.length:e.key==='Home'?0:e.key==='End'?options.length-1:-1;

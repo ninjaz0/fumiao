@@ -571,8 +571,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     if (!trigger?.isConnected || !element) return;
     const box = trigger.getBoundingClientRect();
     const beside = trigger.dataset.menu === "workspaces" && innerWidth > 760;
+    const choiceOffset = element.querySelector(".fm-choice-menu") ? 0 : 16;
     const left = Math.min(
-      Math.max(12, beside ? box.right + 12 : box.left - 16),
+      Math.max(12, beside ? box.right + 12 : box.left - choiceOffset),
       innerWidth - element.offsetWidth - 12,
     );
     let top = beside ? box.top : box.bottom + 8;

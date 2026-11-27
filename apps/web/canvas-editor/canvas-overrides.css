@@ -657,10 +657,6 @@ button[aria-expanded="true"] > .fm-ui-chevron {
   top: auto;
   bottom: calc(100% + 5px);
 }
-.cv-menu.fm-option-menu.fm-option-right {
-  left: auto;
-  right: 0;
-}
 .fm-cine-panel {
   display: grid;
   gap: 10px;
@@ -814,29 +810,9 @@ button[aria-expanded="true"] > .fm-ui-chevron {
 .fm-cine-field {
   min-width: 0;
 }
-.fm-cine-grid > .fm-cine-field:nth-child(3n) .cv-menu.fm-option-menu:not(.fm-option-fixed) {
-  left: auto;
-  right: 0;
-}
-.fm-cine-popover .fm-cine-grid > .fm-cine-field:nth-child(3n) .cv-menu.fm-option-menu:not(.fm-option-fixed) {
-  left: 0;
-  right: auto;
-}
-.fm-cine-popover .fm-cine-grid > .fm-cine-field:nth-child(2n) .cv-menu.fm-option-menu:not(.fm-option-fixed) {
-  left: auto;
-  right: 0;
-}
 @media (max-width: 520px) {
   .fm-cine-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .fm-cine-grid > .fm-cine-field:nth-child(3n) .cv-menu.fm-option-menu:not(.fm-option-fixed) {
-    left: 0;
-    right: auto;
-  }
-  .fm-cine-grid > .fm-cine-field:nth-child(2n) .cv-menu.fm-option-menu:not(.fm-option-fixed) {
-    left: auto;
-    right: 0;
   }
 }
 .fm-cine-trigger {
