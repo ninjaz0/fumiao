@@ -351,31 +351,7 @@
 .side :is(.nav-label, .brand > span) {
   transition: opacity var(--motion-feedback) var(--motion-ease);
 }
-
-@media (max-width: 760px) {
-  .shell > .rail-backdrop {
-    position: fixed;
-    inset: 0 0 0 64px;
-    z-index: 19;
-    background: rgb(0 0 0 / 22%);
-    opacity: 0;
-    pointer-events: none;
-    transition:
-      opacity var(--motion-exit) var(--motion-ease),
-      display var(--motion-exit) allow-discrete;
-  }
-  .shell:not(.collapsed) > .rail-backdrop {
-    inset-inline-start: 64px;
-    opacity: 1;
-    pointer-events: auto;
-    transition-duration: var(--motion-feedback);
-  }
-  @starting-style {
-    .shell:not(.collapsed) > .rail-backdrop {
-      opacity: 0;
-    }
-  }
-}
+/* The phone drawer and its backdrop live in studio-mobile.css. */
 
 #popover.popover {
   opacity: 0;

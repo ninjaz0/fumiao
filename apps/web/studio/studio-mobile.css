@@ -1,0 +1,243 @@
+/* Phone workspace shell (≤760px): top bar, bottom tab bar and an off-canvas
+   drawer instead of the 64px icon rail. Loaded after studio-polish.css and
+   overrides the fixed baseline studio.css; desktop is unchanged.
+   The baseline stylesheet may load after this one, so rules that override
+   it start at #app to outrank it regardless of order. */
+@media (max-width: 760px) {
+  #app .shell {
+    /* No rail on phones: fixed layers such as .detail-view and
+       .floating-composer start at the left edge. */
+    --rail: 0px;
+    --mobile-gutter: 16px;
+    --mobile-topbar-height: 52px;
+    --mobile-tabbar-height: 56px;
+    --mobile-title-size: 20px;
+    --mobile-section-size: 15px;
+    --mobile-body-size: 14px;
+    --mobile-input-size: 16px;
+    --mobile-card-radius: 14px;
+    --mobile-panel-radius: 20px;
+    --mobile-touch-size: 44px;
+    --mobile-drawer-width: min(280px, 86vw);
+  }
+  #app .workspace {
+    margin-left: 0;
+  }
+  /* The baseline header is empty; the phone top bar replaces it. */
+  #app .topbar {
+    display: none;
+  }
+
+  /* Drawer: slides in over the page and leaves the screen when closed. */
+  #app .shell .side {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: var(--mobile-drawer-width);
+    min-width: 0;
+    height: 100dvh;
+    padding: calc(20px + env(safe-area-inset-top)) 12px
+      calc(12px + env(safe-area-inset-bottom));
+    background: var(--side);
+    transform: none;
+    visibility: visible;
+    transition:
+      transform var(--motion-enter) var(--motion-ease),
+      visibility 0s;
+  }
+  #app .shell.collapsed .side {
+    background: var(--side);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition:
+      transform var(--motion-exit) var(--motion-ease),
+      visibility 0s var(--motion-exit);
+  }
+  /* Keep the drawer looking open while it slides away; the rail's collapsed
+     styles would otherwise hide its labels first. */
+  #app .shell.collapsed .side * {
+    visibility: inherit;
+  }
+  #app .shell.collapsed .side :is(.nav-label, .brand > span) {
+    opacity: 1;
+  }
+  #app .shell > .rail-backdrop {
+    position: fixed;
+    inset: 0 0 0 var(--mobile-drawer-width);
+    z-index: 19;
+    background: rgb(0 0 0 / 22%);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity var(--motion-exit) var(--motion-ease),
+      display var(--motion-exit) allow-discrete;
+  }
+  #app .shell:not(.collapsed) > .rail-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+    transition-duration: var(--motion-enter);
+  }
+  @starting-style {
+    #app .shell:not(.collapsed) > .rail-backdrop {
+      opacity: 0;
+    }
+  }
+
+  /* Top bar. */
+  .mobile-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 11;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: calc(var(--mobile-topbar-height) + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 4px 0;
+    background: var(--pop);
+    border-bottom: 1px solid var(--line);
+  }
+  .mobile-menu-button,
+  .mobile-account {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: var(--mobile-touch-size);
+    height: var(--mobile-touch-size);
+    border-radius: 12px;
+    color: var(--text);
+  }
+  .mobile-account {
+    margin-left: auto;
+  }
+  .mobile-brand {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    margin-right: 4px;
+  }
+  .mobile-workspace-switch {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+    max-width: max-content;
+    height: 36px;
+    padding: 0 10px 0 4px;
+    border-radius: 18px;
+    background: var(--hover);
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--text);
+    text-align: left;
+  }
+  /* 44px touch target around the 36px pill. */
+  .mobile-workspace-switch::after {
+    content: "";
+    position: absolute;
+    inset: -4px 0;
+  }
+  .mobile-workspace-switch[aria-expanded="true"] {
+    background: var(--selected);
+  }
+  .mobile-workspace-switch .space-badge {
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    font-size: 13px;
+  }
+  .mobile-workspace-switch .space-badge .icon {
+    width: 16px;
+    height: 16px;
+  }
+  .mobile-workspace-switch .space-button-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--mobile-body-size);
+    font-weight: 550;
+  }
+  .mobile-workspace-switch .chevron {
+    color: var(--secondary);
+  }
+
+  /* Bottom tab bar. */
+  .mobile-tabbar {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 15;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    height: calc(var(--mobile-tabbar-height) + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+    background: var(--pop);
+    border-top: 1px solid var(--line);
+  }
+  .mobile-tabbar[hidden] {
+    display: none;
+  }
+  .mobile-tabbar button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
+    min-height: var(--mobile-touch-size);
+    color: var(--secondary);
+    font-size: 11px;
+    line-height: 1.2;
+  }
+  .mobile-tabbar button .icon {
+    width: 22px;
+    height: 22px;
+  }
+  .mobile-tabbar button[aria-current="page"] {
+    color: var(--focus);
+    font-weight: 550;
+  }
+
+  /* Page content clears the bottom bar (Task 2 measures the dock). */
+  #view {
+    padding-bottom: calc(
+      var(--mobile-dock-height, var(--mobile-tabbar-height)) +
+        env(safe-area-inset-bottom) + 16px
+    );
+  }
+  /* Sticky page headers stop below the top bar. */
+  #app .assets-view .asset-top,
+  #app .ledger-settings .settings-title {
+    top: calc(var(--mobile-topbar-height) + env(safe-area-inset-top));
+  }
+  /* Full-screen details cover the top bar; they have their own back button. */
+  #app .detail-view {
+    z-index: 12;
+  }
+  /* The asset page's floating composer sits above the tab bar. */
+  .shell:has(> .mobile-tabbar:not([hidden])) .floating-composer {
+    bottom: calc(var(--mobile-tabbar-height) + env(safe-area-inset-bottom) + 12px);
+  }
+  /* Chat fills the space between the bars instead of the whole viewport. */
+  .workspace:has(#chat-root) .fm-chat {
+    height: calc(
+      100dvh - var(--mobile-topbar-height) - env(safe-area-inset-top) -
+        var(--mobile-tabbar-height) - env(safe-area-inset-bottom)
+    );
+  }
+  .shell:has(> .mobile-tabbar[hidden]) .workspace:has(#chat-root) .fm-chat {
+    height: calc(
+      var(--visual-viewport-height, 100dvh) - var(--mobile-topbar-height) -
+        env(safe-area-inset-top)
+    );
+  }
+}
+
+/* Safety net: the phone chrome never shows on wider screens. */
+@media (min-width: 761px) {
+  .mobile-topbar,
+  .mobile-tabbar {
+    display: none;
+  }
+}

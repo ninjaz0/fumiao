@@ -96,14 +96,14 @@ try {
 
   const preview = page.locator("#library-grid .asset-preview");
   const showAssets = async () => {
-    await page.locator('nav [data-nav="library"]').tap();
+    await page.locator('.mobile-tabbar [data-tab="library"]').tap();
     await expect(page.getByRole("tab", { name: "视频", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(preview).toHaveCount(1);
     await expect(preview.locator("video")).toHaveAttribute("src", source);
     await expect.poll(() => preview.locator("video").evaluate((video: HTMLVideoElement) => video.readyState)).toBeGreaterThan(1);
     await page.evaluate(() => scrollTo(0, 0));
   };
-  const home = page.locator('nav [data-nav="home"]');
+  const home = page.locator('.mobile-tabbar [data-tab="home"]');
   const homePrompt = page.locator("#home-composer .prompt");
   const sizes = [{ width: 375, height: 667 }, { width: 320, height: 568 }, { width: 390, height: 844 }];
   const failures: string[] = [];

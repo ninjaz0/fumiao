@@ -47,6 +47,7 @@ import {
 } from "./ComposerMenu";
 import { History, Queue, kindLabel } from "./History";
 import { Icon } from "./Icon";
+import { MobileTabBar, MobileTopBar } from "./MobileChrome";
 import {
   HistoryHeading,
   MenuContents,
@@ -100,7 +101,9 @@ import {
   type StudioState,
 } from "./state";
 import { reducedMotion, scrollMotion } from "../app/motion";
+import { useSoftKeyboard } from "./use-soft-keyboard";
 import "./studio-polish.css";
+import "./studio-mobile.css";
 
 type Page = Exclude<Destination, "canvas"> | "settings";
 type Detail = { job: number } | { image: string };
@@ -233,6 +236,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     return () => clearInterval(clock);
   }, [showsJobTimes]);
   const mobileDrawerOpen = narrowScreen && !collapsed;
+  const keyboardOpen = useSoftKeyboard();
   const sidebarPopoverOpen =
     !menuHidden &&
     !!anchor.current &&
@@ -693,6 +697,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     }
     setReferencePicking(null);
     if (destination === "canvas") {
+      if (mobileDrawerOpen) changeSidebar(true, false);
       openCanvas();
       return;
     }
@@ -708,6 +713,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       else url.searchParams.delete("page");
       history.replaceState(history.state, "", url);
     }
+    if (mobileDrawerOpen) changeSidebar(true, false);
     setPage(destination);
     scrollAfterRender.current = () => scrollTo({ top: 0, behavior: "instant" });
   }
@@ -810,7 +816,11 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       requestAnimationFrame(() =>
         shell.current
           ?.querySelector<HTMLButtonElement>(
-            nextCollapsed ? ".expand-button" : ".collapse-button",
+            !nextCollapsed
+              ? ".collapse-button"
+              : narrowScreen
+                ? ".mobile-menu-button"
+                : ".expand-button",
           )
           ?.focus({ preventScroll: true }),
       );
@@ -1738,6 +1748,15 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             />
             <div className="workspace" inert={mobileDrawerOpen}>
               <header className="topbar" aria-hidden="true"></header>
+              {narrowScreen && (
+                <MobileTopBar
+                  state={state}
+                  menu={menuShown && menu && !isComposerMenu(menu) ? menu : null}
+                  drawerOpen={mobileDrawerOpen}
+                  openDrawer={collapse}
+                  open={openMenu}
+                />
+              )}
               <main id="view" ref={view}>
                 {job ? (
                   <JobDetail
@@ -1939,6 +1958,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
                 )}
               </main>
             </div>
+            {narrowScreen && (
+              <MobileTabBar
+                page={page}
+                hidden={!!detail || keyboardOpen || !!referencePicking}
+                inert={mobileDrawerOpen}
+                navigate={navigate}
+              />
+            )}
           </div>
         ) : (
           <main
