@@ -497,8 +497,8 @@ export class OriginalSeries {
             : "";
         const notes = [
           series.synopsis ? `剧集梗概：${series.synopsis}` : "",
-          bibleText ? `世界观与设定：${bibleText}` : "",
           body.summary?.trim() ? `分场梗概：${body.summary.trim()}` : "",
+          bibleText ? `世界观与设定：${bibleText}` : "",
         ]
           .filter(Boolean)
           .join("\n\n");

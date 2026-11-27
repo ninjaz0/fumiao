@@ -14,6 +14,21 @@ function formatYamlScalar(value: unknown): string {
   return str;
 }
 
+function canFormatInlineYamlList(items: unknown[]): items is string[] {
+  return (
+    items.length > 0 &&
+    items.every(
+      (item) =>
+        typeof item === "string" &&
+        item.length > 0 &&
+        item === item.trim() &&
+        item !== "true" &&
+        item !== "false" &&
+        !/[:#\[\]\{\},"'\r\n]/.test(item),
+    )
+  );
+}
+
 function normalizeFrontmatterName(
   rawName: unknown,
   fallbackSlug: string,
@@ -78,6 +93,8 @@ export function serializeSkillMarkdown(skill: {
     if (Array.isArray(val)) {
       if (val.length === 0) {
         lines.push(`${key}: []`);
+      } else if (canFormatInlineYamlList(val)) {
+        lines.push(`${key}: [${val.join(",")}]`);
       } else {
         lines.push(`${key}:`);
         for (const item of val) {

@@ -603,6 +603,89 @@ test("PR #223 Item 9: SkillEditorCard states 64 KiB SKILL.md and 256 KiB ZIP lim
     assert.equal(savedCleared.body_md, "Body after cleared summary");
     assert.equal(savedCleared.frontmatter.description, undefined);
     assert.deepEqual(savedCleared.frontmatter.aliases, ["retained"]);
+
+    // Near 64 KiB round-trip: valid 65,521-byte SKILL.md with inline list must stay <= 64 KiB on body-only edit
+    const nearLimitRawMd =
+      "---\nname: Sample\nslug: sample\naliases: [a,b,c,d,e]\n---\n\n" +
+      "x".repeat(65465);
+    assert.equal(Buffer.byteLength(nearLimitRawMd, "utf8"), 65521);
+    const nearLimitCreated = await skills.create(
+      f.admin,
+      { enabled: true, raw_md: nearLimitRawMd },
+      ws,
+    );
+    const nearLimitSerialized = serializeSkillMarkdown(nearLimitCreated);
+    assert.equal(Buffer.byteLength(nearLimitSerialized, "utf8"), 65521);
+    assert.match(nearLimitSerialized, /^aliases: \[a,b,c,d,e\]$/m);
+    const nearLimitEdited = nearLimitSerialized.replace("\n\nx", "\n\ny");
+    const nearLimitSaved = await skills.update(f.admin, nearLimitCreated.id, {
+      expected_revision: nearLimitCreated.revision,
+      raw_md: nearLimitEdited,
+    });
+    assert.equal(nearLimitSaved.name, "Sample");
+    assert.equal(nearLimitSaved.slug, "sample");
+    assert.deepEqual(nearLimitSaved.frontmatter.aliases, [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+    ]);
+    assert.equal(nearLimitSaved.body_md.length, 65465);
+    assert.ok(nearLimitSaved.body_md.startsWith("yx"));
+
+    // True > 64 KiB input must still be rejected (both >65536 chars via parseBody and >65536 UTF-8 bytes via parseSkillMarkdown)
+    await assert.rejects(() =>
+      skills.update(f.admin, nearLimitCreated.id, {
+        expected_revision: nearLimitSaved.revision,
+        raw_md: nearLimitEdited + "x".repeat(20),
+      }),
+    );
+    await assert.rejects(
+      () =>
+        skills.update(f.admin, nearLimitCreated.id, {
+          expected_revision: nearLimitSaved.revision,
+          raw_md: nearLimitEdited.slice(0, -10) + "中".repeat(10),
+        }),
+      /64 KiB/,
+    );
+
+    // Lists containing commas, quotes, empty strings, or outer spaces must stay in block form for lossless round-trip
+    const unsafeListCreated = await skills.create(
+      f.admin,
+      {
+        enabled: true,
+        raw_md: [
+          "---",
+          "name: Unsafe List Check",
+          "slug: unsafe-list-check",
+          "aliases:",
+          '  - "a,b"',
+          '  - "\\"double\\""',
+          '  - "\'single\'"',
+          '  - ""',
+          '  - " padded "',
+          "---",
+          "",
+          "初始规则。",
+        ].join("\n"),
+      },
+      ws,
+    );
+    const unsafeSerialized = serializeSkillMarkdown(unsafeListCreated);
+    assert.doesNotMatch(unsafeSerialized, /^aliases: \[/m);
+    const unsafeSaved = await skills.update(f.admin, unsafeListCreated.id, {
+      expected_revision: unsafeListCreated.revision,
+      raw_md: unsafeSerialized.replace("初始规则。", "更新后规则。"),
+    });
+    assert.deepEqual(unsafeSaved.frontmatter.aliases, [
+      "a,b",
+      '"double"',
+      "'single'",
+      "",
+      " padded ",
+    ]);
+    assert.equal(unsafeSaved.body_md, "更新后规则。");
   } finally {
     await f.cleanup();
   }

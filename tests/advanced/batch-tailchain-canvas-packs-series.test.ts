@@ -1272,4 +1272,41 @@ test("PR #223 Item 3: Standalone scene canvas includes series.bible worldbuildin
   ) as { text?: string } | undefined;
   assert.ok(stickyB, "standalone scene canvas must contain a sticky note for structured bible");
   assert.match(stickyB.text ?? "", /生物荧光冷蓝/);
+
+  // Case C: Long series.bible must not push scene summary past the 11,000-char sticky note cap
+  const longBibleSeries = await seriesSvc.create(
+    f.admin,
+    {
+      title: "长设定剧集",
+      synopsis: "全剧主线：海底遗迹争夺",
+      bible: { notes: "setting ".repeat(1450) },
+    },
+    wsPublicId,
+  );
+  const epC = await seriesSvc.createEpisode(f.admin, longBibleSeries.id, {
+    season_no: 1,
+    episode_no: 1,
+    title: "序幕",
+  });
+  const scC = await seriesSvc.createScene(f.admin, longBibleSeries.id, epC.id, {
+    scene_no: 1,
+    title: "遗迹入口",
+    summary: "Important scene synopsis",
+    create_canvas: true,
+  });
+  assert.ok(scC.canvas_id);
+  const canvasC = await f.canvases.get(f.admin, scC.canvas_id!);
+  const stickyC = canvasC.document.nodes.find(
+    (n: { type?: string }) => n.type === "sticky",
+  ) as { text?: string } | undefined;
+  assert.ok(stickyC, "standalone scene canvas must contain scene-brief sticky note");
+  const stickyCText = stickyC.text ?? "";
+  assert.equal(stickyCText.length, 11000);
+  assert.match(stickyCText, /剧集梗概：全剧主线：海底遗迹争夺/);
+  assert.match(stickyCText, /分场梗概：Important scene synopsis/);
+  assert.match(stickyCText, /世界观与设定：setting setting /);
+  assert.ok(
+    stickyCText.indexOf("分场梗概：") < stickyCText.indexOf("世界观与设定："),
+    "scene summary must precede worldbuilding so long bible notes never truncate scene synopsis",
+  );
 });
