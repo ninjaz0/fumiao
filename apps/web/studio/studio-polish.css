@@ -377,6 +377,15 @@
   }
 }
 
+#popover.popover:has(.fm-choice-menu) {
+  width: 184px;
+  padding: 6px;
+}
+
+#popover.popover:has(.fm-choice-menu):focus {
+  outline: none;
+}
+
 #popover.popover {
   opacity: 0;
   transform: none;

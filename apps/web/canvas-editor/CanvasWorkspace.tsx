@@ -4511,16 +4511,22 @@ export function CanvasWorkspace({
                 <ChevronDown size={13} />
               </button>
               {menu === "duration" && (
-                <div className="cv-menu duration-menu">
+                <div
+                  className="cv-menu duration-menu fm-choice-menu"
+                  role="group"
+                  aria-label={single.type === "image" ? "图片质量" : "视频时长"}
+                >
                   {(single.type === "image"
                     ? fields?.image_quality?.enum ?? []
                     : flowParameters?.seconds ?? fields?.seconds?.enum ?? []
                   ).map((v) => {
                     const durField = single.type === "image" ? "image_quality" : "seconds";
                     const durDisabledReason = formConstraints?.fields[durField]?.disabledOptions[JSON.stringify(v)];
+                    const selected = single.params[durField] === v;
                     return (
                     <button
                       key={String(v)}
+                      aria-pressed={selected}
                       disabled={Boolean(durDisabledReason)}
                       title={durDisabledReason}
                       onClick={() => {
@@ -4532,14 +4538,12 @@ export function CanvasWorkspace({
                         setMenu(null);
                       }}
                     >
-                      {single.type === "image"
+                      <span>{single.type === "image"
                         ? { low: "草稿", medium: "标准", high: "高清" }[
                             v as "low"
                           ]
-                        : v + "s"}
-                      {(single.type === "image"
-                        ? single.params.image_quality
-                        : single.params.seconds) === v && <Check size={14} />}
+                        : v + "s"}</span>
+                      {selected && <Check size={14} aria-hidden="true" />}
                     </button>
                     );
                   })}
@@ -4609,9 +4613,9 @@ export function CanvasWorkspace({
               <button className={'parameter ' + (menu === 'candidates' ? 'active' : '')}
                 aria-label="候选数量" aria-expanded={menu === 'candidates'}
                 onClick={() => setMenu(menu === 'candidates' ? null : 'candidates')}>{candidateCount} 个<ChevronDown size={13} /></button>
-              {menu === 'candidates' && <div className="cv-menu duration-menu candidate-menu" role="group" aria-label="候选数量">
+              {menu === 'candidates' && <div className="cv-menu duration-menu candidate-menu fm-choice-menu" role="group" aria-label="候选数量">
                 {([1, 2] as const).map(count => <button key={count} aria-pressed={candidateCount === count}
-                  onClick={() => {setCandidateCount(count); setMenu(null);}}><span>{count} 个候选</span>{candidateCount === count && <Check size={16} />}</button>)}
+                  onClick={() => {setCandidateCount(count); setMenu(null);}}><span>{count} 个候选</span>{candidateCount === count && <Check size={16} aria-hidden="true" />}</button>)}
               </div>}
             </div>
             <span className="canvas-credit" aria-label={!selectedModel?'':creditPrice==null?'未定价':`${candidateCost} 积分${creditAvailable?'':'，余额不足'}`} title={`当前空间可用 ${studio.credits.available} 积分${creditPrice!=null && !creditAvailable?'，余额不足':''}`}>

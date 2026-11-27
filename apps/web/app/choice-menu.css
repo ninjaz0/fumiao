@@ -1,0 +1,63 @@
+html .fm-choice-menu[role] {
+  display: grid;
+  grid-auto-rows: max-content;
+  gap: 2px;
+}
+
+html :is(.cv-menu, .fm-chat-model-menu).fm-choice-menu {
+  padding: 6px;
+  border: 0.5px solid var(--pack-line, var(--cv-line, var(--line)));
+  border-radius: 16px;
+}
+
+html .fm-choice-menu[role] > button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  color: inherit;
+  font-size: 14px;
+  text-align: start;
+}
+
+html .fm-choice-menu[role] > button > span {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+
+html .fm-choice-menu[role] > button > svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+html .fm-choice-menu[role] > button:not([aria-selected="true"], [aria-pressed="true"])::after {
+  content: "";
+  flex: 0 0 18px;
+}
+
+html .fm-choice-menu[role] > button:not(:disabled):hover {
+  background: var(--hover, var(--cv-hover, var(--chat-selected)));
+}
+
+html .fm-choice-menu[role] > button:is([aria-selected="true"], [aria-pressed="true"]) {
+  background: var(--selected, var(--cv-selected, var(--chat-selected)));
+}
+
+html .fm-choice-menu[role]:focus {
+  outline: none;
+}
+
+html .fm-choice-menu[role] > button:focus-visible {
+  outline: 2px solid var(--focus, var(--cv-focus, var(--chat-focus, currentColor)));
+  outline-offset: -2px;
+}

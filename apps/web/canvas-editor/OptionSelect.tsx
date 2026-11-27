@@ -42,6 +42,7 @@ export function OptionSelect<T extends string = string>({
   const wrapRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const keyboardOpen = useRef(false);
 
   useEffect(() => {
     if (disabled) setOpen(false);
@@ -140,15 +141,18 @@ export function OptionSelect<T extends string = string>({
     document.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("resize", updateFloatingPosition);
     window.addEventListener("scroll", handleScroll, true);
-    (
-      menuRef.current?.querySelector<HTMLButtonElement>(
-        '[aria-selected="true"]:not(:disabled)',
-      ) ||
-      menuRef.current?.querySelector<HTMLButtonElement>(
-        '[role="option"]:not(:disabled)',
-      ) ||
-      menuRef.current
-    )?.focus();
+    const menu = menuRef.current;
+    if (keyboardOpen.current) {
+      (
+        menu?.querySelector<HTMLButtonElement>(
+          '[aria-selected="true"]:not(:disabled)',
+        ) ??
+        menu?.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled)') ??
+        menu
+      )?.focus();
+    } else {
+      menu?.focus({ preventScroll: true });
+    }
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("resize", updateFloatingPosition);
@@ -172,6 +176,7 @@ export function OptionSelect<T extends string = string>({
       ) {
         event.preventDefault();
         event.stopPropagation();
+        keyboardOpen.current = true;
         setOpen(true);
       }
       return;
@@ -193,15 +198,22 @@ export function OptionSelect<T extends string = string>({
       ];
       if (!items.length) return;
       const current = items.indexOf(document.activeElement as HTMLButtonElement);
+      const down = event.key === "ArrowDown";
       const next =
         event.key === "Home"
           ? 0
           : event.key === "End"
             ? items.length - 1
-            : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) %
-              items.length;
+            : current < 0
+              ? down ? 0 : items.length - 1
+              : (current + (down ? 1 : -1) + items.length) % items.length;
       items[next]?.focus();
     }
+  };
+
+  const toggleMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
+    keyboardOpen.current = event.detail === 0;
+    setOpen((previous) => !previous);
   };
 
   const selected = options.find((opt) => opt.value === value);
@@ -212,6 +224,7 @@ export function OptionSelect<T extends string = string>({
     "cv-menu",
     "fm-option-menu",
     "fm-option-fixed",
+    "fm-choice-menu",
     resolvedDir === "up" ? "fm-option-up" : "",
     align === "right" ? "fm-option-right" : "",
   ]
@@ -239,7 +252,7 @@ export function OptionSelect<T extends string = string>({
           aria-controls={open ? listboxId : undefined}
           tabIndex={open ? -1 : undefined}
           disabled={disabled}
-          onClick={() => setOpen((prev) => !prev)}
+          onClick={toggleMenu}
         >
           {prefixLabel && <span className="fm-cine-label">{prefixLabel}</span>}
           <span className="fm-cine-val">{displayLabel}</span>
@@ -256,7 +269,7 @@ export function OptionSelect<T extends string = string>({
           aria-controls={open ? listboxId : undefined}
           tabIndex={open ? -1 : undefined}
           disabled={disabled}
-          onClick={() => setOpen((prev) => !prev)}
+          onClick={toggleMenu}
         >
           {Icon && <Icon size={14} />}
           <span>{displayLabel}</span>
@@ -291,7 +304,7 @@ export function OptionSelect<T extends string = string>({
                 }}
               >
                 <span>{opt.label}</span>
-                {isSelected && <Check size={14} />}
+                {isSelected && <Check size={14} aria-hidden="true" />}
               </button>
             );
           })}

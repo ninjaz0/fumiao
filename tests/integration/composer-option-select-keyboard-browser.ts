@@ -12,12 +12,13 @@ test(
   { timeout: 60_000 },
   async () => {
     const root = process.cwd();
-    const [baseCss, overridesCss, bundle] = await Promise.all([
+    const [baseCss, overridesCss, choiceMenuCss, bundle] = await Promise.all([
       readFile(join(root, "baseline/production/static/canvas.css"), "utf8"),
       readFile(
         join(root, "apps/web/canvas-editor/canvas-overrides.css"),
         "utf8",
       ),
+      readFile(join(root, "apps/web/app/choice-menu.css"), "utf8"),
       esbuild.build({
         stdin: {
           contents: `
@@ -66,7 +67,7 @@ test(
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <style>${baseCss}\n${overridesCss}</style>
+  <style>${baseCss}\n${overridesCss}\n${choiceMenuCss}</style>
 </head>
 <body>
   <div id="app"></div>
@@ -97,13 +98,28 @@ test(
       await expect(modeBtn).toBeVisible();
       await expect(modeBtn).toHaveAttribute("aria-expanded", "false");
       await modeBtn.click();
-      await page.getByRole("option", { name: "宫格构图预览", exact: true }).click();
+      const modeMenu = page.getByRole("listbox", { name: "分镜生成链路" });
+      const modeOptions = modeMenu.getByRole("option");
+      const order = ["标准首帧", "经典首尾帧", "全能参考", "宫格构图预览"];
+      await expect(modeOptions).toHaveText(order);
+      const gridOption = modeMenu.getByRole("option", { name: "宫格构图预览" });
+      const before = await gridOption.locator("span").boundingBox();
+      assert.ok(before);
+      await gridOption.click();
       const modeGridBtn = page.getByRole("button", {
         name: "分镜生成链路：宫格构图预览",
         exact: true,
       });
       await expect(modeGridBtn).toBeVisible();
       await expect(modeGridBtn).toHaveAttribute("aria-expanded", "false");
+      await modeGridBtn.click();
+      await expect(modeOptions).toHaveText(order);
+      const after = await gridOption.locator("span").boundingBox();
+      assert.ok(after);
+      assert.equal(after.x, before.x, "the label stays put when selected");
+      await expect(gridOption).toHaveAttribute("aria-selected", "true");
+      await expect(gridOption).not.toBeFocused();
+      await page.keyboard.press("Escape");
 
       const shotSizeUnset = page.getByRole("button", {
         name: "导演参数-景别：不限定",
@@ -186,12 +202,13 @@ test(
   { timeout: 60_000 },
   async () => {
     const root = process.cwd();
-    const [baseCss, overridesCss, bundle] = await Promise.all([
+    const [baseCss, overridesCss, choiceMenuCss, bundle] = await Promise.all([
       readFile(join(root, "baseline/production/static/canvas.css"), "utf8"),
       readFile(
         join(root, "apps/web/canvas-editor/canvas-overrides.css"),
         "utf8",
       ),
+      readFile(join(root, "apps/web/app/choice-menu.css"), "utf8"),
       esbuild.build({
         stdin: {
           contents: `
@@ -240,7 +257,7 @@ test(
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <style>${baseCss}\n${overridesCss}</style>
+  <style>${baseCss}\n${overridesCss}\n${choiceMenuCss}</style>
 </head>
 <body style="margin:0">
   <div id="app"></div>

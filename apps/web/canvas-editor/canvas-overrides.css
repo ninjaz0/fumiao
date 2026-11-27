@@ -646,12 +646,7 @@ button[aria-expanded="true"] > .fm-ui-chevron {
   top: calc(100% + 5px);
   left: 0;
   min-width: 164px;
-  max-height: 224px;
-  padding: 5px;
-  border: 1px solid var(--cv-line);
-  border-radius: 10px;
-  display: grid;
-  gap: 2px;
+  max-height: 320px;
 }
 .cv-menu.fm-option-menu.fm-option-fixed {
   position: fixed;
@@ -665,17 +660,6 @@ button[aria-expanded="true"] > .fm-ui-chevron {
 .cv-menu.fm-option-menu.fm-option-right {
   left: auto;
   right: 0;
-}
-.cv-menu.fm-option-menu > button {
-  min-height: 31px;
-  padding: 6px 9px;
-  border-radius: 6px;
-  font-size: 12px;
-  justify-content: space-between;
-}
-.cv-menu.fm-option-menu > button[aria-selected="true"] {
-  font-weight: 600;
-  background: color-mix(in srgb, var(--cv-hover) 75%, transparent);
 }
 .fm-cine-panel {
   display: grid;

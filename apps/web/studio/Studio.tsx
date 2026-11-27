@@ -157,6 +157,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const popover = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLButtonElement | null>(null);
   const menuFocusTarget = useRef<HTMLElement | null>(null);
+  const menuOpenedByPointer = useRef(false);
   const menuTimer = useRef(0);
   const toastTimer = useRef(0);
   const busy = useRef(new Set<string>());
@@ -597,13 +598,17 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         Array.from(element?.querySelectorAll<HTMLElement>(selector) ?? []).find(
           (control) => control.getClientRects().length > 0,
         );
-      const option =
-        visible(
-          '[aria-selected="true"]:not(:disabled), [role="radio"][aria-checked="true"]:not(:disabled)',
-        ) ??
-        visible(
-          'button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex="0"], a[href]',
-        ) ?? element;
+      const pointerChoiceMenu =
+        menuOpenedByPointer.current && element?.querySelector(".fm-choice-menu");
+      const option = pointerChoiceMenu
+        ? element
+        : (visible(
+            '[aria-selected="true"]:not(:disabled), [role="radio"][aria-checked="true"]:not(:disabled)',
+          ) ??
+          visible(
+            'button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex="0"], a[href]',
+          ) ??
+          element);
       option?.focus({ preventScroll: true });
     }
     const outside = (event: Event) => {
@@ -625,13 +630,19 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     };
   }, [menu, menuShown, menuOpenVersion, closeMenu, positionMenu]);
 
-  function openMenu(kind: StudioMenu, button: HTMLButtonElement, focus = true) {
+  function openMenu(
+    kind: StudioMenu,
+    button: HTMLButtonElement,
+    focus = true,
+    pointer = false,
+  ) {
     if (anchor.current === button) {
       closeMenu();
       return;
     }
     clearTimeout(menuTimer.current);
     anchor.current = button;
+    menuOpenedByPointer.current = pointer;
     menuFocusTarget.current = focus
       ? button
       : document.activeElement as HTMLElement;
@@ -2064,15 +2075,16 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             const current = options.indexOf(
               document.activeElement as HTMLElement,
             );
+            const down = event.key === "ArrowDown";
             const index =
               event.key === "Home"
                 ? 0
                 : event.key === "End"
                   ? options.length - 1
-                  : (current +
-                      (event.key === "ArrowDown" ? 1 : -1) +
-                      options.length) %
-                    options.length;
+                  : current < 0 && target === event.currentTarget
+                    ? down ? 0 : options.length - 1
+                    : (current + (down ? 1 : -1) + options.length) %
+                      options.length;
             options[index]?.focus();
           }
         }}

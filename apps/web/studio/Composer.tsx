@@ -161,7 +161,12 @@ export function Composer({
   submit: () => void;
   upload: (files: FileList, frame?: FrameSlot) => void;
   menu: ComposerMenu | null;
-  open: (kind: ComposerMenu, button: HTMLButtonElement, focus?: boolean) => void;
+  open: (
+    kind: ComposerMenu,
+    button: HTMLButtonElement,
+    focus?: boolean,
+    pointer?: boolean,
+  ) => void;
   close: () => void;
   preview: (id: string, button: HTMLButtonElement) => void;
   editor: Ref<ComposerEditor>;
@@ -437,7 +442,7 @@ export function Composer({
   const opener =
     (kind: ComposerMenu) => (event: React.MouseEvent<HTMLButtonElement>) => {
       remember();
-      open(kind, event.currentTarget);
+      open(kind, event.currentTarget, true, event.detail > 0);
     };
   const referenceControls = frameMode ? (
     <div className="h3-frame-pair">

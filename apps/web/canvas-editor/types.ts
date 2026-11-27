@@ -900,7 +900,7 @@ export function resolveOptionMenuFloatingRect(input: {
       : "down";
 
   const available = direction === "up" ? spaceAbove : spaceBelow;
-  const maxHeight = Math.min(224, Math.max(96, available));
+  const maxHeight = Math.min(320, Math.max(96, available));
   const minWidth = Math.max(164, Math.round(input.triggerRect.width));
   const estWidth = Math.max(minWidth, Math.round(input.menuWidth ?? minWidth));
   const desiredLeft =

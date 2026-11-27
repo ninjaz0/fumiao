@@ -841,9 +841,18 @@ export async function studioBrowser(
     await expect(savePrice).toBeDisabled();
     await nav("home");
     const composerCreation = page.locator('.composer [data-menu="creation"]');
+    const composerPopover = page.locator("#popover");
+    await composerCreation.click();
+    await expect(composerPopover.getByRole("option")).toHaveText([
+      "视频生成",
+      "图片生成",
+      "语音生成",
+    ]);
+    await expect(composerPopover.locator('[aria-selected="true"]')).not.toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(composerCreation).toBeFocused();
     await composerCreation.focus();
     await page.keyboard.press("Enter");
-    const composerPopover = page.locator("#popover");
     await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(composerPopover.getByRole("option", { name: "图片生成" })).toBeFocused();
@@ -921,7 +930,7 @@ export async function studioBrowser(
     console.log("Verified typed mention keeps prompt focus, continued typing and Escape restoration");
     await page.locator('.composer [data-menu="creation"]').click();
     await page.evaluate(() => window.document.dispatchEvent(new Event("scroll")));
-    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    await expect(composerPopover).toBeFocused();
     await page
       .locator('#popover [data-act="creation"][data-value="image"]')
       .click();

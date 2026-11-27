@@ -1107,7 +1107,7 @@ test("PR #223 Item 5: resolveCinePopoverPlacement considers both horizontal and 
     menuWidth: 180,
   });
   assert.equal(upwardDesktop.direction, "up");
-  assert.equal(upwardDesktop.maxHeight, 224);
+  assert.equal(upwardDesktop.maxHeight, 320);
   assert.ok(
     typeof upwardDesktop.bottom === "number" &&
       900 - upwardDesktop.bottom - upwardDesktop.maxHeight >= 8,
@@ -1129,7 +1129,7 @@ test("PR #223 Item 5: resolveCinePopoverPlacement considers both horizontal and 
   });
   assert.equal(flippedDown.direction, "down");
   assert.ok(typeof flippedDown.top === "number" && flippedDown.top >= 149);
-  assert.equal(flippedDown.maxHeight, 224);
+  assert.equal(flippedDown.maxHeight, 320);
 });
 
 test("PR #223 Item 7: reconcileCanvasRightDocks collapses docked panel when resizing across 1100px breakpoint", async () => {
