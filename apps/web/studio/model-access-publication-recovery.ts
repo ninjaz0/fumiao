@@ -60,7 +60,8 @@ export async function sendPublication(
   } catch (error) {
     if (
       error instanceof ApiError &&
-      [400, 404, 409, 422].includes(error.status)
+      ([400, 404, 409, 422].includes(error.status) ||
+        (error.status === 403 && error.code === "publication_rejected"))
     )
       storage.removeItem(key);
     throw error;

@@ -700,6 +700,23 @@ test("保存后重开草稿保留公开名称、目标和上架方式，旧草�
   );
 });
 
+function publicationStorage() {
+  const data = new Map<string, string>();
+  return {
+    get length() {
+      return data.size;
+    },
+    key: (i: number) => [...data.keys()][i] ?? null,
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v);
+    },
+    removeItem: (k: string) => {
+      data.delete(k);
+    },
+  };
+}
+
 test("旧 ID 接管和备用关联丢失成功响应后，重新打开仍重试相同的草稿、操作和 UID", async (t) => {
   const { chatSettingsFixture } = await import("../helpers/chat-settings.js");
   const { OriginalModelAccess } =
@@ -725,20 +742,7 @@ test("旧 ID 接管和备用关联丢失成功响应后，重新打开仍重试�
     expected_revision: origin.revision,
   });
   const studioId = "deepseek-flash";
-  const data = new Map<string, string>();
-  const storage = {
-    get length() {
-      return data.size;
-    },
-    key: (i: number) => [...data.keys()][i] ?? null,
-    getItem: (k: string) => data.get(k) ?? null,
-    setItem: (k: string, v: string) => {
-      data.set(k, v);
-    },
-    removeItem: (k: string) => {
-      data.delete(k);
-    },
-  };
+  const storage = publicationStorage();
   for (const action of ["activate", "standby"] as const) {
     const connection =
       action === "activate"
@@ -849,4 +853,91 @@ test("旧 ID 接管和备用关联丢失成功响应后，重新打开仍重试�
       assert.equal(changed.items![0].revision, 3);
     }
   }
+});
+
+test("复用对话凭据发布图片被拒后可返回草稿并修改，失效会话仍能恢复原请求", async (t) => {
+  const { chatSettingsFixture } = await import("../helpers/chat-settings.js");
+  const { api } = await import("../../apps/web/studio/api.js");
+  const { ApiError } = await import("../../apps/web/canvas/api.js");
+  const { recoverablePublications, sendPublication } =
+    await import("../../apps/web/studio/model-access-publication-recovery.js");
+  const f = await chatSettingsFixture();
+  t.after(f.cleanup);
+  await f.reset({ deepseek: "fixture-owned" });
+  const origin = (
+    await f.db.query("SELECT * FROM connections WHERE id=$1", [f.ids.deepseek])
+  ).rows[0];
+  await f.db.query("UPDATE connections SET config=$2 WHERE id=$1", [
+    origin.id,
+    f.p.vault.seal({
+      ...f.p.vault.open(origin.config),
+      baseUrl: "https://1.1.1.1/legacy",
+    }),
+  ]);
+  let token = f.tokens[0];
+  const nativeFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input: string, init: RequestInit) => {
+    const headers = new Headers(init.headers);
+    headers.set("cookie", "fm_session=" + token);
+    return nativeFetch(new URL(input, f.url), { ...init, headers });
+  });
+  const base = "/api/admin/model-access";
+  const request = (path: string, body?: object) => api(null, path, body);
+  const reused = await api<{ id: string }>(null, base + "/connections/reuse", {
+    connection_id: origin.id,
+    expected_revision: origin.revision,
+  });
+  const draft = randomUUID();
+  const selection = {
+    expected_revision: 0,
+    connection_revision: 1,
+    connection_id: reused.id,
+    upstream_id: "new-image",
+    purpose: "image",
+    price: "1",
+  };
+  await api(null, base + "/drafts/" + draft, selection, "PUT");
+  const operation = {
+    uid: randomUUID(),
+    items: [{ action: "create" as const, draft_id: draft, draft_revision: 1 }],
+  };
+  const storage = publicationStorage();
+  token = "";
+  await assert.rejects(
+    sendPublication(storage, 17, operation, request),
+    (error) => error instanceof ApiError && error.status === 401,
+  );
+  assert.deepEqual(recoverablePublications(storage, 17), [operation]);
+  token = f.tokens[1];
+  await assert.rejects(
+    sendPublication(storage, 17, operation, request),
+    (error) =>
+      error instanceof ApiError &&
+      error.status === 403 &&
+      error.code === undefined,
+  );
+  assert.deepEqual(recoverablePublications(storage, 17), [operation]);
+  token = f.tokens[0];
+  await assert.rejects(
+    sendPublication(storage, 17, operation, request),
+    (error) =>
+      error instanceof ApiError &&
+      error.status === 403 &&
+      error.code === "publication_rejected" &&
+      error.message.includes("凭据"),
+  );
+  assert.deepEqual(recoverablePublications(storage, 17), []);
+  const view = await api<{
+    publications: unknown[];
+    drafts: { id: string; revision: number }[];
+  }>(null, base);
+  assert.deepEqual(view.publications, []);
+  assert.equal(view.drafts.find((d) => d.id === draft)?.revision, 1);
+  const edited = await api<{ draft: { revision: number } }>(
+    null,
+    base + "/drafts/" + draft,
+    { ...selection, expected_revision: 1, publication: { action: "draft" } },
+    "PUT",
+  );
+  assert.equal(edited.draft.revision, 2);
 });

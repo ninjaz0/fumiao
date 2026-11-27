@@ -167,7 +167,8 @@ function failure(error: any, res: Response) {
       .end("Internal Server Error");
     return;
   }
-  originalJson(res, { detail }, status);
+  const code = error instanceof DomainError ? error.publicCode : undefined;
+  originalJson(res, { detail, ...(code ? { code } : {}) }, status);
   if (status >= 500)
     console.error("Original API request failed", error.name, error.code || "");
 }

@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { one, type Sql } from "../db.js";
 import type { Actor, Platform } from "../platform.js";
-import { requireValue } from "../security.js";
+import { DomainError, requireValue } from "../security.js";
 import {
   originalModelSnapshots,
   resolveConnectionRevision,
@@ -492,13 +492,20 @@ export async function publishModels(p: Platform, actor: Actor, value: unknown) {
       };
     }
     const items: Awaited<ReturnType<typeof publishOne>>[] = [];
-    for (const choice of choices.sort((a, b) => a.id.localeCompare(b.id)))
-      items[choice.index] =
-        choice.item.action === "price"
-          ? await updatePrice(sql, choice.item)
-          : "route_revision_id" in choice.item
-            ? await activateExisting(p, sql, choice.item)
-            : await publishOne(p, sql, choice.id, choice.item);
+    try {
+      for (const choice of choices.sort((a, b) => a.id.localeCompare(b.id)))
+        items[choice.index] =
+          choice.item.action === "price"
+            ? await updatePrice(sql, choice.item)
+            : "route_revision_id" in choice.item
+              ? await activateExisting(p, sql, choice.item)
+              : await publishOne(p, sql, choice.id, choice.item);
+    } catch (error) {
+      // The receipt lookup already succeeded. A denied item rolls back the whole batch.
+      if (error instanceof DomainError && error.status === 403)
+        throw new DomainError(403, error.message, "publication_rejected");
+      throw error;
+    }
     if (input.items.some((item) => item.action !== "standby"))
       await sql.query(
         "UPDATE studio_policy SET price_revision=price_revision+1",

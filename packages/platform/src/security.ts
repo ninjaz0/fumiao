@@ -71,6 +71,7 @@ export class DomainError extends Error {
   constructor(
     public status: number,
     message: string,
+    public readonly publicCode?: string,
   ) {
     super(message);
   }
