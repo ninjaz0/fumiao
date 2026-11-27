@@ -226,7 +226,9 @@ export function Narration({
         <div className="dialogue-editor">
           {lines.map((line, idx) => {
             const lineJob = runs.find((j) => j.id === line.audio_job);
-            const lineStale = Boolean(line.audio_stale?.length || (lineJob && lineJob.prompt.trim() !== line.text.trim()));
+            const lineStale = Boolean(line.audio_job
+              ? line.audio_stale?.includes(line.audio_job) || (lineJob && lineJob.prompt.trim() !== line.text.trim())
+              : line.audio_stale?.length);
             const linePendingRun = runs.find((j) => j.id === line.audio_pending);
             const linePending =
               Boolean(

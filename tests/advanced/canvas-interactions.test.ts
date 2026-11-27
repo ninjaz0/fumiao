@@ -24,7 +24,8 @@ import {
   type Job,
 } from "../../apps/web/canvas-editor/types.js";
 
-import { directorGenerationTargets, directorAudioAttachment, directorAudioPromotion, directorRetryTargets, type PendingDirectorBatch } from "../../apps/web/canvas-editor/director-batch.js";
+import { parseCanvasDocument } from "@fumiao/original-api/canvas-draft.js";
+import { directorGenerationTargets, directorAudioAttachment, directorAudioPromotion, directorCompletedAudioNodes, directorRetryTargets, promoteOrdinaryCanvasAudio, type PendingDirectorBatch } from "../../apps/web/canvas-editor/director-batch.js";
 
 test("director quotes only missing or failed audio for the effective strategy", () => {
   const shot = { ...newNode("video", 0, 0, 1), id: "shot" };
@@ -113,10 +114,6 @@ test("director revalidates attached audio before promotion and keeps the existin
   });
   assert.deepEqual(directorAudioPromotion(document, [job], {}), document);
 
-  const unchangedLegacy = { ...job, inputs: { pack_id: "pack", instruction: "", voice_id: null } };
-  assert.deepEqual(directorAudioPromotion(document, [unchangedLegacy], {
-    "shot:dialogue:line": audioInput("actual"),
-  }), signed);
   const newer = { ...document, nodes: [{ ...node, dialogue_lines: [{ ...node.dialogue_lines[0], audio_job: 15 }] }] };
   assert.deepEqual(directorAudioPromotion(newer, [job], {
     "shot:dialogue:line": audioInput("old"),
@@ -155,6 +152,88 @@ test("director receipt retries intersect exact targets with current nodes and ne
   assert.deepEqual(directorRetryTargets(graph, held, runs, {}), [recovered[1]]);
   assert.deepEqual(directorRetryTargets(graph, held, runs, {}, recovered[0]), []);
   assert.deepEqual(directorRetryTargets(graph, held, runs, {}, recovered[1]), [recovered[1]]);
+});
+
+test("director receipt retries a skipped or unclaimed line when its latest attempt failed", () => {
+  const shot = { ...newNode("video", 0, 0, 1), id: "shot", dialogue_lines: [
+    { id: "line", speaker: "甲", text: "补录", audio_job: 30 },
+  ] };
+  const document: Doc = {
+    schemaVersion: 1, nodes: [shot], edges: [], shots: [shot.id],
+    director: { script_id: "script", script_revision: 1, shot_ids: [shot.id] },
+  };
+  const target = { node_id: shot.id, stage: "dialogue", line_id: "line" } as const;
+  const unclaimed: PendingDirectorBatch = {
+    request: { uid: "fixture", expected_revision: 1, price_revision: 1, precheck_token: "fixture", expected_total_credits: 4,
+      director: { script_revision: 1, targets: [target] } },
+    rejected: true,
+  };
+  const skipped: PendingDirectorBatch = {
+    request: unclaimed.request, receipt: { submitted: [], total_credits: 0,
+      skipped: [{ node: shot.id, stage: "dialogue", line_id: "line", reason: "素材需确认" }] },
+  };
+  const job = (id: number, status = "done") => makeJob({
+    id, status, kind: "audio", model: "edge-tts", canvas_node: "dialogue:shot:line", prompt: "补录",
+  });
+  const afterFailure = [job(30), job(31, "failed")];
+  const afterRecovery = [...afterFailure, job(32)];
+  for (const pending of [unclaimed, skipped]) {
+    assert.deepEqual(directorRetryTargets(document, pending, afterFailure, {}), [target]);
+    assert.deepEqual(directorRetryTargets(document, pending, afterRecovery, {}), []);
+  }
+});
+
+test("director dialogue clips stale markers to the applied take and the latest rejection", () => {
+  const shot = { ...newNode("video", 0, 0, 1), id: "shot", dialogue_lines: [
+    { id: "line", speaker: "甲", text: "台词", audio_job: 11, audio_stale: [11] },
+  ] };
+  let document: Doc = {
+    schemaVersion: 1, nodes: [shot], edges: [], shots: [shot.id],
+    director: { script_id: "12345678123456781234567812345678", script_revision: 1, shot_ids: [shot.id] },
+  };
+  const apply = (id: number, basis: string) => {
+    document = { ...document, nodes: [{ ...document.nodes[0], dialogue_lines: [
+      { ...document.nodes[0].dialogue_lines![0], audio_pending: id },
+    ] }] };
+    document = directorAudioPromotion(document, [makeJob({
+      id, kind: "audio", prompt: "台词", canvas_node: "dialogue:shot:line", inputs: { director_basis: basis },
+    })], { "shot:dialogue:line": audioInput("actual") });
+    const parsed = parseCanvasDocument(JSON.parse(JSON.stringify(document)));
+    return parsed.nodes[0].dialogue_lines![0];
+  };
+  for (const id of [12, 13, 14]) {
+    assert.equal(apply(id, "obsolete").audio_job, 11);
+  }
+  assert.deepEqual(document.nodes[0].dialogue_lines?.[0].audio_stale, [11, 14]);
+  const valid = apply(15, "actual");
+  assert.equal(valid.audio_job, 15);
+  assert.equal(valid.audio_pending, null);
+  assert.deepEqual(valid.audio_stale, []);
+  assert.equal(document.nodes[0].dialogue_lines?.[0].audio_stale, undefined);
+});
+
+test("ordinary pending narration and dialogue still promote for a director episode member", () => {
+  const shot = { ...newNode("video", 0, 0, 1), id: "shot", audio_strategy: "keep_original" as const,
+    narration_text: "旁白", narration_instruction: "轻声", narration_pending: 20,
+    dialogue_lines: [{ id: "line", speaker: "甲", text: "台词", audio_pending: 21 }],
+  };
+  const document: Doc = {
+    schemaVersion: 1, nodes: [shot], edges: [], shots: [shot.id],
+    director: { script_id: "script", script_revision: 1, shot_ids: [shot.id] },
+  };
+  const narration = makeJob({ id: 20, kind: "audio", prompt: "旁白", canvas_node: "voice:shot", inputs: { instruction: "轻声" } });
+  const dialogue = makeJob({ id: 21, kind: "audio", prompt: "台词", canvas_node: "dialogue:shot:line" });
+  const runs = new Map([[narration.id, narration], [dialogue.id, dialogue]]);
+  assert.deepEqual(directorCompletedAudioNodes(document, runs), []);
+  assert.equal(directorAudioPromotion(document, [...runs.values()], {}), document);
+  for (const strategy of ["keep_original", "replace"] as const) {
+    const graph = { ...document, nodes: [{ ...shot, audio_strategy: strategy }] };
+    const { nodes: [promoted] } = promoteOrdinaryCanvasAudio(graph, runs);
+    assert.equal(promoted.narration_job, 20);
+    assert.equal(promoted.narration_pending, null);
+    assert.equal(promoted.dialogue_lines?.[0].audio_job, 21);
+    assert.equal(promoted.dialogue_lines?.[0].audio_pending, null);
+  }
 });
 
 function makeJob(overrides: Partial<Job>): Job {

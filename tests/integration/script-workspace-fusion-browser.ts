@@ -982,6 +982,53 @@ try {
       await page.unroute(batchQuoteUrl, quoteAudio);
       await page.unroute(batchRunUrl, skipAudio);
     }
+    const ordinaryAudioPage = await context.newPage();
+    try {
+      const narrationId = 20301;
+      const dialogueId = 20302;
+      const original = savedForAudio.document.nodes.find(({ id }) => id === secondId)!;
+      const line = { ...dialogueLines[0], audio_pending: dialogueId };
+      const document = {
+        ...savedForAudio.document,
+        nodes: savedForAudio.document.nodes.map((node) => node.id === original.id ? {
+          ...node,
+          audio_strategy: "keep_original" as const,
+          narration_text: "只作剪辑参考。",
+          narration_instruction: "轻声",
+          narration_pending: narrationId,
+          dialogue_lines: [line],
+        } : node),
+      };
+      const path = `**/api/canvases/${canvasA.id}`;
+      let update: Project["document"] | undefined;
+      await ordinaryAudioPage.route(path, (route) => route.fulfill({
+        status: 200, json: { ...savedForAudio, document },
+      }));
+      await ordinaryAudioPage.route(path + "/runs", (route) => route.fulfill({
+        status: 200, json: {
+          runs: [
+            { id: narrationId, kind: "audio", status: "done", result: "ordinary-voice", canvas_node: `voice:${original.id}`,
+              model: "edge-tts", prompt: "只作剪辑参考。", inputs: { instruction: "轻声" } },
+            { id: dialogueId, kind: "audio", status: "done", result: "ordinary-line", canvas_node: `dialogue:${original.id}:${line.id}`,
+              model: "edge-tts", prompt: line.text, inputs: { model: "edge-tts" } },
+          ],
+        },
+      }));
+      await ordinaryAudioPage.route(path + "/document", async (route) => {
+        if (route.request().method() !== "PUT") return route.continue();
+        const body = route.request().postDataJSON() as { document: Project["document"] };
+        update = body.document;
+        await route.fulfill({ status: 200, json: { ...savedForAudio, revision: savedForAudio.revision + 1, document: update } });
+      });
+      await ordinaryAudioPage.goto(editPath);
+      await expect.poll(() => update?.nodes.find(({ id }) => id === original.id), { timeout: 12000 }).toMatchObject({
+        audio_strategy: "keep_original", narration_job: narrationId, narration_pending: null,
+        dialogue_lines: [{ id: line.id, audio_job: dialogueId, audio_pending: null }],
+      });
+      console.log("PASS ordinary audio promotion browser: keep-original episode shot preserves legacy narration and dialogue promotion");
+    } finally {
+      await ordinaryAudioPage.close();
+    }
     const firstImage = await material.locator("img").getAttribute("src");
     await material.getByRole("button", { name: "定位素材节点" }).click();
     const candidateUrl = `**/api/canvases/${canvasA.id}/nodes/${s02Grid.id}/candidates`;

@@ -110,10 +110,6 @@ export function directorTargetShots(document: CanvasDocument, ordered: string[],
     return { node, shots };
   }
   requireValue(ordered.includes(node.id), 400, "镜头不属于本集");
-  if (target.stage === "dialogue" && !node.dialogue_lines?.some(({ id }) => id === target.line_id)) {
-    requireValue(!document.nodes.some((other) => other.dialogue_lines?.some(({ id }) => id === target.line_id)),
-      400, "对白台词不属于本镜");
-  }
   return { node, shots: [node.id] };
 }
 

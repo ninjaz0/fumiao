@@ -130,8 +130,13 @@ export function directorRetryTargets(
     const takes = targetRuns(node, target, runs);
     if (takes.some(active)) return false;
     const original = submitted.get(key);
-    if (pending.receipt && (original ? !failed(takes.find((job) => job.id === original)) : !skipped.has(key))) return false;
-    return !takes.some((job) => job.id > (original ?? 0) && completed(job) &&
+    if (original === undefined) {
+      if (pending.receipt && !skipped.has(key)) return false;
+      const latest = takes[0];
+      return !latest || !completed(latest) || (isAudio(target) && audioMatch(node, target, latest, styles) === "stale");
+    }
+    if (!failed(takes.find((job) => job.id === original))) return false;
+    return !takes.some((job) => job.id > original && completed(job) &&
       (!isAudio(target) || ["matches", "unknown"].includes(audioMatch(node, target, job, styles))));
   });
 }
@@ -175,12 +180,11 @@ export function directorAudioAttachment(
 }
 
 export function directorCompletedAudioNodes(document: Doc, runs: ReadonlyMap<number, Job>): string[] {
-  const members = directorMembers(document);
   return document.nodes.filter((node) => {
     const ids = [node.narration_pending, ...node.dialogue_lines?.map((line) => line.audio_pending) ?? []];
     return ids.some((id) => {
       const job = id ? runs.get(id) : undefined;
-      return job?.kind === "audio" && completed(job) && (members.has(node.id) || job.inputs?.director_basis);
+      return job?.kind === "audio" && completed(job) && Boolean(job.inputs?.director_basis);
     });
   }).map(({ id }) => id);
 }
@@ -193,12 +197,11 @@ export function directorAudioPromotion(document: Doc, runs: Job[], styles: Direc
     const allowed = new Set(directorAudioTargets(node).map(directorTargetKey));
     const canApply = (target: DirectorTarget, id?: number | null, applied?: number | null) => {
       const job = id ? byId.get(id) : undefined;
-      if (job?.kind !== "audio" || !completed(job) || (!members.has(node.id) && !job.inputs?.director_basis)) return;
+      if (job?.kind !== "audio" || !completed(job) || !job.inputs?.director_basis) return;
       if ((applied ?? 0) > job.id) return "superseded";
       if (!members.has(node.id) || !allowed.has(directorTargetKey(target))) return "stale";
       if (!styles[directorTargetKey(target)]) return;
-      const match = audioMatch(node, target, job, styles);
-      return match === "unchecked" ? undefined : match;
+      return audioMatch(node, target, job, styles) === "matches" ? "matches" : "stale";
     };
     const narration = canApply({ node_id: node.id, stage: "narration" }, node.narration_pending, node.narration_job);
     let dialogueChanged = false;
@@ -206,12 +209,13 @@ export function directorAudioPromotion(document: Doc, runs: Job[], styles: Direc
       const result = canApply({ node_id: node.id, stage: "dialogue", line_id: line.id }, line.audio_pending, line.audio_job);
       if (!result) return line;
       dialogueChanged = true;
-      return {
-        ...line,
-        audio_pending: null,
-        ...(result === "stale" ? { audio_stale: [...new Set([...(line.audio_stale ?? []), line.audio_pending!])] } : {}),
-        ...(result === "matches" || result === "unknown" ? { audio_job: line.audio_pending } : {}),
-      };
+      const { audio_stale: previousStale, ...selected } = line;
+      if (result === "matches") {
+        return { ...selected, audio_pending: null, audio_job: line.audio_pending };
+      }
+      const stale = (previousStale ?? []).filter((id) => id === line.audio_job);
+      if (result === "stale") stale.push(line.audio_pending!);
+      return { ...selected, audio_pending: null, ...(stale.length ? { audio_stale: [...new Set(stale)] } : {}) };
     });
     if (!narration && !dialogueChanged) return node;
     changed = true;
@@ -219,8 +223,36 @@ export function directorAudioPromotion(document: Doc, runs: Job[], styles: Direc
       ...node, ...(dialogueChanged ? { dialogue_lines: lines } : {}),
       ...(narration ? {
         narration_pending: null,
-        ...(narration === "matches" || narration === "unknown" ? { narration_job: node.narration_pending } : {}),
+        ...(narration === "matches" ? { narration_job: node.narration_pending } : {}),
       } : {}),
+    };
+  });
+  return changed ? { ...document, nodes } : document;
+}
+
+export function promoteOrdinaryCanvasAudio(document: Doc, runs: ReadonlyMap<number, Job>) {
+  let changed = false;
+  const nodes = document.nodes.map((node) => {
+    const narration = node.narration_pending ? runs.get(node.narration_pending) : undefined;
+    const promoteNarration = narration && !narration.inputs?.director_basis && completed(narration) &&
+      narration.prompt.trim() === (node.narration_text ?? "").trim() &&
+      (narration.inputs?.instruction ?? "").trim() === (node.narration_instruction ?? "").trim();
+
+    let dialogueChanged = false;
+    const dialogue = node.dialogue_lines?.map((line) => {
+      const job = line.audio_pending ? runs.get(line.audio_pending) : undefined;
+      if (!job || job.inputs?.director_basis || !completed(job) || job.prompt.trim() !== line.text.trim() ||
+        line.audio_stale?.includes(job.id)) return line;
+      dialogueChanged = true;
+      return { ...line, audio_job: job.id, audio_pending: null, audio_stale: undefined };
+    });
+
+    if (!promoteNarration && !dialogueChanged) return node;
+    changed = true;
+    return {
+      ...node,
+      ...(promoteNarration ? { narration_job: narration.id, narration_pending: null } : {}),
+      ...(dialogueChanged ? { dialogue_lines: dialogue } : {}),
     };
   });
   return changed ? { ...document, nodes } : document;

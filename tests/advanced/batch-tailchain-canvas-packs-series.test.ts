@@ -352,19 +352,26 @@ test("director retries one failed line and recovers accepted receipt", async (t)
     ],
   }, {
     id: "original", x: 0, y: 0, type: "video", prompt: "保留原声", audio_strategy: "keep_original",
-    dialogue_lines: [{ id: "other-line", speaker: "甲", text: "保留视频原音" }],
+    dialogue_lines: [
+      { id: "removed", speaker: "甲", text: "原镜中已删除的对白仍在副本中" },
+      { id: second.line_id, speaker: "甲", text: "副本仍保留原对白 ID" },
+    ],
+  }, {
+    id: "outside", x: 0, y: 0, type: "video", prompt: "不属于本集",
+    dialogue_lines: [{ id: second.line_id, speaker: "甲", text: "片单外的副本" }],
   }], ["shot", "original"]);
   const wallet = async () => (await f.db.query("SELECT balance, held FROM wallets WHERE workspace_id=$1", [f.workspace.id])).rows[0];
   const jobRows = async (ids: number[]) => (await f.db.query(
     "SELECT * FROM jobs WHERE public_id=ANY($1::bigint[]) ORDER BY public_id", [ids],
   )).rows;
   const noLongerPresent = await quote([
-    line("removed"), { node_id: "original", stage: "dialogue", line_id: "other-line" }, second,
+    line("removed"), { node_id: "original", stage: "dialogue", line_id: second.line_id }, second,
   ]);
-  assert.deepEqual(noLongerPresent.items.map(({ line_id, status }) => [line_id, status]), [
-    ["removed", "blocked"], ["other-line", "blocked"], ["second", "ready"],
+  assert.deepEqual(noLongerPresent.items.map(({ node_id, line_id, status }) => [node_id, line_id, status]), [
+    ["shot", "removed", "blocked"], ["original", "second", "blocked"], ["shot", "second", "ready"],
   ]);
-  await assert.rejects(quote([line("other-line"), second]), { status: 400, message: /不属于本镜/ });
+  assert.deepEqual(noLongerPresent.executable_keys, ["shot:dialogue:second"]);
+  await assert.rejects(quote([{ ...second, node_id: "outside" }, second]), { status: 400, message: /镜头不属于本集/ });
   const initial = await quote([first, second]);
   assert.equal(initial.summary.total_credits, 8, JSON.stringify(initial.items));
   assert.equal(initial.summary.runnable, 2);

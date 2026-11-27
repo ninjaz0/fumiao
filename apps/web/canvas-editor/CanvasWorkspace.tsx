@@ -91,7 +91,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { api, upload, downloadJSON, ApiError, workspaceURL } from "./api";
 import {
-  directorAudioAttachment, directorAudioPromotion, directorCompletedAudioNodes, directorRetryTargets,
+  directorAudioAttachment, directorAudioPromotion, directorCompletedAudioNodes, directorRetryTargets, promoteOrdinaryCanvasAudio,
   type BatchReceipt, type PendingDirectorBatch,
 } from "./director-batch";
 import { useDirectorBatchRecovery } from "./director-batch-recovery";
@@ -1574,55 +1574,13 @@ export function CanvasWorkspace({
       ),
     [doc.change],
   );
-  useEffect(()=>{
-    if(doc.status==='conflict')return;
-    const members = new Set(doc.value.document.director?.shot_ids);
-    const narrationUpdates=new Map<string,number>();
-    const dialogueUpdates=new Map<string,Map<string,number>>();
-    for(const node of doc.value.document.nodes){
-      if (members.has(node.id)) continue;
-      if(node.narration_pending){
-        const job=runById.get(node.narration_pending);
-        if(job?.status==='done'&&!job.inputs?.director_basis&&job.result&&job.prompt.trim()===(node.narration_text||'').trim()&&
-           (job.inputs?.instruction||'').trim()===(node.narration_instruction||'').trim()){
-          narrationUpdates.set(node.id,job.id);
-        }
-      }
-      if(node.dialogue_lines?.length){
-        for(const line of node.dialogue_lines){
-          if(!line.audio_pending)continue;
-          const job=runById.get(line.audio_pending);
-          if(job?.status==='done'&&!job.inputs?.director_basis&&job.result&&job.prompt.trim()===line.text.trim()&&!line.audio_stale?.includes(job.id)){
-            let map=dialogueUpdates.get(node.id);
-            if(!map){map=new Map();dialogueUpdates.set(node.id,map);}
-            map.set(line.id,job.id);
-          }
-        }
-      }
-    }
-    if(narrationUpdates.size||dialogueUpdates.size){
-      doc.change(d=>({
-        ...d,
-        document:{
-          ...d.document,
-          nodes:d.document.nodes.map(n=>{
-            const nextNarr=narrationUpdates.get(n.id);
-            const nextDlg=dialogueUpdates.get(n.id);
-            if(!nextNarr&&!nextDlg)return n;
-            return {
-              ...n,
-              ...(nextNarr?{narration_job:nextNarr,narration_pending:null}:{}),
-              ...(nextDlg&&n.dialogue_lines?{
-                dialogue_lines:n.dialogue_lines.map(l=>
-                  nextDlg.has(l.id)?{...l,audio_job:nextDlg.get(l.id)!,audio_pending:null,audio_stale:undefined}:l
-                ),
-              }:{}),
-            };
-          }),
-        },
-      }));
-    }
-  },[runById,doc.value.document.nodes,doc.status]);
+  useEffect(() => {
+    if (doc.status === "conflict") return;
+    doc.change((draft) => {
+      const document = promoteOrdinaryCanvasAudio(draft.document, runById);
+      return document === draft.document ? draft : { ...draft, document };
+    });
+  }, [runById, doc.value.document, doc.status]);
   useEffect(() => {
     if (doc.status !== "saved") return;
     const document = doc.value.document;
