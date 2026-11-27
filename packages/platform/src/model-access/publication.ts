@@ -115,7 +115,7 @@ async function requireAdoptable(
   );
 }
 
-function routeScopeAllows(
+export function routeScopeAllows(
   scope: CredentialScope,
   protocol: Protocol,
   upstream: string,

@@ -19,10 +19,7 @@ export type BudgetPolicyRow = {
 };
 
 export async function hasBudgetTables(sql: Sql): Promise<boolean> {
-  const row = await one(
-    sql,
-    "SELECT to_regclass('budget_policies') AS name",
-  );
+  const row = await one(sql, "SELECT to_regclass('budget_policies') AS name");
   return Boolean(row?.name);
 }
 
@@ -48,7 +45,10 @@ async function resolveProjectScopeKey(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
       trimmed,
     );
-  const hasDocs = await one(sql, "SELECT to_regclass('documents') IS NOT NULL AS ok");
+  const hasDocs = await one(
+    sql,
+    "SELECT to_regclass('documents') IS NOT NULL AS ok",
+  );
   if (!hasDocs?.ok) {
     return { canonicalUuid: isUuid ? trimmed : null, policyKeys: [trimmed] };
   }
@@ -120,14 +120,17 @@ export async function computeScopeSpend(
   const tables = await one(
     sql,
     `SELECT to_regclass('job_projects') IS NOT NULL AS jp,
-            to_regclass('canvas_job_links') IS NOT NULL AS cjl`,
+            to_regclass('canvas_job_links') IS NOT NULL AS cjl,
+            to_regclass('chat_turn_bills') IS NOT NULL AS chat`,
   );
   const sources: string[] = [];
   if (tables?.jp) {
     sources.push("SELECT job_id FROM job_projects WHERE project_id = $1::uuid");
   }
   if (tables?.cjl) {
-    sources.push("SELECT job_id FROM canvas_job_links WHERE project_id = $1::uuid");
+    sources.push(
+      "SELECT job_id FROM canvas_job_links WHERE project_id = $1::uuid",
+    );
   }
   if (!sources.length) return budgetUsage(0, 0);
   const projectJobsCte = `WITH proj_jobs AS (${sources.join(" UNION ")})`;
@@ -151,7 +154,23 @@ export async function computeScopeSpend(
          AND j.state IN ('queued', 'dispatching', 'running', 'finalizing', 'uncertain')`,
     [canonicalUuid],
   );
-  return budgetUsage(spentRow?.total, heldRow?.total);
+  if (!tables?.chat) return budgetUsage(spentRow?.total, heldRow?.total);
+  const chat = await one(
+    sql,
+    `SELECT
+    COALESCE((SELECT SUM(c.amount) FROM chat_charges c WHERE c.project_id=$1 AND c.state='held'),0) AS held,
+    COALESCE((SELECT SUM(ABS(l.amount)) FROM ledger l JOIN chat_charges c ON c.turn_id=l.chat_turn_id
+              WHERE c.project_id=$1 AND l.action='spend' AND l.created_at>=${startExpr}),0) AS spent`,
+    [canonicalUuid],
+  );
+  return budgetUsage(
+    formatCredits(
+      creditUnits(String(spentRow.total)) + creditUnits(String(chat.spent)),
+    ),
+    formatCredits(
+      creditUnits(String(heldRow.total)) + creditUnits(String(chat.held)),
+    ),
+  );
 }
 
 export type BudgetEvaluation = {

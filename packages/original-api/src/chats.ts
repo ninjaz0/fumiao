@@ -2,14 +2,24 @@ import { listedStudioCatalog } from "@fumiao/platform/studio-plugin-profile.js";
 import { randomUUID } from "node:crypto";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
-import { requireValue } from "@fumiao/platform/security.js";
+import { requireValue, hash } from "@fumiao/platform/security.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
-import { ChatProviders } from "@fumiao/platform/chat-providers.js";
+import { resolvePublishedRoute } from "@fumiao/platform/model-access/publication.js";
 import {
-  chatBytes,
-  chatText,
-  chatJson,
-} from "@fumiao/platform/chat-values.js";
+  chatBill,
+  type ChatCallUsage,
+} from "@fumiao/platform/model-access/chat.js";
+import { checkAndRecordBudget } from "@fumiao/platform/budgets.js";
+import { chatQuoteFields } from "./chat-draft.js";
+import {
+  prepareNativeChat,
+  readChatBills,
+  retryTarget,
+  type NativeChatSnapshot,
+} from "./chat-billing.js";
+import { snapshotTurnSkills } from "./skills.js";
+import { ChatProviders } from "@fumiao/platform/chat-providers.js";
+import { chatBytes, chatText, chatJson } from "@fumiao/platform/chat-values.js";
 import {
   pythonStrip,
   pythonWhitespace,
@@ -23,13 +33,14 @@ import {
   parseChatSend,
   type ChatContextInput,
 } from "./chat-draft.js";
-import { freezeChatTools } from "./chat-tools.js";
+import { detectBoundCanvasProject, freezeChatTools } from "./chat-tools.js";
 import { chatCanvasContext } from "./chat-canvas.js";
 export type ChatFinish = {
   state: "complete" | "failed" | "stopped" | "interrupted";
   text?: string;
   error?: string;
   usage?: Record<string, number | bigint>;
+  calls?: ChatCallUsage[];
   reason?: string;
 };
 /** Independent original conversations, sharing only identity, policy and the wallet.
@@ -302,7 +313,10 @@ export class OriginalChats {
         "UPDATE chat_conversations SET deleted_at=$2,revision=revision+1 WHERE id=$1 RETURNING revision",
         [row.id, this.clock()],
       );
-      return { ok: true, conversation: { id: row.public_id, revision: deleted.revision } };
+      return {
+        ok: true,
+        conversation: { id: row.public_id, revision: deleted.revision },
+      };
     });
   }
   async restore(actor: Actor, key: string, selected?: string) {
@@ -335,8 +349,83 @@ export class OriginalChats {
       );
     });
   }
+  async quote(actor: Actor, value: unknown, selected?: string) {
+    const body = parseBody(value, chatQuoteFields, true);
+    return this.p.db.transaction(async (sql) => {
+      const policy = await one(
+        sql,
+        "SELECT price_revision FROM studio_policy FOR SHARE",
+      );
+      const workspace = await this.identity.activeWorkspace(
+        sql,
+        actor,
+        selected,
+      );
+      const chat = body.cid
+        ? await this.access(sql, actor, body.cid, workspace.id, { lock: true })
+        : null;
+      requireValue(!body.retry || chat, 409, "请先选择重试的对话");
+      requireValue(
+        (await new StudioCatalog(this.p.db).effective(sql, workspace.id))[
+          body.model
+        ],
+        403,
+        "当前空间未开放该模型",
+      );
+      const route = await resolvePublishedRoute(sql, body.model);
+      requireValue(route, 409, "当前模型不使用 Token 报价");
+      const wallet = await one(
+        sql,
+        "SELECT balance,held FROM wallets WHERE workspace_id=$1",
+        [workspace.id],
+      );
+      requireValue(wallet, 404, "积分账户不存在");
+      const context = await chatCanvasContext(
+        this.p,
+        sql,
+        actor,
+        workspace.id,
+        body.context,
+      );
+      const prepared = await prepareNativeChat(
+        this.p,
+        sql,
+        actor,
+        workspace.id,
+        chat?.id ?? null,
+        { text: body.text, retry: body.retry },
+        context,
+        route,
+        { balance: wallet.balance, held: wallet.held },
+        policy.price_revision,
+      );
+      return prepared.quote;
+    });
+  }
+  async bills(actor: Actor, key: string, selected?: string) {
+    return this.p.db.transaction(async (sql) => {
+      await sql.query(
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      const workspace = await this.identity.activeWorkspace(
+        sql,
+        actor,
+        selected,
+      );
+      const chat = await this.access(sql, actor, key, workspace.id);
+      return readChatBills(sql, chat.id);
+    });
+  }
   async send(actor: Actor, key: string, value: unknown, selected?: string) {
     const body = parseChatSend(value);
+    const requestHash = hash(
+      JSON.stringify([
+        body.model,
+        body.retry,
+        pythonStrip(body.text),
+        body.context,
+      ]),
+    );
     return this.p.db.transaction(async (sql) => {
       // Policy -> admission -> conversation -> wallet -> canvas. Match existing
       // catalog/financial lock order; global admission serializes only new turns.
@@ -363,6 +452,9 @@ export class OriginalChats {
           previous.owner_id === actor.id &&
             previous.conversation_id === chat.id &&
             previous.model === body.model &&
+            (!previous.native_snapshot ||
+              JSON.parse(previous.native_snapshot).requestHash ===
+                requestHash) &&
             (body.retry ||
               chatText(previous.content) === pythonStrip(body.text)),
           409,
@@ -387,15 +479,20 @@ export class OriginalChats {
         403,
         "当前空间未开放该模型，请选择其他模型",
       );
-      const connection = [
-        ...(await new ChatProviders(this.p).read(sql, true)).values(),
-      ].find((c) => c.provider.models.includes(body.model));
-      requireValue(connection, 503, "原对话模型尚未完整启用");
-      requireValue(
-        connection.configured && connection.row?.enabled !== false,
-        409,
-        "这个对话服务尚未配置",
-      );
+      const route = await resolvePublishedRoute(sql, body.model);
+      const connection = route
+        ? undefined
+        : [...(await new ChatProviders(this.p).read(sql, true)).values()].find(
+            (c) => c.provider.models.includes(body.model),
+          );
+      if (!route) {
+        requireValue(connection, 503, "原对话模型尚未完整启用");
+        requireValue(
+          connection.configured && connection.row?.enabled !== false,
+          409,
+          "这个对话服务尚未配置",
+        );
+      }
       requireValue(
         !(await one(
           sql,
@@ -456,21 +553,36 @@ export class OriginalChats {
         workspace.id,
         body.context,
       );
+      requireValue(wallet, 404, "积分账户不存在");
+      const native = route
+        ? await prepareNativeChat(
+            this.p,
+            sql,
+            actor,
+            workspace.id,
+            chat.id,
+            body,
+            context,
+            route,
+            { balance: wallet.balance, held: wallet.held },
+            global.price_revision,
+          )
+        : null;
+      if (native) {
+        const q = native.quote;
+        requireValue(
+          q.price_revision === body.price_revision &&
+            q.route_revision === body.route_revision &&
+            q.quote_context === body.quote_context &&
+            q.max_charge === body.max_charge &&
+            q.max_output_tokens === body.max_output_tokens,
+          409,
+          "本次对话报价已更新，请确认后重新发送",
+        );
+      }
       let userMessage: string;
       if (body.retry) {
-        const last = await one(
-          sql,
-          "SELECT * FROM chat_messages WHERE conversation_id=$1 AND NOT superseded ORDER BY public_id DESC LIMIT 1",
-          [chat.id],
-        );
-        requireValue(
-          last &&
-            Number(last.public_id) === body.retry &&
-            last.role === "assistant" &&
-            ["failed", "stopped", "interrupted"].includes(last.state),
-          409,
-          "只能重试最后一条未完成的回复",
-        );
+        const last = await retryTarget(sql, chat.id, body.retry);
         userMessage = last.reply_to;
         await sql.query(
           "UPDATE chat_messages SET superseded=true WHERE id=$1",
@@ -500,55 +612,84 @@ export class OriginalChats {
           [chat.id, body.model, stamp, userMessage],
         )
       ).id;
-      const turn = await one(
-        sql,
-        `INSERT INTO chat_turns(uid,conversation_id,owner_id,user_message,assistant_message,model,state,created,updated,plugin_id,plugin_version,config_snapshot,connection_id)
+      const common = [
+        body.uid,
+        chat.id,
+        actor.id,
+        userMessage,
+        assistantMessage,
+        body.model,
+        stamp,
+      ];
+      const turn = native
+        ? await one(
+            sql,
+            `INSERT INTO chat_turns(uid,conversation_id,owner_id,user_message,assistant_message,model,state,created,updated,route_revision_id,price_revision_id,native_snapshot,connection_id)
         VALUES($1,$2,$3,$4,$5,$6,'running',$7,$7,$8,$9,$10,$11) RETURNING *`,
-        [
-          body.uid,
-          chat.id,
-          actor.id,
-          userMessage,
-          assistantMessage,
-          body.model,
-          stamp,
-          connection.plugin.manifest.id,
-          connection.plugin.manifest.version,
-          this.p.vault.seal(connection.config),
-          connection.row?.id ?? null,
-        ],
-      );
-      if (connection.plugin.manifest.chat?.sandbox?.tools)
-        await freezeChatTools(sql, turn.id, actor.role);
-      const priceKey = body.model + "|reply",
-        price = await one(
+            [
+              ...common,
+              native.quote.route_revision,
+              native.quote.price_revision,
+              JSON.stringify({ ...native.snapshot, requestHash }),
+              route!.connectionId,
+            ],
+          )
+        : await one(
+            sql,
+            `INSERT INTO chat_turns(uid,conversation_id,owner_id,user_message,assistant_message,model,state,created,updated,plugin_id,plugin_version,config_snapshot,connection_id)
+        VALUES($1,$2,$3,$4,$5,$6,'running',$7,$7,$8,$9,$10,$11) RETURNING *`,
+            [
+              ...common,
+              connection!.plugin.manifest.id,
+              connection!.plugin.manifest.version,
+              this.p.vault.seal(connection!.config),
+              connection!.row?.id ?? null,
+            ],
+          );
+      let amount: string, priceKey: string;
+      if (native) {
+        for (const tool of native.tools.values())
+          if (!tool.builtin)
+            await sql.query(
+              "INSERT INTO chat_turn_tools(turn_id,plugin_id,package_version,tool_id) VALUES($1,$2,$3,$4)",
+              [turn.id, tool.plugin, tool.version, tool.declaration.id],
+            );
+        await snapshotTurnSkills(sql, turn.id, native.skills);
+        amount = native.quote.max_charge;
+        priceKey = body.model + "|token";
+      } else {
+        if (connection!.plugin.manifest.chat?.sandbox?.tools)
+          await freezeChatTools(sql, turn.id, actor.role);
+        priceKey = body.model + "|reply";
+        const price = await one(
           sql,
           "SELECT amount FROM studio_prices WHERE key=$1",
           [priceKey],
         );
-      requireValue(
-        price?.amount !== undefined && price.amount !== null,
-        409,
-        "这个对话模型尚未定价",
-      );
-      requireValue(
-        global.price_revision === body.price_revision,
-        409,
-        "价格已更新，请确认后重新发送",
-      );
-      requireValue(wallet, 404, "积分账户不存在");
-      const amount = Number(price.amount);
-      const held = await one(sql,
+        requireValue(price?.amount != null, 409, "这个对话模型尚未定价");
+        requireValue(
+          global.price_revision === body.price_revision,
+          409,
+          "价格已更新，请确认后重新发送",
+        );
+        amount = String(price.amount);
+      }
+      const project = native
+        ? native.snapshot.project
+        : await detectBoundCanvasProject(sql, turn.id);
+      await checkAndRecordBudget(sql, {
+        workspaceId: workspace.id,
+        projectId: project,
+        amount,
+      });
+      const held = await one(
+        sql,
         "UPDATE wallets SET held=held+$2 WHERE workspace_id=$1 AND balance-held >= $2 RETURNING workspace_id",
         [workspace.id, amount],
       );
-      requireValue(
-        held,
-        409,
-        `当前空间积分不足，需要 ${amount} 积分`,
-      );
+      requireValue(held, 409, `当前空间积分不足，需要 ${amount} 积分`);
       await sql.query(
-        "INSERT INTO chat_charges VALUES($1,$2,$3,$4,$5,$6,'held',$7)",
+        "INSERT INTO chat_charges(turn_id,workspace_id,owner_id,amount,price_key,price_revision,state,created) VALUES($1,$2,$3,$4,$5,$6,'held',$7)",
         [
           turn.id,
           workspace.id,
@@ -559,6 +700,14 @@ export class OriginalChats {
           Math.floor(stamp),
         ],
       );
+      if (
+        project &&
+        (await one(sql, "SELECT to_regclass('chat_turn_bills') AS ok")).ok
+      )
+        await sql.query(
+          "UPDATE chat_charges SET project_id=(SELECT id FROM documents WHERE public_id=$2) WHERE turn_id=$1",
+          [turn.id, project],
+        );
       await this.ledger(
         sql,
         turn,
@@ -672,9 +821,24 @@ export class OriginalChats {
     if (charge?.state === "held") {
       const success = value.state === "complete",
         amount = String(charge.amount);
+      let charged = success ? amount : "0";
+      if (turn.native_snapshot) {
+        const snapshot: NativeChatSnapshot = JSON.parse(turn.native_snapshot);
+        const bill = chatBill(
+          snapshot.route.price,
+          value.calls?.length ? value.calls : success ? [null] : [],
+          amount,
+          value.state,
+        );
+        await sql.query(
+          "INSERT INTO chat_turn_bills(turn_id,bill) VALUES($1,$2)",
+          [id, JSON.stringify(bill)],
+        );
+        charged = bill.charged;
+      }
       await sql.query(
         "UPDATE wallets SET balance=balance-$2,held=held-$3 WHERE workspace_id=$1",
-        [charge.workspace_id, success ? amount : 0, amount],
+        [charge.workspace_id, charged, amount],
       );
       await sql.query("UPDATE chat_charges SET state=$2 WHERE turn_id=$1", [
         id,
@@ -684,7 +848,7 @@ export class OriginalChats {
         sql,
         turn,
         charge.workspace_id,
-        amount,
+        success ? charged : amount,
         success ? "spend" : "refund",
         "AI 对话",
         stamp,

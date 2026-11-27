@@ -41,6 +41,7 @@ export class OriginalChatSettings {
           if (flags[row.id]) {
             models[row.id] = {
               ...row.descriptor,
+              billing: "token",
               label: row.display_label ?? row.descriptor.label,
             };
           }

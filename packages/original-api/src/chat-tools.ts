@@ -36,7 +36,7 @@ export async function freezeChatTools(sql: Sql, turnId: string, role: string) {
   );
 }
 
-type FrozenTool = {
+export type FrozenTool = {
   plugin: string;
   version: string;
   grants?: ResolvedContributions;
@@ -46,7 +46,7 @@ type FrozenTool = {
   model: ModelTool;
 };
 
-async function detectBoundCanvasProject(
+export async function detectBoundCanvasProject(
   sql: Sql,
   turnId: string,
 ): Promise<string | null> {
@@ -91,7 +91,7 @@ async function detectBoundCanvasProject(
   return null;
 }
 
-export async function turnTools(sql: Sql, id: string) {
+export async function turnTools(sql: Sql, id: string, project?: string | null) {
   const { rows } = await sql.query(
     `SELECT t.plugin_id,t.package_version,array_agg(t.tool_id ORDER BY t.tool_id) AS ids,
     r.package->'contributes' AS contributes FROM chat_turn_tools t JOIN studio_package_releases r
@@ -99,6 +99,41 @@ export async function turnTools(sql: Sql, id: string) {
     GROUP BY t.plugin_id,t.package_version,r.id,r.version ORDER BY t.plugin_id`,
     [id],
   );
+  return buildTools(
+    sql,
+    rows,
+    project === undefined ? await detectBoundCanvasProject(sql, id) : project,
+  );
+}
+
+export async function availableChatTools(
+  sql: Sql,
+  role: string,
+  project: string | null,
+) {
+  const { rows } = await sql.query(
+    `SELECT p.id AS plugin_id,p.version AS package_version,
+    r.package->'contributes' AS contributes,array_agg(t->>'id' ORDER BY t->>'id') AS ids
+    FROM studio_packages p JOIN studio_package_releases r USING(id,version)
+    CROSS JOIN LATERAL jsonb_array_elements(r.package->'contributes'->'chatTools') t
+    WHERE p.installed AND p.enabled AND NOT p.removing AND ($1='admin' OR coalesce(t->>'audience','member')='member')
+    GROUP BY p.id,p.version,r.id,r.version ORDER BY p.id`,
+    [role],
+  );
+  const tools = await buildTools(sql, rows, project);
+  requireValue(
+    tools.size <= 128,
+    409,
+    "已启用的对话工具过多，请管理员调整插件",
+  );
+  return tools;
+}
+
+async function buildTools(
+  sql: Sql,
+  rows: Record<string, any>[],
+  boundProject: string | null,
+) {
   const tools = new Map<string, FrozenTool>();
   for (const row of rows) {
     const grants = packageContributions(row);
@@ -127,7 +162,6 @@ export async function turnTools(sql: Sql, id: string) {
   }
 
   // F018: Mount built-in canvas Agent proposal tools when the chat is bound to a canvas project.
-  const boundProject = await detectBoundCanvasProject(sql, id);
   const hasProposals = boundProject
     ? Boolean(
         (await one(sql, "SELECT to_regclass('canvas_proposals') AS ok"))?.ok,
@@ -152,8 +186,14 @@ export async function turnTools(sql: Sql, id: string) {
           type: "string",
           description: "画布公开 ID（缺省默认使用当前对话绑定的画布）",
         },
-        title: { type: "string", description: "变更提案标题（如：新增雨夜分镜）" },
-        summary: { type: "string", description: "本次画布结构变更与镜头意图说明" },
+        title: {
+          type: "string",
+          description: "变更提案标题（如：新增雨夜分镜）",
+        },
+        summary: {
+          type: "string",
+          description: "本次画布结构变更与镜头意图说明",
+        },
         base_revision: {
           type: "integer",
           description: "基于的画布版本号（用于并发冲突保护，不匹配时返回 409）",

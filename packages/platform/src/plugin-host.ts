@@ -123,7 +123,12 @@ export type HttpTransport<Body extends string | Uint8Array = string> = (
   contentType: string;
   body: Buffer | ReadableStream<Uint8Array>;
 }>;
-export const guardedTransport: HttpTransport<string | Uint8Array> = (url, init, signal) =>
+/** Native generation callers own the finite deadline for the entire response stream. */
+export const generationTransport: HttpTransport<string | Uint8Array> = (
+  url,
+  init,
+  signal,
+) =>
   new Promise((done, fail) => {
     requirePublicHttps(url);
     const req = httpsRequest(
@@ -132,10 +137,7 @@ export const guardedTransport: HttpTransport<string | Uint8Array> = (url, init, 
         method: init.method,
         headers: init.headers,
         lookup: guardedLookup,
-        signal: AbortSignal.any([
-          signal,
-          AbortSignal.timeout(hostLimits.httpTimeoutMs),
-        ]),
+        signal,
       },
       (res) =>
         done({
@@ -152,6 +154,17 @@ export const guardedTransport: HttpTransport<string | Uint8Array> = (url, init, 
     req.on("error", fail);
     req.end(init.body);
   });
+
+export const guardedTransport: HttpTransport<string | Uint8Array> = (
+  url,
+  init,
+  signal,
+) =>
+  generationTransport(
+    url,
+    init,
+    AbortSignal.any([signal, AbortSignal.timeout(hostLimits.httpTimeoutMs)]),
+  );
 
 /** Read the entity body once. Count raw bytes before any text conversion. */
 export async function* httpChunks(

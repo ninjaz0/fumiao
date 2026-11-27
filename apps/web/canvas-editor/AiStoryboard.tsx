@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {ModelSelect} from './chat/ModelSelect';
+import {useChatQuote,quoteFunded} from './chat/useChatQuote';
 import {chatRequest} from './chat/ChatWorkspace';
 import type {CanvasGenerationMode} from './types';
 
@@ -65,24 +66,31 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
   return()=>{closed=true;events.close()};
  },[cid,workspace]);
  useEffect(()=>{if(shots.length)localStorage.setItem(key+'-proposal',JSON.stringify({message:lastMessage.current,shots}))},[shots,key,draft.message]);
- const price=config?.pricing.items.find((p:any)=>p.key===model+'|reply')?.amount;
- const funded = price != null && config?.credits.available >= price;
- const send=async()=>{
-  setBusy(true);setError('');
-  try{
-   if(!pending.current){
-    const c=await req('/api/chats',{model});const chat=c.conversation.id;localStorage.setItem(key+'-chat',chat);setCid(chat);
-    const trackHint = generationMode === 'omni_ref'
+ const trackHint = generationMode === 'omni_ref'
       ? '采用全能多参考链路（可在画面描述中引用 @角色名/@场景名 或 <Picture N>）。'
       : generationMode === 'grid_preview'
         ? `采用 ${gridLayout} 宫格构图预览链路，确保画面构图连贯。`
         : '采用经典首尾帧连贯链路，注意镜头间动作与光影承接。';
-    const text=`请根据下面需求拟定可编辑分镜，不要执行视频或语音生成。目标是约 ${targetCount} 个镜头（最多支持 ${MAX_STORYBOARD_SHOTS} 个镜头）。${trackHint}只返回 JSON 数组，1–${MAX_STORYBOARD_SHOTS} 个镜头，每项严格包含 title（简短标题）、prompt（可直接用于视频生成的中文镜头描述）、narration（可为空，按自然朗读每秒约2–3个汉字，5秒不超过12字、10秒不超过25字、15秒不超过35字）、seconds（只能为5、10、15）。保持主体和场景连贯，不编造需求没有提供的事实，不输出 Markdown。需求：\n`+brief;
-    pending.current={cid:chat,body:{uid:crypto.randomUUID(),model,text,expected_revision:c.conversation.revision,price_revision:config.pricing.revision}};
+ const text=`请根据下面需求拟定可编辑分镜，不要执行视频或语音生成。目标是约 ${targetCount} 个镜头（最多支持 ${MAX_STORYBOARD_SHOTS} 个镜头）。${trackHint}只返回 JSON 数组，1–${MAX_STORYBOARD_SHOTS} 个镜头，每项严格包含 title（简短标题）、prompt（可直接用于视频生成的中文镜头描述）、narration（可为空，按自然朗读每秒约2–3个汉字，5秒不超过12字、10秒不超过25字、15秒不超过35字）、seconds（只能为5、10、15）。保持主体和场景连贯，不编造需求没有提供的事实，不输出 Markdown。需求：\n`+brief;
+ const native=config?.models[model]?.billing==="token";
+ const canvasContext=async()=>({project,expected_revision:(await req('/api/canvases/'+project)).revision});
+ const offered=useChatQuote(native&&brief.trim()&&!running?JSON.stringify([workspace,project,model,text,config?.pricing.revision,config?.credits.exact?.available]):null,
+  async()=>req('/api/chat/quote',{cid:null,model,text,context:await canvasContext()}));
+ const storedCap=pending.current?.body.max_charge;
+ const price=storedCap ?? (native?offered.quote?.max_charge:config?.pricing.items.find((p:any)=>p.key===model+'|reply')?.amount);
+ const funded = !!pending.current || (!!config && quoteFunded(config.credits.exact?.available,config.credits.available,price));
+ const send=async()=>{
+  setBusy(true);setError('');
+  try{
+   if(!pending.current){
+    if(native&&!offered.quote)return;
+    const context=native?await canvasContext():undefined;
+    const c=await req('/api/chats',{model,context});const chat=c.conversation.id;localStorage.setItem(key+'-chat',chat);setCid(chat);
+    pending.current={cid:chat,body:{uid:crypto.randomUUID(),model,text,expected_revision:c.conversation.revision,price_revision:config.pricing.revision,...offered.quote,context}};
     localStorage.setItem(key+'-pending',JSON.stringify(pending.current));
    }
    const p=pending.current;setCid(p.cid);setComplete(false);const snapshot=await req('/api/chats/'+p.cid+'/messages',p.body);setRunning(!!snapshot.conversation.active_turn);const reply=[...snapshot.messages].reverse().find((m:any)=>m.role==='assistant');if(reply?.state==='complete'){lastMessage.current=reply.id;setComplete(true);try{setShots(parseStoryboard(reply.content))}catch{setError('未能整理出完整分镜。请调整需求后重新拟定，已有分镜会保留。')}}
-  }catch(e){if((e as any).status && (e as any).status<500){pending.current=null;localStorage.removeItem(key+'-pending');void req('/api/chat/config').then(updateConfig);}setError((e as Error).message)}finally{setBusy(false)}
+  }catch(e){if((e as any).status && (e as any).status<500){offered.refresh();pending.current=null;localStorage.removeItem(key+'-pending');void req('/api/chat/config').then(updateConfig);}setError((e as Error).message)}finally{setBusy(false)}
  };
  const stop=async()=>{
   if(stopPending.current)return;
@@ -120,13 +128,13 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
   <label>创作需求<textarea value={brief} maxLength={8000} rows={4} disabled={running||busy} placeholder="介绍剧集剧情、角色关系、场景与希望传达的节奏…" onChange={e=>{setBrief(e.target.value);localStorage.setItem(key+'-brief',e.target.value)}}/></label>
   <div className="storyboard-request">{model&&config?.models[model]&&<>
    <ModelSelect models={config.models} value={model} disabled={busy||running} onChange={setModel}/>
-   {price!=null&&<span className="fm-number">{`文字生成 · ${price} 积分`}</span>}
+   {price!=null&&<span className="fm-number">{`文字生成 · ${native||storedCap?"最高 ":""}${price} 积分`}</span>}
   </>}{running?<><span className="fm-state-change" role="status">{stopping?'正在停止…':'正在拟定分镜…'}</span><button className="secondary" disabled={stopping} onClick={()=>void stop()}>停止</button></>:model&&<button className="primary" disabled={busy||!brief.trim()||!config?.models[model]||!funded} onClick={()=>void send()}>{busy?'提交中…':pending.current?'重试确认':complete&&error?'重新拟定':'拟定分镜'}</button>}</div>
   {!running&&config&&(!model
    ? <p role="status">当前空间暂无可用对话模型{onConfigureModels
     ? <button className="secondary" type="button" onClick={onConfigureModels}>前往配置对话模型</button>
     : "，请联系管理员开通"}</p>
-   : price==null ? <p role="status">当前对话模型尚未定价</p>
+   : price==null ? <p role="status">{native?(offered.error||(brief.trim()?"正在报价":"按 Token 计费")):"当前对话模型尚未定价"}{native&&offered.error&&<button type="button" onClick={offered.refresh}>重新报价</button>}</p>
    : !funded && <p role="status">当前空间积分不足<button className="secondary" type="button" onClick={onRecharge}>去充值</button></p>)}
   {error&&<p className="error" role="alert">{error}</p>}
 
