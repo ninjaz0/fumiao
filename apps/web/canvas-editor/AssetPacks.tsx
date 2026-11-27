@@ -35,6 +35,7 @@ export type AssetPacksProps = {
  onImportPack:(pack:Pack)=>void|Promise<void>;
  onRemovePack:(id:string)=>void|Promise<void>;
  onDeletePack?:(id:string)=>void|Promise<void>;
+ onPackMutate?:(change:{kind:'saved';pack:Pack}|{kind:'deleted';id:string})=>void;
 };
 const purposes:Record<string,string>={subject:'人物外观',outfit:'服装',scene:'场景',style:'风格',product:'产品细节'};
 const turnaroundSlots:[keyof PackTurnaroundViews,string][]=[['front','正面'],['side','侧面'],['back','背面'],['sheet','三视图总表']];
@@ -54,7 +55,7 @@ const blank=()=>({name:'',purpose:'subject',description:'',media:[] as string[],
 export function AssetPacks(props:AssetPacksProps){
  return <WorkspaceAssetPacks key={props.workspace} {...props}/>;
 }
-function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[],onImportImages,onImportPack,onRemovePack,onDeletePack}:AssetPacksProps){
+function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs=[],onImportImages,onImportPack,onRemovePack,onDeletePack,onPackMutate}:AssetPacksProps){
  const [packs,setPacks]=useState<Pack[]>([]),[assets,setAssets]=useState<{id:string;name?:string}[]>([]),[opened,setOpened]=useState<string|null>(null),[chosen,setChosen]=useState<string[]>([]),[editing,setEditing]=useState<Pack|null|undefined>(),[draft,setDraft]=useState(blank),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[removing,setRemoving]=useState<string|null>(null);
  const [turnaroundView,setTurnaroundView]=useState<'sheet'|'front'|'side'|'back'>('sheet');
  const [turnaroundDraft,setTurnaroundDraft]=useState<PackTurnaroundViews>({});
@@ -117,7 +118,8 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
    const payload:Record<string,unknown>={name:draft.name,purpose:draft.purpose,description:draft.description,media:draft.media,expected_revision:editing?.revision};
    if(hasVp)payload.voice_profile=vp;
    else if(editing?.voice_profile)payload.voice_profile=null;
-   await request('/api/asset-packs'+(editing?'/'+editing.id:''),payload,editing?'PUT':'POST');
+   const saved=(await request('/api/asset-packs'+(editing?'/'+editing.id:''),payload,editing?'PUT':'POST')) as Pack;
+   onPackMutate?.({kind:'saved',pack:saved});
    if(!mountedRef.current)return;
    if(editing===null)newDraft.current=blank();
    leaveEditor();await load();
@@ -279,7 +281,7 @@ function WorkspaceAssetPacks({workspace,userId,admin=false,selected=[],imageRefs
      <button className="fm-pack-button" disabled={busy||pack.locked||(pack.scope==='global'&&!admin)} title={pack.locked?'已锁定':undefined} aria-label={'编辑 '+pack.name} onClick={()=>{setEditing(pack);setDraft({name:pack.name,purpose:pack.purpose,description:pack.description,media:pack.media,voice_profile:pack.voice_profile??null});setError('')}}><Pencil size={16}/></button>
      {(admin||pack.owner===userId)&&<button className="fm-pack-button" disabled={busy||pack.locked} title={pack.locked?'已锁定不可删除':undefined} aria-label={'删除 '+pack.name} onClick={()=>setRemoving(pack.id)}><Trash2 size={16}/></button>}
     </div>
-    {removing===pack.id&&<div className="fm-pack-delete"><span>删除“{pack.name}”？原图片会保留。</span><button disabled={busy} onClick={async()=>{setBusy(true);setError('');try{const wasSelected=selected.some(p=>p.id===pack.id);await request('/api/asset-packs/'+pack.id,undefined,'DELETE');if(!mountedRef.current)return;setRemoving(null);if(onDeletePack)await onDeletePack(pack.id);else if(wasSelected)await onRemovePack(pack.id);if(mountedRef.current)await load()}catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}}}>删除素材包</button><button disabled={busy} onClick={()=>setRemoving(null)}>取消</button></div>}
+    {removing===pack.id&&<div className="fm-pack-delete"><span>删除“{pack.name}”？原图片会保留。</span><button disabled={busy} onClick={async()=>{setBusy(true);setError('');try{const wasSelected=selected.some(p=>p.id===pack.id);await request('/api/asset-packs/'+pack.id,undefined,'DELETE');onPackMutate?.({kind:'deleted',id:pack.id});if(!mountedRef.current)return;setRemoving(null);if(onDeletePack)await onDeletePack(pack.id);else if(wasSelected)await onRemovePack(pack.id);if(mountedRef.current)await load()}catch(e){if(mountedRef.current)setError((e as Error).message)}finally{if(mountedRef.current)setBusy(false)}}}>删除素材包</button><button disabled={busy} onClick={()=>setRemoving(null)}>取消</button></div>}
    </article>)}</div>}
   </>}
  </div>

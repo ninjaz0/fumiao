@@ -1663,3 +1663,34 @@ test("PR #223 Round 4 Items 3 & 4: quoteCanvasSpeechPlan scopes voice packs to c
   );
   assert.match(workspaceSource, /"--fm-right-obstruction":\s*`\$\{rightObstruction\}px`/);
 });
+
+test("PR #223 Round 5: AssetPacks emits single onPackMutate before modal close/onRemovePack and CanvasWorkspace guards availablePacks refresh with read generation", async () => {
+  const root = process.cwd();
+  const assetPacksSource = await readFile(
+    join(root, "apps/web/canvas-editor/AssetPacks.tsx"),
+    "utf8",
+  );
+  const workspaceSource = await readFile(
+    join(root, "apps/web/canvas-editor/CanvasWorkspace.tsx"),
+    "utf8",
+  );
+
+  // Single optional mutation callback emitted on save & delete BEFORE mountedRef early-return and BEFORE onRemovePack
+  assert.match(
+    assetPacksSource,
+    /onPackMutate\?:\(change:\{kind:'saved';pack:Pack\}\|\{kind:'deleted';id:string\}\)=>void;/,
+  );
+  assert.match(
+    assetPacksSource,
+    /const saved=\(await request\('\/api\/asset-packs'[\s\S]*?onPackMutate\?\.\(\{kind:'saved',pack:saved\}\);\s*if\(!mountedRef\.current\)return;/,
+  );
+  assert.match(
+    assetPacksSource,
+    /await request\('\/api\/asset-packs\/'\+pack\.id,undefined,'DELETE'\);onPackMutate\?\.\(\{kind:'deleted',id:pack\.id\}\);if\(!mountedRef\.current\)return;[\s\S]*?else if\(wasSelected\)await onRemovePack\(pack\.id\);/,
+  );
+
+  // CanvasWorkspace wires onPackMutate + generation-guarded loadAvailablePacks while keeping importPack intact
+  assert.match(workspaceSource, /const packsReadSeqRef = useRef\(0\);/);
+  assert.match(workspaceSource, /seq === packsReadSeqRef\.current/);
+  assert.match(workspaceSource, /onPackMutate=\{\(change\) => \{/);
+});

@@ -977,7 +977,24 @@ export function CanvasWorkspace({
   const [packPicker, setPackPicker] = useState<string | null>(null);
   const [packMedia, setPackMedia] = useState<Record<string,string[]>>({});
   const [availablePacks, setAvailablePacks] = useState<Pack[]>([]);
-  useEffect(()=>{let active=true;void api<{packs:Pack[]}>('/api/asset-packs').then(data=>{if(active){setAvailablePacks(data.packs);setPackMedia(Object.fromEntries(data.packs.map((p)=> [p.id,p.media])))}}).catch(()=>{});return()=>{active=false}},[project.id]);
+  const packsReadSeqRef = useRef(0);
+  const loadAvailablePacks = useCallback(() => {
+    const seq = ++packsReadSeqRef.current;
+    void api<{ packs: Pack[] }>("/api/asset-packs")
+      .then((data) => {
+        if (aliveRef.current && seq === packsReadSeqRef.current) {
+          setAvailablePacks(data.packs);
+          setPackMedia(Object.fromEntries(data.packs.map((p) => [p.id, p.media])));
+        }
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    loadAvailablePacks();
+    return () => {
+      ++packsReadSeqRef.current;
+    };
+  }, [project.id, loadAvailablePacks]);
   const [candidateCount, setCandidateCount] = useState<1 | 2>(1);
   const [confirmCandidates, setConfirmCandidates] = useState(false);
   const [compareNode, setCompareNode] = useState<string | null>(null);
@@ -5210,6 +5227,23 @@ export function CanvasWorkspace({
         <AssetPacks workspace={project.workspace} userId={studio.me.id} admin={studio.me.role === 'admin'}
           selected={doc.value.document.nodes.find(n=>n.id===packPicker)?.asset_packs || []}
           imageRefs={referenceMedia.filter((id):id is string=>Boolean(id))}
+          onPackMutate={(change) => {
+            ++packsReadSeqRef.current;
+            setAvailablePacks((prev) =>
+              change.kind === "saved"
+                ? [change.pack, ...prev.filter((p) => p.id !== change.pack.id)]
+                : prev.filter((p) => p.id !== change.id),
+            );
+            setPackMedia((prev) => {
+              if (change.kind === "saved") {
+                return { ...prev, [change.pack.id]: change.pack.media };
+              }
+              const next = { ...prev };
+              delete next[change.id];
+              return next;
+            });
+            loadAvailablePacks();
+          }}
           onImportImages={(ids,pack)=>importPack(pack,ids)} onImportPack={pack=>importPack(pack)}
           onRemovePack={id=>{const target=doc.ref.current.document.nodes.find(n=>n.id===packPicker);if(target)edit(target.id,{asset_packs:(target.asset_packs||[]).filter(p=>p.id!==id)});setPackPicker(null);}} />
       </Modal>}

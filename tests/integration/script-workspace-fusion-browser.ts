@@ -1183,9 +1183,305 @@ try {
       .click();
     await expect(page.locator(".fm-group-node")).toHaveCount(1);
 
-    console.log(
-      "PASS script-workspace-fusion-browser: <=760px layout, directory-rename child alignment, slow-search invalidation, draft-safe search/replace, rich+source jump, and 2x close/reopen conflict retention verified",
+    // 8. PR #223 Round 5: Intra-canvas AssetPacks mutation -> live speech quote & balance gate sync
+    //    Verifies:
+    //    (a) Normal path: speaker-matched character pack ("侦探角色" -> free edge-tts) renamed inside AssetPacks modal ->
+    //        closing modal immediately switches Shot 1 dialogue quote to default paid tts-1 (2 credits > 0 wallet -> disabled + "当前空间积分不足");
+    //    (b) Failed write branch: 503 on PUT keeps error alert and does NOT corrupt parent availablePacks;
+    //    (c) Stale pre-save GET /api/asset-packs arriving AFTER save + fast modal close does NOT overwrite new pack state;
+    //    (d) Reverse rename back to speaker name immediately unblocks dialogue buttons;
+    //    (e) Deleting an imported pack that closes the modal via onRemovePack immediately updates dialogue quote!
+    const png1x1 = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
     );
+    const assetUploadRes = await context.request.post("/api/assets", {
+      headers: { ...headers, "Content-Type": "image/png" },
+      data: png1x1,
+    });
+    assert.equal(assetUploadRes.status(), 200, await assetUploadRes.text());
+    const refAsset = await assetUploadRes.json();
+
+    const speakerName = `侦探角色_${runTag}`;
+    const renamedPackName = `路人甲_${runTag}`;
+    const createPackRes = await context.request.post("/api/asset-packs", {
+      headers,
+      data: {
+        name: speakerName,
+        purpose: "subject",
+        description: "同画布声线同步测试",
+        media: [refAsset.id],
+        voice_profile: { model: "edge-tts" },
+      },
+    });
+    assert.equal(createPackRes.status(), 200, await createPackRes.text());
+    const createdPack = await createPackRes.json();
+
+    const createPackCanvasRes = await context.request.post("/api/canvases", {
+      headers,
+      data: { title: `声线同步验收_${runTag}` },
+    });
+    assert.equal(
+      createPackCanvasRes.status(),
+      200,
+      await createPackCanvasRes.text(),
+    );
+    const canvasPacks = await createPackCanvasRes.json();
+    const putPackCanvasRes = await context.request.put(
+      `/api/canvases/${canvasPacks.id}/document`,
+      {
+        headers,
+        data: {
+          title: canvasPacks.title,
+          expected_revision: canvasPacks.revision,
+          document: {
+            schemaVersion: 1,
+            nodes: [
+              {
+                ...newNode("video", 140, 220, 1),
+                id: "shot-pack-sync",
+                title: "对白镜头 1",
+                width: 240,
+                height: 150,
+                prompt: "侦探回头说话",
+                dialogue_lines: [
+                  {
+                    id: "dlg-sync-1",
+                    speaker: speakerName,
+                    text: "真相只有一个。",
+                  },
+                ],
+              },
+            ],
+            edges: [],
+            shots: ["shot-pack-sync"],
+          },
+        },
+      },
+    );
+    assert.equal(putPackCanvasRes.status(), 200, await putPackCanvasRes.text());
+
+    // Configure state view for this page: default speech is paid tts-1 (2 credits), edge-tts is free (0 credits), wallet available = 0
+    await page.route("**/api/state*", async (route) => {
+      try {
+        const resp = await route.fetch();
+        const json = await resp.json();
+        json.canvas_speech_models = ["tts-1", "edge-tts"];
+        json.canvas_speech_default_models = ["tts-1"];
+        json.model_catalog = {
+          ...(json.model_catalog || {}),
+          "tts-1": { kind: "audio", label: "OpenAI TTS-1" },
+          "edge-tts": { kind: "audio", label: "Edge 免费配音" },
+        };
+        json.model_access = {
+          ...(json.model_access || {}),
+          "tts-1": true,
+          "edge-tts": true,
+        };
+        json.pricing = {
+          revision: json.pricing?.revision ?? 1,
+          items: [
+            ...(json.pricing?.items || []).filter(
+              (i: { key: string }) =>
+                !i.key.startsWith("tts-1|") && !i.key.startsWith("edge-tts|"),
+            ),
+            { key: "tts-1|standard", amount: 2 },
+            { key: "edge-tts|free", amount: 0 },
+          ],
+        };
+        json.credits = { available: 0, reserved: 0 };
+        await route.fulfill({ response: resp, json });
+      } catch {
+        // Page/context closing at test teardown.
+      }
+    });
+
+    let failNextPackPut = false;
+    let holdStaleGetOnce = false;
+    let releaseStaleGet: (() => void) | null = null;
+    await page.route(/\/api\/asset-packs(?:\/|$|\?)/, async (route) => {
+      const req = route.request();
+      if (req.method() === "PUT" && failNextPackPut) {
+        failNextPackPut = false;
+        await route.fulfill({
+          status: 503,
+          json: { detail: "模拟素材包保存失败" },
+        });
+        return;
+      }
+      if (req.method() === "GET" && holdStaleGetOnce) {
+        holdStaleGetOnce = false;
+        const staleResp = await route.fetch();
+        const staleJson = await staleResp.json();
+        await new Promise<void>((resolve) => {
+          releaseStaleGet = resolve;
+        });
+        await route.fulfill({ response: staleResp, json: staleJson });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.setViewportSize({ width: 1360, height: 860 });
+    await page.goto(`/canvas/${canvasPacks.id}?workspace=${workspace}`);
+    // Close Agent dock if open from previous step
+    if (await page.locator(".fm-floating-agent.is-docked").isVisible()) {
+      await page
+        .locator(".fm-floating-agent.is-docked")
+        .getByRole("button", { name: "关闭 Agent 提案箱" })
+        .click();
+    }
+    await page
+      .locator(".fm-view-switch")
+      .getByRole("button", { name: "分屏", exact: true })
+      .click();
+    const sbDock = page.locator(".fm-docked-storyboard");
+    await expect(sbDock).toBeVisible();
+    await sbDock.getByRole("button", { name: "镜头 1 的旁白" }).click();
+
+    const lineSynthBtn = sbDock.getByRole("button", {
+      name: "合成此句",
+      exact: true,
+    });
+    const batchSynthBtn = sbDock.getByRole("button", {
+      name: "一键合成全部对白",
+      exact: true,
+    });
+    // Initially speaker matches character pack (edge-tts, 0 credits <= 0 available) -> enabled!
+    await expect(lineSynthBtn).toBeEnabled();
+    await expect(batchSynthBtn).toBeEnabled();
+    await expect(sbDock.getByText("当前空间积分不足")).toHaveCount(0);
+
+    // Select shot node to open composer and open AssetPacks modal
+    const shotNodeLoc = page.locator('.react-flow__node[data-id="shot-pack-sync"]');
+    await shotNodeLoc.click();
+    const openPackBtn = page
+      .locator(".canvas-pack-entry")
+      .getByRole("button", { name: /素材包/ });
+    await openPackBtn.click();
+    const packDialog = page.getByRole("dialog", { name: "素材包" });
+    await expect(packDialog).toBeVisible();
+
+    // (b) Failed write branch: PUT returns 503 -> error shown, parent quote remains enabled
+    failNextPackPut = true;
+    await packDialog
+      .getByRole("button", { name: `编辑 ${speakerName}`, exact: true })
+      .click();
+    await packDialog.getByLabel("名称").fill(renamedPackName);
+    await packDialog
+      .getByRole("button", { name: "保存素材包", exact: true })
+      .click();
+    await expect(packDialog.getByRole("alert")).toContainText(
+      "模拟素材包保存失败",
+    );
+    await packDialog.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(packDialog).toHaveCount(0);
+    await expect(lineSynthBtn).toBeEnabled();
+
+    // (a) + (c) Trigger a real CanvasWorkspace loadAvailablePacks() GET carrying speakerName and hold its HTTP response,
+    //           then rename pack to renamedPackName + fast-close modal, then release the held stale GET!
+    await openPackBtn.click();
+    await expect(packDialog).toBeVisible();
+    await packDialog
+      .getByRole("button", { name: `编辑 ${speakerName}`, exact: true })
+      .click();
+    await packDialog.getByLabel("说明").fill("触发首轮刷新并挂起旧读请求");
+    holdStaleGetOnce = true;
+    const heldStaleGetEntered = new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        if (releaseStaleGet) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 15);
+    });
+    await packDialog
+      .getByRole("button", { name: "保存素材包", exact: true })
+      .click();
+    await heldStaleGetEntered;
+
+    // AssetPacks's internal post-save load() also awaits GET /api/asset-packs; close & reopen modal so we can immediately rename while CanvasWorkspace's older GET is still held!
+    await packDialog.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(packDialog).toHaveCount(0);
+
+    await openPackBtn.click();
+    await expect(packDialog).toBeVisible();
+    await packDialog
+      .getByRole("button", { name: `编辑 ${speakerName}`, exact: true })
+      .click();
+    await packDialog.getByLabel("名称").fill(renamedPackName);
+    const putWait = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/asset-packs/${createdPack.id}`) &&
+        r.request().method() === "PUT" &&
+        r.status() === 200,
+    );
+    await packDialog
+      .getByRole("button", { name: "保存素材包", exact: true })
+      .click();
+    await putWait;
+    // Fast-close modal immediately after PUT 200!
+    await packDialog.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(packDialog).toHaveCount(0);
+
+    // Release CanvasWorkspace's older held GET (which carries stale speakerName!) and verify it does NOT overwrite renamedPackName
+    (releaseStaleGet as (() => void) | null)?.();
+    releaseStaleGet = null;
+    await page.waitForTimeout(150);
+
+    // Shot 1 speaker no longer matches -> falls back to default paid tts-1 (2 credits > 0 available) -> disabled!
+    await expect(lineSynthBtn).toBeDisabled();
+    await expect(batchSynthBtn).toBeDisabled();
+    await expect(sbDock.getByText("当前空间积分不足")).toBeVisible();
+
+    // (d) Reverse rename back to speakerName -> immediately re-enables free edge-tts!
+    await openPackBtn.click();
+    await expect(packDialog).toBeVisible();
+    await packDialog
+      .getByRole("button", { name: `编辑 ${renamedPackName}`, exact: true })
+      .click();
+    await packDialog.getByLabel("名称").fill(speakerName);
+    await packDialog
+      .getByRole("button", { name: "保存素材包", exact: true })
+      .click();
+    await expect(
+      packDialog.getByRole("button", { name: `打开素材包 ${speakerName}` }),
+    ).toBeVisible();
+    await packDialog.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(packDialog).toHaveCount(0);
+    await expect(lineSynthBtn).toBeEnabled();
+    await expect(batchSynthBtn).toBeEnabled();
+    await expect(sbDock.getByText("当前空间积分不足")).toHaveCount(0);
+
+    // (e) Import whole pack onto shot-pack-sync, re-open modal, delete selected pack -> onRemovePack closes modal AND dialogue flips to disabled!
+    await openPackBtn.click();
+    await expect(packDialog).toBeVisible();
+    await packDialog
+      .getByRole("button", { name: `打开素材包 ${speakerName}` })
+      .click();
+    await packDialog
+      .getByRole("button", { name: "导入整个素材包", exact: true })
+      .click();
+    await expect(packDialog).toHaveCount(0);
+
+    await openPackBtn.click();
+    await expect(packDialog).toBeVisible();
+    await packDialog
+      .getByRole("button", { name: `删除 ${speakerName}`, exact: true })
+      .click();
+    await packDialog
+      .getByRole("button", { name: "删除素材包", exact: true })
+      .click();
+    // onRemovePack automatically closes the modal on selected-pack deletion!
+    await expect(packDialog).toHaveCount(0);
+    await expect(lineSynthBtn).toBeDisabled();
+    await expect(batchSynthBtn).toBeDisabled();
+    await expect(sbDock.getByText("当前空间积分不足")).toBeVisible();
+
+    console.log(
+      "PASS script-workspace-fusion-browser: <=760px layout, directory-rename child alignment, slow-search invalidation, draft-safe search/replace, rich+source jump, 2x close/reopen conflict retention, and intra-canvas pack voice/quote sync verified",
+    );
+    await page.unrouteAll({ behavior: "ignoreErrors" });
     await page.close();
   } finally {
     await context.close();
