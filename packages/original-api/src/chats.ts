@@ -411,7 +411,12 @@ export class OriginalChats {
       return prepared.quote;
     });
   }
-  async replySource(actor: Actor, message: string, selected?: string) {
+  async replySource(
+    actor: Actor,
+    message: string,
+    selected?: string,
+    project?: string,
+  ) {
     requireValue(
       /^[1-9]\d{0,15}$/.test(message) && Number.isSafeInteger(Number(message)),
       404,
@@ -426,6 +431,55 @@ export class OriginalChats {
         actor,
         selected,
       );
+      if (project !== undefined) {
+        const row = await one(
+          sql,
+          `SELECT c.id,c.public_id,m.content,m.state,t.public_id AS turn,
+          author.public_id AS actor_number,u.context,charge.project_id,d.id AS canvas_id
+          FROM chat_messages m JOIN chat_conversations c ON c.id=m.conversation_id
+          JOIN documents d ON d.public_id=$3 AND d.workspace_id=c.workspace_id AND d.kind='canvas' AND NOT d.deleted
+          LEFT JOIN chat_turns t ON t.assistant_message=m.id
+          LEFT JOIN chat_messages u ON u.id=COALESCE(t.user_message,m.reply_to) AND u.conversation_id=c.id AND u.role='user'
+          JOIN users author ON author.id=COALESCE(t.owner_id,u.author_id)
+          LEFT JOIN chat_charges charge ON charge.turn_id=t.id
+          WHERE m.public_id=$1 AND c.workspace_id=$2 AND author.id=$4
+            AND m.role='assistant' AND m.state<>'running'
+            AND (charge.turn_id IS NULL OR (charge.workspace_id=c.workspace_id AND charge.owner_id=author.id))`,
+          [message, workspace.id, project, actor.id],
+        );
+        requireValue(row, 404, "内容不存在或无权访问");
+        await this.access(sql, actor, row.public_id, workspace.id);
+        // The admission/import charge already carries the historical project,
+        // including provable links. An archived reply may have only user context.
+        let contextProject: unknown;
+        try {
+          contextProject = JSON.parse(row.context ?? "{}")?.project;
+        } catch {
+          /* historical text */
+        }
+        requireValue(
+          (contextProject == null || contextProject === project) &&
+            (row.project_id
+              ? row.project_id === row.canvas_id
+              : contextProject === project),
+          404,
+          "内容不存在或无权访问",
+        );
+        const bill = row.turn
+          ? (await readChatBills(sql, row.id, Number(message))).bills[0]
+          : null;
+        return {
+          cid: row.public_id,
+          message: Number(message),
+          content: chatText(row.content),
+          state: row.state,
+          turn: row.turn,
+          actor: Number(row.actor_number),
+          workspace: Number(workspace.public_id),
+          project,
+          bill: bill ?? null,
+        };
+      }
       const row = await one(
         sql,
         `SELECT c.public_id,m.content FROM chat_messages m

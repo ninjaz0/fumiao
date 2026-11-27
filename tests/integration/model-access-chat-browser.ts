@@ -18,9 +18,9 @@ async function composerPage(t: test.TestContext) {
  import {createRoot} from 'react-dom/client';
  import {ChatWorkspace} from './canvas-editor/chat/ChatWorkspace';
  import {AiStoryboard} from './canvas-editor/AiStoryboard';
- const props={workspace:Number(new URLSearchParams(location.search).get("workspace")||1),userId:1};
+ const params=new URLSearchParams(location.search); const props={workspace:Number(params.get("workspace")||1),userId:Number(params.get("actor")||1)};
  createRoot(document.getElementById('root')).render(location.pathname==='/storyboard'
-   ? <AiStoryboard {...props} project="project" onApply={async()=>{}} onRecharge={()=>{}}/>
+   ? <AiStoryboard {...props} project={params.get("project")||"project"} onApply={async()=>{}} onRecharge={()=>{}}/>
    : location.pathname==='/writeback'? <ChatWorkspace {...props} project="project" node="node" onApply={async(cid,message,mode,opts)=>{sessionStorage.setItem('applied',JSON.stringify({cid,id:message.id,opts}))}}/>
    : <ChatWorkspace {...props} getContext={async()=>({project:'project',node:'',expected_revision:Number(sessionStorage.getItem('canvasRev')||3)})}/>);
  `,
@@ -120,16 +120,36 @@ test("聊天和分镜按显示的最高扣费发送，报价冲突保留草稿�
         contentType: "text/event-stream",
         body: ": keepalive\n\n",
       });
-    if (path === "/api/chat/messages/2/source")
+    if (/^\/api\/chat\/messages\/(2|4)\/source$/.test(path)) {
+      const failed = path.includes("/4/"),
+        message = failed ? 4 : 2;
+      const turn = failed ? "failed" : sameChatHistory ? "prior" : "t";
+      const state = failed ? "failed" : "complete";
       return route.fulfill({
         json: {
-          cid: sameChatHistory ? failedCid : cid,
-          message: 2,
-          content: JSON.stringify([
-            { title: "镜头", prompt: "光", narration: "", seconds: 5 },
-          ]),
+          cid: failed || sameChatHistory ? failedCid : cid,
+          message,
+          turn,
+          state,
+          actor: 1,
+          workspace: 1,
+          project: "project",
+          content: failed
+            ? ""
+            : JSON.stringify([
+                { title: "镜头", prompt: "光", narration: "", seconds: 5 },
+              ]),
+          bill: {
+            kind: "token",
+            message,
+            turn,
+            state,
+            held: "0.72",
+            charged: failed ? "0" : "0.64",
+          },
         },
       });
+    }
     if (path.endsWith("/bills"))
       return route.fulfill({
         json: {
@@ -510,4 +530,179 @@ test("固定价重放原回合后只写回原助手消息和受理的画布版�
   );
   assert.equal(applied.cid, cid);
   assert.equal(applied.opts.expectedRevision, 3);
+});
+
+test("真实固定价分镜编辑后保留原账单，复制到另一真实画布的来源不显示账单", async (t) => {
+  const { chatsFixture } = await import("../helpers/chats.js");
+  const f = await chatsFixture();
+  t.after(f.cleanup);
+  const { page, bundle } = await composerPage(t);
+  const shot = { title: "山谷", prompt: "晨光", narration: "", seconds: 5 };
+  const a = (await f.request("POST", "/api/canvases", { title: "画布甲" }))
+    .body;
+  const b = (await f.request("POST", "/api/canvases", { title: "画布乙" }))
+    .body;
+  const prefix =
+    "fm-storyboard-" + f.admin.public_id + "-" + f.workspace.public_id + "-";
+  const url = (project: string) =>
+    "https://chat.test/storyboard?" +
+    new URLSearchParams({
+      project,
+      workspace: String(f.workspace.public_id),
+      actor: String(f.admin.public_id),
+    });
+  const submitted: any[] = [];
+  let fail = false;
+  await page.route("https://chat.test/**", async (route) => {
+    const { pathname, search } = new URL(route.request().url()),
+      method = route.request().method();
+    if (pathname === "/bundle")
+      return route.fulfill({
+        contentType: "application/javascript",
+        body: bundle.outputFiles[0].text,
+      });
+    if (!pathname.startsWith("/api/"))
+      return route.fulfill({
+        contentType: "text/html",
+        body: '<main id="root"></main><script src="/bundle"></script>',
+      });
+    if (pathname.endsWith("/events"))
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: ": keepalive\n\n",
+      });
+    if (pathname === "/api/chat/config")
+      return route.fulfill({
+        json: {
+          models: { "deepseek-flash": { label: "旧固定价" } },
+          pricing: {
+            revision: (await f.draft({ conversation: { revision: 1 } }))
+              .price_revision,
+            items: [{ key: "deepseek-flash|reply", amount: 1 }],
+          },
+          credits: { available: 20 },
+        },
+      });
+    const body = method === "POST" ? route.request().postDataJSON() : undefined;
+    const r = await f.request(method, pathname + search, body);
+    if (
+      pathname.endsWith("/messages") &&
+      method === "POST" &&
+      r.status === 200
+    ) {
+      submitted.push(body);
+      const turn = await f.turn(r.body.accepted_turn);
+      await f.chats.finish(turn.id, {
+        state: fail ? "failed" : "complete",
+        text: fail ? "" : JSON.stringify([shot]),
+        error: fail ? "本次生成失败" : undefined,
+      });
+      return route.fulfill({
+        json: {
+          ...(await f.chats.get(f.admin, r.body.conversation.id)),
+          accepted_turn: r.body.accepted_turn,
+        },
+      });
+    }
+    return route.fulfill({ status: r.status, json: r.body });
+  });
+  const destination = await f.chats.create(f.admin, {
+    context: { project: b.id, expected_revision: b.revision },
+  });
+  const sent = await f.chats.send(
+    f.admin,
+    destination.conversation.id,
+    await f.draft(destination, {
+      context: { project: b.id, expected_revision: b.revision },
+    }),
+  );
+  const turn = await f.turn(sent.conversation.active_turn);
+  await f.chats.finish(turn.id, {
+    state: "complete",
+    text: JSON.stringify([shot]),
+  });
+  const message = sent.messages.at(-1)!.id;
+  const foreign = {
+    cid: destination.conversation.id,
+    message,
+    turn: turn.public_id,
+  };
+  for (const shape of ["完整来源", "旧消息号", "仅活动会话"])
+    await t.test(shape + "来自画布乙", async () => {
+      await page.goto(url(b.id));
+      await page.evaluate(
+        ({ prefix, project, shot, foreign, shape }) => {
+          const key = prefix + project;
+          localStorage.setItem(key + "-chat", foreign.cid);
+          localStorage.setItem(
+            key + "-proposal",
+            JSON.stringify({
+              message: foreign.message,
+              shots: [shot],
+              ...(shape === "完整来源" ? { source: foreign } : {}),
+            }),
+          );
+        },
+        { prefix, project: b.id, shot, foreign, shape },
+      );
+      await page.reload();
+      await expect(page.locator("summary")).toHaveText("实扣 1 积分");
+      await page.evaluate(
+        ({ prefix, a, b, shape }) => {
+          for (const suffix of ["-chat", "-proposal"])
+            localStorage.setItem(
+              prefix + a + suffix,
+              localStorage.getItem(prefix + b + suffix)!,
+            );
+          if (shape === "仅活动会话")
+            localStorage.removeItem(prefix + a + "-proposal");
+        },
+        { prefix, a: a.id, b: b.id, shape },
+      );
+      const decision = page.waitForResponse(
+        (r) =>
+          r.url().includes("/" + message + "/source") ||
+          r.url().endsWith("/" + foreign.cid + "/bills"),
+      );
+      await page.goto(url(a.id));
+      const proof = await decision;
+      await expect(
+        page.locator(".storyboard-proposal input").first(),
+      ).toHaveValue(shot.title);
+      assert.equal(
+        proof.status(),
+        404,
+        "The same authorized message must not be accepted as a receipt on another canvas",
+      );
+      await expect(page.locator("summary")).toHaveCount(0);
+    });
+  await t.test("固定价新受理带项目，成功编辑后另一会话失败并刷新", async () => {
+    await page.evaluate(() => localStorage.clear());
+    await page.goto(url(a.id));
+    await page.getByRole("textbox", { name: "创作需求" }).fill("拟定湖光");
+    await page.getByRole("button", { name: "拟定分镜", exact: true }).click();
+    await expect(
+      page.locator(".storyboard-proposal input").first(),
+    ).toHaveValue(shot.title);
+    assert.deepEqual(submitted[0].context, {
+      project: a.id,
+      expected_revision: a.revision,
+    });
+    await expect(page.locator("summary")).toHaveText("实扣 1 积分");
+    await page
+      .locator(".storyboard-proposal input")
+      .first()
+      .fill("编辑后的山谷");
+    fail = true;
+    await page.getByRole("button", { name: "拟定分镜", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("本次生成失败");
+    await page.reload();
+    await expect(
+      page.locator(".storyboard-proposal input").first(),
+    ).toHaveValue("编辑后的山谷");
+    await expect(page.locator("summary")).toHaveText([
+      "实扣 0 积分",
+      "实扣 1 积分",
+    ]);
+  });
 });

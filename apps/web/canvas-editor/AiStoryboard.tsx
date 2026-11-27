@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useRef,useState} from 'react';
 import {ChatBill,type TurnBill} from './chat/ChatBill';
 import {ModelSelect} from './chat/ModelSelect';
 import {useChatQuote,quoteFunded} from './chat/useChatQuote';
@@ -15,18 +15,32 @@ export type StoryboardApplyOptions={
 const MAX_STORYBOARD_SHOTS = 120;
 
 type ReplySource={cid:string;message:number;turn?:string};
-function StoryboardBill({workspace,source}:{workspace:number;source:ReplySource}){
+type StoryboardReceipt = {
+ cid:string; message:number; turn:string|null; actor:number; workspace:number; project:string;
+ state:string; content:string; bill:TurnBill|null;
+};
+function StoryboardBill({workspace,userId,project,source,forShots,onSource}:{
+ workspace:number;userId:number;project:string;source:ReplySource;forShots:boolean;onSource?:(value:ReplySource)=>void;
+}){
  const {cid,message,turn}=source;
  const [bill,setBill]=useState<TurnBill>();
  const [error,setError]=useState(false),[retry,setRetry]=useState(0);
  useEffect(()=>{
   let current=true;
   setBill(undefined);setError(false);
-  void chatRequest<{bills:TurnBill[]}>(workspace,'/api/chats/'+cid+'/bills').then(r=>{
-   if(current)setBill(r.bills.find(b=>b.message===message&&(!turn||b.turn===turn)));
-  },()=>{if(current)setError(true)});
+  void chatRequest<StoryboardReceipt>(workspace,'/api/chat/messages/'+message+'/source?project='+encodeURIComponent(project))
+   .then(receipt=>{
+    if(!current || receipt.workspace!==workspace || receipt.actor!==userId || receipt.project!==project ||
+      receipt.message!==message || (cid && receipt.cid!==cid) || (turn && receipt.turn!==turn))return;
+    if(forShots){
+     if(receipt.state!=='complete')return;
+     try{parseStoryboard(receipt.content)}catch{return}
+     if(!cid)onSource?.({cid:receipt.cid,message,turn:receipt.turn??undefined});
+    }
+    if(receipt.turn && receipt.bill?.turn===receipt.turn && receipt.bill.message===message)setBill(receipt.bill);
+   }).catch(e=>{if(current&&e.status!==403&&e.status!==404)setError(true)});
   return ()=>{current=false};
- },[workspace,cid,message,turn,retry]);
+ },[workspace,userId,project,cid,message,turn,forShots,onSource,retry]);
  if(error)return <button type="button" onClick={()=>setRetry(n=>n+1)}>重新载入分镜账单</button>;
  return bill?<ChatBill bill={bill}/>:null;
 }
@@ -61,35 +75,15 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
  const [draft]=useState(()=>restoreStoryboard(localStorage.getItem(key+'-proposal')||'[]'));
  const [config,setConfig]=useState<any>(),[model,setModel]=useState(''),[brief,setBrief]=useState(()=>localStorage.getItem(key+'-brief')||''),[cid,setCid]=useState(()=>localStorage.getItem(key+'-chat')||''),[shots,setShots]=useState<SuggestedShot[]>(draft.shots),[running,setRunning]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[complete,setComplete]=useState(false);
  const [shotMessage,setShotMessage]=useState(draft.message);
- const [shotSource,setShotSource]=useState<ReplySource|null>(null);
- const [sourceRetry,setSourceRetry]=useState(0),[sourceError,setSourceError]=useState(false);
- // Pre-upgrade proposals recorded only the globally unique assistant message.
- // The most recent chat can belong to a different (failed) attempt.
- useEffect(()=>{
-  if(!draft.shots.length || !draft.message || draft.message!==shotMessage || (!draft.legacy && !draft.source) || shotSource)return;
-  let current=true;
-  setSourceError(false);
-  void chatRequest<ReplySource & {content:string}>(workspace,'/api/chat/messages/'+draft.message+'/source')
-   .then(async(source)=>{
-    if(!current || source.message!==draft.message || (draft.source && draft.source.cid!==source.cid))return;
-    let original:SuggestedShot[];
-    try{original=parseStoryboard(source.content)}catch{return}
-    // Edits may change every shot. A different chat needs additional evidence
-    // from the original user message before an edited draft can display its bill.
-    if(source.cid!==cid && JSON.stringify(original)!==JSON.stringify(draft.shots)){
-     const chat=await chatRequest(workspace,'/api/chats/'+source.cid);
-     const reply=chat.messages.find((m:any)=>m.id===source.message&&m.role==='assistant'&&m.state==='complete');
-     const user=chat.messages.find((m:any)=>m.id===reply?.reply_to&&m.role==='user');
-     let context;try{context=JSON.parse(user?.context||'{}')}catch{return}
-     if(chat.conversation.id!==source.cid || chat.conversation.workspace!==workspace || user?.author!==userId ||
-       context.project!==project || !reply || (draft.source?.turn && reply.turn!==draft.source.turn))return;
-    }
-    if(current)setShotSource(existing=>existing??{cid:source.cid,message:source.message,turn:draft.source?.turn});
-   }).catch(e=>{if(current && e.status!==403 && e.status!==404)setSourceError(true)});
-  return ()=>{current=false};
- },[workspace,userId,project,cid,draft,shotMessage,shotSource,sourceRetry]);
+ // These are candidate message IDs. Only the scoped server receipt can supply a bill.
+ const [shotSource,setShotSource]=useState<ReplySource|null>(()=>
+  draft.source??(draft.legacy&&draft.message?{cid:'',message:draft.message}:null));
+ const resolveOldSource=useCallback((value:ReplySource)=>{
+  setShotSource(current=>current && !current.cid && current.message===value.message?value:current);
+ },[]);
  const [latestReceipt,setLatestReceipt]=useState<ReplySource|null>(null);
- const showReceipt=(source:ReplySource|null)=>source&&<StoryboardBill key={source.cid+'-'+source.message} workspace={workspace} source={source}/>;
+ const showReceipt=(source:ReplySource|null,forShots:boolean)=>source&&<StoryboardBill key={source.cid+'-'+source.message}
+  workspace={workspace} userId={userId} project={project} source={source} forShots={forShots} onSource={forShots?resolveOldSource:undefined}/>;
  const setResult=(chat:string,m:any)=>{
   const source={cid:chat,message:m.id,turn:m.turn||undefined};
   if(m.state!=='complete' || lastMessage.current!==m.id)
@@ -130,9 +124,9 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
     const rows=boundary?s.messages.slice(0,s.messages.indexOf(boundary)):s.messages,previous=[...rows].reverse().find((r:any)=>r.role==='assistant'&&r.state!=='running');
     if(previous?.state==='complete' && draft.legacy){
      try{
-      const original=parseStoryboard(previous.content);
+      parseStoryboard(previous.content);
       setShotMessage(previous.id);
-      if(JSON.stringify(original)===JSON.stringify(draft.shots))setShotSource({cid,message:previous.id,turn:previous.turn||undefined});
+      setShotSource({cid,message:previous.id,turn:previous.turn||undefined});
      }catch{/* An invalid reply cannot identify a storyboard. */}
     }
     lastMessage.current=previous?.id||0;
@@ -149,7 +143,7 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
   if(!shots.length)return;
   // Keep the legacy shape while awaiting verification; source:null explicitly
   // marks an edit whose reply is tracked without an attributable receipt.
-  const retainLegacy=draft.legacy && shotMessage===draft.message && !shotSource;
+  const retainLegacy=draft.legacy && shotMessage===draft.message && !shotSource?.cid;
   const source=shotSource??(shotMessage===draft.message?draft.source:null);
   localStorage.setItem(key+'-proposal',JSON.stringify({message:shotMessage,shots,...(retainLegacy?{}:{source})}));
  },[shots,key,draft,shotMessage,shotSource]);
@@ -171,12 +165,20 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
   try{
    if(!pending.current){
     if(native&&!offered.quote)return;
-    const context=native?await canvasContext():undefined;
+    const context=await canvasContext();
     const c=await req('/api/chats',{model,context});const chat=c.conversation.id;localStorage.setItem(key+'-chat',chat);setCid(chat);
     pending.current={cid:chat,body:{uid:crypto.randomUUID(),model,text,expected_revision:c.conversation.revision,price_revision:config.pricing.revision,...offered.quote,context}};
     localStorage.setItem(key+'-pending',JSON.stringify(pending.current));
    }
-   const p=pending.current;setCid(p.cid);setComplete(false);const snapshot=await req('/api/chats/'+p.cid+'/messages',p.body);setRunning(!!snapshot.conversation.active_turn);const reply=[...snapshot.messages].reverse().find((m:any)=>m.role==='assistant');if(reply&&reply.state!=='running')setResult(p.cid,reply);
+   const p=pending.current;
+   setCid(p.cid);setComplete(false);
+   const snapshot=await req('/api/chats/'+p.cid+'/messages',p.body);
+   setRunning(!!snapshot.conversation.active_turn);
+   const reply=[...snapshot.messages].reverse().find((m:any)=>m.role==='assistant'&&(!snapshot.accepted_turn||m.turn===snapshot.accepted_turn));
+   if(reply&&reply.state!=='running'){
+    pending.current=null;localStorage.removeItem(key+'-pending');
+    setResult(p.cid,reply);
+   }
   }catch(e){if((e as any).status && (e as any).status<500){offered.refresh();pending.current=null;localStorage.removeItem(key+'-pending');void req('/api/chat/config').then(updateConfig);}setError((e as Error).message)}finally{setBusy(false)}
  };
  const stop=async()=>{
@@ -224,10 +226,9 @@ export function AiStoryboard({workspace,userId,project,onApply,onRecharge,onConf
    : price==null ? <p role="status">{native?(offered.error||(brief.trim()?"正在报价":"按 Token 计费")):"当前对话模型尚未定价"}{native&&offered.error&&<button type="button" onClick={offered.refresh}>重新报价</button>}</p>
    : !funded && <p role="status">当前空间积分不足<button className="secondary" type="button" onClick={onRecharge}>去充值</button></p>)}
   {error&&<p className="error" role="alert">{error}</p>}
-  {latestReceipt?.cid===cid && (latestReceipt.cid!==shotSource?.cid || latestReceipt.message!==shotSource.message) && showReceipt(latestReceipt)}
+  {latestReceipt?.cid===cid && (latestReceipt.cid!==shotSource?.cid || latestReceipt.message!==shotSource.message) && showReceipt(latestReceipt,false)}
 
-  {!shotSource&&sourceError&&<button type="button" onClick={()=>setSourceRetry(n=>n+1)}>重新载入分镜账单</button>}
-  {!!shots.length&&<>{showReceipt(shotSource)}<div className="storyboard-proposal">{shots.map((shot,i)=><section key={i}><label>镜头 {i+1}<input value={shot.title} maxLength={80} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,title:e.target.value}:r))}/></label><label>画面<textarea rows={3} value={shot.prompt} maxLength={12000} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,prompt:e.target.value}:r))}/></label><label>旁白<textarea rows={2} maxLength={300} value={shot.narration} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,narration:e.target.value}:r))}/></label><div className="storyboard-seconds" role="group" aria-label={`镜头 ${i+1} 时长`}>{([5,10,15] as const).map(seconds=><button key={seconds} aria-pressed={shot.seconds===seconds} onClick={()=>setShots(rows=>rows.map((r,j)=>j===i?{...r,seconds}:r))}>{seconds}s</button>)}</div></section>)}</div>
+  {!!shots.length&&<>{showReceipt(shotSource,true)}<div className="storyboard-proposal">{shots.map((shot,i)=><section key={i}><label>镜头 {i+1}<input value={shot.title} maxLength={80} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,title:e.target.value}:r))}/></label><label>画面<textarea rows={3} value={shot.prompt} maxLength={12000} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,prompt:e.target.value}:r))}/></label><label>旁白<textarea rows={2} maxLength={300} value={shot.narration} onChange={e=>setShots(rows=>rows.map((r,j)=>j===i?{...r,narration:e.target.value}:r))}/></label><div className="storyboard-seconds" role="group" aria-label={`镜头 ${i+1} 时长`}>{([5,10,15] as const).map(seconds=><button key={seconds} aria-pressed={shot.seconds===seconds} onClick={()=>setShots(rows=>rows.map((r,j)=>j===i?{...r,seconds}:r))}>{seconds}s</button>)}</div></section>)}</div>
    <div className="dialog-actions"><span className="fm-number">{shots.length} 个镜头 · {shots.reduce((t,s)=>t+s.seconds,0)} 秒</span><button className="primary" disabled={busy||shots.some(s=>!s.title.trim()||!s.prompt.trim())} onClick={async()=>{setBusy(true);setApplying(true);try{await onApply(shots,{generationMode,tailChain,gridLayout})}catch(e){setError((e as Error).message)}finally{setBusy(false);setApplying(false)}}}>{applying?'正在加入画布…':'采用分镜，不生成视频'}</button></div></>}
  </div>
 }

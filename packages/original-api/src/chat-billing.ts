@@ -161,15 +161,19 @@ export async function prepareNativeChat(
   return { snapshot, quote, tools, skills };
 }
 
-export async function readChatBills(sql: Sql, chatId: string) {
+export async function readChatBills(
+  sql: Sql,
+  chatId: string,
+  message?: number,
+) {
   const { rows } = await sql.query(
     `SELECT t.public_id AS turn,t.route_revision_id,t.price_revision_id,m.public_id AS message,r.public_id AS user_message,m.superseded,t.state,t.usage,
     c.amount AS held,c.state AS charge_state,b.bill,l.amount AS spent
     FROM chat_turns t JOIN chat_conversations conv ON conv.id=t.conversation_id JOIN chat_messages m ON m.id=t.assistant_message JOIN chat_messages r ON r.id=t.user_message
     LEFT JOIN chat_charges c ON c.turn_id=t.id LEFT JOIN chat_turn_bills b ON b.turn_id=t.id
     LEFT JOIN LATERAL (SELECT SUM(ABS(amount)) AS amount FROM ledger WHERE b.turn_id IS NULL AND (chat_turn_id=t.id OR (chat_turn_id IS NULL AND original_chat_turn=t.public_id)) AND workspace_id=conv.workspace_id AND action='spend') l ON true
-    WHERE t.conversation_id=$1 AND t.state<>'running' ORDER BY m.public_id`,
-    [chatId],
+    WHERE t.conversation_id=$1 AND t.state<>'running' AND ($2::bigint IS NULL OR m.public_id=$2) ORDER BY m.public_id`,
+    [chatId, message ?? null],
   );
   return {
     bills: rows.map((r) => ({

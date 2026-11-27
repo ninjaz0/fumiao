@@ -1241,6 +1241,113 @@ test("旧固定价重放准确返回原回合，旧分镜消息来源按当前�
   );
 });
 
+test("分镜来源按实际画布、回合发起人与工作区返回单笔账单，兼容旧回复", async (t) => {
+  const f = await chatsFixture();
+  t.after(f.cleanup);
+  const team = await f.identity.createWorkspace(f.admin, {
+    name: "可共享的画布",
+    members: [Number(f.member.public_id)],
+  });
+  await f.identity.selectWorkspace(f.admin, team!.id);
+  await f.identity.selectWorkspace(f.member, team!.id);
+  const space = await f.identity.activeWorkspace(f.db, f.admin);
+  await f.db.query("UPDATE wallets SET balance=100 WHERE workspace_id=$1", [
+    space.id,
+  ]);
+  const a = await f.canvas(f.admin, space),
+    b = await f.canvas(f.admin, space),
+    context = { project: a.public_id, expected_revision: a.revision };
+  const base = await f.chats.create(f.admin, { context });
+  const cid = base.conversation.id;
+  const sent = await f.chats.send(f.admin, cid, await f.draft(base)); // Fixed-price linked chat, no per-message project.
+  const turn = await f.turn(sent.conversation.active_turn);
+  await f.chats.finish(turn.id, { state: "complete", text: "原始分镜" });
+  const message = sent.messages.at(-1)!.id,
+    path = "/api/chat/messages/" + message + "/source?project=";
+  assert.equal((await f.request("GET", path + b.public_id)).status, 404);
+  const good = await f.request("GET", path + a.public_id);
+  assert.equal(good.status, 200);
+  assert.deepEqual(
+    [
+      good.body.cid,
+      good.body.message,
+      good.body.turn,
+      good.body.project,
+      good.body.actor,
+      good.body.workspace,
+      good.body.bill?.charged,
+    ],
+    [
+      cid,
+      message,
+      turn.public_id,
+      a.public_id,
+      Number(f.admin.public_id),
+      Number(space.public_id),
+      "1",
+    ],
+  );
+  assert.equal(
+    (await f.request("GET", "/api/chats/" + cid + "/bills", undefined, 1))
+      .status,
+    200,
+  );
+  assert.equal(
+    (await f.request("GET", path + a.public_id, undefined, 1)).status,
+    404,
+  );
+  assert.equal(
+    (
+      await f.request(
+        "GET",
+        path + a.public_id + "&workspace=" + f.workspace.public_id,
+      )
+    ).status,
+    404,
+  );
+  await f.db.query("UPDATE chat_charges SET project_id=NULL WHERE turn_id=$1", [
+    turn.id,
+  ]);
+  // Simulate an unattributable import, retaining its real conversation bill.
+  await f.db.query("DELETE FROM canvas_chat_links WHERE conversation_id=$1", [
+    turn.conversation_id,
+  ]);
+  assert.equal((await f.request("GET", path + a.public_id)).status, 404);
+  assert.equal(
+    (await f.request("GET", "/api/chats/" + cid + "/bills")).body.bills[0]
+      .charged,
+    "1",
+  );
+  await f.db.query("UPDATE chat_messages SET context=$2 WHERE id=$1", [
+    turn.user_message,
+    JSON.stringify(context),
+  ]);
+  assert.equal(
+    (await f.request("GET", path + a.public_id)).body.bill.charged,
+    "1",
+  );
+  const historic = await one(
+    f.db,
+    `INSERT INTO chat_messages(conversation_id,role,state,content,reply_to,created) VALUES($1,'assistant','complete',$2,$3,$4) RETURNING public_id`,
+    [
+      turn.conversation_id,
+      Buffer.from("归档"),
+      turn.user_message,
+      turn.created,
+    ],
+  );
+  const archive = await f.request(
+    "GET",
+    "/api/chat/messages/" +
+      historic.public_id +
+      "/source?project=" +
+      a.public_id,
+  );
+  assert.equal(archive.status, 200);
+  assert.equal(archive.body.turn, null);
+  assert.equal(archive.body.bill, null);
+});
+
 test("原生画布建议在写入前校验业务对象，拒绝时没有提案或画布变动", async (t) => {
   const f = await setupNative(t, { free: true, tools: true, json: true });
   const canvas = (

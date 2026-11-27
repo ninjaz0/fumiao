@@ -69,7 +69,12 @@ export class OriginalChatController implements OnModuleDestroy {
     @Req() req: OriginalAuthRequest,
     @Param("message") message: string,
   ) {
-    return this.chats.replySource(req.actor, message, originalWorkspace(req));
+    return this.chats.replySource(
+      req.actor,
+      message,
+      originalWorkspace(req),
+      requestQuery(req).getAll("project").at(-1),
+    );
   }
 
   @Get("chats/:cid/bills")
