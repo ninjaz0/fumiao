@@ -64,6 +64,11 @@
   color: var(--secondary);
   line-height: 1.5;
 }
+@container (max-width: 260px) {
+  .composer .composer-parameters {
+    display: flex;
+  }
+}
 .section-head {
   margin-bottom: 16px;
 }
