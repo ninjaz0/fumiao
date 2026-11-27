@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { chromium, expect, type Browser, type Locator, type Response, type Route } from "@playwright/test";
+import { chromium, expect, type Browser, type Locator, type Page, type Response, type Route } from "@playwright/test";
 import sharp from "sharp";
 import { directorBasis, directorScriptConflict, directorShotIds } from "../../packages/web-compat/src/director.js";
+import type { DirectorSubmission } from "../../apps/web/canvas-editor/director-batch.js";
 import { newNode, type Project, type Studio } from "../../apps/web/canvas-editor/types.js";
 
 const externalOrigin = process.env.STUDIO_TEST_ORIGIN;
@@ -178,6 +179,7 @@ try {
           `△${heroBefore}推门走进钟表铺环顾四周。`,
           `△${heroBefore}低头凝视柜台上的黄铜怀表。`,
           `${heroBefore}：怀表停在了午夜十二点。`,
+          `${heroBefore}：听，齿轮还在转。`,
         ].join("\n"),
       },
     });
@@ -845,6 +847,14 @@ try {
         [{ node_id: secondId, stage: "video" }], [{ node_id: secondId, stage: "video" }],
       ]);
       assert.deepEqual(quoteRequests.map(({ director }) => director.use_confirmed_script), [false, true]);
+      await page.evaluate((uid) => {
+        const key = Object.keys(localStorage).find((name) => name.startsWith("fm-director-batch:") && name.endsWith(":" + uid));
+        if (!key) throw new Error("Missing durable director submission");
+        const legacyKey = key.slice(0, -(uid.length + 1));
+        localStorage.setItem(legacyKey, localStorage.getItem(key)!);
+        localStorage.removeItem(key);
+        sessionStorage.removeItem(legacyKey + ":selected");
+      }, (batchRequests[0] as DirectorSubmission).uid);
       await page.reload();
       await directorTab.click();
       await director.getByRole("button", { name: "恢复上次提交" }).click();
@@ -861,6 +871,116 @@ try {
     } finally {
       await page.unroute(batchQuoteUrl, quoteBatch);
       await page.unroute(batchRunUrl, runBatch);
+    }
+    const secondTab = await context.newPage();
+    const tabRequests = new Map<Page, DirectorSubmission[]>();
+    const multiRun = async (route: Route) => {
+      const tab = route.request().frame().page();
+      const requests = tabRequests.get(tab) ?? [];
+      requests.push(route.request().postDataJSON() as DirectorSubmission);
+      tabRequests.set(tab, requests);
+      if (requests.length === 1) return route.abort("failed");
+      await route.fulfill({ status: 200, json: {
+        submitted: [{ node: secondId, stage: "video", job_id: 20002 }], skipped: [], total_credits: 2,
+      } });
+    };
+    await context.route(batchQuoteUrl, quoteBatch);
+    await context.route(batchRunUrl, multiRun);
+    const receiptDialog = (tab: Page) => tab.getByRole("dialog", { name: "导演台提交回执" });
+    const openReceipt = async (tab: Page) => {
+      await tab.reload();
+      await tab.getByRole("tab", { name: "导演台" }).click();
+      await tab.getByRole("region", { name: "导演台" }).getByRole("button", { name: "恢复上次提交" }).click();
+      return receiptDialog(tab);
+    };
+    try {
+      await secondTab.goto(editPath);
+      await secondTab.getByRole("tab", { name: "导演台" }).click();
+      for (const tab of [page, secondTab]) {
+        const desk = tab.getByRole("region", { name: "导演台" });
+        await desk.getByRole("button", { name: /^S01-02/ }).click();
+        await desk.getByRole("button", { name: /^预检视频/ }).click();
+        await expect(tab.getByRole("dialog", { name: "视频生成预检" })
+          .getByRole("button", { name: /确认冻结 2 积分并提交/ })).toBeEnabled();
+      }
+      for (const tab of [page, secondTab]) {
+        const quote = tab.getByRole("dialog", { name: "视频生成预检" });
+        await quote.getByRole("button", { name: /确认冻结 2 积分并提交/ }).click();
+        await expect(quote.getByRole("button", { name: "恢复上次提交" })).toBeEnabled();
+      }
+      const first = tabRequests.get(page)![0];
+      const second = tabRequests.get(secondTab)![0];
+      assert.notEqual(first.uid, second.uid);
+      const later = await openReceipt(secondTab);
+      const choices = later.getByRole("combobox", { name: "选择要恢复的提交" });
+      await expect(choices).toHaveValue(second.uid);
+      await expect(choices.locator("option")).toHaveCount(2);
+      await later.getByRole("button", { name: "恢复上次提交" }).click();
+      await later.getByRole("button", { name: "确认回执并关闭" }).click();
+      assert.deepEqual(tabRequests.get(secondTab)![1], second);
+      await expect(secondTab.getByRole("region", { name: "导演台" })
+        .getByRole("button", { name: "恢复上次提交" })).toBeVisible();
+
+      const earlier = await openReceipt(page);
+      await expect(earlier.getByRole("combobox", { name: "选择要恢复的提交" })).toHaveCount(0);
+      await earlier.getByRole("button", { name: "恢复上次提交" }).click();
+      await earlier.getByRole("button", { name: "确认回执并关闭" }).click();
+      assert.deepEqual(tabRequests.get(page)![1], first);
+      await expect(director.getByRole("button", { name: "恢复上次提交" })).toHaveCount(0);
+      await director.getByRole("button", { name: /^S01-02/ }).click();
+      console.log("PASS director batch two-tab browser: both original paid requests survive reload and independent acknowledgement");
+    } finally {
+      await context.unroute(batchQuoteUrl, quoteBatch);
+      await context.unroute(batchRunUrl, multiRun);
+      await secondTab.close();
+    }
+
+    const savedForAudio = await (await context.request.get(`/api/canvases/${canvasA.id}`, { headers })).json() as Project;
+    const dialogueLines = savedForAudio.document.nodes.find(({ id }) => id === secondId)?.dialogue_lines ?? [];
+    assert.equal(dialogueLines.length, 2);
+    const audioQuotes: DirectorSubmission["director"]["targets"][] = [];
+    const quoteAudio = async (route: Route) => {
+      const body = route.request().postDataJSON() as DirectorSubmission;
+      const { targets } = body.director;
+      audioQuotes.push(targets);
+      await route.fulfill({ status: 200, json: {
+        revision: body.expected_revision, stale_revision: false, price_revision: 4, precheck_token: "audio-test-quote",
+        items: targets.map((target) => ({ ...target, title: dialogueLines.find((line) => line.id === target.line_id)?.text,
+          node_type: "video", model: "test-tts", credits: 2, status: "ready", issues: [] })),
+        summary: { total: targets.length, ready: targets.length, warning: 0, blocked: 0, runnable: targets.length,
+          total_credits: targets.length * 2, available_credits: 10, sufficient: true },
+      } });
+    };
+    const skipAudio = async (route: Route) => {
+      const body = route.request().postDataJSON() as DirectorSubmission;
+      await route.fulfill({ status: 200, json: {
+        submitted: [], skipped: body.director.targets.map(({ node_id: node, ...target }) => ({ node, ...target, reason: "请检查声线" })),
+        total_credits: 0,
+      } });
+    };
+    await page.route(batchQuoteUrl, quoteAudio);
+    await page.route(batchRunUrl, skipAudio);
+    try {
+      await page.setViewportSize({ width: 375, height: 812 });
+      await director.getByRole("button", { name: /预检对白 .*听，齿轮还在转/ }).click();
+      const lineQuote = page.getByRole("dialog", { name: "对白单句预检" });
+      await expect(lineQuote.getByRole("button", { name: /确认冻结 2 积分并提交/ })).toBeEnabled();
+      const target = { node_id: secondId, stage: "dialogue", line_id: dialogueLines[1].id };
+      assert.deepEqual(audioQuotes.at(-1), [target]);
+      await lineQuote.getByRole("button", { name: "关闭", exact: true }).click();
+      await page.setViewportSize({ width: 1360, height: 860 });
+      await director.getByRole("button", { name: /^预检待生成音频/ }).click();
+      const fullQuote = page.getByRole("dialog", { name: "音频生成预检" });
+      await fullQuote.getByRole("button", { name: /确认冻结 4 积分并提交/ }).click();
+      await fullQuote.getByRole("button", { name: /仅补跑 .*听，齿轮还在转/ }).click();
+      const retryQuote = page.getByRole("dialog", { name: "导演台补跑预检" });
+      await expect(retryQuote.getByRole("button", { name: /确认冻结 2 积分并提交/ })).toBeEnabled();
+      assert.deepEqual(audioQuotes.at(-1), [target]);
+      await retryQuote.getByRole("button", { name: "关闭", exact: true }).click();
+      console.log("PASS director dialogue browser: mobile precheck and receipt retry each quote the selected exact line");
+    } finally {
+      await page.unroute(batchQuoteUrl, quoteAudio);
+      await page.unroute(batchRunUrl, skipAudio);
     }
     const firstImage = await material.locator("img").getAttribute("src");
     await material.getByRole("button", { name: "定位素材节点" }).click();

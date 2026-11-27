@@ -30,6 +30,14 @@ export type DirectorBatchSelection = {
   targets: DirectorTarget[];
 };
 
+export type DirectorAudioInputs = Record<string, {
+  basis: string;
+  model: string;
+  pack_id: string | null;
+  voice_id: string | null;
+  instruction: string;
+}>;
+
 export type DirectorShotInputs = {
   revision: number;
   description: string;
@@ -40,6 +48,7 @@ export type DirectorShotInputs = {
   visual_issues: string[];
   material_issues: string[];
   audio_input_bases: Record<string, string>;
+  audio_inputs: DirectorAudioInputs;
   voices: {
     speaker: string;
     model: string;

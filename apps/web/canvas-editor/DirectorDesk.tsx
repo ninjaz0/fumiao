@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, BookOpen, Crosshair, ListVideo, Plus, X } from "lucide-react";
-import { canvasTailSourceId, directorAudioTargets, directorBasis, directorShotIds, type DirectorShotInputs, type DirectorTarget } from "@fumiao/web-compat/director.js";
+import { canvasTailSourceId, directorAudioTargets, directorBasis, directorShotIds, type DirectorAudioInputs, type DirectorShotInputs, type DirectorTarget } from "@fumiao/web-compat/director.js";
 import { directorGenerationTargets } from "./director-batch";
 import { scriptApi, type ScriptDocumentDetail } from "./script-api";
 import {
@@ -229,14 +229,19 @@ export function DirectorDesk({
   });
   const videoTargets = directorGenerationTargets(eligible, runs, "video");
   const audioShots = eligible.filter((shot) => directorAudioTargets(shot).length);
-  const audioTargets = directorGenerationTargets(audioShots, runs, "audio", inputs?.audio_input_bases);
-  const precheckAudio = async () => {
-    const checked = await Promise.all(audioShots.map((shot) => onReadInputs(shot.id)));
+  const audioTargets = directorGenerationTargets(audioShots, runs, "audio", inputs?.audio_inputs);
+  const currentDialogueTargets = node
+    ? directorGenerationTargets([node], runs, "audio", inputs?.audio_inputs).filter(({ stage }) => stage === "dialogue")
+    : [];
+  const precheckAudio = async (only?: DirectorTarget) => {
+    const shots = only && node?.id === only.node_id ? [node] : audioShots;
+    const checked = await Promise.all(shots.map((shot) => onReadInputs(shot.id)));
     if (checked.some((item) => item.revision !== revision)) throw new Error("画布版本已变更，请重新载入。");
-    const bases = Object.assign({}, ...checked.map((item) => item.audio_input_bases)) as Record<string, string>;
-    const targets = directorGenerationTargets(audioShots, runs, "audio", bases);
-    if (!targets.length) throw new Error("所选镜头的音频已就绪或正在生成。");
-    await onPrecheck(targets, "音频生成预检");
+    const styles = Object.assign({}, ...checked.map((item) => item.audio_inputs)) as DirectorAudioInputs;
+    const targets = directorGenerationTargets(shots, runs, "audio", styles).filter((target) =>
+      !only || (target.node_id === only.node_id && target.stage === only.stage && target.line_id === only.line_id));
+    if (!targets.length) throw new Error("所选音频已就绪或正在生成。");
+    await onPrecheck(targets, only ? "对白单句预检" : "音频生成预检");
   };
   const tailSource = node?.tail_inherited && videoNodes.find((item) => item.id === canvasTailSourceId(document, node.id));
   const imageRefs = document.edges.flatMap((edge) => {
@@ -419,10 +424,28 @@ export function DirectorDesk({
                       预检视频{videoTargets.length ? `（${videoTargets.length} 镜）` : ""}
                     </button>
                     <button type="button" className="secondary" disabled={pending || !orderConfirmed || !audioShots.length}
-                      onClick={() => void apply(precheckAudio)}>
+                      onClick={() => void apply(() => precheckAudio())}>
                       预检待生成音频{audioTargets.length ? `（${audioTargets.length} 项）` : ""}
                     </button>
                   </div>
+                  {orderConfirmed && storyConfirmed && materialConfirmed && currentDialogueTargets.length > 0 && (
+                    <ul className="fm-director-dialogue-targets" aria-label="本镜待生成对白">
+                      {currentDialogueTargets.map((target) => {
+                        const line = node.dialogue_lines?.find(({ id }) => id === target.line_id);
+                        if (!line) return null;
+                        const label = [line.speaker, line.text].filter(Boolean).join("：");
+                        return (
+                          <li key={line.id}>
+                            <span>{label}</span>
+                            <button type="button" className="secondary" disabled={pending}
+                              aria-label={`预检对白 ${label}`} onClick={() => void apply(() => precheckAudio(target))}>
+                              预检此句
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
                 </section>
                 <section className="fm-director-card">
                   <h4>剧本原文</h4>

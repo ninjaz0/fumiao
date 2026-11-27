@@ -28,6 +28,7 @@ import {
   directorTargetShots,
   expandGroupNodeIds,
   normalizeDirectorSelection,
+  requireDirectorAudioTarget,
   OriginalBatchPrecheck,
   validateDirectorSelection,
   type DirectorTicket,
@@ -828,7 +829,8 @@ export class OriginalCanvasRuns {
       sql, this.canvases, { workspace_id: project.workspace_id, revision: project.revision },
       document, body.expected_revision, selection, true,
     );
-    directorTargetShots(document, ordered, target);
+    const { node } = directorTargetShots(document, ordered, target);
+    requireDirectorAudioTarget(node, target);
     requireValue(!(await this.busy(sql, project.id, nodeName)), 409, "此项正在生成，请等待任务结束");
     const bindings = await CanvasSubmissionModels.read(sql, {
       strict: false, workspaceId: project.workspace_id, vault: this.p.vault, registry: this.p.registry,

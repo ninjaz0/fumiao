@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Play, ShieldAlert } from "lucide-react";
-import { directorBatchUnclaimed, directorScriptConflict, type DirectorBatchSelection } from "@fumiao/web-compat/director.js";
-import type { BatchReceipt, DirectorSubmission, PendingDirectorBatch } from "./director-batch";
+import { directorBatchUnclaimed, directorScriptConflict, type DirectorBatchSelection, type DirectorTarget } from "@fumiao/web-compat/director.js";
+import { receiptTarget, type BatchReceipt, type DirectorSubmission, type PendingDirectorBatch } from "./director-batch";
 import type { PrecheckResponse, PrecheckStage } from "./types";
 
 const STAGE_LABELS: { id: PrecheckStage; label: string }[] = [
@@ -32,10 +32,14 @@ export function PrecheckCostModal({
   lockedStages?: boolean;
   director?: {
     selection?: DirectorBatchSelection;
-    pending: PendingDirectorBatch | null;
-    onPending: (pending: PendingDirectorBatch | null) => void;
+    pending?: PendingDirectorBatch;
+    batches: PendingDirectorBatch[];
+    onPick: (uid: string) => void;
+    onPending: (pending: PendingDirectorBatch) => void;
+    onClear: (uid: string) => void;
     onAttach: (receipt: BatchReceipt) => Promise<{ note?: string }>;
-    onRecheck: (pending: PendingDirectorBatch) => Promise<void>;
+    onRecheck: (pending: PendingDirectorBatch, only?: DirectorTarget) => Promise<void>;
+    canRetryItem: (jobId: number) => boolean;
     describe: (item: { node: string; line_id?: string }) => string;
   };
   onSubmitted: (result: BatchReceipt) => void | Promise<void>;
@@ -175,14 +179,14 @@ export function PrecheckCostModal({
       setSubmitting(false);
     }
   };
-  const newDirectorQuote = async () => {
+  const newDirectorQuote = async (only?: DirectorTarget) => {
     if (!director || !pending) return;
     setSubmitting(true);
     setError("");
     try {
-      await director.onRecheck(pending);
+      await director.onRecheck(pending, only);
       setUseConfirmedScript(false);
-      director.onPending(null);
+      director.onClear(pending.request.uid);
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -261,19 +265,53 @@ export function PrecheckCostModal({
 
   if (director && pending) return (
     <div className="fm-precheck" aria-label={title}>
+      {director.batches.length > 1 && (
+        <label className="fm-precheck-stage-pill">
+          提交记录
+          <select aria-label="选择要恢复的提交"
+            disabled={submitting}
+            value={pending.request.uid}
+            onChange={(event) => {
+              setError("");
+              director.onPick(event.target.value);
+            }}>
+            {director.batches.map((batch) => (
+              <option key={batch.request.uid} value={batch.request.uid}>
+                #{batch.request.uid.slice(0, 8)} · {batch.receipt ? "已收到回执" : batch.rejected ? "可重新预检" : "待恢复"}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {error && <p className="error" role="alert">{error}</p>}
       {pending.receipt ? (
         <>
           <h3>已接单 {pending.receipt.submitted.length} 项 · 冻结 {pending.receipt.total_credits} 积分</h3>
           <ul>
             {pending.receipt.submitted.map((item) => (
-              <li key={item.job_id}>{director.describe(item)} · {STAGE_LABELS.find((stage) => stage.id === item.stage)?.label} · #{item.job_id}</li>
+              <li key={item.job_id}>
+                {director.describe(item)} · {STAGE_LABELS.find((stage) => stage.id === item.stage)?.label} · #{item.job_id}
+                {item.stage === "dialogue" && pending.attachment && director.canRetryItem(item.job_id) && (
+                  <button type="button" className="secondary" disabled={submitting}
+                    aria-label={`仅补跑 ${director.describe(item)}`} onClick={() => void newDirectorQuote(receiptTarget(item))}>
+                    仅补跑此句
+                  </button>
+                )}
+              </li>
             ))}
           </ul>
           <h3>跳过 {pending.receipt.skipped.length} 项</h3>
           <ul>
             {pending.receipt.skipped.map((item) => (
-              <li key={`${item.node}:${item.stage}:${item.line_id ?? ""}`}>{director.describe(item)} · {item.reason}</li>
+              <li key={`${item.node}:${item.stage}:${item.line_id ?? ""}`}>
+                {director.describe(item)} · {item.reason}
+                {item.stage === "dialogue" && pending.attachment && (
+                  <button type="button" className="secondary" disabled={submitting}
+                    aria-label={`仅补跑 ${director.describe(item)}`} onClick={() => void newDirectorQuote(receiptTarget(item))}>
+                    仅补跑此句
+                  </button>
+                )}
+              </li>
             ))}
           </ul>
           {pending.attachment?.note && <p role="status">{pending.attachment.note}</p>}
@@ -281,7 +319,17 @@ export function PrecheckCostModal({
         </>
       ) : <p>{pending.rejected ? "本次未创建回执，可重新预检。" : "上次提交的回执待恢复。恢复时会使用原提交号。"}</p>}
       <div className="dialog-actions">
-        <button type="button" className="secondary" onClick={onClose}>关闭</button>
+        <button type="button" className="secondary" disabled={submitting} onClick={() => {
+          if (pending.attachment || pending.rejected) {
+            try {
+              director.onClear(pending.request.uid);
+            } catch (cause) {
+              setError((cause as Error).message);
+              return;
+            }
+          }
+          onClose();
+        }}>{pending.attachment ? "确认回执并关闭" : "关闭"}</button>
         {!pending.receipt && !pending.rejected && (
           <button type="button" className="primary" disabled={submitting} onClick={() => void settleDirector(pending)}>
             {submitting ? "正在恢复回执…" : "恢复上次提交"}
@@ -298,6 +346,13 @@ export function PrecheckCostModal({
           </button>
         )}
       </div>
+    </div>
+  );
+
+  if (director && !directorSelection) return (
+    <div className="fm-precheck" aria-label={title}>
+      <p>此提交回执已处理。</p>
+      <div className="dialog-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button></div>
     </div>
   );
 

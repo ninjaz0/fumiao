@@ -139,7 +139,12 @@ test("director input basis covers resolved reference and voice", async (t) => {
   assert.equal(await basis(video, pinned), pinnedBefore);
   assert.equal(await basis(video, mediaPinned), pinnedBefore);
   assert.notEqual(await basis(dialogue), voiceBefore);
-  assert.notEqual((await inspect(pinned)).material_basis, confirmed.material_basis);
+  const revisedVoice = await inspect(pinned);
+  assert.notEqual(revisedVoice.material_basis, confirmed.material_basis);
+  assert.deepEqual(revisedVoice.audio_inputs["shot:dialogue:line"], {
+    basis: revisedVoice.audio_input_bases["shot:dialogue:line"], model: "edge-tts",
+    pack_id: pack.id, voice_id: "zh-CN-YunxiNeural", instruction: "",
+  });
   await assert.rejects(basis(video, inPack), { status: 409, message: /素材包.*小林.*已更新/ });
   await assert.rejects(basis(video, editShot(document, { tail_inherited: true })), { status: 409, message: /首镜.*自动尾帧/ });
   await assert.rejects(basis(dialogue, editShot(document, { dialogue_lines: [{
@@ -345,11 +350,21 @@ test("director retries one failed line and recovers accepted receipt", async (t)
       { id: first.line_id, text: "天亮了。", model: "edge-tts" },
       { id: second.line_id, text: "出发吧。", model: "edge-tts" },
     ],
-  }], ["shot"]);
+  }, {
+    id: "original", x: 0, y: 0, type: "video", prompt: "保留原声", audio_strategy: "keep_original",
+    dialogue_lines: [{ id: "other-line", speaker: "甲", text: "保留视频原音" }],
+  }], ["shot", "original"]);
   const wallet = async () => (await f.db.query("SELECT balance, held FROM wallets WHERE workspace_id=$1", [f.workspace.id])).rows[0];
   const jobRows = async (ids: number[]) => (await f.db.query(
     "SELECT * FROM jobs WHERE public_id=ANY($1::bigint[]) ORDER BY public_id", [ids],
   )).rows;
+  const noLongerPresent = await quote([
+    line("removed"), { node_id: "original", stage: "dialogue", line_id: "other-line" }, second,
+  ]);
+  assert.deepEqual(noLongerPresent.items.map(({ line_id, status }) => [line_id, status]), [
+    ["removed", "blocked"], ["other-line", "blocked"], ["second", "ready"],
+  ]);
+  await assert.rejects(quote([line("other-line"), second]), { status: 400, message: /不属于本镜/ });
   const initial = await quote([first, second]);
   assert.equal(initial.summary.total_credits, 8, JSON.stringify(initial.items));
   assert.equal(initial.summary.runnable, 2);

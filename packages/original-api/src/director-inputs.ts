@@ -320,7 +320,7 @@ export async function inspectDirectorShotInputs(
 ): Promise<Omit<DirectorShotInputs, "revision">> {
   const result: Omit<DirectorShotInputs, "revision"> = {
     description: "", story_basis: null, material_basis: null,
-    references: [], pack_texts: [], visual_issues: [], material_issues: [], voices: [], audio_input_bases: {},
+    references: [], pack_texts: [], visual_issues: [], material_issues: [], voices: [], audio_input_bases: {}, audio_inputs: {},
   };
   const sources = await resolveCanvasSources(sql, project.id, document, node.id);
   const texts = sources.filter(({ kind }) => kind === "text");
@@ -356,7 +356,16 @@ export async function inspectDirectorShotInputs(
     try {
       const input = await resolveDirectorInput(sql, project, document, target, models);
       materials.push(input.material);
-      result.audio_input_bases[directorTargetKey(target)] = input.basis;
+      if (input.stage !== "dialogue" && input.stage !== "narration") continue;
+      const key = directorTargetKey(target);
+      result.audio_input_bases[key] = input.basis;
+      result.audio_inputs[key] = {
+        basis: input.basis,
+        model: input.payload.model,
+        pack_id: input.stage === "dialogue" ? input.voice.packId : null,
+        voice_id: input.stage === "dialogue" ? input.voice.voiceId ?? null : null,
+        instruction: input.payload.instruction ?? "",
+      };
       if (input.stage === "dialogue") {
         result.voices.push({
           speaker: input.line.speaker,

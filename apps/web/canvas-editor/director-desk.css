@@ -191,3 +191,15 @@
   .fm-director-list ol { max-height: 27vh; }
   .fm-director-sync-diff { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+.fm-director-dialogue-targets { list-style: none; padding: 0; }
+.fm-director-dialogue-targets li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 5px 0;
+}
+.fm-director-dialogue-targets li span { min-width: 0; overflow-wrap: anywhere; }

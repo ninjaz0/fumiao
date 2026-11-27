@@ -110,11 +110,17 @@ export function directorTargetShots(document: CanvasDocument, ordered: string[],
     return { node, shots };
   }
   requireValue(ordered.includes(node.id), 400, "镜头不属于本集");
-  if (target.stage !== "video") {
-    requireValue(directorAudioTargets(node).some((item) => directorTargetKey(item) === directorTargetKey(target)),
-      400, "音频目标不符合本镜策略或台词不属于本镜");
+  if (target.stage === "dialogue" && !node.dialogue_lines?.some(({ id }) => id === target.line_id)) {
+    requireValue(!document.nodes.some((other) => other.dialogue_lines?.some(({ id }) => id === target.line_id)),
+      400, "对白台词不属于本镜");
   }
   return { node, shots: [node.id] };
+}
+
+export function requireDirectorAudioTarget(node: CanvasNode, target: DirectorTarget) {
+  if (target.stage !== "dialogue" && target.stage !== "narration") return;
+  requireValue(directorAudioTargets(node).some((item) => directorTargetKey(item) === directorTargetKey(target)),
+    409, "音频目标已移除或不符合本镜策略");
 }
 
 export function directorDraft(input: Awaited<ReturnType<typeof resolveDirectorInput>>, catalog: Awaited<ReturnType<StudioCatalog["catalog"]>>, uid: string) {
@@ -336,6 +342,7 @@ export class OriginalBatchPrecheck {
         const line = node.dialogue_lines?.find(({ id }) => id === target.line_id);
         if (line) item.title += ` · ${line.speaker ? line.speaker + "：" : ""}${line.text}`;
         try {
+          requireDirectorAudioTarget(node, target);
           let storyConfirmed = false;
           for (const id of shots) {
             const current = await inspect(id);
