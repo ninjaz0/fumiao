@@ -1206,6 +1206,12 @@ test(
 for (const scenario of [
   "202 empty",
   "202 pending",
+  "202 status pending null",
+  "202 status pending object",
+  "202 status running preview",
+  "202 status completed zero",
+  "202 status failed",
+  "202 status cancelled preview",
   "200 premature FIN",
   "202 terminal image",
   "200 corrupt image",
@@ -1221,6 +1227,27 @@ for (const scenario of [
       "202 pending": JSON.stringify({
         status: "pending",
         id: "pending-opaque-id",
+      }),
+      "202 status pending null": JSON.stringify({
+        status: "pending",
+        data: [null],
+      }),
+      "202 status pending object": JSON.stringify({
+        status: "pending",
+        data: [{}],
+      }),
+      "202 status running preview": JSON.stringify({
+        data: [valid],
+        status: "in_progress",
+      }),
+      "202 status completed zero": JSON.stringify({
+        status: "completed",
+        data: [],
+      }),
+      "202 status failed": JSON.stringify({ status: "failed" }),
+      "202 status cancelled preview": JSON.stringify({
+        status: "cancelled",
+        data: [valid],
       }),
       "200 premature FIN":
         '{"data":[' + JSON.stringify(valid) + ',{"b64_json":"YQ',
@@ -1266,9 +1293,14 @@ for (const scenario of [
     await runner.execute(job.id);
     await runner.recover();
     await runner.execute(job.id);
-    const expected = ["202 empty", "202 pending", "200 premature FIN"].includes(
-      scenario,
-    )
+    const expected = [
+      "202 empty",
+      "202 pending",
+      "202 status pending null",
+      "202 status pending object",
+      "202 status running preview",
+      "200 premature FIN",
+    ].includes(scenario)
       ? "uncertain"
       : scenario === "202 terminal image"
         ? "completed"

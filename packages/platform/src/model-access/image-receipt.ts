@@ -4,6 +4,7 @@ import { DomainError } from "../security.js";
 
 export const maxImageBytes = 64 << 20;
 const maxEncoded = 4 * Math.ceil(maxImageBytes / 3);
+const fieldLimits = { status: 64, url: 8192, b64_json: maxEncoded };
 export type ImageOutput =
   { inline: true } | { url: string } | { b64: string } | null;
 export class DefiniteImageFailure extends Error {}
@@ -79,6 +80,7 @@ export async function readImageReceipt(
     throw new DefiniteImageFailure();
   const outputs: ImageOutput[] = [];
   let found = false;
+  let status: string | undefined;
   async function* chunks() {
     try {
       for await (const bytes of httpChunks(
@@ -119,7 +121,7 @@ export async function readImageReceipt(
       inData = false,
       item = false,
       index = -1;
-    let capture: "url" | "b64_json" | null = null,
+    let capture: "url" | "b64_json" | "status" | null = null,
       value: ReceiptField | null = null,
       url = "",
       b64 = "";
@@ -130,6 +132,10 @@ export async function readImageReceipt(
         switch (token.name) {
           case "keyValue":
             key = token.value;
+            if (accepted && depth === 1 && key === "status") {
+              if (status !== undefined) throw new InterruptedReceipt();
+              status = "";
+            }
             break;
           case "startArray":
           case "startObject": {
@@ -178,22 +184,26 @@ export async function readImageReceipt(
               index++;
               if (index < count) outputs.push(null);
             }
-            capture =
-              token.name === "startString" &&
-              depth === 3 &&
-              item &&
-              (key === "url" || key === "b64_json")
-                ? key
-                : null;
-            value = capture
-              ? new ReceiptField(capture === "url" ? 8192 : maxEncoded)
-              : null;
+            capture = null;
+            if (token.name === "startString") {
+              if (accepted && depth === 1 && key === "status")
+                capture = "status";
+              else if (
+                depth === 3 &&
+                item &&
+                (key === "url" || key === "b64_json")
+              )
+                capture = key;
+            }
+            value = capture ? new ReceiptField(fieldLimits[capture]) : null;
             key = "";
             break;
           case "stringChunk":
             if (value && !value.append(token.value)) value = null;
             break;
           case "endString":
+            if (capture === "status")
+              status = value?.finish().trim().toLowerCase() ?? "";
             if (capture === "url") url = value?.finish() ?? "";
             if (capture === "b64_json") b64 = value?.finish() ?? "";
             capture = null;
@@ -207,8 +217,16 @@ export async function readImageReceipt(
 
     throw new DefiniteImageFailure();
   }
-  if (!closed || (accepted && (!found || !outputs.length)))
-    throw new InterruptedReceipt();
+  if (!closed) throw new InterruptedReceipt();
+  if (accepted && status !== undefined) {
+    if (["failed", "error", "cancelled", "canceled"].includes(status))
+      throw new DefiniteImageFailure();
+    // A 202 can contain previews before its final status field arrives.
+    if (!["completed", "succeeded", "success", "done"].includes(status))
+      throw new InterruptedReceipt();
+    return { outputs };
+  }
+  if (accepted && (!found || !outputs.length)) throw new InterruptedReceipt();
   if (!found) throw new DefiniteImageFailure();
   return { outputs };
 }
