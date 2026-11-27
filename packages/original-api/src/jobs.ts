@@ -75,8 +75,9 @@ export class OriginalJobs {
           [job.id],
         )
       ).rows;
+      const media = new OriginalMedia(this.p);
       for (const asset of assets) {
-        await new OriginalMedia(this.p).protect(sql, asset.id);
+        await media.protect(sql, asset.id);
         requireValue(
           !(await one(
             sql,
@@ -87,6 +88,7 @@ export class OriginalJobs {
           "仍有作品或任务引用这张图片，请先删除相关版本",
         );
       }
+      await media.protectDialogueTakes(sql, { jobIds: [job.id] });
       const ids = assets.map((a) => a.id);
       // Retain immutable accounting and accepted request identity, hide the original record.
       await sql.query(

@@ -15,6 +15,7 @@ import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-expor
 import { originalStoryboard } from "@fumiao/platform/composition/renderer.js";
 import { OriginalMedia } from "@fumiao/original-api/media.js";
 import { OriginalLibrary } from "@fumiao/original-api/library.js";
+import { OriginalJobs } from "@fumiao/original-api/jobs.js";
 import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
 import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
@@ -1785,6 +1786,39 @@ test("selected and pending dialogue takes survive library cleanup and canvas dup
   await save(copy.id, copy.revision, [selected]);
   assert.equal((await remove(line.audio_pending)).deleted, 1);
   assert.equal((await remove(line.audio_job)).deleted, 1);
+});
+
+test("failed dialogue takes without output retain their retry history until detached", async (t) => {
+  const f = await fixture();
+  t.after(() => f.cleanup());
+  await seedEpisodeScript(f);
+  const jobs = new OriginalJobs(f.p);
+  await f.job(970, "audio", "failed");
+  await f.job(971, "audio", "cancelled");
+  await f.link(f.project.id, "dialogue:shot:first", 970);
+  await f.link(f.project.id, "dialogue:shot:second", 971);
+  const node = {
+    ...f.doc.nodes[0], narration_job: null, narration_text: "",
+    dialogue_lines: [
+      { id: "first", speaker: "甲", text: "你好", audio_pending: 970 },
+      { id: "second", speaker: "乙", text: "再见", audio_pending: 971 },
+    ],
+  };
+  const graph = { ...f.doc, nodes: [node], director: episode(f.doc.shots) };
+  const saved = await f.canvases.save(f.admin, f.project.id, {
+    title: "对白", expected_revision: 1, document: graph,
+  });
+  const removeBulk = () => f.canvases.library.remove(f.admin, { keys: ["job:970"] });
+  const removeSingle = () => jobs.remove(f.admin, 971);
+  await assert.rejects(removeBulk(), { status: 409, message: /对白.*画布/ });
+  await assert.rejects(removeSingle(), { status: 409, message: /对白.*画布/ });
+
+  await f.canvases.save(f.admin, f.project.id, {
+    title: "对白", expected_revision: saved.revision,
+    document: { ...graph, nodes: [{ ...node, dialogue_lines: [] }] },
+  });
+  assert.equal((await removeBulk()).deleted, 1);
+  assert.deepEqual(await removeSingle(), { ok: true });
 });
 
 test("episode reused media must confirm every available basis even when its adoption digest matches", async () => {

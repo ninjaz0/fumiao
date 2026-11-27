@@ -381,6 +381,7 @@ export class OriginalLibrary {
           "所选素材仍被其他作品或任务引用，请先移除相关版本；本次未删除任何内容",
         );
       }
+      await this.media.protectDialogueTakes(sql, { jobIds: jobs });
       // A tombstone keeps accepted request identities and immutable ledger foreign keys.
       await sql.query(
         "UPDATE jobs SET deleted_at=clock_timestamp() WHERE id=ANY($1::uuid[]) AND deleted_at IS NULL",
