@@ -229,9 +229,108 @@ async function checkPickingReturnsExpanded(page: Page) {  // Review Focus 5
   await page.keyboard.press("Escape");
 }
 
+async function checkMenuSheet(page: Page) {
+  const dock = page.locator("#home-composer .composer-dock");
+  const sheet = page.locator("#popover");
+  await page.locator("#home-composer #prompt").tap();
+  await expect(dock).toHaveAttribute("data-expanded", "true");
+  const triggers = ["#home-composer .creation-type"];
+  if (await page.locator("#home-composer .model-name").isEnabled())
+    triggers.push("#home-composer .model-name");
+  for (const selector of triggers) {
+    const trigger = page.locator(selector);
+    await trigger.tap();
+    await expect(sheet).toHaveAttribute("data-sheet", "");
+    await expect(sheet).toHaveCSS("translate", "none");
+    const box = (await sheet.boundingBox())!;
+    assert.ok(
+      Math.abs(box.x) <= 1 && Math.abs(box.width - 375) <= 1 && Math.abs(box.y + box.height - 667) <= 1,
+      `unexpected sheet geometry for ${selector}: ${JSON.stringify(box)}`,
+    );
+    const stackedOnTop = await page.evaluate((y) => {
+      const hit = document.elementFromPoint(187, y);
+      return !!hit?.closest("#popover");
+    }, box.y + Math.min(24, box.height / 2));
+    assert.ok(stackedOnTop, `${selector} sheet stacks above expanded composer dock`);
+    const optionHeights = await sheet.locator('[role="option"]:visible').evaluateAll((items) =>
+      items.map((item) => item.getBoundingClientRect().height));
+    assert.ok(optionHeights.length > 0 && optionHeights.every((height) => height >= 43.5), `option heights >= 44px: ${optionHeights}`);
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+    await expect(dock).toHaveAttribute("data-expanded", "true");
+    await expect(trigger).toBeFocused();
+  }
+  await page.keyboard.press("Escape");
+  await expect(dock).toHaveAttribute("data-expanded", "false");
+
+  // Top-bar workspace sheet + dialog focus return to the visible mobile switch.
+  const mobileSwitch = page.locator(".mobile-workspace-switch");
+  await mobileSwitch.tap();
+  await expect(sheet).toHaveAttribute("data-sheet", "");
+  const itemHeights = await sheet.locator(".space-option:visible, .space-create:visible").evaluateAll((items) =>
+    items.map((item) => item.getBoundingClientRect().height));
+  assert.ok(itemHeights.length > 0 && itemHeights.every((height) => height >= 43.5), `workspace menu heights >= 44px: ${itemHeights}`);
+  if (await sheet.locator('[data-act="create-workspace"]').count()) {
+    await sheet.locator('[data-act="create-workspace"]').tap();
+    await expect(page.locator("#modal[open]")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#modal[open]")).toHaveCount(0);
+    await expect(mobileSwitch).toBeFocused();
+  } else {
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+  }
+
+  // Desktop (>760px) removes data-sheet and positions popover next to trigger.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.locator("#home-composer .creation-type").click();
+  await expect(sheet).toBeVisible();
+  await expect(sheet).not.toHaveAttribute("data-sheet");
+  const desktopBox = (await sheet.boundingBox())!;
+  assert.ok(desktopBox.width < 375, `desktop popover width ${desktopBox.width}`);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await page.setViewportSize({ width: 375, height: 667 });
+}
+
+async function setTheme(page: Page, theme: "light" | "dark") {
+  await page.evaluate((value) => {
+    (window as Window & { setFumiaoTheme?: (next: "light" | "dark") => void }).setFumiaoTheme?.(value);
+  }, theme);
+}
+
+async function checkDarkSurfaces(page: Page) {             // Review Focus 4
+  await setTheme(page, "dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.locator(".mobile-account").tap();
+  const sheet = page.locator("#popover");
+  await expect(sheet).toHaveAttribute("data-sheet", "");
+  const menuItemHeights = await sheet.locator(".menu-item:visible").evaluateAll((items) =>
+    items.map((item) => item.getBoundingClientRect().height));
+  assert.ok(menuItemHeights.length > 0 && menuItemHeights.every((height) => height >= 43.5), `menu-item heights >= 44px: ${menuItemHeights}`);
+  const backgrounds = await page.evaluate(() =>
+    [".mobile-topbar", ".mobile-tabbar", "#popover"].map((s) => getComputedStyle(document.querySelector(s)!).backgroundColor));
+  for (const color of backgrounds) {
+    assert.notEqual(color, "rgb(255, 255, 255)");
+    assert.notEqual(color, "rgba(0, 0, 0, 0)");
+  }
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await page.locator("#home-composer #prompt").tap();
+  await expect(page.locator("#home-composer .composer-dock")).toHaveAttribute("data-expanded", "true");
+  const dockColor = await page.evaluate(() =>
+    getComputedStyle(document.querySelector("#home-composer .composer-dock-sheet")!).backgroundColor);
+  assert.notEqual(dockColor, "rgb(255, 255, 255)");
+  assert.notEqual(dockColor, "rgba(0, 0, 0, 0)");
+  if (evidence) await page.screenshot({ path: `${evidence}/checkDarkSurfaces-dark.png`, animations: "disabled" });
+  await page.keyboard.press("Escape");
+  await setTheme(page, "light");
+}
+
 const checks = [
   checkTabBar, checkDrawerClosesAfterNavigation, checkLongWorkspaceName,
   checkDockCollapseExpand, checkLongDraft, checkWidenClearsDock, checkPickingReturnsExpanded,
+  checkMenuSheet, checkDarkSurfaces,
 ];
 
 async function fixture(harness: ChildProcess) {

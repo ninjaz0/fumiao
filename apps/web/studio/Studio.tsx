@@ -552,6 +552,8 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         closeMenu();
       } else {
         setCollapsed(localStorage.getItem("fm-sidebar") === "collapsed");
+        if (anchor.current?.closest(".mobile-topbar")) closeMenu();
+        delete popover.current?.dataset.sheet;
       }
     };
     narrow.addEventListener("change", onNarrow);
@@ -591,6 +593,15 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     const trigger = anchor.current;
     const element = popover.current;
     if (!trigger?.isConnected || !element) return;
+    if (matchMedia("(max-width: 760px)").matches) {
+      element.dataset.sheet = "";
+      element.style.left = "";
+      element.style.top = "";
+      element.style.removeProperty("--motion-popover-x");
+      element.style.removeProperty("--motion-popover-y");
+      return;
+    }
+    delete element.dataset.sheet;
     const box = trigger.getBoundingClientRect();
     const beside = trigger.dataset.menu === "workspaces" && innerWidth > 760;
     const left = Math.min(
@@ -743,6 +754,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     scrollAfterRender.current = () => scrollTo({ top: 0, behavior: "instant" });
   }
 
+  function workspaceSwitch() {
+    return document.querySelector<HTMLElement>(
+      narrowScreen && !mobileDrawerOpen
+        ? ".mobile-workspace-switch"
+        : ".workspace-switch",
+    );
+  }
+
   function openSettingsDialog(
     body: ReactNode,
     opener: HTMLElement | null,
@@ -750,6 +769,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     presentation?: SettingsDialogPresentation,
   ) {
     if (leaving.current || !active.current) return;
+    if (opener?.closest("#popover")) opener = anchor.current ?? workspaceSwitch();
     closeMenu();
     setMenuHidden(true);
     const version = ++settingsDialogVersion.current;
@@ -1025,8 +1045,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     opener = document.activeElement as HTMLElement | null,
     adminOnly = false,
   ) {
-    if (opener?.closest("#popover"))
-      opener = document.querySelector(".workspace-switch");
+    if (opener?.closest("#popover")) opener = anchor.current ?? workspaceSwitch();
     closeMenu();
     setMenuHidden(true);
     setDialog({ content, opener, adminOnly });

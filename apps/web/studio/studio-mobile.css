@@ -2,14 +2,13 @@
    drawer instead of the 64px icon rail. Loaded after studio-polish.css and
    overrides the fixed baseline studio.css; desktop is unchanged.
    The baseline stylesheet may load after this one, so rules that override
-   it start at #app to outrank it regardless of order.
+   it start at #app (or html #popover.popover[data-sheet] for the sibling
+   #popover layer) to outrank it regardless of order.
    Convention: selectors that override baseline studio.css rules need the
    #app prefix; new class names (.mobile-*) and #view rules don't. */
 @media (max-width: 760px) {
+  :root,
   #app .shell {
-    /* No rail on phones: fixed layers such as .detail-view and
-       .floating-composer start at the left edge. */
-    --rail: 0px;
     --mobile-gutter: 16px;
     --mobile-topbar-height: 52px;
     --mobile-tabbar-height: 56px;
@@ -21,6 +20,11 @@
     --mobile-panel-radius: 20px;
     --mobile-touch-size: 44px;
     --mobile-drawer-width: min(280px, 86vw);
+  }
+  #app .shell {
+    /* No rail on phones: fixed layers such as .detail-view and
+       .floating-composer start at the left edge. */
+    --rail: 0px;
   }
   #app .workspace {
     margin-left: 0;
@@ -456,6 +460,74 @@
   .composer-dock-handle:focus-visible {
     outline: 2px solid var(--focus);
     outline-offset: -4px;
+  }
+
+  /* Popover menus become bottom sheets on phones (#popover is a sibling of
+     #app, so html #popover.popover[data-sheet] outranks all baseline .popover
+     selectors, including .popover.duration:has(#voice-description)). */
+  html #popover.popover[data-sheet] {
+    --motion-popover-x: 0px;
+    --motion-popover-y: 8px;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: none;
+    max-height: min(70dvh, calc(var(--visual-viewport-height, 100dvh) - 24px));
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 12px var(--mobile-gutter)
+      calc(12px + env(safe-area-inset-bottom));
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: var(--mobile-panel-radius) var(--mobile-panel-radius) 0 0;
+    background: var(--pop);
+    box-shadow: 0 -8px 30px rgb(0 0 0 / 16%);
+  }
+  #popover.popover[data-sheet] .flow-model-options {
+    min-width: 0;
+    max-width: none;
+  }
+  #popover.popover[data-sheet]
+    :is(
+      .menu-item,
+      .choice-list button,
+      .duration-options button,
+      .quality-options button
+    ) {
+    min-height: var(--mobile-touch-size);
+    font-size: var(--mobile-body-size);
+  }
+  #popover.popover[data-sheet] .quality-options button {
+    height: auto;
+  }
+  #popover.popover[data-sheet]
+    :is(
+      .space-create,
+      .ref-entry,
+      .reference-row .quiet-button,
+      .check,
+      .h3-video-audio,
+      .advanced-mode-row
+    ) {
+    min-height: var(--mobile-touch-size);
+  }
+  #popover.popover[data-sheet] .reference-row .icon-button {
+    width: var(--mobile-touch-size);
+    min-width: var(--mobile-touch-size);
+    height: var(--mobile-touch-size);
+  }
+  #popover.popover[data-sheet] .primary {
+    width: 100%;
+    min-height: var(--mobile-touch-size);
+  }
+  #popover.popover[data-sheet] :is(input:not([type="checkbox"]), select) {
+    min-height: var(--mobile-touch-size);
+  }
+  #popover.popover[data-sheet]
+    :is(input:not([type="checkbox"]), textarea, select) {
+    font-size: var(--mobile-input-size);
   }
 }
 
