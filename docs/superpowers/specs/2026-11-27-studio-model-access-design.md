@@ -1,6 +1,6 @@
 # Studio 内置模型接入
 
-2026-11-27 · 设计稿，待负责人确认
+2026-11-27 · 负责人已确认上架流程与首版兼容范围。[实施计划](../plans/2026-11-27-studio-model-access.md)
 
 ## 负责人已确认的使用方式
 
@@ -49,7 +49,7 @@
 
 以受理事务为界。切换前受理的聊天回合使用旧执行器和原定的每条回复价格。切换后，在同一对话发送的下一条消息按新快照结算。历史回合展示当时的固定价或实际账本金额，缺失的旧用量标为未记录。接管后的模型由内置设置管理，旧插件启停、升级和移除只能影响仍归其管理的模型及资源。待所有旧在途回合结算后再按现有流程释放旧资源。
 
-## 首版协议范围建议
+## 首版协议范围
 
 接口路径相对于管理员配置的 API 根地址。平台提供版本化的内置协议实现。插件目录仍由插件清单管理，新增内置模型直接登记在 Studio 模型目录。两种来源共用公开 ID、工作区授权、任务/回合和钱包。现有数据库中的连接、任务及运行中回合带插件外键或约束，实现时为内置来源建立明确的执行器版本和引用约束，历史任务继续按原版本解析。[目录注册](../../../packages/platform/src/catalog.ts) · [现有回合约束](../../../migrations/019_original_chat.sql)
 
@@ -57,7 +57,7 @@
 | --- | --- | --- |
 | 对话 | `POST chat/completions`，默认流式并请求返回用量。仅支持完整 JSON 回复的网关可在线路选择整段返回。两种方式共用用量结算，有工具能力的模型沿用现有工具调用流程 | 一条可回看的回复和一张本轮账单 |
 | 图片 | OpenAI 兼容线路用 `images/generations`，支持参考图编辑的线路用 `images/edits`。OpenRouter 图片专用目录中的模型用其 `POST images`，有参考图能力时传 `input_references` | 从图片数据或成品链接取得文件，验证后写入工作区私有素材，每张有效成品计一次。[OpenRouter 图片协议](https://openrouter.ai/docs/guides/overview/multimodal/image-generation) |
-| 视频 | 建议首版支持 New API 的 OpenAI Videos 兼容格式和 OpenRouter Videos。两条协议都覆盖文生视频，对声明支持首帧的模型开放单张首帧生视频 | 保存上游任务号及所需查询位置，按受理时的线路取成片，按实测时长结算 |
+| 视频 | 首版支持 New API 的 OpenAI Videos 兼容格式和 OpenRouter Videos。两条协议都覆盖文生视频，对声明支持首帧的模型开放单张首帧生视频 | 保存上游任务号及所需查询位置，按受理时的线路取成片，按实测时长结算 |
 
 OpenAI 官方 Videos 服务于 2026-09-24 停用，New API 等网关仍发布兼容接口。接入范围以目标网关对外提供的协议为准。[对话流及用量](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events) · [图片接口](https://developers.openai.com/api/reference/cli/resources/images) · [OpenAI 视频接口与停用说明](https://developers.openai.com/api/reference/resources/videos/methods/create) · [New API 视频路由](https://docs.newapi.pro/en/docs/guide/feature-guide/user/log)
 
@@ -130,4 +130,4 @@ OpenAI 官方 Videos 服务于 2026-09-24 停用，New API 等网关仍发布兼
 | 两张图片只交付一张，或下载一段有小数秒的成片 | 按交付数量或实测时长扣款，账本与资产一致。失败和重复下载可复测 |
 | 老库含整数余额、冻结额、旧聊天、已有回执和在途任务 | 迁移、重启和恢复能核对原账面值。旧单按旧约定结算一次。不同工作区的账单、密钥和私有素材相互隔离 |
 
-实施者负责表结构、接口命名、组件拆分、十进制序列化兼容和分阶段迁移，沿用仓库现有包边界与 `/studio` 验收流程。协议范围、精度、预留上限和异常收费属于本稿提出的默认选择，供负责人审批。自动选路、独立网关脚本和 Sub2API 的分档倍率属于后续独立需求。
+实施者负责表结构、接口命名、组件拆分、十进制序列化兼容和分阶段迁移，沿用仓库现有包边界与 `/studio` 验收流程。金额精度、预留上限及异常收费的具体取值在实施计划中对应到验收用例。自动选路、独立网关脚本和 Sub2API 的分档倍率属于后续独立需求。
