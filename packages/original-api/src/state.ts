@@ -1,3 +1,4 @@
+import { mediaModelForm } from "@fumiao/platform/model-access/media-form.js";
 import { canvasNodeEntries } from "@fumiao/platform/canvas-node-plugins.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { statfs } from "node:fs/promises";
@@ -6,6 +7,7 @@ import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import {
+  hasModelAccess,
   hasStudioPackages,
   studioPluginProfile,
   pairedPluginAvailable,
@@ -124,6 +126,11 @@ export class OriginalState {
             vault: this.p.vault,
             registry: this.p.registry,
           });
+          const nativeForms = (await hasModelAccess(sql)) ? (await sql.query(
+            `SELECT p.catalog_id, r.purpose, r.protocol, r.capabilities FROM model_access_publications p
+             JOIN model_access_route_revisions r ON r.id=p.route_revision_id WHERE r.purpose IN ('image','video')`,
+          )).rows.filter(r => Object.hasOwn(models, r.catalog_id)).map(r =>
+            [r.catalog_id, mediaModelForm({ purpose: r.purpose, protocol: r.protocol, capabilities: r.capabilities })]) : [];
           const out: Record<string, any> = {
             ...(plugins.profile ? { studio_plugins: true } : {}),
             server_time: stamp,
@@ -191,14 +198,15 @@ export class OriginalState {
                 .map(([id, s]) => [id, s.label]),
             ),
             model_catalog: models,
-            model_forms: Object.fromEntries(
-              (
+            model_forms: Object.fromEntries([
+              ...(
                 await sql.query(
                   `SELECT c.id, f.forms->c.id AS form FROM ${await listedStudioCatalog(sql)} c
                JOIN plugin_model_forms f ON f.plugin_id=c.plugin_id AND f.plugin_version=c.plugin_version`,
                 )
               ).rows.map((r) => [r.id, r.form]),
-            ),
+              ...nativeForms,
+            ]),
             model_groups: await catalog.groups(sql),
             model_policy: listedPolicy(await catalog.policy(sql)),
             model_access: await catalog.effective(sql, workspace.id),

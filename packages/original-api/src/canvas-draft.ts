@@ -1,3 +1,4 @@
+import { mediaQuoteFields } from "./drafts.js";
 import {
   canvasExtensionSchema,
   validCanvasResult,
@@ -60,7 +61,7 @@ export const canvasParamsFields: Fields = {
   flow_source_job: positive,
   ratio: literal(["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"], "16:9"),
   quality: literal([480, 768], 480),
-  seconds: { ...integer(5), min: 0, max: 15 },
+  seconds: { ...integer(5), min: -1, max: 120 },
   seed: { ...integer(null), nullable: true, min: 0, max: 2 ** 53 - 1 },
   sampling_steps: literal([16, 20, 32, 50], 20),
   fast_mode: { kind: "boolean", strict: false, default: false },
@@ -221,6 +222,7 @@ export const canvasBgmRunFields: Fields = {
   },
 };
 export const canvasRunFields: Fields = {
+  ...mediaQuoteFields,
   ...canvasExactRevisionFields,
   price_revision: {
     ...integer(null),
@@ -266,10 +268,11 @@ export const canvasGridCropFields: Fields = {
   col: { ...integer(0), min: 0, max: 2 },
 };
 export const batchQuoteItemFields: Fields = {
+  reference_count: { ...integer(), min: 0, max: 12, optional: true },
   params: { kind: "dictionary", optional: true },
   kind: literal(["image", "video", "audio"]),
   model: text(180, ""),
-  seconds: { ...integer(5), min: 0, max: 15, optional: true },
+  seconds: { ...integer(5), min: -1, max: 120, optional: true },
   quality: { ...literal([480, 768]), optional: true },
   resolution: { ...literal(["1K", "2K", "4K"]), optional: true },
   image_quality: { ...literal(["low", "medium", "high"]), optional: true },

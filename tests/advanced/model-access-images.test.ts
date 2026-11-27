@@ -88,6 +88,55 @@ async function fixture(
   return { ...f, c, conn, model, request };
 }
 
+test("成员状态公开当前线路的画布和创作表单", async (t) => {
+  const f = await fixture(t);
+  const { body: state } = await f.request("/api/state");
+  const form = state.model_forms?.[f.model];
+  assert.ok(form?.canvas && form.parameterObject, "成员应能在普通画布和创作台配置公开图片模型");
+  assert.equal(form.fields.n.default, 1);
+  assert.equal(form.fields.n.maximum, 2);
+  assert.equal(form.references.max, 1);
+});
+
+test("画布候选确认的是全部候选总价，分镜脚本文档信息不属于上游参数", async (t) => {
+  const f = await fixture(t);
+  const { OriginalCanvases } = await import("@fumiao/original-api/canvases.js");
+  const canvases = new OriginalCanvases(f.p);
+  const project = await canvases.create(f.member, { title: "原画" });
+  const path = "/api/canvases/" + project.id;
+  await canvases.save(f.member, project.id, { title: "原画", expected_revision: 1, document: {
+    nodes: [{ id: "draw", type: "image", x: 0, y: 0, prompt: "一组候选", params: { model: f.model }, extra_params: { n: 2, script_doc_id: "story" } }], edges: [],
+  } });
+  const pre = await f.request(path + "/batch-precheck", { node_ids: ["draw"], stages: ["image"] });
+  assert.equal(pre.body.summary.exact_total_credits, "0.5");
+  const item = pre.body.items[0];
+  const offered = { expected_revision: 2, uid: randomUUID(), price_revision: pre.body.price_revision, route_revision: item.route_revision, price_revision_id: item.price_revision_id, count: 2 };
+  assert.ok(item.route_revision && item.price_revision_id);
+  const post = (max_charge: string) => f.request(path + "/nodes/draw/candidates", { ...offered, max_charge });
+  assert.equal((await post("0.5")).status, 409);
+  assert.equal((await one(f.db, "SELECT count(*)::int AS n FROM jobs WHERE catalog_id=$1", [f.model])).n, 0);
+  const accepted = await post("1");
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+  assert.equal(accepted.body.exact_credits, "1");
+  assert.deepEqual((await post("1")).body, accepted.body);
+  assert.deepEqual((await f.db.query("SELECT input->'params' AS params FROM jobs WHERE catalog_id=$1", [f.model])).rows, [{ params: { n: 2 } }, { params: { n: 2 } }]);
+});
+
+test("普通创作的报价绑定线路、售价和最高扣款，重试复用已受理请求", async (t) => {
+  const f = await fixture(t);
+  const body = { kind: "image", model: f.model, prompt: "两张", params: { n: 2 }, uid: randomUUID() };
+  const { body: quote } = await f.request("/api/estimate", body);
+  const request = { ...body, ...quote };
+  for (const change of [{ max_charge: "0.000000000001" }, { route_revision: randomUUID() }, { price_revision_id: randomUUID() }]) {
+    assert.equal((await f.request("/api/image-jobs", { ...request, ...change })).status, 409);
+  }
+  assert.equal((await one(f.db, "SELECT count(*)::int AS n FROM jobs WHERE catalog_id=$1", [f.model])).n, 0);
+  const accepted = await f.request("/api/image-jobs", request);
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+  await f.c.edit(f.conn.id, { expected_revision: 1, enabled: false });
+  assert.deepEqual((await f.request("/api/image-jobs", request)).body, accepted.body);
+});
+
 test("会员报价、受理后停线、并发重投，大图片按实际交付一张收 0.25", async (t) => {
   const f = await fixture(t);
   const body = {

@@ -1611,3 +1611,22 @@ test("#53 composerFeedback surfaces visible status and button reason for insuffi
     priceReason: "当前模型尚未定价",
   });
 });
+
+test("有效线路报价失败时沿用网关原因，保留已保存的创作参数", (t) => {
+  t.after(installFakeEnv().restore);
+  const model = "native-video";
+  const state = makeState({ studio_plugins: true, video_models: { [model]: model },
+    model_access: { [model]: true }, pricing: {revision: 2, items: [], published: [{model, price: { kind: "video", unit: "4" }}]},
+    model_forms: { [model]: { canvas: true, parameterObject: true, fields: {seconds: {type: "integer", default: 4, enum: [4]}}, tiers: [], references: {min:0, max:0} } },
+  });
+  const session = readDraft(state);
+  session.draft.videoModel = model;
+  session.draft.kind = "video";
+  session.draft.params = { seconds: 8 };
+  session.draft.prompt = "历史镜头";
+  writeDraft(state, session);
+  const restored = readDraft(state);
+  assert.equal(restored.draft.params?.seconds, 8);
+  assert.equal(restored.draft.prompt, "历史镜头");
+  assert.match(composerFeedback(state, restored, { quoteError: "当前线路可选 4 秒" }).submitReason, /4 秒/);
+});

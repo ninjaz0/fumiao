@@ -685,6 +685,42 @@ for (const legacyChild of [false, true])
     },
   );
 
+test("画布保留三十秒与换线前的八秒草稿，重新生成提示节点和可用时长", async (t) => {
+  const f = await fixture(t, "new-api-videos");
+  const { OriginalCanvases } = await import("@fumiao/original-api/canvases.js");
+  const canvases = new OriginalCanvases(f.p);
+  const project = await canvases.create(f.member, { title: "历史镜头" });
+  const path = "/api/canvases/" + project.id;
+  const nodes = [8, 30].map(seconds => ({ id: "take" + seconds, title: "镜头" + seconds, type: "video", prompt: "街景", x: 0, y: 0, params: { model: f.model, seconds } }));
+  const document = { nodes, shots: nodes.map(n => n.id), edges: [] };
+  await canvases.save(f.member, project.id, { title: "历史镜头", expected_revision: 1, document });
+  const batch = await f.request("/api/quotes/batch", { items: [{ kind: "video", model: f.model, seconds: 30 }] });
+  assert.equal(batch.body.exact_total_credits, "90", JSON.stringify(batch.body));
+  assert.ok(batch.body.items[0].route_revision && batch.body.items[0].price_revision_id);
+  await f.publish(f.model);
+  const renewed = await canvases.save(f.member, project.id, { title: "保留时长", expected_revision: 2, document });
+  assert.equal(renewed.document.nodes[0].params.seconds, 8);
+  const check = await f.request(path + "/batch-precheck", { node_ids: ["take8"], stages: ["video"] });
+  assert.equal(check.body.items[0].status, "blocked");
+  assert.match(check.body.items[0].issues.join(" "), /镜头8.*4/);
+  const run = await f.request(path + "/nodes/take8/runs", { expected_revision: 3, uid: randomUUID(), price_revision: check.body.price_revision });
+  assert.equal(run.status, 400, JSON.stringify(run.body));
+  assert.match(JSON.stringify(run.body), /镜头8.*4/);
+  assert.equal((await one(f.db, "SELECT count(*)::int AS n FROM jobs WHERE catalog_id=$1", [f.model])).n, 0);
+  nodes[0].params.seconds = 4;
+  await canvases.save(f.member, project.id, { title: "改为四秒", expected_revision: 3, document });
+  const selections = { node_ids: ["take8"], stages: ["video"], expected_revision: 4 };
+  const fresh = (await f.request(path + "/batch-precheck", selections)).body;
+  assert.equal(fresh.summary.exact_total_credits, "20");
+  const approved = { ...selections, uid: randomUUID(), precheck_token: fresh.precheck_token, expected_total_credits: "20", price_revision: fresh.price_revision };
+  assert.equal((await f.request(path + "/batch-runs", { ...approved, price_revision: fresh.price_revision + 1 })).status, 409);
+  const admitted = await f.request(path + "/batch-runs", approved);
+  assert.equal(admitted.status, 200, JSON.stringify(admitted.body));
+  assert.equal(admitted.body.exact_total_credits, "20");
+  assert.deepEqual((await f.request(path + "/batch-runs", approved)).body, admitted.body);
+
+});
+
 test("视频估价和受理使用受支持的时长与参数，默认时长重放保留请求身份", async (t) => {
   const f = await fixture(t, "new-api-videos");
   const base = {

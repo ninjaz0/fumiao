@@ -4,7 +4,7 @@ import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
-import { hash, requireValue } from "@fumiao/platform/security.js";
+import { DomainError, hash, requireValue } from "@fumiao/platform/security.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { uuid5 } from "@fumiao/platform/uuid.js";
@@ -33,6 +33,7 @@ import {
 import { resolveSpeakerVoice } from "./dialogue.js";
 import {
   canvasBytes,
+  canvasMediaParameters,
   canvasDocumentJson,
   tailParentNode,
   canvasText,
@@ -82,6 +83,9 @@ export function compileCinematographyPrompt(
   return parts.filter(Boolean).join("\n\n").slice(0, 12000);
 }
 type Run = {
+  route_revision?: string;
+  price_revision_id?: string;
+  max_charge?: string;
   uid: string;
   expected_revision: number | bigint;
   price_revision: number | bigint | null;
@@ -515,11 +519,14 @@ export class OriginalCanvasRuns {
       prompt,
       refs,
       ratio: params.ratio,
+      ...(body.route_revision !== undefined && { route_revision: body.route_revision }),
+      ...(body.price_revision_id !== undefined && { price_revision_id: body.price_revision_id }),
+      ...(body.max_charge !== undefined && { max_charge: body.max_charge }),
       price_revision:
         typeof body.price_revision === "number" ? body.price_revision : null,
       asset_packs: node.asset_packs,
       model,
-      ...(extraParams ? { params: extraParams } : {}),
+      ...(extraParams ? { params: builtin ? canvasMediaParameters(extraParams) : extraParams } : {}),
     };
     const draft = parseDraft(
       node.type,
@@ -557,7 +564,11 @@ export class OriginalCanvasRuns {
         executionKey: `canvas-run:${p.id}:${nid}:${body.uid}`,
         tailParentJobId: pendingTailParentJobId,
       },
-    );
+    ).catch((error: unknown) => {
+      if (builtin && error instanceof DomainError && error.status === 400)
+        throw new DomainError(400, `节点「${node.title || nid}」：${error.message}`);
+      throw error;
+    });
     await this.link(sql, p, user, nid, body.uid, result.id, {
       revision: p.revision,
       prompt,
@@ -649,7 +660,9 @@ export class OriginalCanvasRuns {
         "SELECT sum(price) AS total FROM jobs WHERE public_id=ANY($1::bigint[])",
         [ids],
       );
-      const result = { ids, count: body.count, credits: Number(fees.total) };
+      const total = creditUnits(String(fees.total));
+      requireValue(body.max_charge === undefined || total <= creditUnits(body.max_charge), 409, "候选合计超过已确认的最高积分，请重新确认");
+      const result = { ids, count: body.count, credits: Number(fees.total), exact_credits: formatCredits(total) };
       await sql.query(
         "INSERT INTO canvas_run_batches(owner_id,uid,project_id,node,count,result) VALUES($1,$2,$3,$4,$5,$6)",
         [
@@ -999,6 +1012,7 @@ export class OriginalCanvasRuns {
       }[];
       skipped: { node: string; stage: PrecheckStage; reason: string }[];
       total_credits: number;
+      exact_total_credits?: string;
     };
 
     const body = parseBody(value, canvasBatchRunFields, true) as Run & {
@@ -1042,6 +1056,8 @@ export class OriginalCanvasRuns {
       return response;
     };
 
+    type NodeQuote = { price_revision: number; price_revision_id: string; route_revision: string; max_charge: string };
+    let nativeQuotes: Partial<Record<string, NodeQuote>> = {};
     const waitOrReclaim = async (
       projectUuid: string,
     ): Promise<
@@ -1082,10 +1098,11 @@ export class OriginalCanvasRuns {
               WHERE owner_id=$1 AND project_id=$2 AND uid=$3
                 AND status = 'in_progress'
                 AND updated_at < now() - interval '60 seconds'
-             RETURNING expected_revision, allowed_keys`,
+             RETURNING expected_revision, allowed_keys, response`,
             [user.id, projectUuid, body.uid, claimId],
           );
           if (reclaimed) {
+            nativeQuotes = reclaimed.response?.native_quotes ?? {};
             return {
               mode: "reclaimed",
               expectedRevision:
@@ -1212,6 +1229,7 @@ export class OriginalCanvasRuns {
         submitted,
         skipped,
         total_credits: Number(formatCredits(totalUnits)),
+        exact_total_credits: formatCredits(totalUnits),
       });
     };
 
@@ -1360,6 +1378,19 @@ export class OriginalCanvasRuns {
             "画布节点状态、模型报价或可执行集合已发生变化，请重新预检后再确认提交",
           );
         }
+        for (const item of freshPrecheck.items) {
+          if (item.status === "blocked" || !item.route_revision || !item.price_revision_id) continue;
+          nativeQuotes[item.node_id + ":" + item.stage] = {
+            price_revision: freshPrecheck.price_revision,
+            route_revision: item.route_revision,
+            price_revision_id: item.price_revision_id,
+            max_charge: item.exact_credits,
+          };
+        }
+        requireValue(
+          !Object.keys(nativeQuotes).length || Number(body.price_revision) === freshPrecheck.price_revision,
+          409, "积分价格已更新，请重新预检",
+        );
         const expectedCredits =
           body.expected_total_credits ?? init.serverTotalCredits;
         if (
@@ -1395,7 +1426,7 @@ export class OriginalCanvasRuns {
                owner_id, project_id, uid, request_hash, status,
                expected_revision, allowed_keys, response, updated_at, claim_id
              )
-             VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], '{}'::jsonb, now(), $7)
+             VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], $8::jsonb, now(), $7)
              ON CONFLICT (owner_id, project_id, uid) DO NOTHING
              RETURNING uid`,
           [
@@ -1406,6 +1437,7 @@ export class OriginalCanvasRuns {
             Number(body.expected_revision),
             [...allowedKeys].sort(),
             claimId,
+            JSON.stringify({ native_quotes: nativeQuotes }),
           ],
         );
         resume = !claimed;
@@ -1493,6 +1525,7 @@ export class OriginalCanvasRuns {
             const res = await this.generate(user, projectKey, node.id, {
               expected_revision: effectiveExpectedRevision,
               price_revision: body.price_revision,
+              ...nativeQuotes[node.id + ":" + stage],
               uid,
             });
             submitted.push({ node: node.id, stage, job_id: res.id });
@@ -1547,20 +1580,21 @@ export class OriginalCanvasRuns {
       }
     }
 
-    let totalCredits = 0;
+    let totalCredits = "0";
     if (submitted.length) {
       const feeRow = await one(
         this.p.db,
         "SELECT COALESCE(SUM(price),0) AS total FROM jobs WHERE public_id=ANY($1::bigint[])",
         [submitted.map((s) => s.job_id)],
       );
-      totalCredits = Number(feeRow?.total ?? 0);
+      totalCredits = formatCredits(creditUnits(String(feeRow?.total ?? 0)));
     }
 
     const response: BatchRunResponse = {
       submitted,
       skipped,
-      total_credits: totalCredits,
+      total_credits: Number(totalCredits),
+      exact_total_credits: totalCredits,
     };
     if (resume) {
       return this.p.db.transaction(async (sql) => {

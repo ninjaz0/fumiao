@@ -17,7 +17,7 @@ import {
   parseCanvasDocument,
   type CanvasNode,
 } from "./canvas-draft.js";
-import { canvasDocumentJson, tailParentNode } from "./canvas-values.js";
+import { canvasMediaParameters, canvasDocumentJson, tailParentNode } from "./canvas-values.js";
 import { parseBody } from "./validation.js";
 
 const ACTIVE_STATES = [
@@ -39,6 +39,8 @@ export type PrecheckItem = {
   model: string;
   credits: number;
   exact_credits: string;
+  route_revision?: string;
+  price_revision_id?: string;
   status: PrecheckHealth;
   issues: string[];
 };
@@ -98,6 +100,7 @@ export class OriginalBatchPrecheck {
         image_quality?: string;
         ratio?: string;
         count?: number;
+        reference_count?: number;
         params?: Record<string, unknown>;
       }[];
     };
@@ -176,8 +179,10 @@ export class OriginalBatchPrecheck {
                 model,
                 workspace.id,
                 params,
-                { nativeParams: item.params },
+                { kind: item.kind, nativeParams: item.params, referenceCount: item.reference_count },
               );
+        if (item.seconds !== undefined && (item.seconds < 0 || item.seconds > 15))
+          requireValue(await one(sql, "SELECT 1 FROM studio_catalog WHERE id=$1 AND plugin_id IS NULL AND descriptor->>'kind'='video'", [model]), 422, "镜头时长超出范围");
         priceRevision = q.revision;
         const subtotal =
           creditUnits(String(q.exactAmount ?? q.amount)) * BigInt(count);
@@ -188,6 +193,9 @@ export class OriginalBatchPrecheck {
           model,
           count,
           unit_credits: q.amount,
+          exact_unit_credits: String(q.exactAmount ?? q.amount),
+          exact_credits: formatCredits(subtotal),
+          ...(q.route_revision && { route_revision: q.route_revision, price_revision_id: q.price_revision_id }),
           credits: Number(formatCredits(subtotal)),
           allowed: q.allowed,
           priced: q.priced,
@@ -198,6 +206,8 @@ export class OriginalBatchPrecheck {
         price_revision: priceRevision,
         items,
         total_credits: Number(formatCredits(totalUnits)),
+        exact_total_credits: formatCredits(totalUnits),
+        exact_available_credits: formatCredits(available),
         available_credits: Number(formatCredits(available)),
         sufficient: available >= totalUnits,
       };
@@ -311,6 +321,7 @@ export class OriginalBatchPrecheck {
           let status: PrecheckHealth = "ready";
           let units = 0n;
           let model = "";
+          let routeQuote: Pick<PrecheckItem, "price_revision_id" | "route_revision"> | undefined;
 
           if (staleRevision) {
             issues.push("画布已有新版本，提交前请先同步保存");
@@ -432,15 +443,17 @@ export class OriginalBatchPrecheck {
                       ratio: node.params.ratio,
                     },
                 {
-                  nativeParams: node.extra_params ?? {},
+                  kind: stage,
+                  nativeParams: canvasMediaParameters(node.extra_params),
                   referenceCount: totalRefs + Number(Boolean(tailReference)),
                 },
               );
               if (!q.allowed || !q.priced) {
-                issues.push(q.reason || "当前模型不可用或未定价");
+                issues.push(`节点「${node.title || node.id}」：${q.reason || "当前模型不可用或未定价"}`);
                 status = "blocked";
               } else {
                 units = creditUnits(String(q.exactAmount ?? q.amount));
+                if (q.route_revision && q.price_revision_id) routeQuote = { route_revision: q.route_revision, price_revision_id: q.price_revision_id };
               }
             }
           } else if (stage === "narration") {
@@ -556,6 +569,7 @@ export class OriginalBatchPrecheck {
             node_type: node.type,
             stage,
             model,
+            ...routeQuote,
             exact_credits: status === "blocked" ? "0" : formatCredits(units),
             credits: status === "blocked" ? 0 : Number(formatCredits(units)),
             status,
@@ -613,6 +627,7 @@ export class OriginalBatchPrecheck {
             total_credits: Number(totalCredits),
             exact_total_credits: totalCredits,
             available_credits: Number(formatCredits(availableCredits)),
+            exact_available_credits: formatCredits(availableCredits),
             sufficient: availableCredits >= totalUnits,
             budget_blocked: budgetImpact.blocked,
             budget_blocks: budgetImpact.blocks,

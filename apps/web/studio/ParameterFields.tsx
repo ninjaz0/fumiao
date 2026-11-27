@@ -22,10 +22,12 @@ export function ParameterFields({
   form,
   values,
   change,
+  keepHistorical = false,
 }: {
   form: ModelForm;
   values: FormValues;
   change: (v: FormValues) => void;
+  keepHistorical?: boolean;
 }) {
   const evaluated = evaluateFormConstraints(form, values);
   function edit(name: string, value: Value | undefined) {
@@ -34,7 +36,7 @@ export function ParameterFields({
     else next[name] = value;
     // Text and number inputs can be temporarily incomplete while typing.
     change(
-      form.fields[name].enum || form.fields[name].type === "boolean"
+      !keepHistorical && (form.fields[name].enum || form.fields[name].type === "boolean")
         ? normalizeForm(form, next, name)
         : next,
     );
@@ -74,6 +76,7 @@ export function ParameterFields({
                 }
               >
                 {!required && <option value="">默认</option>}
+                {value !== undefined && !options.includes(value) && <option disabled value={JSON.stringify(value)}>{String(value)}（旧参数）</option>}
                 {options.map((option) => {
                   const key = JSON.stringify(option);
                   const disabledReason = constraint?.disabledOptions[key];
@@ -131,6 +134,11 @@ export function ParameterFields({
           </label>
         );
       })}
+      {keepHistorical && Object.keys(values).filter(name => !Object.hasOwn(form.fields, name)).map(name =>
+        <button type="button" className="parameter-button" key={name} onClick={() => edit(name, undefined)}>
+          移除旧参数 {name}（{String(values[name])}）
+        </button>
+      )}
       {evaluated.references.reason && (
         <span className="parameter-constraint-hint" role="status">
           {evaluated.references.reason}

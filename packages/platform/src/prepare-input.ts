@@ -1,3 +1,4 @@
+import { imageReferenceLimits, isImageControl } from "./model-access/media-form.js";
 import { prepareVideoParameters } from "./model-access/video-parameters.js";
 import { z } from "zod";
 import type { Platform } from "./platform.js";
@@ -130,27 +131,13 @@ export function prepareImageParameters(
     resolution: caps.resolutions,
     aspect_ratio: caps.aspect_ratios,
   };
-  const controls = new Set([
-    "n",
-    "size",
-    "aspect_ratio",
-    "resolution",
-    "quality",
-    "background",
-    "output_format",
-    "output_compression",
-    "seed",
-    "style",
-    "moderation",
-    "input_fidelity",
-  ]);
   for (const [name, value] of Object.entries(raw)) {
     const choices = options[name];
     const def = Object.hasOwn(caps.definitions ?? {}, name)
       ? caps.definitions![name]
       : undefined;
     requireValue(
-      controls.has(name) && (caps.names?.includes(name) || choices?.length),
+      isImageControl(name) && (caps.names?.includes(name) || choices?.length),
       400,
       "线路不支持此图片参数",
     );
@@ -189,15 +176,9 @@ export function prepareImageParameters(
     400,
     "图片张数无效",
   );
-  const def = caps.definitions?.input_references;
-  const refs =
-    caps.input_references ?? (def?.type === "range" ? def : undefined);
-  const supportsEdits =
-    caps.input_modalities?.includes("image") ||
-    caps.names?.includes("input_references");
+  const refs = imageReferenceLimits(caps);
   requireValue(
-    referenceCount >= (refs?.min ?? 0) &&
-      referenceCount <= Math.min(9, refs?.max ?? (supportsEdits ? 9 : 0)),
+    referenceCount >= refs.min && referenceCount <= refs.max,
     400,
     "参考图片数量不符合线路要求",
   );

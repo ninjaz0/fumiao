@@ -141,7 +141,7 @@ export class OriginalGeneration {
       const previous = await one(
         sql,
         native
-          ? "SELECT j.public_id,j.workspace_id,j.deleted_at,j.request_hash FROM model_access_job_uids i JOIN jobs j ON j.id=i.job_id WHERE i.uid=$1"
+          ? "SELECT j.public_id,j.workspace_id,j.deleted_at,j.request_hash,j.price_revision FROM model_access_job_uids i JOIN jobs j ON j.id=i.job_id WHERE i.uid=$1"
           : packages
             ? `SELECT * FROM jobs WHERE deleted_at IS NULL AND (original_uid=$1 OR (owner_id=$2 AND catalog_id=$3 AND studio_client_uid=$4 AND EXISTS(SELECT 1 FROM studio_shared_models WHERE model_id=$3))) LIMIT 1`
             : "SELECT * FROM jobs WHERE original_uid=$1 AND deleted_at IS NULL",
@@ -151,9 +151,13 @@ export class OriginalGeneration {
       // duration selects the route default, which must remain distinct on replay.
       const useRouteDuration = native && draft.kind === "video" &&
         !Object.hasOwn(draft.params ?? {}, "seconds") && !draft.provided.includes("seconds");
-      const fingerprint = native
-        ? hash(canonical({ ...draft, ...(useRouteDuration ? { seconds: undefined } : {}), provided: undefined }))
-        : "";
+      // Keep the generation fingerprint compatible with receipts issued before
+      // explicit native quotes. A quote authorizes the order, not its content.
+      const fingerprintDraft: Record<string, unknown> = { ...draft, ...(previous && native ? { price_revision: Number(previous.price_revision) } : {}), ...(useRouteDuration ? { seconds: undefined } : {}), provided: undefined };
+      delete fingerprintDraft.route_revision;
+      delete fingerprintDraft.price_revision_id;
+      delete fingerprintDraft.max_charge;
+      const fingerprint = native ? hash(canonical(fingerprintDraft)) : "";
       if (previous) {
         await new OriginalLibrary(this.p).access(
           sql,

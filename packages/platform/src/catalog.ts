@@ -531,6 +531,7 @@ export class StudioCatalog {
     params: Record<string, unknown>,
     options?: {
       requireConnection?: boolean;
+      kind?: string;
       nativeParams?: Record<string, unknown>;
       referenceCount?: number;
     },
@@ -539,6 +540,8 @@ export class StudioCatalog {
     priced: boolean;
     amount: number;
     exactAmount?: string;
+    route_revision?: string;
+    price_revision_id?: string;
     key: string | null;
     revision: number;
     reason?: string;
@@ -563,7 +566,7 @@ export class StudioCatalog {
       try {
         const route = await resolvePublishedRoute(sql, modelId);
         requireValue(
-          route && (route.price.kind === "image" || route.price.kind === "video"),
+          route && (!options?.kind || route.purpose === options.kind) && (route.price.kind === "image" || route.price.kind === "video"),
           409,
           "该线路不支持媒体估价",
         );
@@ -590,6 +593,8 @@ export class StudioCatalog {
           priced: true,
           amount: Number(amount),
           exactAmount: amount,
+          route_revision: route.routeRevisionId,
+          price_revision_id: route.priceRevisionId,
           key: null,
           revision,
         };

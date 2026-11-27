@@ -132,6 +132,12 @@ export async function acceptNativeMedia(
   snapshots: unknown[],
   meta?: AcceptTaskMeta,
 ) {
+  requireValue(
+    (draft.route_revision === undefined || draft.route_revision === route.routeRevisionId) &&
+      (draft.price_revision_id === undefined || draft.price_revision_id === route.priceRevisionId),
+    409,
+    "线路或售价已更新，请确认新报价后重新提交",
+  );
   const prepared = await prepareNativeMedia(
     p,
     sql,
@@ -141,6 +147,11 @@ export async function acceptNativeMedia(
     draft,
     true,
     Boolean(meta?.tailParentJobId),
+  );
+  requireValue(
+    draft.max_charge === undefined || creditUnits(prepared.amount) <= creditUnits(draft.max_charge),
+    409,
+    "当前报价超过已确认的最高积分，请重新确认",
   );
   requireValue(pythonStrip(draft.prompt), 400, "请输入提示词");
   if (meta?.projectId) {

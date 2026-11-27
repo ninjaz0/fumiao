@@ -59,7 +59,7 @@ export function prepareVideoParameters(
         durations.includes(seconds) ||
         (range && seconds >= range.min && seconds <= range.max)),
     400,
-    "视频时长超出线路范围",
+    `视频时长超出线路范围，可选 ${[...durations.map(n => n + " 秒"), ...(range ? [range.min + "–" + range.max + " 秒"] : []), ...(caps.automatic_duration ? ["自动"] : [])].join("、")}`,
   );
   requireValue(
     refs <= (caps.frame_images?.includes("first_frame") ? 1 : 0) &&

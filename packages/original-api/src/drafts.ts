@@ -16,6 +16,11 @@ const packs: Field = {
   },
 };
 const price: Field = { kind: "integer", nullable: true, default: null, min: 1 };
+export const mediaQuoteFields: Fields = {
+  route_revision: { kind: "uuid", optional: true },
+  price_revision_id: { kind: "uuid", optional: true },
+  max_charge: { kind: "string", max: 36, pattern: "^[0-9]+(?:\\.[0-9]{1,12})?$", strictPattern: true, optional: true },
+};
 const parent: Field = { kind: "integer", nullable: true, default: null };
 const uid: Field = { kind: "uuid" };
 const seed = (max: number): Field => ({
@@ -114,6 +119,7 @@ export function parseDraft(
           };
   const parsed = parseBody(value, {
     ...fields,
+    ...(kind !== "audio" ? mediaQuoteFields : {}),
     params: { kind: "dictionary", optional: true },
   });
   return {

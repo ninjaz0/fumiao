@@ -84,3 +84,8 @@ export function tailParentNode(doc: CanvasDocument, nodeId: string) {
       ),
   )?.source;
 }
+
+/** Script import stores document linkage alongside the user-selected model parameters. */
+export function canvasMediaParameters(extra?: Record<string, unknown> | null) {
+  return Object.fromEntries(Object.entries(extra ?? {}).filter(([name]) => !name.startsWith("script_")));
+}

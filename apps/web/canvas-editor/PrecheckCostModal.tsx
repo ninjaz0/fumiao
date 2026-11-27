@@ -29,6 +29,7 @@ export function PrecheckCostModal({
     submitted: { node: string; stage: PrecheckStage; job_id: number; line_id?: string }[];
     skipped: { node: string; stage: PrecheckStage; reason: string; line_id?: string }[];
     total_credits: number;
+    exact_total_credits?: string;
   }) => void | Promise<void>;
   onClose: () => void;
 }) {
@@ -139,7 +140,7 @@ export function PrecheckCostModal({
           expected_revision: revision,
           price_revision: data.price_revision,
           precheck_token: data.precheck_token,
-          expected_total_credits: data.summary.total_credits,
+          expected_total_credits: (data.summary.exact_total_credits ?? data.summary.total_credits),
           uid,
           node_ids: nodeIds,
           stages,
@@ -205,20 +206,20 @@ export function PrecheckCostModal({
             </div>
             <div className="fm-precheck-credits">
               <span>
-                预计冻结：<strong>{data.summary.total_credits}</strong> 积分
+                预计冻结：<strong>{(data.summary.exact_total_credits ?? data.summary.total_credits)}</strong> 积分
               </span>
               <span
                 className={data.summary.sufficient ? "" : "fm-credits-short"}
               >
-                可用余额：{data.summary.available_credits} 积分
+                可用余额：{(data.summary.exact_available_credits ?? data.summary.available_credits)} 积分
               </span>
             </div>
           </div>
 
           {!data.summary.sufficient && (
             <p className="error" role="alert">
-              当前工作区可用积分不足（需 {data.summary.total_credits}，当前{" "}
-              {data.summary.available_credits}），请先充值或减少选中镜头。
+              当前工作区可用积分不足（需 {(data.summary.exact_total_credits ?? data.summary.total_credits)}，当前{" "}
+              {(data.summary.exact_available_credits ?? data.summary.available_credits)}），请先充值或减少选中镜头。
             </p>
           )}
           {data.summary.budget_blocked &&
@@ -272,7 +273,7 @@ export function PrecheckCostModal({
                     )}
                   </div>
                   <span className="fm-precheck-cost">
-                    {item.status === "blocked" ? "跳过" : `${item.credits} 积分`}
+                    {item.status === "blocked" ? "跳过" : `${item.exact_credits ?? item.credits} 积分`}
                   </span>
                 </div>
               ))
@@ -295,7 +296,7 @@ export function PrecheckCostModal({
           {submitting
             ? "提交中…"
             : data
-              ? `确认冻结 ${data.summary.total_credits} 积分并提交 (${data.summary.runnable} 项)`
+              ? `确认冻结 ${(data.summary.exact_total_credits ?? data.summary.total_credits)} 积分并提交 (${data.summary.runnable} 项)`
               : "确认提交"}
         </button>
       </div>

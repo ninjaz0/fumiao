@@ -1,3 +1,4 @@
+import { creditUnits } from "@fumiao/plugin-sdk/credit-amount.js";
 import type { MenuEntry, PluginPageEntry } from "@fumiao/plugin-sdk/contributions";
 import type { InstalledSettingsPage } from "@fumiao/plugin-sdk/settings-pages";
 import {
@@ -43,6 +44,9 @@ export type InviteCode = {
   revision: number;
 };
 export type CreditEntry = {
+  balance?: number;
+  reserved?: number;
+  exact?: { amount: string; balance: string; reserved: string };
   id: number;
   action: string;
   amount: number;
@@ -52,6 +56,8 @@ export type CreditEntry = {
   job?: number | null;
 };
 export type CreditAccount = {
+  balance?: number;
+  exact?: { available: string; reserved: string; balance: string };
   workspace: number;
   kind: Space["kind"];
   name: string;
@@ -214,7 +220,7 @@ export type StudioState = {
     }[];
     revision: number;
   };
-  credits: { available: number; reserved: number };
+  credits: { available: number; reserved: number; exact?: { available: string; reserved: string; balance: string } };
   credit_history: CreditEntry[];
   credit_accounts?: CreditAccount[];
 };
@@ -443,7 +449,7 @@ function restoreStoredDraft(state: StudioState, saved: StoredDraft | null): Draf
     state.studio_plugins &&
     !modelAvailable(state, selectedModel(draft))
       ? draft
-      : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft));
+      : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft), Boolean(saved?.draft));
   const session: DraftSession = {
     parent: typeof saved?.parent === "number" ? saved.parent : null,
     retainedSeed:
@@ -673,7 +679,12 @@ export function seedError(form: ModelForm | undefined, raw: string): string {
   if (parsed < min) return `随机种子需为不小于 ${min} 的整数`;
   return "";
 }
-export function normalizeParams(state: StudioState, draft: Draft): Draft {
+export const publishedMedia = (state: StudioState, model: string) =>
+  state.pricing?.published?.some(p => p.model === model && p.price.kind !== "chat") ?? false;
+
+export type MediaQuote = { price_revision: number; route_revision: string; price_revision_id: string; max_charge: string };
+
+export function normalizeParams(state: StudioState, draft: Draft, preserveNative = false): Draft {
   const form = modelForm(state, draft);
   const flow = flowSpec(state, selectedModel(draft));
   const supportsH3 = draft.kind === "video" && form?.referenceModes && !flow;
@@ -698,7 +709,10 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
       flowSourceJob: flow.mode === "extend" ? draft.flowSourceJob : null,
     };
   }
-  const values = form
+  const native = publishedMedia(state, selectedModel(draft));
+  const values = native && form
+    ? (preserveNative && draft.params ? draft.params : normalizeForm(form, draft.params ?? {}))
+    : form
     ? normalizeForm(form, { ...draftValues(draft), ...draft.params })
     : {};
   const seed = typeof draft.seed === "string" ? draft.seed.trim() : "";
@@ -1458,7 +1472,7 @@ export function referenceIssue(
   if (form?.parameterObject) {
     const issue = formError(
       form,
-      job ? normalizeForm(form, savedParameters(job)) : (draft.params ?? {}),
+      job ? (publishedMedia(state, model) ? savedParameters(job) : normalizeForm(form, savedParameters(job))) : (draft.params ?? {}),
     );
     if (issue) return issue;
   }
@@ -1606,7 +1620,7 @@ export function loadJob(
     ),
     fast_mode:
       Number(job.sampling_steps) === state.model_forms?.[job.model]?.fastSteps,
-  });
+  }, true);
   const wasAudio = session.draft.kind === "audio";
   return {
     ...session,
@@ -1629,6 +1643,7 @@ export function generationRequest(
   session: DraftSession,
   job?: Job,
   retryId?: string,
+  offered?: MediaQuote,
 ) {
   const { draft, parent, submitId, refs } = session;
   const kind = job?.kind || draft.kind;
@@ -1640,6 +1655,7 @@ export function generationRequest(
     parent: job?.id ?? parent,
     uid: retryId ?? submitId,
     price_revision: state.pricing?.revision,
+    ...offered,
   };
   if (state.model_forms?.[model]?.parameterObject) {
     return {
@@ -1654,7 +1670,7 @@ export function generationRequest(
         ...common,
         model,
         params: job
-          ? normalizeForm(state.model_forms?.[model], savedParameters(job))
+          ? publishedMedia(state, model) ? savedParameters(job) : normalizeForm(state.model_forms?.[model], savedParameters(job))
           : (draft.params ?? {}),
         ...(kind === "audio"
           ? {}
@@ -1742,8 +1758,14 @@ export function generationRequest(
 export const resultTab = (kind: Job["kind"]) =>
   kind === "image" ? "images" : kind === "audio" ? "audio" : "videos";
 
-export function quote(state: StudioState, draft: Draft) {
+export function quote(state: StudioState, draft: Draft, offered?: MediaQuote) {
   const model = selectedModel(draft);
+  if (publishedMedia(state, model)) {
+    const amount = offered?.max_charge;
+    const available = state.credits?.exact?.available ?? String(state.credits?.available ?? 0);
+    const allowed = amount !== undefined && creditUnits(available) >= creditUnits(amount);
+    return { amount, available, allowed, label: amount === undefined ? "正在估价" : `最高 ${amount} 积分${allowed ? "" : " · 余额不足"}` };
+  }
   const form = state.model_forms?.[model];
   const values = form?.parameterObject
     ? (draft.params ?? {})
@@ -1770,16 +1792,17 @@ export function quote(state: StudioState, draft: Draft) {
 export function composerFeedback(
   state: StudioState,
   session: DraftSession,
-  options: { uploading?: boolean; submitting?: boolean } = {},
+  options: { uploading?: boolean; submitting?: boolean; offered?: MediaQuote; quoteError?: string } = {},
 ) {
   const { draft } = session;
   const model = selectedModel(draft);
   const available = modelAvailable(state, model);
-  const issue = referenceIssue(state, session) || flowIssue(state, session);
+  const quoteError = publishedMedia(state, model) ? options.quoteError : undefined;
+  const issue = quoteError || referenceIssue(state, session) || flowIssue(state, session);
   const limit = promptLimit(draft);
   const overLimit = draft.prompt.length > limit;
   const hasPrompt = !!draft.prompt.trim();
-  const price = quote(state, draft);
+  const price = quote(state, draft, options.offered);
   const unpricedReason =
     (modelForm(state, draft)?.tiers.length ?? 0) > 1
       ? "当前规格尚未定价"
@@ -1788,7 +1811,7 @@ export function composerFeedback(
   const priceReason = price.allowed
     ? ""
     : price.amount === undefined
-      ? unpricedReason
+      ? publishedMedia(state, model) ? quoteError || "正在估价" : unpricedReason
       : "当前空间积分不足";
 
   const limitReason = overLimit

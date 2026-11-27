@@ -32,6 +32,7 @@ export type PrecheckItem = {
   stage: PrecheckStage;
   model: string;
   credits: number;
+  exact_credits?: string;
   status: "ready" | "warning" | "blocked";
   issues: string[];
 };
@@ -50,6 +51,8 @@ export type PrecheckResponse = {
     runnable: number;
     total_credits: number;
     available_credits: number;
+    exact_total_credits?: string;
+    exact_available_credits?: string;
     sufficient: boolean;
     budget_blocked?: boolean;
     budget_blocks?: string[];
@@ -188,8 +191,8 @@ export type Studio = {
   flow?: {configured:boolean;ready:boolean};
   model_policy: {revision:number;enabled:Record<string,boolean>};
   model_access: Record<string,boolean>;
-  credits: {available:number;reserved:number};
-  pricing: {revision:number;items:{key:string;amount:number|null}[]};
+  credits: {available:number;reserved:number;exact?:{available:string;balance:string;reserved:string}};
+  pricing: {revision:number;published?:{model:string;price:{kind:string}}[];items:{key:string;amount:number|null}[]};
   workspace_id: number;
   workspaces: {id:number;name:string;kind:string}[];
   me: {
