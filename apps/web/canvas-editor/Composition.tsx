@@ -254,6 +254,7 @@ export function Composition({
             <div className="composition-bgm-gen" aria-label="AI 视频驱动配乐生成">
               <input
                 type="text"
+                className="fm-bgm-input"
                 aria-label="AI 配乐风格与情绪描述"
                 maxLength={300}
                 value={bgmPrompt}
@@ -262,6 +263,7 @@ export function Composition({
               />
               {bgmModels.length > 0 && (
                 <select
+                  className="fm-bgm-select"
                   aria-label="AI 配乐引擎"
                   value={bgmModel}
                   onChange={(e) => setBgmModel(e.target.value)}
@@ -275,7 +277,7 @@ export function Composition({
               )}
               <button
                 type="button"
-                className="secondary"
+                className="secondary fm-bgm-btn"
                 disabled={bgmBusy || bgmGenerating || !bgmPrompt.trim() || !bgmModels.length}
                 onClick={async () => {
                   setBgmBusy(true);

@@ -112,11 +112,18 @@ import {
   isCanvasComposerOpen,
   hasCanvasSelectionToolbar,
   resolveBatchShots,
+  resolveCinePopoverPlacement,
+  resolveNextShotContinuation,
+  reconcileCanvasRightDocks,
+  resolveCanvasWorkspaceTop,
+  resolveCanvasSpeechModels,
+  quoteCanvasSpeechPlan,
   linkedValue,
   type CanvasEdge,
   type CanvasClipboard,
   type CanvasNode,
   type Doc,
+  type CinematographySpec,
   type Kind,
   type Project,
   type Job,
@@ -136,6 +143,7 @@ import { Composition } from "./Composition";
 import { AssetPacks, type Pack } from "./AssetPacks";
 import { CinematographyPanel } from "./CinematographyPanel";
 import { OptionSelect, SegmentedOptions } from "./OptionSelect";
+import { isBgmMusicModel } from "@fumiao/plugin-sdk/speech-routing";
 import {
   GENERATION_MODE_OPTIONS,
   GRID_LAYOUT_OPTIONS,
@@ -159,7 +167,6 @@ import {
   resolveChatReplaceTarget,
   scriptSourceJump,
 } from "./script-fusion";
-import { SkillEditorModal } from "./SkillEditorModal";
 import { captureFrame } from "./videoFrame";
 import { VideoThumb } from "./VideoThumb";
 import { canvasVideoThumbnails } from "./videoThumbnails";
@@ -462,6 +469,81 @@ const ZoomCheck = memo(function ZoomCheck({ target }: { target: number }) {
   return Math.abs(zoom - target) < 0.01 ? <Check size={14} /> : null;
 });
 
+const FloatingCinematographyPopover = memo(function FloatingCinematographyPopover({
+  anchorNode,
+  panelHeight,
+  windowSize,
+  headerBottom,
+  viewMode,
+  agentDock,
+  agentDockedWidth,
+  mediaPanelRef,
+  value,
+  onChange,
+  onClose,
+}: {
+  anchorNode: Pick<CanvasNode, "x" | "y" | "width" | "height" | "type">;
+  panelHeight: number;
+  windowSize: { w: number; h: number };
+  headerBottom: number;
+  viewMode: "canvas" | "split" | "list";
+  agentDock: boolean;
+  agentDockedWidth: number;
+  mediaPanelRef: React.RefObject<HTMLElement | null>;
+  value?: CinematographySpec | null;
+  onChange: (next: CinematographySpec | null) => void;
+  onClose: () => void;
+}) {
+  const viewport = useViewport();
+  const computedComposer = computeOverlayPositions({
+    viewport,
+    windowSize,
+    node: anchorNode,
+    panelHeight,
+  }).composer;
+  const rect = mediaPanelRef.current?.getBoundingClientRect();
+  const composerLeft = computedComposer?.left ?? rect?.left ?? 76;
+  const composerTop = computedComposer?.top ?? rect?.top;
+  const composerWidth = rect && rect.width > 0 ? rect.width : 520;
+  const composerHeight = rect && rect.height > 0 ? rect.height : panelHeight;
+  const placement = resolveCinePopoverPlacement({
+    composerLeft,
+    composerTop,
+    composerWidth,
+    composerHeight,
+    windowWidth: windowSize.w,
+    windowHeight: windowSize.h,
+    headerBottom,
+    viewMode,
+    agentDock,
+    agentDockedWidth,
+  });
+  const popoverStyle: React.CSSProperties =
+    windowSize.w <= 760
+      ? {}
+      : placement.side === "viewport"
+        ? {
+            top: placement.fixedTop,
+            right: placement.fixedRight,
+            maxHeight: placement.maxHeight,
+          }
+        : {
+            maxHeight: placement.maxHeight,
+          };
+  return (
+    <CinematographyPanel
+      compact
+      floating
+      side={placement.side}
+      verticalAlign={placement.verticalAlign}
+      style={popoverStyle}
+      value={value}
+      onChange={onChange}
+      onClose={onClose}
+    />
+  );
+});
+
 type ContextValue = {
   edit: (id: string, patch: Partial<CanvasNode>, history?: boolean) => void;
   begin: () => void;
@@ -760,6 +842,8 @@ export function CanvasWorkspace({
   } | null>(null);
   const [retryingLeave, setRetryingLeave] = useState(false);
   const [headerBottom, setHeaderBottom] = useState(60);
+  const [workspaceTop, setWorkspaceTop] = useState(60);
+  const [rightObstruction, setRightObstruction] = useState(0);
   const leaveInFlight = useRef(false);
   const [activeTextNodes,setActiveTextNodes]=useState<string[]>([]);
   const textApplyQueue=useRef<Promise<void>>(Promise.resolve());
@@ -793,7 +877,7 @@ export function CanvasWorkspace({
     [progress, setProgress] = useState<number | null>(null),
     [preview, setPreview] = useState<Preview | null>(null),
     [confirm, setConfirm] = useState<null | (() => void)>(null);
-  const [shotList, setShotList] = useState(false);
+  const [agentDock, setAgentDock] = useState(false);
   const [viewMode, setViewModeState] = useState<"canvas" | "split" | "list">(() => {
     try {
       const saved = localStorage.getItem("fm-canvas-view-mode");
@@ -803,14 +887,35 @@ export function CanvasWorkspace({
     }
     return "canvas";
   });
-  const setViewMode = useCallback((mode: "canvas" | "split" | "list") => {
-    setViewModeState(mode);
-    try {
-      localStorage.setItem("fm-canvas-view-mode", mode);
-    } catch {
-      // Ignore storage failures.
-    }
-  }, []);
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
+  const setViewMode = useCallback(
+    (
+      next:
+        | "canvas"
+        | "split"
+        | "list"
+        | ((prev: "canvas" | "split" | "list") => "canvas" | "split" | "list"),
+    ) => {
+      const resolved =
+        typeof next === "function" ? next(viewModeRef.current) : next;
+      viewModeRef.current = resolved;
+      setViewModeState(resolved);
+      if (
+        resolved !== "canvas" &&
+        typeof window !== "undefined" &&
+        window.innerWidth <= 1100
+      ) {
+        setAgentDock(false);
+      }
+      try {
+        localStorage.setItem("fm-canvas-view-mode", resolved);
+      } catch {
+        // Ignore storage failures.
+      }
+    },
+    [],
+  );
   const [precheckTarget, setPrecheckTarget] = useState<{
     nodeIds: string[];
     title?: string;
@@ -824,11 +929,32 @@ export function CanvasWorkspace({
   } | null>(null);
   const [showCinePanel, setShowCinePanel] = useState(false);
   const [pendingBgmJobId, setPendingBgmJobId] = useState<number | null>(null);
+  const [pendingProposals, setPendingProposals] = useState(0);
+  useEffect(() => {
+    let active = true;
+    const syncProposals = () => {
+      void api<{ proposals?: { status: string }[] }>(
+        `/api/canvases/${project.id}/proposals?workspace=${project.workspace}`,
+      )
+        .then((data) => {
+          if (!active) return;
+          setPendingProposals(
+            (data.proposals ?? []).filter((p) => p.status === "pending").length,
+          );
+        })
+        .catch(() => {});
+    };
+    syncProposals();
+    const timer = setInterval(syncProposals, 15000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [project.id, project.workspace]);
   const [surface, setSurface] = useState<"canvas" | "document" | "director">("canvas");
   const [directorShotId, setDirectorShotId] = useState<string | null>(null);
   const [directorMounted, setDirectorMounted] = useState(false);
   const [scriptWorkspaceMounted, setScriptWorkspaceMounted] = useState(false);
-  const [agentDock, setAgentDock] = useState(false);
   const [agentTab, setAgentTab] = useState<"chat" | "proposals">("chat");
   const [agentDockedWidth, setAgentDockedWidth] = useState(0);
   const [activeScript, setActiveScript] = useState<{
@@ -908,7 +1034,6 @@ export function CanvasWorkspace({
     WorkspaceCanvasSummary[]
   >([]);
   const [projectSearch, setProjectSearch] = useState("");
-  const [skillsModal, setSkillsModal] = useState(false);
   useEffect(() => {
     if (menu !== "project") return;
     setProjectSearch("");
@@ -922,7 +1047,24 @@ export function CanvasWorkspace({
   const [directorPickerShot, setDirectorPickerShot] = useState<string | null>(null);
   const [packMedia, setPackMedia] = useState<Record<string,string[]>>({});
   const [availablePacks, setAvailablePacks] = useState<Pack[]>([]);
-  useEffect(()=>{let active=true;void api<{packs:Pack[]}>('/api/asset-packs').then(data=>{if(active){setAvailablePacks(data.packs);setPackMedia(Object.fromEntries(data.packs.map((p)=> [p.id,p.media])))}}).catch(()=>{});return()=>{active=false}},[project.id, surface]);
+  const packsReadSeqRef = useRef(0);
+  const loadAvailablePacks = useCallback(() => {
+    const seq = ++packsReadSeqRef.current;
+    void api<{ packs: Pack[] }>("/api/asset-packs")
+      .then((data) => {
+        if (aliveRef.current && seq === packsReadSeqRef.current) {
+          setAvailablePacks(data.packs);
+          setPackMedia(Object.fromEntries(data.packs.map((p) => [p.id, p.media])));
+        }
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    loadAvailablePacks();
+    return () => {
+      ++packsReadSeqRef.current;
+    };
+  }, [project.id, surface, loadAvailablePacks]);
   const [candidateCount, setCandidateCount] = useState<1 | 2>(1);
   const [confirmCandidates, setConfirmCandidates] = useState(false);
   const [compareNode, setCompareNode] = useState<string | null>(null);
@@ -1011,6 +1153,44 @@ export function CanvasWorkspace({
     }
     return map;
   }, [studio.jobs]);
+  const availableModel = useCallback(
+    (model: string) =>
+      !!studio.model_forms?.[model]?.canvas &&
+      (studio.model_access || studio.model_policy?.enabled)?.[model] === true &&
+      (model !== "gpt-image-2.6-sunburst" || studio.images.configured) &&
+      (studio.model_catalog?.[model]?.provider !== "flow" ||
+        Boolean(studio.flow?.configured)),
+    [
+      studio.model_forms,
+      studio.model_access,
+      studio.model_policy,
+      studio.images.configured,
+      studio.model_catalog,
+      studio.flow?.configured,
+    ],
+  );
+  const formatVideoModelLabel = useCallback(
+    (modelId: string) =>
+      FlowPicker.label(studio.model_catalog, modelId) ||
+      studio.video_models?.[modelId] ||
+      studio.model_catalog?.[modelId]?.label ||
+      modelId,
+    [studio.model_catalog, studio.video_models],
+  );
+  const resolveNodeTailContinuation = useCallback(
+    (node: CanvasNode, run?: Job) =>
+      resolveNextShotContinuation(
+        studio,
+        node.params.model,
+        {
+          ratio: run?.ratio || node.params.ratio,
+          seconds: run?.seconds || node.params.seconds,
+        },
+        availableModel,
+        formatVideoModelLabel,
+      ),
+    [studio, availableModel, formatVideoModelLabel],
+  );
   const shots = useMemo(
     () =>
       shotIds.flatMap((id) => {
@@ -1030,6 +1210,9 @@ export function CanvasWorkspace({
             prompt: node.prompt,
             generation_mode: node.generation_mode,
             cinematography: node.cinematography ?? null,
+            tailContinuation: media
+              ? resolveNodeTailContinuation(node, source)
+              : null,
             seconds: Math.max(
               videoSeconds(source) || node.params.seconds,
               voice?.status === "done" ? voice.actual?.duration || 0 : 0,
@@ -1038,10 +1221,17 @@ export function CanvasWorkspace({
           },
         ];
       }),
-    [shotIds, nodeById, runsByNode, runById, studioJobByResult],
+    [
+      shotIds,
+      nodeById,
+      runsByNode,
+      runById,
+      studioJobByResult,
+      resolveNodeTailContinuation,
+    ],
   );
   const compositionIssue = useMemo(() => {
-    if (!shotList && viewMode === "canvas") return "";
+    if (viewMode === "canvas") return "";
     if (shots.reduce((sum, shot) => sum + shot.seconds, 0) > 900) {
       return "成片最多 15 分钟（900 秒），请减少镜头或缩短旁白";
     }
@@ -1068,15 +1258,21 @@ export function CanvasWorkspace({
       }
     }
     return "";
-  }, [shotList, shots, shotIds, nodeById, runsByNode, runById]);
+  }, [viewMode, shots, shotIds, nodeById, runsByNode, runById]);
   const compared = compareNode ? nodeById.get(compareNode) : undefined;
   const comparisonRuns = compared ? resolveNodeFromIndex(compared, runsByNode).list.filter((job) => job.status === "done" && job.result) : [];
-  const availableModel = (model:string) => !!studio.model_forms?.[model]?.canvas && (studio.model_access || studio.model_policy?.enabled)?.[model] === true && (model !== 'gpt-image-2.6-sunburst' || studio.images.configured) && (studio.model_catalog?.[model]?.provider!=='flow' || Boolean(studio.flow?.configured));
-  const defaultImageModel = Object.keys(studio.images.models || {}).find(availableModel) || "";
-  const defaultVideoModel = Object.keys(studio.video_models || {}).find(availableModel) || "";
+  const defaultImageModel =
+    (studio.images.default_model && availableModel(studio.images.default_model)
+      ? studio.images.default_model
+      : Object.keys(studio.images.models || {}).find(availableModel)) || "";
+  const defaultVideoModel =
+    Object.keys(studio.video_models || {}).find(availableModel) || "";
   const imagesEnabled = Object.keys(studio.images.models || {}).some(availableModel);
   const rawModelChoices = Object.entries(single?.type==='image' ? studio.images.models || {} : studio.video_models || {}).filter(([model])=>availableModel(model));
-  const requestedModel = single?.params.model || (single?.type === 'image' ? 'gpt-image-2.6-sunburst' : 'MiniMax H3');
+  const requestedModel = single?.params.model || (single?.type === 'image' ? (defaultImageModel || 'gpt-image-2.6-sunburst') : defaultVideoModel);
+  useEffect(() => {
+    setShowCinePanel(false);
+  }, [single?.id]);
   const selectedModel = rawModelChoices.some(([id])=>id===requestedModel) ? requestedModel : FlowPicker.resolve(studio.model_catalog,requestedModel,availableModel,single?.params) || rawModelChoices[0]?.[0] || '';
   const modelChoices = FlowPicker.grouped(Object.fromEntries(rawModelChoices),studio.model_catalog,availableModel,selectedModel,single?.params);
   const flowModel=studio.model_catalog?.[selectedModel]?.provider==='flow'?studio.model_catalog[selectedModel]:null;
@@ -1302,6 +1498,25 @@ export function CanvasWorkspace({
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
+  const prevWindowWidthRef = useRef(windowSize.w);
+  const prevAgentDockedWidthRef = useRef(agentDockedWidth);
+  useEffect(() => {
+    const decision = reconcileCanvasRightDocks({
+      prevWindowWidth: prevWindowWidthRef.current,
+      windowWidth: windowSize.w,
+      viewMode,
+      agentDock,
+      prevAgentDockedWidth: prevAgentDockedWidthRef.current,
+      agentDockedWidth,
+    });
+    prevWindowWidthRef.current = windowSize.w;
+    prevAgentDockedWidthRef.current = agentDockedWidth;
+    if (decision.closeAgentDock) {
+      setAgentDock(false);
+    } else if (decision.switchSplitToCanvas) {
+      setViewMode("canvas");
+    }
+  }, [windowSize.w, viewMode, agentDock, agentDockedWidth, setViewMode]);
   useEffect(() => {
     if (innerWidth <= 760) {
       const n = doc.ref.current.document.nodes.find(
@@ -1862,7 +2077,7 @@ export function CanvasWorkspace({
     );
     if (!videoIds.length) return;
     if (!addedIds.length) {
-      setShotList(true);
+      setViewMode((m) => (m === "canvas" ? "split" : m));
       return;
     }
     updateShots((ids) => {
@@ -1924,6 +2139,13 @@ export function CanvasWorkspace({
   };
   const extractFrame = async ({ node: source, media, run }: Preview, next: boolean) => {
     if (!previewPlayer.current || extracting) return;
+    const desiredRatio = run?.ratio || source.params.ratio;
+    const continuation = next ? resolveNodeTailContinuation(source, run) : null;
+    const nextVideoModel = continuation?.model || "";
+    if (next && !continuation) {
+      setFrameError("当前空间没有支持参考图首帧的视频模型");
+      return;
+    }
     const checkCapacity = () => {
       const d = doc.ref.current.document;
       if (d.nodes.length + (next ? 2 : 1) > 200 || (next && d.edges.length >= 600))
@@ -1951,17 +2173,29 @@ export function CanvasWorkspace({
         title: `${source.title.slice(0, 45)} · ${origin} · ${time} 秒取帧`,
         media_id: asset.id, use_media: true, height: imageHeight,
       };
+      image.params.model = defaultImageModel;
       const placed = [...d.nodes, image];
       const edges = [...d.edges];
       const ordered = [...(d.shots ?? [])];
       let target: CanvasNode = image;
       if (next) {
-        const ratio = run?.ratio || source.params.ratio;
         const point = freePosition(placed, image.x + image.width + 180, image.y, 320, 240);
         target = newNode("video", point.x, point.y, 1);
         target.title = "下一镜头";
-        target.params.model = "MiniMax H3";
-        target.params.ratio = studio.ratios.includes(ratio) ? ratio : "16:9";
+        const spec = studio.model_catalog?.[nextVideoModel];
+        if (spec?.provider === "flow") {
+          target.params = {
+            ...target.params,
+            model: nextVideoModel,
+            ratio: spec.ratio || (studio.ratios.includes(desiredRatio) ? desiredRatio : "16:9"),
+            seconds: (spec.seconds || target.params.seconds) as Params["seconds"],
+            resolution: ((spec.resolution === "原生" ? "1K" : spec.resolution) || "1K") as Params["resolution"],
+            flow_source_job: null,
+          };
+        } else {
+          target.params.model = nextVideoModel;
+          target.params.ratio = studio.ratios.includes(desiredRatio) ? desiredRatio : "16:9";
+        }
         placed.push(target);
         edges.push({ id: crypto.randomUUID(), source: image.id, target: target.id });
         if (!ordered.includes(source.id)) ordered.push(source.id);
@@ -1973,7 +2207,13 @@ export function CanvasWorkspace({
       setPreview(null);
       selectOne(target.id);
       requestAnimationFrame(() => reveal(target));
-      notify(next ? "已将当前画面设为新镜头首帧" : "已提取当前帧到画布与素材库");
+      notify(
+        next
+          ? continuation?.switched
+            ? `已将当前画面设为新镜头首帧（已选用 ${continuation.label}）`
+            : "已将当前画面设为新镜头首帧"
+          : "已提取当前帧到画布与素材库",
+      );
     } catch (error) {
       setFrameError((error as Error).message);
     } finally {
@@ -2515,7 +2755,11 @@ export function CanvasWorkspace({
     const document = doc.ref.current.document;
     const target = document.nodes.find(n=>n.id===packPicker);
     if (!target) throw new Error('节点已移除，请重新选择');
-    if (target.type==='video' && target.params.model==='MiniMax H3' && target.params.h3?.mode==='frames')
+    if (
+      target.type === 'video' &&
+      studio.model_forms?.[target.params.model]?.referenceModes &&
+      target.params.h3?.mode === 'frames'
+    )
       throw new Error('首尾帧模式请使用首帧和尾帧选择器');
     const incomingIds = document.edges.filter(e=>e.target===target.id).map(e=>linkedValue(document.nodes.find(n=>n.id===e.source)!,e,runs)).filter(v=>v.kind==="image").map(v=>v.value).filter((id):id is string=>Boolean(id));
     const direct = [...incomingIds,...(target.params.h3_refs||[])];
@@ -2623,23 +2867,92 @@ export function CanvasWorkspace({
     event.stopPropagation();
     generate();
   };
-  useEffect(() => {
+  const measureTopChrome = useCallback(() => {
     const root = workspaceRef.current;
     const headerEl = root?.querySelector<HTMLElement>(".canvas-header");
     if (!root || !headerEl) return;
-    const measure = () => {
-      const rootRect = root.getBoundingClientRect();
-      const rect = headerEl.getBoundingClientRect();
-      const next = Math.max(52, Math.ceil(rect.bottom - rootRect.top));
-      setHeaderBottom((prev) => (prev === next ? prev : next));
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const obs = new ResizeObserver(measure);
+    const switcherEl = root.querySelector<HTMLElement>(".fm-surface-switcher");
+    const toolsEl = headerEl.querySelector<HTMLElement>(".global-tools");
+    const headingEl = headerEl.querySelector<HTMLElement>(".project-heading");
+    const rootRect = root.getBoundingClientRect();
+    const headerRect = headerEl.getBoundingClientRect();
+    const effectiveHeaderBottom = Math.max(
+      headerRect.bottom,
+      toolsEl?.getBoundingClientRect().bottom ?? 0,
+      headingEl?.getBoundingClientRect().bottom ?? 0,
+    );
+    const swRect = switcherEl?.getBoundingClientRect();
+    const resolved = resolveCanvasWorkspaceTop({
+      rootTop: rootRect.top,
+      headerBottom: effectiveHeaderBottom,
+      switcherTop: swRect?.top ?? null,
+      switcherBottom: swRect?.bottom ?? null,
+      switcherHeight: swRect?.height ?? null,
+    });
+    setHeaderBottom((prev) =>
+      prev === resolved.headerBottom ? prev : resolved.headerBottom,
+    );
+    setWorkspaceTop((prev) =>
+      prev === resolved.workspaceTop ? prev : resolved.workspaceTop,
+    );
+    let nextRightObstruction = 0;
+    if (rootRect.width > 760) {
+      const agentEl = root.querySelector<HTMLElement>(
+        ".fm-floating-agent.is-docked",
+      );
+      const sbEl = root.querySelector<HTMLElement>(
+        ".fm-docked-storyboard:not(.fm-full-list)",
+      );
+      const agentInset = agentEl
+        ? Math.max(
+            0,
+            Math.ceil(rootRect.right - agentEl.getBoundingClientRect().left),
+          )
+        : agentDockedWidth;
+      const sbInset = sbEl
+        ? Math.max(
+            0,
+            Math.ceil(rootRect.right - sbEl.getBoundingClientRect().left),
+          )
+        : 0;
+      const rawInset = Math.max(agentInset, sbInset);
+      if (rootRect.width - rawInset >= 260) {
+        nextRightObstruction = rawInset;
+      }
+    }
+    setRightObstruction((prev) =>
+      prev === nextRightObstruction ? prev : nextRightObstruction,
+    );
+  }, [agentDockedWidth]);
+  useLayoutEffect(() => {
+    measureTopChrome();
+  }, [
+    measureTopChrome,
+    headerBottom,
+    agentDock,
+    agentDockedWidth,
+    windowSize.w,
+    windowSize.h,
+    surface,
+    viewMode,
+  ]);
+  useEffect(() => {
+    const root = workspaceRef.current;
+    const headerEl = root?.querySelector<HTMLElement>(".canvas-header");
+    const switcherEl = root?.querySelector<HTMLElement>(".fm-surface-switcher");
+    const agentEl = root?.querySelector<HTMLElement>(
+      ".fm-floating-agent.is-docked",
+    );
+    const sbEl = root?.querySelector<HTMLElement>(".fm-docked-storyboard");
+    if (!root || !headerEl || typeof ResizeObserver === "undefined") return;
+    const obs = new ResizeObserver(measureTopChrome);
     obs.observe(headerEl);
+    if (switcherEl) obs.observe(switcherEl);
+    if (agentEl) obs.observe(agentEl);
+    if (sbEl) obs.observe(sbEl);
     obs.observe(root);
     return () => obs.disconnect();
-  }, []);
+  }, [measureTopChrome, agentDock, viewMode]);
 
   const downloadLocalBackup = (baseDraft: {
     title: string;
@@ -2943,15 +3256,7 @@ export function CanvasWorkspace({
   const availableAudioModels = Object.entries(studio.model_catalog)
     .filter(([id, spec]) => spec.kind === "audio" && availableModel(id))
     .map(([id, spec]) => ({ id, label: spec.label || id }));
-  const isBgmMusicModel = (
-    id: string,
-    spec?: { kind?: string; provider?: string },
-  ) =>
-    spec?.kind === "audio" &&
-    (spec.provider === "bgm-generator" ||
-      ["bgm-v1", "suno-v4", "udio-v1.5", "musicgen-large"].includes(id) ||
-      (typeof spec.provider === "string" &&
-        /(?:^|[-_])(bgm|music)(?:$|[-_])/i.test(spec.provider)));
+  const availableSpeechModels = resolveCanvasSpeechModels(studio);
   const bgmModels = availableAudioModels.filter((m) =>
     isBgmMusicModel(m.id, studio.model_catalog[m.id]),
   );
@@ -2995,9 +3300,17 @@ export function CanvasWorkspace({
         label: `${j.model || "配乐"} · ${(j.prompt || "").slice(0, 18) || "#" + j.id}`,
       })),
   ].filter((item, idx, arr) => arr.findIndex((x) => x.id === item.id) === idx);
-  const handleInheritTailFrame = async (shotId: string, closeModal = false) => {
+  const handleInheritTailFrame = async (shotId: string) => {
     const source = doc.ref.current.document.nodes.find((n) => n.id === shotId);
     if (!source) return;
+    const { run, media } = resolveNodeFromIndex(source, runsByNode);
+    const sourceRun = run ?? (media ? studioJobByResult.get(media) : undefined);
+    const continuation = resolveNodeTailContinuation(source, sourceRun);
+    if (!continuation) {
+      notify("当前空间没有支持参考图首帧续接的视频模型");
+      return;
+    }
+    const nextVideoModel = continuation.model;
     await doc.flush();
     const res = await api<{ asset_id: string; width: number; height: number }>(
       `/api/canvases/${project.id}/nodes/${shotId}/tail-frame`,
@@ -3012,14 +3325,29 @@ export function CanvasWorkspace({
     vidNode.title = `${source.title || "镜头"} 续镜`;
     vidNode.tail_inherited = true;
     vidNode.generation_mode = "first_last_frame";
+    const supportsH3Frames = Boolean(
+      studio.model_forms?.[nextVideoModel]?.referenceModes?.includes("frames"),
+    );
+    const nextSpec = studio.model_catalog?.[nextVideoModel];
     vidNode.params = {
       ...source.params,
-      h3: {
-        mode: "frames",
-        first_frame: res.asset_id,
-        last_frame: null,
-        video_audio: [],
-      },
+      model: nextVideoModel,
+      ...(nextSpec?.provider === "flow"
+        ? {
+            ratio: nextSpec.ratio || source.params.ratio,
+            seconds: (nextSpec.seconds || source.params.seconds) as Params["seconds"],
+            resolution: ((nextSpec.resolution === "原生" ? "1K" : nextSpec.resolution) || "1K") as Params["resolution"],
+            flow_source_job: null,
+          }
+        : {}),
+      h3: supportsH3Frames
+        ? {
+            mode: "frames",
+            first_frame: res.asset_id,
+            last_frame: null,
+            video_audio: [],
+          }
+        : null,
     };
     doc.change((d) => ({
       ...d,
@@ -3033,8 +3361,12 @@ export function CanvasWorkspace({
         shots: [...(d.document.shots ?? []), vidNode.id],
       },
     }));
-    notify("已抽取尾帧并创建续接镜头");
-    if (closeModal) setShotList(false);
+    notify(
+      continuation.switched
+        ? `已抽取尾帧并用 ${continuation.label} 创建续接镜头`
+        : "已抽取尾帧并创建续接镜头",
+    );
+    if (viewMode === "list") setViewMode("split");
     selectOne(vidNode.id);
     focusNodes([vidNode.id]);
   };
@@ -3059,39 +3391,22 @@ export function CanvasWorkspace({
   const renderShotNarration = (shot: { id: string }) => {
     const node = doc.value.document.nodes.find((n) => n.id === shot.id);
     if (!node) return null;
-    const preferred = node.narration_model?.trim();
-    const audioCandidates = [
-      ...(preferred ? [preferred] : []),
-      "breeze-tts-2",
-      "tts-1",
-      "gpt-4o-mini-tts",
-      "local-tts-compat",
-      "edge-tts",
-    ];
-    const activeAudio =
-      audioCandidates.find((m) => availableModel(m)) ??
-      availableAudioModels[0]?.id ??
-      "";
-    const priceItem = activeAudio
-      ? studio.pricing.items.find((p) => p.key.startsWith(activeAudio + "|"))
-      : undefined;
-    const price = !activeAudio
-      ? null
-      : (priceItem?.amount ?? (activeAudio === "edge-tts" ? 0 : null));
-    const unavailableReason = !activeAudio
-      ? "当前空间未开放语音模型"
-      : price === null
-        ? "语音生成尚未定价"
-        : studio.credits.available < price
-          ? "当前空间积分不足"
-          : "";
+    const speechPlan = quoteCanvasSpeechPlan({
+      studio,
+      node,
+      packs: availablePacks,
+    });
     return (
       <Narration
         node={node}
         runs={runs}
-        cost={price}
-        unavailableReason={unavailableReason}
-        audioModels={availableAudioModels}
+        cost={speechPlan.narration.cost}
+        costIndeterminate={speechPlan.narration.costIndeterminate}
+        unavailableReason={speechPlan.narration.unavailableReason}
+        dialogueUnavailableReason={speechPlan.dialogue.unavailableReason}
+        dialogueLineUnavailableReasons={speechPlan.dialogue.lineReasons}
+        audioModels={availableSpeechModels}
+        activeModel={speechPlan.narration.activeModel}
         onEditStart={doc.begin}
         onEditEnd={doc.end}
         onChange={(patch, history) => edit(shot.id, patch, history)}
@@ -3160,12 +3475,15 @@ export function CanvasWorkspace({
       ref={workspaceRef}
       className="canvas-workspace"
       data-surface={surface}
+      data-view-mode={viewMode}
       data-composer-open={composerOpen ? "true" : "false"}
       data-selection-toolbar={selectionToolbarOpen ? "true" : "false"}
       style={
         {
           "--fm-agent-width": `${agentDockedWidth}px`,
+          "--fm-right-obstruction": `${rightObstruction}px`,
           "--fm-header-bottom": `${headerBottom}px`,
+          "--fm-workspace-top": `${workspaceTop}px`,
         } as React.CSSProperties
       }
       tabIndex={-1}
@@ -3332,6 +3650,11 @@ export function CanvasWorkspace({
           >
             <img src="/static/mark.svg" alt="弗淼 AIGC" />
           </a>
+          <IconButton
+            icon={ArrowLeft}
+            label="所有画布"
+            onClick={() => void closeAndLeave(canvasListPath)}
+          />
           <input
             aria-label="画布名称"
             value={doc.value.title}
@@ -3414,7 +3737,7 @@ export function CanvasWorkspace({
                 title="纯分镜表视图"
               >
                 <List size={14} />
-                列表
+                镜头列表
               </button>
             </div>
           )}
@@ -3447,32 +3770,38 @@ export function CanvasWorkspace({
               } else {
                 setAgentTab("chat");
                 setAgentDock(true);
+                if (window.innerWidth <= 1100 && viewMode !== "canvas") {
+                  setViewMode("canvas");
+                }
               }
             }}
           />
-          <IconButton
-            icon={Sparkles}
-            label="画布 Agent 提案箱"
-            active={agentDock && agentTab === "proposals"}
+          <button
+            type="button"
+            className={
+              "icon-button fm-agent-trigger" +
+              (agentDock && agentTab === "proposals" ? " active" : "")
+            }
+            title="画布 Agent 提案箱"
+            aria-label="画布 Agent 提案箱"
+            aria-expanded={agentDock && agentTab === "proposals"}
             onClick={() => {
               if (agentDock && agentTab === "proposals") {
                 setAgentDock(false);
               } else {
                 setAgentTab("proposals");
                 setAgentDock(true);
+                if (window.innerWidth <= 1100 && viewMode !== "canvas") {
+                  setViewMode("canvas");
+                }
               }
             }}
-          />
-          <IconButton
-            icon={ListVideo}
-            label="镜头列表"
-            onClick={() => setShotList(true)}
-          />
-          <IconButton
-            icon={FolderOpen}
-            label="所有画布"
-            onClick={() => void closeAndLeave(canvasListPath)}
-          />
+          >
+            <Sparkles size={18} />
+            {pendingProposals > 0 && (
+              <span className="fm-agent-badge fm-number">{pendingProposals}</span>
+            )}
+          </button>
         </div>
       </header>
       <div
@@ -3505,38 +3834,6 @@ export function CanvasWorkspace({
           导演台
         </button>
       </div>
-      {selected.length >= 2 && (
-        <div className="fm-multi-bar" role="toolbar" aria-label="多选批量操作">
-          <span>已选 {selected.length} 个节点</span>
-          <button
-            type="button"
-            className="secondary"
-            onClick={createGroupFromSelection}
-          >
-            <Layers size={14} />
-            建工作流组
-          </button>
-          <button
-            type="button"
-            className="primary"
-            onClick={() => {
-              void doc
-                .flush()
-                .then(() =>
-                  setPrecheckTarget({
-                    nodeIds: selected,
-                    title: `多选批量预检 (${selected.length} 节点)`,
-                    stages: ["image", "video", "narration", "dialogue"],
-                  }),
-                )
-                .catch((e) => notify((e as Error).message));
-            }}
-          >
-            <Play size={14} />
-            预检并批量生成
-          </button>
-        </div>
-      )}
       {menu === "project" && (
         <div
           className="cv-menu project-menu fm-project-switcher-menu"
@@ -3747,7 +4044,7 @@ export function CanvasWorkspace({
           {single.type === "video" && (
             <IconButton icon={ListVideo}
               label={shotIds.includes(single.id) ? "查看镜头列表" : "加入镜头列表"}
-              onClick={() => shotIds.includes(single.id) ? setShotList(true) : addShot(single)} />
+              onClick={() => shotIds.includes(single.id) ? setViewMode((m) => (m === "canvas" ? "split" : m)) : addShot(single)} />
           )}
           {single.type === "image" && current?.media && shots.length > 0 && (
             <IconButton icon={Link2} label="应用参考图到镜头" onClick={() => openSharedReference(single.id)} />
@@ -3828,7 +4125,7 @@ export function CanvasWorkspace({
         </div>
       )}
       {selected.length > 1 && (
-        <div className="multi-toolbar">
+        <div className="multi-toolbar" role="toolbar" aria-label="多选批量操作">
           <span>已选 {selected.length} 个节点</span>
           <IconButton
             icon={Copy}
@@ -3847,7 +4144,9 @@ export function CanvasWorkspace({
               icon={ListVideo}
               label={batchShots.allInShots ? "查看镜头列表" : "加入镜头列表"}
               onClick={() =>
-                batchShots.allInShots ? setShotList(true) : addSelectedShots()
+                batchShots.allInShots
+                  ? setViewMode((m) => (m === "canvas" ? "split" : m))
+                  : addSelectedShots()
               }
             />
           )}
@@ -3856,6 +4155,34 @@ export function CanvasWorkspace({
             label="删除所选节点"
             onClick={removeSelected}
           />
+          <span className="dock-divider" aria-hidden="true" />
+          <button
+            type="button"
+            className="secondary fm-multi-action"
+            onClick={createGroupFromSelection}
+          >
+            <Layers size={14} />
+            建工作流组
+          </button>
+          <button
+            type="button"
+            className="primary fm-multi-action"
+            onClick={() => {
+              void doc
+                .flush()
+                .then(() =>
+                  setPrecheckTarget({
+                    nodeIds: selected,
+                    title: `多选批量预检 (${selected.length} 节点)`,
+                    stages: ["image", "video", "narration", "dialogue"],
+                  }),
+                )
+                .catch((e) => notify((e as Error).message));
+            }}
+          >
+            <Play size={14} />
+            预检并批量生成
+          </button>
         </div>
       )}
       {single?.extension && (
@@ -4056,10 +4383,18 @@ export function CanvasWorkspace({
             );
           })()}
           {showCinePanel && (
-            <CinematographyPanel
-              compact
+            <FloatingCinematographyPopover
+              anchorNode={single}
+              panelHeight={panelHeight}
+              windowSize={windowSize}
+              headerBottom={workspaceTop}
+              viewMode={viewMode}
+              agentDock={agentDock}
+              agentDockedWidth={agentDockedWidth}
+              mediaPanelRef={mediaPanelRef}
               value={single.cinematography}
               onChange={(cinematography) => edit(single.id, { cinematography })}
+              onClose={() => setShowCinePanel(false)}
             />
           )}
           {h3Native?<H3Prompt
@@ -5014,7 +5349,7 @@ export function CanvasWorkspace({
               generation_mode:isGridPreview?'first_frame':options.generationMode,
               ...(options.gridLayout&&!isGridPreview?{grid_layout:options.gridLayout}:{}),
               ...(options.tailChain&&i>0?{tail_inherited:true}:{}),
-              params:{...newNode('video',0,0,1).params,model:'MiniMax H3',seconds:shot.seconds},
+              params:{...newNode('video',0,0,1).params,model:defaultVideoModel,seconds:shot.seconds},
             };
             return {text,gridImage,video};
           });
@@ -5046,6 +5381,23 @@ export function CanvasWorkspace({
         <AssetPacks workspace={project.workspace} userId={studio.me.id} admin={studio.me.role === 'admin'}
           selected={doc.value.document.nodes.find(n=>n.id===packPicker)?.asset_packs || []}
           imageRefs={packTargetMedia.filter((id):id is string=>Boolean(id))}
+          onPackMutate={(change) => {
+            ++packsReadSeqRef.current;
+            setAvailablePacks((prev) =>
+              change.kind === "saved"
+                ? [change.pack, ...prev.filter((p) => p.id !== change.pack.id)]
+                : prev.filter((p) => p.id !== change.id),
+            );
+            setPackMedia((prev) => {
+              if (change.kind === "saved") {
+                return { ...prev, [change.pack.id]: change.pack.media };
+              }
+              const next = { ...prev };
+              delete next[change.id];
+              return next;
+            });
+            loadAvailablePacks();
+          }}
           onImportImages={(ids,pack)=>importPack(pack,ids)} onImportPack={pack=>importPack(pack)}
           onRemovePack={id=>{const target=doc.ref.current.document.nodes.find(n=>n.id===packPicker);if(target)edit(target.id,{asset_packs:(target.asset_packs||[]).filter(p=>p.id!==id)});setPackPicker(null);}} />
       </Modal>}
@@ -5054,61 +5406,15 @@ export function CanvasWorkspace({
         <div className="dialog-actions"><button className="secondary" onClick={() => setConfirmCandidates(false)}>取消</button>
           <button className="primary" disabled={!canGenerate} onClick={() => void submit()}>确认生成 · {candidateCost}</button></div>
       </Modal>}
-      {shotList && (
-        <Modal title="镜头列表" wide onClose={() => setShotList(false)}>
-          <ShotList shots={shots} onMove={moveShot} onExport={exportShots}
-            onEditShot={(id, patch) => edit(id, patch, false)}
-            onBatchPrecheck={(nodeIds) => {
-              void doc
-                .flush()
-                .then(() => {
-                  setShotList(false);
-                  setPrecheckTarget({
-                    nodeIds,
-                    title: `分镜批量预检 (${nodeIds.length} 镜)`,
-                    stages: ["video", "narration", "dialogue"],
-                  });
-                })
-                .catch((e) => notify((e as Error).message));
-            }}
-            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId, true)}
-            composition={
-              <Composition
-                project={project.id}
-                getRevision={doc.flush}
-                ready={shots.length > 0 && !compositionIssue}
-                waitingReason={compositionIssue}
-                audioAssets={compositionAudioAssets}
-                bgm={doc.value.document.bgm ?? null}
-                loudnorm={doc.value.document.loudnorm}
-                defaultBgmPrompt={defaultBgmPrompt}
-                bgmModels={bgmModels}
-                bgmGenerating={bgmGenerating}
-                onGenerateBgm={handleGenerateBgm}
-                onMixChange={(patch) =>
-                  doc.change((d) => ({
-                    ...d,
-                    document: {
-                      ...d.document,
-                      ...("bgm" in patch ? { bgm: patch.bgm } : {}),
-                      ...("loudnorm" in patch ? { loudnorm: patch.loudnorm } : {}),
-                    },
-                  }))
-                }
-              />
-            }
-            renderNarration={renderShotNarration}
-            onRemove={(id) => updateShots((ids) => ids.filter((item) => item !== id))}
-            onSelect={(id) => {
-              setShotList(false);
-              selectOne(id);
-              focusNodes([id]);
-            }} />
-        </Modal>
-      )}
       {showCrop && firstFrame && (
         <Modal title="首帧裁切预览" onClose={() => setShowCrop(false)}>
-          <p>MiniMax H3 会按 {single?.params.ratio} 居中裁切单张参考图，并将它用作首帧。</p>
+          <p>
+            {studio.video_models?.[selectedModel] ||
+              studio.model_catalog?.[selectedModel]?.label ||
+              selectedModel ||
+              "当前视频模型"}{" "}
+            会按 {single?.params.ratio} 居中裁切单张参考图，并将它用作首帧。
+          </p>
           <div className="crop-preview">
             <img src={mediaURL(firstFrame)} alt="生成画幅中的首帧" style={{ aspectRatio: cropRatio }} />
           </div>
@@ -5145,7 +5451,12 @@ export function CanvasWorkspace({
           </div>
         </Modal>
       )}
-      {preview && (
+      {preview && (() => {
+        const previewContinuation =
+          preview.node.type === "video"
+            ? resolveNodeTailContinuation(preview.node, preview.run)
+            : null;
+        return (
         <Modal title={preview.node.title} wide onClose={() => {
           if (!extracting) { setPreview(null); setFrameError(""); }
         }}>
@@ -5166,17 +5477,22 @@ export function CanvasWorkspace({
             )}
           </div>
           {frameError && <p className="error" role="alert">{frameError}</p>}
-          {preview.node.type === "video" && availableModel("MiniMax H3") && (
-            <p>暂停在想保留的画面，可提取为图片，或设为 MiniMax H3 下一镜头的首帧。</p>
+          {preview.node.type === "video" && (
+            <p>
+              暂停在想保留的画面，可提取为图片
+              {previewContinuation
+                ? previewContinuation.previewHint
+                : "保存到画布与素材库。"}
+            </p>
           )}
           <div className="dialog-actions preview-actions">
             {preview.node.type === "video" && <>
               <button className="secondary" disabled={extracting} onClick={() => extractFrame(preview, false)}>
                 {extracting ? "正在提取…" : "提取当前帧"}
               </button>
-              {availableModel("MiniMax H3") && (
+              {Boolean(previewContinuation) && (
                 <button className="primary" disabled={extracting} onClick={() => extractFrame(preview, true)}>
-                  用作下一镜头首帧
+                  {previewContinuation!.previewButtonLabel}
                 </button>
               )}
             </>}
@@ -5197,7 +5513,8 @@ export function CanvasWorkspace({
             </a>
           </div>
         </Modal>
-      )}
+        );
+      })()}
       {confirm && (
         <Modal title="重新载入画布？" onClose={() => setConfirm(null)}>
           <p>将载入团队最新版本。请先下载需要保留的本地修改。</p>
@@ -5214,7 +5531,9 @@ export function CanvasWorkspace({
       {viewMode !== "canvas" && (
         <aside
           className={
-            "fm-docked-storyboard" + (viewMode === "list" ? " fm-full-list" : "")
+            "fm-docked-storyboard" +
+            (viewMode === "list" ? " fm-full-list" : "") +
+            (agentDockedWidth > 0 ? " fm-with-agent-dock" : "")
           }
           aria-label="分镜表双向同步视图"
         >
@@ -5246,7 +5565,7 @@ export function CanvasWorkspace({
                 )
                 .catch((e) => notify((e as Error).message));
             }}
-            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId, false)}
+            onInheritTailFrame={(shotId) => handleInheritTailFrame(shotId)}
             onRemove={(id) =>
               updateShots((ids) => ids.filter((item) => item !== id))
             }
@@ -5522,6 +5841,9 @@ export function CanvasWorkspace({
           onClick={() => {
             setAgentTab("chat");
             setAgentDock(true);
+            if (window.innerWidth <= 1100 && viewMode !== "canvas") {
+              setViewMode("canvas");
+            }
           }}
         >
           <span className="fm-agent-orb-dot" aria-hidden="true" />
@@ -5655,14 +5977,9 @@ export function CanvasWorkspace({
           );
           return queued;
         }}
-        onOpenSkills={() => setSkillsModal(true)}
+        onPendingCountChange={setPendingProposals}
         onNotify={notify}
       />
-      {skillsModal && (
-        <Modal title="工作区技能包 (SKILL.md)" wide onClose={() => setSkillsModal(false)}>
-          <SkillEditorModal workspace={project.workspace} />
-        </Modal>
-      )}
       {leaveFailure && (
         <Modal
           title="保存失败，仍要离开？"

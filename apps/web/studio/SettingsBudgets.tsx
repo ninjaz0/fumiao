@@ -39,10 +39,6 @@ type BudgetsPayload = {
   projects?: BudgetProjectOption[];
   policies: BudgetPolicy[];
   alerts: BudgetAlert[];
-  moderation: {
-    auto_rewrite: boolean;
-    max_attempts: number;
-  };
 };
 
 const periodNames: Record<string, string> = {
@@ -54,7 +50,7 @@ const periodNames: Record<string, string> = {
 const modeNames: Record<string, string> = {
   observe: "仅记录观察",
   warn: "超阈告警放行",
-  cap: "超上限硬拦截 (402)",
+  cap: "超上限硬拦截",
 };
 
 export function SettingsBudgets({
@@ -72,16 +68,12 @@ export function SettingsBudgets({
   const [capLimit, setCapLimit] = useState(1000);
   const [mode, setMode] = useState<"observe" | "warn" | "cap">("cap");
   const [enabled, setEnabled] = useState(true);
-  const [autoRewrite, setAutoRewrite] = useState(false);
-  const [maxAttempts, setMaxAttempts] = useState(2);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const res = await api<BudgetsPayload>(String(workspace), "/api/budgets");
       setData(res);
-      setAutoRewrite(res.moderation.auto_rewrite);
-      setMaxAttempts(res.moderation.max_attempts);
       if (!scopeProjectId && res.projects?.length) {
         setScopeProjectId(res.projects[0].public_id);
       }
@@ -94,7 +86,7 @@ export function SettingsBudgets({
     void load();
   }, [load]);
 
-  const canManage = data?.can_manage ?? true;
+  const canManage = data ? Boolean(data.can_manage) : false;
   const projects = data?.projects ?? [];
 
   async function savePolicy(e: FormEvent) {
@@ -128,153 +120,141 @@ export function SettingsBudgets({
     }
   }
 
-  async function saveModeration(e: FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await api(
-        String(workspace),
-        "/api/budgets/moderation",
-        {
-          auto_rewrite: autoRewrite,
-          max_attempts: maxAttempts,
-        },
-        "PUT",
-      );
-      notify("内容安全改写策略已更新");
-      await load();
-    } catch (err) {
-      notify((err as Error).message || "保存安全策略失败");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
     <section className="settings-section">
-      <h2>预算控制与安全风控</h2>
+      <h2>预算控制</h2>
       <p className="console-description">
-        为当前工作区或指定画布项目配置「预估 → 锁定 → 核销」三段式预算阈值，并管理敏感词拦截后的无二次计费自动改写重试策略。
+        为当前工作区或指定画布项目配置「预估 → 锁定 → 核销」三段式预算阈值与超限保护。
       </p>
 
-      {!canManage && (
+      {data && !canManage && (
         <p className="console-description" style={{ color: "#f59e0b" }}>
-          当前账号为普通成员，仅工作区负责人或管理员可修改预算与内容安全策略。
+          当前账号为普通成员，仅工作区负责人或管理员可修改预算策略。
         </p>
       )}
 
       <section className="ledger-card" style={{ marginBottom: 16 }}>
-        <h3>配置工作区 / 项目预算策略（F015）</h3>
-        <form
-          onSubmit={savePolicy}
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-            gap: 10,
-            alignItems: "end",
-          }}
-        >
-          <label>
-            生效范围
-            <select
-              value={scopeType}
-              disabled={!canManage}
-              onChange={(e) =>
-                setScopeType(e.target.value as "workspace" | "project")
-              }
-            >
-              <option value="workspace">整个工作区</option>
-              <option value="project">指定画布项目</option>
-            </select>
-          </label>
-          {scopeType === "project" && (
+        <h3>
+          {canManage ? "配置工作区 / 项目预算策略" : "当前生效的预算策略"}
+        </h3>
+        {canManage && (
+          <form
+            onSubmit={savePolicy}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+              gap: 10,
+              alignItems: "end",
+            }}
+          >
             <label>
-              目标项目
+              生效范围
               <select
-                value={scopeProjectId}
-                disabled={!canManage || projects.length === 0}
-                onChange={(e) => setScopeProjectId(e.target.value)}
+                value={scopeType}
+                onChange={(e) =>
+                  setScopeType(e.target.value as "workspace" | "project")
+                }
               >
-                {projects.length === 0 ? (
-                  <option value="">暂无画布项目</option>
-                ) : (
-                  projects.map((proj) => (
-                    <option key={proj.id} value={proj.public_id}>
-                      {proj.title}（{proj.public_id.slice(0, 8)}）
-                    </option>
-                  ))
-                )}
+                <option value="workspace">整个工作区</option>
+                <option value="project">指定画布项目</option>
               </select>
             </label>
-          )}
-          <label>
-            统计周期
-            <select
-              value={period}
-              disabled={!canManage}
-              onChange={(e) =>
-                setPeriod(e.target.value as "daily" | "monthly" | "total")
-              }
+            {scopeType === "project" && (
+              <label>
+                目标项目
+                <select
+                  value={scopeProjectId}
+                  disabled={projects.length === 0}
+                  onChange={(e) => setScopeProjectId(e.target.value)}
+                >
+                  {projects.length === 0 ? (
+                    <option value="">暂无画布项目</option>
+                  ) : (
+                    projects.map((proj) => (
+                      <option key={proj.id} value={proj.public_id}>
+                        {proj.title}（{proj.public_id.slice(0, 8)}）
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+            )}
+            <label>
+              统计周期
+              <select
+                value={period}
+                onChange={(e) =>
+                  setPeriod(e.target.value as "daily" | "monthly" | "total")
+                }
+              >
+                <option value="daily">每日预算</option>
+                <option value="monthly">月度预算</option>
+                <option value="total">累计预算</option>
+              </select>
+            </label>
+            <label>
+              告警阈值（积分）
+              <input
+                type="number"
+                min={0}
+                value={warnLimit}
+                onChange={(e) => setWarnLimit(Number(e.target.value))}
+              />
+            </label>
+            <label>
+              硬上限（积分）
+              <input
+                type="number"
+                min={0}
+                value={capLimit}
+                onChange={(e) => setCapLimit(Number(e.target.value))}
+              />
+            </label>
+            <label>
+              执行模式
+              <select
+                value={mode}
+                onChange={(e) =>
+                  setMode(e.target.value as "observe" | "warn" | "cap")
+                }
+              >
+                <option value="observe">仅观察</option>
+                <option value="warn">达阈告警</option>
+                <option value="cap">超限拦截</option>
+              </select>
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+              />
+              启用此策略
+            </label>
+            <button
+              type="submit"
+              className="primary"
+              disabled={saving || (scopeType === "project" && !scopeProjectId)}
             >
-              <option value="daily">每日预算</option>
-              <option value="monthly">月度预算</option>
-              <option value="total">累计预算</option>
-            </select>
-          </label>
-          <label>
-            告警阈值（积分）
-            <input
-              type="number"
-              min={0}
-              disabled={!canManage}
-              value={warnLimit}
-              onChange={(e) => setWarnLimit(Number(e.target.value))}
-            />
-          </label>
-          <label>
-            硬上限（积分）
-            <input
-              type="number"
-              min={0}
-              disabled={!canManage}
-              value={capLimit}
-              onChange={(e) => setCapLimit(Number(e.target.value))}
-            />
-          </label>
-          <label>
-            执行模式
-            <select
-              value={mode}
-              disabled={!canManage}
-              onChange={(e) =>
-                setMode(e.target.value as "observe" | "warn" | "cap")
-              }
-            >
-              <option value="observe">仅观察</option>
-              <option value="warn">达阈告警</option>
-              <option value="cap">超限拦截</option>
-            </select>
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <input
-              type="checkbox"
-              disabled={!canManage}
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            启用此策略
-          </label>
-          <button
-            type="submit"
-            className="primary"
-            disabled={saving || !canManage || (scopeType === "project" && !scopeProjectId)}
-          >
-            保存预算策略
-          </button>
-        </form>
+              保存预算策略
+            </button>
+          </form>
+        )}
+
+        {!data && (
+          <p className="console-description" style={{ marginBottom: 0 }}>
+            正在加载预算策略…
+          </p>
+        )}
+
+        {data && !canManage && data.policies.length === 0 && (
+          <p className="console-description" style={{ marginBottom: 0 }}>
+            当前工作区暂未配置预算策略。
+          </p>
+        )}
 
         {data && data.policies.length > 0 && (
-          <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
+          <div style={{ display: "grid", gap: 8, marginTop: canManage ? 14 : 0 }}>
             {data.policies.map((p) => {
               const pct =
                 p.cap_limit > 0
@@ -345,46 +325,6 @@ export function SettingsBudgets({
             })}
           </div>
         )}
-      </section>
-
-      <section className="ledger-card" style={{ marginBottom: 16 }}>
-        <h3>内容安全拦截自动改写重试（F024）</h3>
-        <p className="console-description">
-          仅当上游明确拒单且不计费（<code>moderation_blocked + rejected + billable=false</code>）时，自动将提示词改写为中性影视光影隐喻并重新入队；保留原始提示词审计记录，并严格复用原冻结额度，绝不二次扣费。
-        </p>
-        <form
-          onSubmit={saveModeration}
-          style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}
-        >
-          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <input
-              type="checkbox"
-              disabled={!canManage}
-              checked={autoRewrite}
-              onChange={(e) => setAutoRewrite(e.target.checked)}
-            />
-            启用内容安全自动中性化改写重试
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            最大自动重试次数
-            <select
-              disabled={!canManage}
-              value={maxAttempts}
-              onChange={(e) => setMaxAttempts(Number(e.target.value))}
-            >
-              <option value={0}>0 次</option>
-              <option value={1}>1 次</option>
-              <option value={2}>2 次（上限）</option>
-            </select>
-          </label>
-          <button
-            type="submit"
-            className="primary"
-            disabled={saving || !canManage}
-          >
-            保存安全策略
-          </button>
-        </form>
       </section>
 
       {data && data.alerts.length > 0 && (

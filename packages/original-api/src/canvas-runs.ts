@@ -8,6 +8,7 @@ import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { uuid5 } from "@fumiao/platform/uuid.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
+import { isBgmMusicModel } from "@fumiao/plugin-sdk/speech-routing.js";
 import type { OriginalActor } from "./identity.js";
 import { parseBody } from "./validation.js";
 import { parseDraft } from "./drafts.js";
@@ -46,27 +47,6 @@ import { OriginalState } from "./state.js";
 
 const namespaceUrl = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
 const active = ["queued", "dispatching", "running", "finalizing", "uncertain"];
-const BGM_MODEL_IDS = new Set([
-  "bgm-v1",
-  "suno-v4",
-  "udio-v1.5",
-  "musicgen-large",
-]);
-function isBgmMusicModel(
-  modelId: string,
-  spec?: { kind?: string; provider?: string },
-): boolean {
-  if (!spec || spec.kind !== "audio") return false;
-  if (spec.provider === "bgm-generator") return true;
-  if (BGM_MODEL_IDS.has(modelId)) return true;
-  if (
-    typeof spec.provider === "string" &&
-    /(?:^|[-_])(bgm|music)(?:$|[-_])/i.test(spec.provider)
-  ) {
-    return true;
-  }
-  return false;
-}
 
 export { compileCinematographyPrompt } from "./director-inputs.js";
 type Run = {
@@ -184,7 +164,8 @@ export class OriginalCanvasRuns {
   private async previous(sql: Sql, user: OriginalActor, uid: string) {
     return one(
       sql,
-      `SELECT l.project_id,l.node,j.public_id AS job FROM canvas_job_links l
+      `SELECT l.project_id,l.node,l.inputs,j.public_id AS job,j.catalog_id,j.provider_model,j.input AS job_input
+      FROM canvas_job_links l
       LEFT JOIN jobs j ON j.id=l.job_id AND j.deleted_at IS NULL WHERE l.owner_id=$1 AND l.uid=$2`,
       [user.id, uid],
     );
@@ -524,7 +505,11 @@ export class OriginalCanvasRuns {
         409,
         "这个镜头的旁白仍在生成",
       );
-      const bindings = await CanvasSubmissionModels.read(sql);
+      const bindings = await CanvasSubmissionModels.read(sql, {
+        workspaceId: String(p.workspace_id),
+        vault: this.p.vault,
+        registry: this.p.registry,
+      });
       const draft = parseDraft(
         "audio",
         {
@@ -660,8 +645,8 @@ export class OriginalCanvasRuns {
         ? node.dialogue_lines.filter((l) => l.id === body.line_id)
         : node.dialogue_lines.filter((l) => pythonStrip(l.text));
       requireValue(targets.length > 0, 400, "未找到可合成的对白台词");
-      const bindings = await CanvasSubmissionModels.read(sql);
-      const catalog = await new StudioCatalog(this.p.db).catalog(sql);
+      let bindings: CanvasSubmissionModels | null = null;
+      let catalog: Awaited<ReturnType<StudioCatalog["catalog"]>> | null = null;
       const items: {
         line_id: string;
         id: number;
@@ -674,8 +659,6 @@ export class OriginalCanvasRuns {
         const nodeName = `dialogue:${nid}:${line.id}`;
         const uid = uuid5(body.uid, `dialogue:${p.public_id}:${nid}:${line.id}`);
         const old = await this.previous(sql, user, uid);
-        const { voice: resolved, payload } = await resolveDialogueInput(sql, p.workspace_id, line, bindings);
-        const { model, prompt: cleanText } = payload;
         if (old) {
           requireValue(
             old.project_id === p.id &&
@@ -684,15 +667,63 @@ export class OriginalCanvasRuns {
             409,
             "这次提交已处理，请刷新后重试",
           );
+          const savedInputs = old.inputs
+            ? (parseCanvasRunJson(canvasText(old.inputs)) as Record<
+                string,
+                unknown
+              > | null)
+            : null;
+          if (
+            savedInputs &&
+            (typeof savedInputs.revision === "number" ||
+              typeof savedInputs.revision === "bigint")
+          ) {
+            requireValue(
+              Number(savedInputs.revision) === Number(body.expected_revision),
+              409,
+              "这次提交已处理，请刷新后重试",
+            );
+          }
+          const savedModel =
+            (typeof savedInputs?.model === "string" && savedInputs.model) ||
+            (typeof old.catalog_id === "string" && old.catalog_id) ||
+            (typeof old.provider_model === "string" && old.provider_model) ||
+            "";
+          let savedVoiceId: string | null = null;
+          if (savedInputs && Object.hasOwn(savedInputs, "voice_id")) {
+            savedVoiceId =
+              typeof savedInputs.voice_id === "string" && savedInputs.voice_id
+                ? savedInputs.voice_id
+                : null;
+          } else if (
+            old.job_input &&
+            typeof old.job_input === "object" &&
+            typeof (old.job_input as any).params?.voice === "string" &&
+            (old.job_input as any).params.voice
+          ) {
+            savedVoiceId = (old.job_input as any).params.voice;
+          }
+          const savedSpeaker =
+            typeof savedInputs?.speaker === "string"
+              ? savedInputs.speaker
+              : line.speaker;
           items.push({
             line_id: line.id,
             id: Number(old.job),
-            speaker: line.speaker,
-            model,
-            voice_id: resolved.voiceId ?? null,
+            speaker: savedSpeaker,
+            model: savedModel,
+            voice_id: savedVoiceId,
           });
           continue;
         }
+        bindings ??= await CanvasSubmissionModels.read(sql, {
+          workspaceId: String(p.workspace_id),
+          vault: this.p.vault,
+          registry: this.p.registry,
+        });
+        catalog ??= await new StudioCatalog(this.p.db).catalog(sql);
+        const { voice: resolved, payload } = await resolveDialogueInput(sql, p.workspace_id, line, bindings);
+        const { model, prompt: cleanText } = payload;
         requireValue(
           !(await this.busy(sql, p.id, nodeName)),
           409,
@@ -729,6 +760,7 @@ export class OriginalCanvasRuns {
           line_id: line.id,
           speaker: line.speaker,
           pack_id: resolved.packId,
+          model,
           voice_id: resolved.voiceId ?? null,
           text: cleanText,
           instruction: resolved.instruction,

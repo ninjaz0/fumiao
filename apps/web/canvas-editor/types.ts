@@ -5,6 +5,12 @@ import {
   normalizeMediaMime,
 } from "@fumiao/plugin-sdk/media-filename";
 import type { DirectorProduction } from "@fumiao/web-compat/director.js";
+import {
+  isBgmMusicModel,
+  pickSpeechAudioModel,
+  resolveDialogueVoiceProfile,
+  type SpeechPackCandidate,
+} from "@fumiao/plugin-sdk/speech-routing";
 export type Kind = "text" | "image" | "video" | "sticky" | "plugin" | "group";
 export type CanvasGenerationMode =
   | "first_frame"
@@ -177,6 +183,8 @@ export type Studio = {
   model_groups?: Record<string, { kind: string; label: string; models: string[] }>;
   team_model_policies?: Record<string, { revision: number; enabled: Record<string, boolean> }>;
   canvas_nodes?: CanvasNodeEntry[];
+  canvas_speech_models?: string[];
+  canvas_speech_default_models?: string[];
   model_forms: Record<string, import("@fumiao/plugin-sdk/model-form").ModelForm>;
   model_catalog: Record<string,FlowModel>;
   video_models: Record<string,string>;
@@ -600,5 +608,624 @@ export function resolveBatchShots(
       ? [...existingShots, ...addedIds]
       : [...existingShots],
     allInShots: videoIds.length > 0 && addedIds.length === 0,
+  };
+}
+
+export function videoModelAcceptsSingleFirstFrame(
+  studio: Pick<Studio, "video_models" | "model_catalog" | "model_forms">,
+  modelId: string,
+  availableModel: (model: string) => boolean,
+): boolean {
+  if (!modelId || !availableModel(modelId)) return false;
+  const inVideoModels = Boolean(
+    studio.video_models && Object.hasOwn(studio.video_models, modelId),
+  );
+  const spec = studio.model_catalog?.[modelId];
+  if (!inVideoModels && spec?.kind !== "video") return false;
+  if (spec?.mode === "extend") return false;
+  if (typeof spec?.min_refs === "number" && spec.min_refs > 1) return false;
+  if (typeof spec?.max_refs === "number" && spec.max_refs < 1) return false;
+  const form = studio.model_forms?.[modelId];
+  if (!form) return false;
+  if (form.references.min > 1 || form.references.max < 1) return false;
+  if (form.references.counts && form.references.counts.image < 1) return false;
+  return true;
+}
+
+function flowVideoStem(modelId: string): string {
+  if (!modelId.startsWith("flow:")) return "";
+  return modelId
+    .replace(/-(?:i2v|r2v|t2v|extend|omni)(?=-|$)/g, "")
+    .replace(/-\d+s-(?:landscape|portrait|square|four-three|three-four).*$/, "");
+}
+
+export function resolveNextShotVideoModel(
+  studio: Pick<Studio, "video_models" | "model_catalog" | "model_forms">,
+  sourceModel: string | undefined,
+  want: { ratio?: string; seconds?: number },
+  availableModel: (model: string) => boolean,
+): string {
+  if (
+    sourceModel &&
+    videoModelAcceptsSingleFirstFrame(studio, sourceModel, availableModel)
+  ) {
+    return sourceModel;
+  }
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const id of [
+    ...Object.keys(studio.video_models || {}),
+    ...Object.keys(studio.model_catalog || {}),
+  ]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (videoModelAcceptsSingleFirstFrame(studio, id, availableModel)) {
+      candidates.push(id);
+    }
+  }
+  if (!candidates.length) return "";
+
+  const srcFamily = sourceModel
+    ? studio.model_catalog?.[sourceModel]?.family || ""
+    : "";
+  const srcStem = sourceModel ? flowVideoStem(sourceModel) : "";
+  const modeRank = (mode?: string) =>
+    mode === "i2v" ? 0 : mode === "omni" ? 1 : mode === "r2v" ? 2 : 3;
+
+  const indexed = candidates.map((id, index) => {
+    const spec = studio.model_catalog?.[id];
+    const form = studio.model_forms?.[id];
+    const sameGroup =
+      (srcFamily && spec?.family === srcFamily) ||
+      (srcStem && flowVideoStem(id) === srcStem)
+        ? 0
+        : 1;
+    const ratioMatches =
+      want.ratio &&
+      (spec?.ratio === want.ratio ||
+        form?.fields?.ratio?.enum?.includes(want.ratio))
+        ? 0
+        : 1;
+    const secDiff =
+      want.seconds && typeof spec?.seconds === "number" && spec.seconds > 0
+        ? Math.abs(spec.seconds - want.seconds)
+        : 0;
+    return {
+      id,
+      index,
+      sameGroup,
+      modeScore: sameGroup === 0 ? modeRank(spec?.mode) : 0,
+      ratioMatches,
+      secDiff,
+    };
+  });
+
+  indexed.sort(
+    (a, b) =>
+      a.sameGroup - b.sameGroup ||
+      a.modeScore - b.modeScore ||
+      a.ratioMatches - b.ratioMatches ||
+      a.secDiff - b.secDiff ||
+      a.index - b.index,
+  );
+  return indexed[0].id;
+}
+
+export type NextShotContinuation = {
+  model: string;
+  label: string;
+  switched: boolean;
+  shotTitle: string;
+  previewHint: string;
+  previewButtonLabel: string;
+};
+
+export function resolveNextShotContinuation(
+  studio: Pick<Studio, "video_models" | "model_catalog" | "model_forms">,
+  sourceModel: string | undefined,
+  want: { ratio?: string; seconds?: number },
+  availableModel: (model: string) => boolean,
+  resolveLabel: (model: string) => string,
+): NextShotContinuation | null {
+  const model = resolveNextShotVideoModel(
+    studio,
+    sourceModel,
+    want,
+    availableModel,
+  );
+  if (!model) return null;
+  const label = resolveLabel(model) || model;
+  const switched = Boolean(sourceModel && sourceModel !== model);
+  return {
+    model,
+    label,
+    switched,
+    shotTitle: switched
+      ? `抽取尾帧并用 ${label} 续接下一镜`
+      : `抽取尾帧续接下一镜（${label}）`,
+    previewHint: `，或设为 ${label} 下一镜头的首帧。`,
+    previewButtonLabel: switched
+      ? `用作 ${label} 下一镜头首帧`
+      : "用作下一镜头首帧",
+  };
+}
+
+export type CinePopoverSide =
+  | "right"
+  | "left"
+  | "top"
+  | "bottom"
+  | "viewport";
+
+export type CinePopoverPlacement = {
+  side: CinePopoverSide;
+  verticalAlign: "top" | "bottom";
+  maxHeight: number;
+  fixedTop?: number;
+  fixedRight?: number;
+};
+
+export type CinePopoverInput = {
+  composerLeft: number;
+  composerTop?: number;
+  composerWidth?: number;
+  composerHeight?: number;
+  windowWidth: number;
+  windowHeight?: number;
+  headerBottom?: number;
+  dockedWidth?: number;
+  viewMode?: "canvas" | "split" | "list";
+  agentDock?: boolean;
+  agentDockedWidth?: number;
+};
+
+export function resolveCinePopoverPlacement(
+  input: CinePopoverInput,
+): CinePopoverPlacement {
+  const composerWidth = input.composerWidth ?? 520;
+  const composerHeight = input.composerHeight ?? 240;
+  const windowHeight = input.windowHeight ?? 840;
+  const headerBottom = Math.max(56, input.headerBottom ?? 60);
+  const safeTop = headerBottom + 8;
+  const safeBottom = Math.max(safeTop + 120, windowHeight - 12);
+  const dockedWidth =
+    input.dockedWidth ??
+    (input.viewMode === "split" ? Math.min(520, input.windowWidth * 0.46) : 0) +
+      (input.agentDockedWidth ?? (input.agentDock ? 400 : 0));
+  const rightLimit = input.windowWidth - dockedWidth - 12;
+  const leftLimit = 76;
+  const composerTop =
+    input.composerTop ?? Math.max(safeTop, windowHeight - composerHeight - 32);
+  const composerBottom = composerTop + composerHeight;
+
+  const sideVertical = (): Pick<
+    CinePopoverPlacement,
+    "verticalAlign" | "maxHeight"
+  > => {
+    const upHeight = composerBottom - safeTop;
+    const downHeight = safeBottom - composerTop;
+    if (upHeight < 240 && downHeight > upHeight) {
+      return {
+        verticalAlign: "top",
+        maxHeight: Math.min(360, Math.max(150, downHeight)),
+      };
+    }
+    return {
+      verticalAlign: "bottom",
+      maxHeight: Math.min(360, Math.max(150, upHeight)),
+    };
+  };
+
+  if (input.composerLeft + composerWidth + 352 <= rightLimit) {
+    return { side: "right", ...sideVertical() };
+  }
+  if (input.composerLeft - 352 >= leftLimit) {
+    return { side: "left", ...sideVertical() };
+  }
+
+  if (input.composerTop === undefined) {
+    return {
+      side: "top",
+      verticalAlign: "bottom",
+      maxHeight: Math.min(360, Math.max(160, safeBottom - safeTop)),
+    };
+  }
+
+  const spaceAbove = composerTop - 10 - safeTop;
+  const spaceBelow = safeBottom - (composerBottom + 10);
+  if (spaceAbove >= 200 && (spaceAbove >= spaceBelow || spaceBelow < 200)) {
+    return {
+      side: "top",
+      verticalAlign: "bottom",
+      maxHeight: Math.min(360, Math.floor(spaceAbove)),
+    };
+  }
+  if (spaceBelow >= 200) {
+    return {
+      side: "bottom",
+      verticalAlign: "top",
+      maxHeight: Math.min(360, Math.floor(spaceBelow)),
+    };
+  }
+
+  return {
+    side: "viewport",
+    verticalAlign: "top",
+    fixedTop: safeTop,
+    fixedRight: Math.max(12, Math.round(dockedWidth + 16)),
+    maxHeight: Math.min(360, Math.max(140, Math.floor(safeBottom - safeTop))),
+  };
+}
+
+export function resolveCinePopoverSide(
+  input: CinePopoverInput,
+): CinePopoverSide {
+  return resolveCinePopoverPlacement(input).side;
+}
+
+export type OptionMenuFloatingRect = {
+  direction: "up" | "down";
+  top?: number;
+  bottom?: number;
+  left: number;
+  minWidth: number;
+  maxHeight: number;
+};
+
+export function resolveOptionMenuFloatingRect(input: {
+  triggerRect: {
+    top: number;
+    bottom: number;
+    left: number;
+    right: number;
+    width: number;
+  };
+  windowWidth: number;
+  windowHeight: number;
+  preferredDirection?: "down" | "up";
+  align?: "left" | "right";
+  menuWidth?: number;
+  safeTop?: number;
+  safeBottomMargin?: number;
+}): OptionMenuFloatingRect {
+  const safeTop = input.safeTop ?? 8;
+  const safeBottomMargin = input.safeBottomMargin ?? 8;
+  const safeBottom = input.windowHeight - safeBottomMargin;
+  const gap = 5;
+  const spaceBelow = Math.floor(safeBottom - (input.triggerRect.bottom + gap));
+  const spaceAbove = Math.floor(input.triggerRect.top - gap - safeTop);
+  const pref = input.preferredDirection ?? "down";
+
+  const direction: "up" | "down" =
+    (pref === "up" && (spaceAbove >= 150 || spaceAbove >= spaceBelow)) ||
+    (pref === "down" && spaceBelow < 150 && spaceAbove > spaceBelow)
+      ? "up"
+      : "down";
+
+  const available = direction === "up" ? spaceAbove : spaceBelow;
+  const maxHeight = Math.min(224, Math.max(96, available));
+  const minWidth = Math.max(164, Math.round(input.triggerRect.width));
+  const estWidth = Math.max(minWidth, Math.round(input.menuWidth ?? minWidth));
+  const desiredLeft =
+    input.align === "right"
+      ? input.triggerRect.right - estWidth
+      : input.triggerRect.left;
+  const left = Math.round(
+    Math.max(8, Math.min(desiredLeft, input.windowWidth - estWidth - 8)),
+  );
+
+  if (direction === "up") {
+    return {
+      direction: "up",
+      bottom: Math.round(
+        Math.max(safeBottomMargin, input.windowHeight - (input.triggerRect.top - gap)),
+      ),
+      left,
+      minWidth,
+      maxHeight,
+    };
+  }
+
+  return {
+    direction: "down",
+    top: Math.round(Math.max(safeTop, input.triggerRect.bottom + gap)),
+    left,
+    minWidth,
+    maxHeight,
+  };
+}
+
+export function reconcileCanvasRightDocks(input: {
+  prevWindowWidth: number;
+  windowWidth: number;
+  viewMode: "canvas" | "split" | "list";
+  agentDock: boolean;
+  prevAgentDockedWidth: number;
+  agentDockedWidth: number;
+}): { closeAgentDock: boolean; switchSplitToCanvas: boolean } {
+  if (
+    input.windowWidth <= 1100 &&
+    input.viewMode !== "canvas" &&
+    input.agentDock
+  ) {
+    if (input.prevWindowWidth > 1100) {
+      return { closeAgentDock: true, switchSplitToCanvas: false };
+    }
+    if (input.prevAgentDockedWidth === 0 && input.agentDockedWidth > 0) {
+      return { closeAgentDock: false, switchSplitToCanvas: true };
+    }
+  }
+  return { closeAgentDock: false, switchSplitToCanvas: false };
+}
+
+export function resolveCanvasWorkspaceTop(input: {
+  rootTop: number;
+  headerBottom: number;
+  switcherTop?: number | null;
+  switcherBottom?: number | null;
+  switcherHeight?: number | null;
+}): { headerBottom: number; workspaceTop: number } {
+  const headerBottom = Math.max(
+    52,
+    Math.ceil(input.headerBottom - input.rootTop),
+  );
+  let workspaceTop = headerBottom;
+  if (
+    typeof input.switcherTop === "number" &&
+    typeof input.switcherBottom === "number" &&
+    (input.switcherHeight ?? 0) > 0 &&
+    input.switcherTop >= input.headerBottom - 4
+  ) {
+    workspaceTop = Math.max(
+      headerBottom,
+      Math.ceil(input.switcherBottom - input.rootTop + 6),
+    );
+  }
+  return { headerBottom, workspaceTop };
+}
+
+export function resolveEffectiveNarrationModel(input: {
+  requestedModel?: string | null;
+  activeModel?: string;
+  audioModels?: readonly { id: string }[];
+}): string {
+  const requested = input.requestedModel?.trim() || "";
+  const requestedAvailable = Boolean(
+    requested && input.audioModels?.some((m) => m.id === requested),
+  );
+  if (requestedAvailable) return requested;
+  if (input.activeModel) return input.activeModel;
+  if (input.audioModels?.length === 1) return input.audioModels[0].id;
+  return requested;
+}
+
+export function resolveCanvasSpeechModels(
+  studio: Pick<
+    Studio,
+    | "canvas_speech_models"
+    | "model_catalog"
+    | "model_access"
+    | "model_policy"
+  >,
+): { id: string; label: string }[] {
+  if (Array.isArray(studio.canvas_speech_models)) {
+    return studio.canvas_speech_models
+      .filter((id) => {
+        if (!id) return false;
+        const spec = studio.model_catalog?.[id];
+        if (spec && spec.kind !== "audio") return false;
+        return !isBgmMusicModel(id, spec);
+      })
+      .map((id) => ({
+        id,
+        label: studio.model_catalog?.[id]?.label || id,
+      }));
+  }
+  const access = studio.model_access || studio.model_policy?.enabled;
+  const isPolicyAllowed = (id: string) => !access || access[id] === true;
+  return Object.entries(studio.model_catalog ?? {})
+    .filter(
+      ([id, spec]) =>
+        spec.kind === "audio" &&
+        !spec.hidden &&
+        !isBgmMusicModel(id, spec) &&
+        isPolicyAllowed(id),
+    )
+    .map(([id, spec]) => ({ id, label: spec.label || id }));
+}
+
+function quoteSingleSpeechModel(
+  studio: Pick<Studio, "pricing" | "credits">,
+  modelId: string,
+): {
+  cost: number | null;
+  costIndeterminate: boolean;
+  unavailableReason: string;
+} {
+  if (!modelId) {
+    return {
+      cost: null,
+      costIndeterminate: false,
+      unavailableReason: "当前空间未开放语音模型",
+    };
+  }
+  const modelPrices = (studio.pricing?.items ?? []).filter((p) =>
+    p.key.startsWith(modelId + "|"),
+  );
+  if (modelPrices.length === 0) {
+    if (modelId === "edge-tts") {
+      return { cost: 0, costIndeterminate: false, unavailableReason: "" };
+    }
+    return {
+      cost: null,
+      costIndeterminate: false,
+      unavailableReason: "语音生成尚未定价",
+    };
+  }
+  if (modelPrices.length === 1) {
+    const cost = modelPrices[0].amount;
+    if (cost === null) {
+      return {
+        cost: null,
+        costIndeterminate: false,
+        unavailableReason: "语音生成尚未定价",
+      };
+    }
+    if ((studio.credits?.available ?? 0) < cost) {
+      return {
+        cost,
+        costIndeterminate: false,
+        unavailableReason: "当前空间积分不足",
+      };
+    }
+    return { cost, costIndeterminate: false, unavailableReason: "" };
+  }
+
+  const pricedAmounts = modelPrices
+    .map((p) => p.amount)
+    .filter((amount): amount is number => amount !== null);
+  if (pricedAmounts.length === 0) {
+    return {
+      cost: null,
+      costIndeterminate: false,
+      unavailableReason: "语音生成尚未定价",
+    };
+  }
+  const uniqueAmounts = new Set(pricedAmounts);
+  if (
+    pricedAmounts.length === modelPrices.length &&
+    uniqueAmounts.size === 1
+  ) {
+    const cost = pricedAmounts[0];
+    if ((studio.credits?.available ?? 0) < cost) {
+      return {
+        cost,
+        costIndeterminate: false,
+        unavailableReason: "当前空间积分不足",
+      };
+    }
+    return { cost, costIndeterminate: false, unavailableReason: "" };
+  }
+  // Multi-tier speech models depend on plugin-prepared parameters; defer exact
+  // amount & balance enforcement to server precheck/submit rather than guessing.
+  return { cost: null, costIndeterminate: true, unavailableReason: "" };
+}
+
+export function quoteCanvasSpeechPlan(input: {
+  studio: Partial<Pick<Studio, "workspace_id">> &
+    Pick<
+      Studio,
+      | "canvas_speech_models"
+      | "canvas_speech_default_models"
+      | "model_catalog"
+      | "model_access"
+      | "model_policy"
+      | "pricing"
+      | "credits"
+    >;
+  node: Pick<CanvasNode, "narration_model" | "dialogue_lines">;
+  packs?: readonly SpeechPackCandidate[];
+}): {
+  speechModels: { id: string; label: string }[];
+  narration: {
+    activeModel: string;
+    cost: number | null;
+    costIndeterminate: boolean;
+    unavailableReason: string;
+  };
+  dialogue: {
+    lineModels: Record<string, string>;
+    lineCosts: Record<string, number | null>;
+    lineReasons: Record<string, string>;
+    batchCost: number | null;
+    costIndeterminate: boolean;
+    unavailableReason: string;
+  };
+} {
+  const speechModels = resolveCanvasSpeechModels(input.studio);
+  const availableSpeechIds = speechModels.map((m) => m.id);
+  const defaultModelIds = input.studio.canvas_speech_default_models;
+
+  const narrationActive = pickSpeechAudioModel({
+    preferredModel: input.node.narration_model?.trim(),
+    availableSpeechIds,
+    defaultModelIds,
+  });
+  const narrationQuote = quoteSingleSpeechModel(input.studio, narrationActive);
+
+  const lineModels: Record<string, string> = {};
+  const lineCosts: Record<string, number | null> = {};
+  const lineReasons: Record<string, string> = {};
+
+  let batchSum = 0;
+  let batchUnpriced = false;
+  let batchIndeterminate = false;
+  let batchNoModel = false;
+  let nonEmptyCount = 0;
+
+  for (const line of input.node.dialogue_lines ?? []) {
+    const resolvedVoice = resolveDialogueVoiceProfile({
+      workspaceId: input.studio.workspace_id,
+      packs: input.packs,
+      line,
+    });
+    const resolvedModel = pickSpeechAudioModel({
+      preferredModel: resolvedVoice.model,
+      availableSpeechIds,
+      defaultModelIds,
+    });
+    const lineQuote = quoteSingleSpeechModel(input.studio, resolvedModel);
+    lineModels[line.id] = resolvedModel;
+    lineCosts[line.id] = lineQuote.cost;
+    lineReasons[line.id] = lineQuote.unavailableReason;
+
+    if (line.text.trim()) {
+      nonEmptyCount++;
+      if (!resolvedModel) {
+        batchNoModel = true;
+      } else if (lineQuote.costIndeterminate) {
+        batchIndeterminate = true;
+      } else if (lineQuote.cost === null) {
+        batchUnpriced = true;
+      } else {
+        batchSum += lineQuote.cost;
+      }
+    }
+  }
+
+  let dialogueReason = "";
+  let batchCost: number | null = batchIndeterminate ? null : batchSum;
+  if (availableSpeechIds.length === 0 || batchNoModel) {
+    batchCost = null;
+    dialogueReason = "当前空间未开放语音模型";
+  } else if (nonEmptyCount === 0) {
+    batchCost = narrationQuote.cost;
+    dialogueReason =
+      narrationQuote.cost === null && !narrationQuote.costIndeterminate
+        ? "语音生成尚未定价"
+        : "";
+  } else if (batchUnpriced) {
+    batchCost = null;
+    dialogueReason = "语音生成尚未定价";
+  } else if ((input.studio.credits?.available ?? 0) < batchSum) {
+    dialogueReason = "当前空间积分不足";
+  }
+
+  return {
+    speechModels,
+    narration: {
+      activeModel: narrationActive,
+      cost: narrationQuote.cost,
+      costIndeterminate: narrationQuote.costIndeterminate,
+      unavailableReason: narrationQuote.unavailableReason,
+    },
+    dialogue: {
+      lineModels,
+      lineCosts,
+      lineReasons,
+      batchCost,
+      costIndeterminate: batchIndeterminate,
+      unavailableReason: dialogueReason,
+    },
   };
 }
