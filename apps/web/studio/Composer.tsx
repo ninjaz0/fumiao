@@ -12,6 +12,7 @@ import {
 } from "react";
 import { Chevron, Icon } from "./Icon";
 import { estimateTime } from "./History";
+import { dockNotice } from "./composer-dock";
 import { ReferenceMedia } from "./AssetMedia";
 import type { ComposerMenu } from "./ComposerMenu";
 import {
@@ -150,6 +151,7 @@ export function Composer({
   flowSourceContents,
   restoreDraft,
   onRecharge,
+  expand,
 }: {
   state: StudioState;
   session: DraftSession;
@@ -161,7 +163,12 @@ export function Composer({
   submit: () => void;
   upload: (files: FileList, frame?: FrameSlot) => void;
   menu: ComposerMenu | null;
-  open: (kind: ComposerMenu, button: HTMLButtonElement, focus?: boolean) => void;
+  open: (
+    kind: ComposerMenu,
+    button: HTMLButtonElement,
+    focus?: boolean,
+    pointer?: boolean,
+  ) => void;
   close: () => void;
   preview: (id: string, button: HTMLButtonElement) => void;
   editor: Ref<ComposerEditor>;
@@ -171,6 +178,8 @@ export function Composer({
   managePlugins: () => void;
   restoreDraft?: () => void;
   onRecharge: () => void;
+  /** Opens the phone bottom sheet; the collapsed bar's notice calls it. */
+  expand?: () => void;
 }) {
   const { draft } = session;
   const box = useRef<HTMLElement>(null);
@@ -214,6 +223,11 @@ export function Composer({
   const statusMessage = status || (unavailable && hasAnyAvailableModel && !hasAvailableModel
     ? "当前类型暂无可用模型，可切换创作类型"
     : "");
+  const notice = dockNotice({
+    status: statusMessage,
+    busy: uploading || submitting,
+    canRestoreDraft: !!restoreDraft,
+  });
   const ratio = audio
     ? ""
     : frameMode && activeReferences(session).length
@@ -437,7 +451,7 @@ export function Composer({
   const opener =
     (kind: ComposerMenu) => (event: React.MouseEvent<HTMLButtonElement>) => {
       remember();
-      open(kind, event.currentTarget);
+      open(kind, event.currentTarget, true, event.detail > 0);
     };
   const referenceControls = frameMode ? (
     <div className="h3-frame-pair">
@@ -661,7 +675,7 @@ export function Composer({
       <div className="composer-toolbar">
         <div className="composer-parameters">
           <button
-            className="creation-type parameter-button"
+            className="creation-type parameter-button fm-choice-trigger fm-choice-trigger-wide"
             data-menu="creation"
             aria-label="创作类型"
             aria-expanded={menu === "creation"}
@@ -699,7 +713,7 @@ export function Composer({
             />
           )}
           <button
-            className="parameter-button h3-mode-control"
+            className="parameter-button h3-mode-control fm-choice-trigger fm-choice-trigger-wide"
             data-menu="h3-mode"
             aria-label="选择参考模式"
             aria-expanded={menu === "h3-mode"}
@@ -726,7 +740,7 @@ export function Composer({
             <span className="quality-label">{quality}</span>
           </button>
           <button
-            className={`parameter-button${fixed ? " fixed-parameter" : ""}`}
+            className={`parameter-button${fixed ? " fixed-parameter" : ""}${audio ? "" : " fm-choice-trigger"}`}
             data-menu="duration"
             aria-expanded={menu === "duration"}
             aria-label={durationName}
@@ -746,7 +760,7 @@ export function Composer({
                     ]
                   : draft.seconds + "s"}
             </span>
-            {(audio || image) && <Chevron />}
+            {(audio || image || !fixed) && <Chevron />}
           </button>
         </div>
         <div className="composer-actions">
@@ -848,6 +862,9 @@ export function Composer({
           </label>
         )}
       </div>
+      <button type="button" className="composer-dock-notice" hidden={!notice} onClick={expand}>
+        {notice}
+      </button>
       <div className="composer-status" aria-live="polite">
         {statusMessage && <span className="fm-state-change" key={statusMessage}>{statusMessage}</span>}
       </div>

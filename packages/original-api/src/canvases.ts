@@ -224,18 +224,6 @@ export class OriginalCanvases {
         [id, document.nodes.map((node) => node.id)],
       );
   }
-  async createBoundCanvas(
-    sql: Sql,
-    user: Actor,
-    wid: string,
-    title: string,
-    document: CanvasDocument,
-  ) {
-    await this.limit(sql, wid);
-    const row = await this.insert(sql, user, wid, title, document);
-    await this.nodes(sql, row.id, document);
-    return row;
-  }
   async importProject(
     sql: Sql,
     user: Actor,

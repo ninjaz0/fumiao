@@ -20,7 +20,6 @@ export function OptionSelect<T extends string = string>({
   active = false,
   disabled = false,
   direction = "down",
-  align = "left",
   variant = "chip",
 }: {
   ariaLabel: string;
@@ -32,16 +31,15 @@ export function OptionSelect<T extends string = string>({
   active?: boolean;
   disabled?: boolean;
   direction?: "down" | "up";
-  align?: "left" | "right";
   variant?: "chip" | "field";
 }) {
   const [open, setOpen] = useState(false);
-  const [floatingStyle, setFloatingStyle] = useState<React.CSSProperties>({});
   const [resolvedDir, setResolvedDir] = useState<"down" | "up">(direction);
   const listboxId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const keyboardOpen = useRef(false);
 
   useEffect(() => {
     if (disabled) setOpen(false);
@@ -49,76 +47,47 @@ export function OptionSelect<T extends string = string>({
 
   const updateFloatingPosition = useCallback(() => {
     const trigger = buttonRef.current;
-    if (!trigger || typeof window === "undefined") return;
-    const rect = trigger.getBoundingClientRect();
     const menuEl = menuRef.current;
-    const measuredWidth =
-      menuEl && menuEl.offsetWidth > 0 ? menuEl.offsetWidth : undefined;
+    if (!trigger || !menuEl) return;
     const floating = resolveOptionMenuFloatingRect({
-      triggerRect: rect,
+      triggerRect: trigger.getBoundingClientRect(),
       windowWidth: window.innerWidth,
       windowHeight: window.innerHeight,
       preferredDirection: direction,
-      align,
-      menuWidth: measuredWidth,
     });
     setResolvedDir(floating.direction);
-    setFloatingStyle({
+    Object.assign(menuEl.style, {
       position: "fixed",
-      left: floating.left,
+      left: `${floating.left}px`,
       right: "auto",
-      top: floating.top ?? "auto",
-      bottom: floating.bottom ?? "auto",
-      minWidth: floating.minWidth,
-      maxHeight: floating.maxHeight,
+      top: floating.top === undefined ? "auto" : `${floating.top}px`,
+      bottom: floating.bottom === undefined ? "auto" : `${floating.bottom}px`,
+      width: `${floating.width}px`,
+      maxHeight: `${floating.maxHeight}px`,
     });
-  }, [align, direction]);
 
-  useLayoutEffect(() => {
-    if (!open) return;
-    updateFloatingPosition();
-    // Re-measure once menu width is laid out (and adjust if an ancestor sets a transformed containing block)
-    const menuEl = menuRef.current;
-    const trigger = buttonRef.current;
-    if (menuEl && trigger && typeof window !== "undefined") {
-      const floating = resolveOptionMenuFloatingRect({
-        triggerRect: trigger.getBoundingClientRect(),
-        windowWidth: window.innerWidth,
-        windowHeight: window.innerHeight,
-        preferredDirection: direction,
-        align,
-        menuWidth: menuEl.offsetWidth || undefined,
-      });
-      menuEl.style.left = `${floating.left}px`;
-      menuEl.style.right = "auto";
-      menuEl.style.minWidth = `${floating.minWidth}px`;
-      menuEl.style.maxHeight = `${floating.maxHeight}px`;
-      if (floating.direction === "up") {
-        menuEl.style.top = "auto";
-        menuEl.style.bottom = `${floating.bottom!}px`;
-      } else {
-        menuEl.style.bottom = "auto";
-        menuEl.style.top = `${floating.top!}px`;
+    // An ancestor can establish a containing block for the fixed menu.
+    const actual = menuEl.getBoundingClientRect();
+    const dx = actual.left - floating.left;
+    if (Math.abs(dx) > 1) {
+      menuEl.style.left = `${floating.left - dx}px`;
+    }
+    if (floating.top !== undefined) {
+      const dy = actual.top - floating.top;
+      if (Math.abs(dy) > 1) {
+        menuEl.style.top = `${Math.round(floating.top - dy)}px`;
       }
-      const actual = menuEl.getBoundingClientRect();
-      const dx = actual.left - floating.left;
-      if (Math.abs(dx) > 1) {
-        menuEl.style.left = `${Math.round(floating.left - dx)}px`;
-      }
-      if (floating.direction === "down" && floating.top !== undefined) {
-        const dy = actual.top - floating.top;
-        if (Math.abs(dy) > 1) {
-          menuEl.style.top = `${Math.round(floating.top - dy)}px`;
-        }
-      } else if (floating.direction === "up" && floating.bottom !== undefined) {
-        const expectedBottomEdge = window.innerHeight - floating.bottom;
-        const dy = actual.bottom - expectedBottomEdge;
-        if (Math.abs(dy) > 1) {
-          menuEl.style.bottom = `${Math.round(floating.bottom + dy)}px`;
-        }
+    } else if (floating.bottom !== undefined) {
+      const dy = actual.bottom - (window.innerHeight - floating.bottom);
+      if (Math.abs(dy) > 1) {
+        menuEl.style.bottom = `${Math.round(floating.bottom + dy)}px`;
       }
     }
-  }, [open, options.length, align, direction, updateFloatingPosition]);
+  }, [direction]);
+
+  useLayoutEffect(() => {
+    if (open) updateFloatingPosition();
+  }, [open, options.length, updateFloatingPosition]);
 
   useEffect(() => {
     if (!open) return;
@@ -140,15 +109,18 @@ export function OptionSelect<T extends string = string>({
     document.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("resize", updateFloatingPosition);
     window.addEventListener("scroll", handleScroll, true);
-    (
-      menuRef.current?.querySelector<HTMLButtonElement>(
-        '[aria-selected="true"]:not(:disabled)',
-      ) ||
-      menuRef.current?.querySelector<HTMLButtonElement>(
-        '[role="option"]:not(:disabled)',
-      ) ||
-      menuRef.current
-    )?.focus();
+    const menu = menuRef.current;
+    if (keyboardOpen.current) {
+      (
+        menu?.querySelector<HTMLButtonElement>(
+          '[aria-selected="true"]:not(:disabled)',
+        ) ??
+        menu?.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled)') ??
+        menu
+      )?.focus();
+    } else {
+      menu?.focus({ preventScroll: true });
+    }
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("resize", updateFloatingPosition);
@@ -172,6 +144,7 @@ export function OptionSelect<T extends string = string>({
       ) {
         event.preventDefault();
         event.stopPropagation();
+        keyboardOpen.current = true;
         setOpen(true);
       }
       return;
@@ -193,15 +166,22 @@ export function OptionSelect<T extends string = string>({
       ];
       if (!items.length) return;
       const current = items.indexOf(document.activeElement as HTMLButtonElement);
+      const down = event.key === "ArrowDown";
       const next =
         event.key === "Home"
           ? 0
           : event.key === "End"
             ? items.length - 1
-            : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) %
-              items.length;
+            : current < 0
+              ? down ? 0 : items.length - 1
+              : (current + (down ? 1 : -1) + items.length) % items.length;
       items[next]?.focus();
     }
+  };
+
+  const toggleMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
+    keyboardOpen.current = event.detail === 0;
+    setOpen((previous) => !previous);
   };
 
   const selected = options.find((opt) => opt.value === value);
@@ -212,8 +192,8 @@ export function OptionSelect<T extends string = string>({
     "cv-menu",
     "fm-option-menu",
     "fm-option-fixed",
+    "fm-choice-menu",
     resolvedDir === "up" ? "fm-option-up" : "",
-    align === "right" ? "fm-option-right" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -233,34 +213,36 @@ export function OptionSelect<T extends string = string>({
           type="button"
           className={"fm-cine-trigger" + (open ? " open" : "")}
           data-filled={active ? "true" : "false"}
+          data-choice-direction={resolvedDir}
           aria-label={triggerAriaLabel}
           aria-haspopup="listbox"
           aria-expanded={open}
           aria-controls={open ? listboxId : undefined}
           tabIndex={open ? -1 : undefined}
           disabled={disabled}
-          onClick={() => setOpen((prev) => !prev)}
+          onClick={toggleMenu}
         >
           {prefixLabel && <span className="fm-cine-label">{prefixLabel}</span>}
           <span className="fm-cine-val">{displayLabel}</span>
-          <ChevronDown size={12} className="fm-ui-chevron" />
+          <ChevronDown size={12} className="fm-ui-chevron fm-choice-chevron" />
         </button>
       ) : (
         <button
           ref={buttonRef}
           type="button"
-          className={"fm-ui-chip" + (active || open ? " active" : "")}
+          className={"fm-ui-chip fm-choice-trigger fm-choice-trigger-chip" + (active || open ? " active" : "")}
+          data-choice-direction={resolvedDir}
           aria-label={triggerAriaLabel}
           aria-haspopup="listbox"
           aria-expanded={open}
           aria-controls={open ? listboxId : undefined}
           tabIndex={open ? -1 : undefined}
           disabled={disabled}
-          onClick={() => setOpen((prev) => !prev)}
+          onClick={toggleMenu}
         >
           {Icon && <Icon size={14} />}
           <span>{displayLabel}</span>
-          <ChevronDown size={13} className="fm-ui-chevron" />
+          <ChevronDown size={13} className="fm-ui-chevron fm-choice-chevron" />
         </button>
       )}
       {open && (
@@ -268,7 +250,6 @@ export function OptionSelect<T extends string = string>({
           id={listboxId}
           ref={menuRef}
           className={menuClass}
-          style={floatingStyle}
           role="listbox"
           aria-label={ariaLabel}
           tabIndex={-1}
@@ -291,7 +272,7 @@ export function OptionSelect<T extends string = string>({
                 }}
               >
                 <span>{opt.label}</span>
-                {isSelected && <Check size={14} />}
+                {isSelected && <Check size={14} aria-hidden="true" />}
               </button>
             );
           })}

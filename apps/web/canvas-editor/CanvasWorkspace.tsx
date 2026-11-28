@@ -23,6 +23,11 @@ import {portableReferences,remapH3Prompt} from './h3References';
 import {H3Inputs,mediaType} from './H3Inputs';
 import * as FlowPicker from './flowPicker';
 import {
+  alignChoiceMenuToTrigger,
+  restoreChoiceMenuTriggerFocus,
+  stepChoiceMenuFocus,
+} from "./choice-menu-position";
+import {
   ReactFlow,
   Handle,
   Position,
@@ -883,6 +888,35 @@ export function CanvasWorkspace({
     [progress, setProgress] = useState<number | null>(null),
     [preview, setPreview] = useState<Preview | null>(null),
     [confirm, setConfirm] = useState<null | (() => void)>(null);
+  const choiceOpenedByKeyboard = useRef(false);
+  const mountComposerChoice = useCallback((element: HTMLDivElement | null) => {
+    const cleanup = alignChoiceMenuToTrigger(element);
+    if (element && choiceOpenedByKeyboard.current) {
+      const selected = element.querySelector<HTMLButtonElement>(
+        'button[aria-pressed="true"]:not(:disabled)',
+      );
+      (selected ?? element.querySelector<HTMLButtonElement>("button:not(:disabled)") ?? element).focus();
+    } else {
+      element?.focus({ preventScroll: true });
+    }
+    return cleanup;
+  }, []);
+  function toggleComposerChoice(
+    event: React.MouseEvent<HTMLButtonElement>,
+    choice: "duration" | "candidates",
+  ) {
+    choiceOpenedByKeyboard.current = event.detail === 0;
+    setMenu((current) => current === choice ? null : choice);
+  }
+  function openComposerChoiceFromKeyboard(
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    choice: "duration" | "candidates",
+  ) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    choiceOpenedByKeyboard.current = true;
+    setMenu(choice);
+  }
   const [agentDock, setAgentDock] = useState(false);
   const [viewMode, setViewModeState] = useState<"canvas" | "split" | "list">(() => {
     try {
@@ -3635,23 +3669,21 @@ export function CanvasWorkspace({
           const buttons = Array.from(
             pop.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
           );
-          const i = buttons.indexOf(
-            document.activeElement as HTMLButtonElement,
+          const next = stepChoiceMenuFocus(
+            buttons,
+            buttons.indexOf(document.activeElement as HTMLButtonElement),
+            e.key,
           );
-          const next =
-            e.key === "Home"
-              ? 0
-              : e.key === "End"
-                ? buttons.length - 1
-                : (i + (e.key === "ArrowDown" ? 1 : -1) + buttons.length) %
-                  buttons.length;
-          buttons[next]?.focus();
+          if (next >= 0) buttons[next]?.focus();
         }
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
           if (menu === "project") closeProjectMenu();
-          else setMenu(null);
+          else {
+            restoreChoiceMenuTriggerFocus(pop);
+            setMenu(null);
+          }
           setContext(null);
           setDownstream(null);
         }
@@ -4782,10 +4814,13 @@ export function CanvasWorkspace({
             </div>
             {!((muse || flowModel) && single.type === 'image') && <div className="parameter-wrap menu-trigger">
               <button
-                className="parameter"
+                className="parameter fm-choice-trigger"
                 disabled={Boolean(flowModel&&!flowParameters)}
                 aria-label={single.type === "image" ? "图片质量" : "视频时长"}
-                onClick={() => setMenu(menu === "duration" ? null : "duration")}
+                aria-expanded={menu === "duration"}
+                data-choice-direction="up"
+                onKeyDown={(event) => openComposerChoiceFromKeyboard(event, "duration")}
+                onClick={(event) => toggleComposerChoice(event, "duration")}
               >
                 {single.type === "image" ? (
                   <Settings2 size={15} />
@@ -4799,38 +4834,45 @@ export function CanvasWorkspace({
                       ]
                     : single.params.seconds + "s"}
                 </span>
-                <ChevronDown size={13} />
+                <ChevronDown size={13} className="fm-choice-chevron" />
               </button>
               {menu === "duration" && (
-                <div className="cv-menu duration-menu">
+                <div
+                  ref={mountComposerChoice}
+                  className="cv-menu duration-menu fm-choice-menu"
+                  role="group"
+                  aria-label={single.type === "image" ? "图片质量" : "视频时长"}
+                  tabIndex={-1}
+                >
                   {(single.type === "image"
                     ? fields?.image_quality?.enum ?? []
                     : flowParameters?.seconds ?? fields?.seconds?.enum ?? []
                   ).map((v) => {
                     const durField = single.type === "image" ? "image_quality" : "seconds";
                     const durDisabledReason = formConstraints?.fields[durField]?.disabledOptions[JSON.stringify(v)];
+                    const selected = single.params[durField] === v;
                     return (
                     <button
                       key={String(v)}
+                      aria-pressed={selected}
                       disabled={Boolean(durDisabledReason)}
                       title={durDisabledReason}
-                      onClick={() => {
+                      onClick={(event) => {
                         patchParams(
                           single.type === "image"
                             ? { image_quality: v as "low" | "medium" | "high" }
                             : { seconds: v as 5 | 6 | 8 | 10 | 15 },
                         );
+                        restoreChoiceMenuTriggerFocus(event.currentTarget);
                         setMenu(null);
                       }}
                     >
-                      {single.type === "image"
+                      <span>{single.type === "image"
                         ? { low: "草稿", medium: "标准", high: "高清" }[
                             v as "low"
                           ]
-                        : v + "s"}
-                      {(single.type === "image"
-                        ? single.params.image_quality
-                        : single.params.seconds) === v && <Check size={14} />}
+                        : v + "s"}</span>
+                      {selected && <Check size={14} aria-hidden="true" />}
                     </button>
                     );
                   })}
@@ -4897,12 +4939,14 @@ export function CanvasWorkspace({
               </div>
             )}
             <div className="parameter-wrap menu-trigger">
-              <button className={'parameter ' + (menu === 'candidates' ? 'active' : '')}
+              <button className={'parameter fm-choice-trigger fm-choice-trigger-count ' + (menu === 'candidates' ? 'active' : '')}
                 aria-label="候选数量" aria-expanded={menu === 'candidates'}
-                onClick={() => setMenu(menu === 'candidates' ? null : 'candidates')}>{candidateCount} 个<ChevronDown size={13} /></button>
-              {menu === 'candidates' && <div className="cv-menu duration-menu candidate-menu" role="group" aria-label="候选数量">
+                data-choice-direction="up"
+                onKeyDown={(event) => openComposerChoiceFromKeyboard(event, "candidates")}
+                onClick={(event) => toggleComposerChoice(event, "candidates")}>{candidateCount} 个<ChevronDown size={13} className="fm-choice-chevron" /></button>
+              {menu === 'candidates' && <div ref={mountComposerChoice} className="cv-menu duration-menu candidate-menu fm-choice-menu" role="group" aria-label="候选数量" tabIndex={-1}>
                 {([1, 2] as const).map(count => <button key={count} aria-pressed={candidateCount === count}
-                  onClick={() => {setCandidateCount(count); setMenu(null);}}><span>{count} 个候选</span>{candidateCount === count && <Check size={16} />}</button>)}
+                  onClick={(event) => {setCandidateCount(count); restoreChoiceMenuTriggerFocus(event.currentTarget); setMenu(null);}}><span>{count} 个候选</span>{candidateCount === count && <Check size={16} aria-hidden="true" />}</button>)}
               </div>}
             </div>
             <span className="canvas-credit" aria-label={!selectedModel?'':creditPrice==null?'未定价':`${candidateCost} 积分${creditAvailable?'':'，余额不足'}`} title={`当前空间可用 ${studio.credits.available} 积分${creditPrice!=null && !creditAvailable?'，余额不足':''}`}>

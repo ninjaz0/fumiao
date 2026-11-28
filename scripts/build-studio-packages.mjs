@@ -51,7 +51,6 @@ const releases = [
   { id: "example-extension" },
   { id: "example-asset-tags" },
   { id: "example-review-board" },
-  { id: "example-shot-prompt" },
   { id: "example-reading-time" },
   { id: "example-importers" },
   { id: "example-review-notes" },

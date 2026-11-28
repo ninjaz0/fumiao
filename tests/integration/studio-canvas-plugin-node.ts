@@ -1,21 +1,24 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { expect, type Page } from "@playwright/test";
 import { request, setTab } from "./studio-settings-browser.js";
 
 /** Starts on Settings in a signed-in Studio, through the production Web gateway. */
 export async function verifyCanvasPluginNode(page: Page, workspace: number) {
   await setTab(page, "plugins");
-  await page
-    .getByLabel("选择插件文件")
-    .setInputFiles(
-      "plugins/example-shot-prompt/example-shot-prompt.fmplugin.json",
-    );
+  const fixture = JSON.parse(await readFile("tests/fixtures/legacy-shot-prompt.fmplugin.json", "utf8"));
+  const pluginId = "test-canvas-node";
+  await page.getByLabel("选择插件文件").setInputFiles({
+    name: `${pluginId}.fmplugin.json`,
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ ...fixture, id: pluginId })),
+  });
   await expect(page.getByText(/工作区画布节点 · 镜头提示词/)).toBeVisible();
   await page.getByRole("button", { name: "确认导入", exact: true }).click();
   const toggle = page.getByRole("switch", { name: "镜头提示词开关" });
   const enabled = await request(
     page,
-    "/api/admin/plugins/example-shot-prompt/state",
+    `/api/admin/plugins/${pluginId}/state`,
     "POST",
     () => toggle.click(),
   );

@@ -29,7 +29,10 @@ export async function databaseFixture(throughMigration?: string) {
       transaction: instance.transaction.bind(instance),
       close: async () => {
         await instance.close();
-        await admin.query("DROP SCHEMA " + schema + " CASCADE");
+        await admin.transaction(async (sql) => {
+          await sql.query("SELECT pg_advisory_xact_lock(2489731)");
+          await sql.query("DROP SCHEMA " + schema + " CASCADE");
+        });
         await admin.close();
       },
     };
@@ -56,6 +59,7 @@ export async function databaseFixture(throughMigration?: string) {
   try {
     if (throughMigration) {
       await db.transaction(async (sql) => {
+        await sql.query("SELECT pg_advisory_xact_lock(2489731)");
         for (const name of (await readdir("migrations"))
           .filter((n) => n.endsWith(".sql") && n <= throughMigration)
           .sort()) {

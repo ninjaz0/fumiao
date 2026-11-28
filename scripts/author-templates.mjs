@@ -13,7 +13,7 @@ export async function writeAuthorTemplates(root, destination) {
     settingsPages: "example-extension",
     settings: "example-extension",
     pages: "example-review-board",
-    canvasNodes: "example-shot-prompt",
+    canvasNodes: "canvas-node",
     actions: "example-review-notes",
     events: "example-asset-tags",
     chatTools: "example-reading-time",
@@ -22,7 +22,7 @@ export async function writeAuthorTemplates(root, destination) {
   };
   for (const [type, source] of Object.entries(templates)) {
     const input =
-      type === "nodePools"
+      type === "nodePools" || type === "canvasNodes"
         ? join(root, "packages", "plugin-sdk", "scaffolds", source)
         : join(root, "plugins", source),
       files = {};
