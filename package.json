@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:web": "next typegen apps/web && tsc -p apps/web/tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "tsx --test tests/advanced/*.test.ts",
+    "test": "tsx --test --test-concurrency=4 tests/advanced/*.test.ts",
     "build": "pnpm typecheck && next build apps/web",
     "start:api": "node --env-file-if-exists=.env --import tsx apps/api/src/main.ts",
     "start:web": "node --env-file-if-exists=.env node_modules/next/dist/bin/next start apps/web -p 3000",
