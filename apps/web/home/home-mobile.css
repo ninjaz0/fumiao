@@ -1,0 +1,385 @@
+/* Phone layout overrides (≤760px) for the public homepage (/).
+   baseline/production/static/home.css is hash-pinned and loads after bundled
+   styles in dev, so rules here use html[lang] body / #main to outrank it
+   without affecting desktop (>=761px).
+   home.css defines --surface rather than --pop; var(--pop, var(--surface))
+   preserves both light and dark card surfaces. */
+
+@media (max-width: 760px) {
+  html[lang] body .wrap {
+    padding-inline: 16px;
+  }
+
+  /* Sticky top bar: 56px row + safe-area-inset-top, 44px touch targets. */
+  html[lang] body .top {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  html[lang] body .top-row {
+    height: 56px;
+    gap: 8px;
+  }
+
+  html[lang] body .top-row .brand {
+    min-height: 44px;
+    font-size: 16px;
+    gap: 8px;
+  }
+
+  html[lang] body .top-row .brand img {
+    width: 24px;
+    height: 24px;
+  }
+
+  html[lang] body .top-actions {
+    gap: 4px;
+  }
+
+  html[lang] body .top-actions .icon-button {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+  }
+
+  html[lang] body .top-actions .text-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 8px;
+  }
+
+  html[lang] body .top-actions .button.small {
+    position: relative;
+    min-height: 38px;
+    padding: 0 14px;
+    margin-left: 0;
+    border-radius: 10px;
+  }
+
+  html[lang] body .top-actions .button.small::after {
+    content: "";
+    position: absolute;
+    inset: -3px 0;
+  }
+
+  /* Hero: compact copy, stacked 48px CTAs, schematic canvas visible on first screen. */
+  #main .hero {
+    padding: 24px 0 32px;
+  }
+
+  #main .hero-grid {
+    gap: 20px;
+  }
+
+  #main .eyebrow {
+    margin-bottom: 10px;
+    font-size: 12px;
+  }
+
+  #main .hero h1 {
+    font-size: 32px;
+    line-height: 1.2;
+  }
+
+  #main .lead {
+    margin-top: 12px;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+
+  #main .cta-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    margin-top: 20px;
+  }
+
+  #main .cta-row .button {
+    flex: none;
+    width: 100%;
+    min-height: 48px;
+    height: 48px;
+    border-radius: 12px;
+    font-size: 15px;
+  }
+
+  #main .cta-note {
+    margin-top: 10px;
+    font-size: 12px;
+  }
+
+  /* Schematic canvas: halve padding and node gaps; 12–13px copy. */
+  #main .stage {
+    gap: 12px 8px;
+    padding: 34px 10px 10px;
+    border-radius: 14px;
+  }
+
+  #main .stage-bar {
+    left: 10px;
+    top: 8px;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  #main .stage-bar strong {
+    font-size: 12px;
+  }
+
+  #main .stage .node {
+    gap: 4px;
+  }
+
+  #main .stage .node-label {
+    font-size: 12px;
+  }
+
+  #main .stage .node-body {
+    border-radius: 10px;
+  }
+
+  #main .stage .node-text .node-body {
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  #main .stage .node-image::after {
+    right: -8px;
+    width: 8px;
+  }
+
+  #main .stage .composer {
+    gap: 6px 8px;
+    padding: 8px 10px;
+    border-radius: 12px;
+  }
+
+  #main .stage .composer-text {
+    font-size: 12.5px;
+  }
+
+  #main .stage .composer-params {
+    font-size: 12px;
+  }
+
+  #main .stage .composer-params > span {
+    padding: 2px 6px;
+  }
+
+  #main .stage .send {
+    width: 26px;
+    height: 26px;
+  }
+
+  /* Content sections: halved vertical rhythm and unified 20px/15px/14px scale. */
+  #main .section {
+    padding: 44px 0;
+  }
+
+  #main .section-head {
+    margin-bottom: 20px;
+  }
+
+  #main .section-head h2 {
+    font-size: 20px;
+    line-height: 1.3;
+  }
+
+  #main .section-head p {
+    margin-top: 8px;
+    font-size: 14px;
+    line-height: 1.65;
+  }
+
+  /* Feature cards: var(--pop) surface, var(--line) border, 14px radius, 16px padding. */
+  #main .features {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    border-top: 0;
+  }
+
+  #main .features > li {
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-right: 1px solid var(--line) !important;
+    border-radius: 14px;
+    background: var(--pop, var(--surface));
+  }
+
+  #main .features .feature-icon {
+    width: 20px;
+    height: 20px;
+    margin-bottom: 10px;
+  }
+
+  #main .features h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  #main .features p {
+    font-size: 14px;
+    line-height: 1.65;
+  }
+
+  #main .features .tags {
+    margin-top: 10px;
+    font-size: 12px;
+  }
+
+  #main .extras {
+    gap: 16px;
+    margin-top: 20px;
+    padding-top: 20px;
+  }
+
+  #main .extras strong {
+    font-size: 14px;
+  }
+
+  /* Workflow: align step number with the first line of the step heading. */
+  #main .flow-grid {
+    gap: 24px;
+  }
+
+  #main .steps > li {
+    grid-template-columns: 28px 1fr;
+    gap: 8px;
+    align-items: start;
+    padding: 14px 0;
+  }
+
+  #main .steps .step-no {
+    padding-top: 0;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 22px;
+  }
+
+  #main .steps h3 {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 22px;
+    margin-bottom: 4px;
+  }
+
+  #main .steps p {
+    font-size: 14px;
+    line-height: 1.65;
+  }
+
+  #main .shots {
+    padding: 16px;
+    border-radius: 14px;
+  }
+
+  /* Spaces section. */
+  #main .spaces-grid {
+    gap: 24px;
+  }
+
+  #main .switcher {
+    padding: 16px;
+    border-radius: 14px;
+  }
+
+  #main .switch-pop {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  #main .rules > li {
+    padding: 12px 0;
+    gap: 4px;
+  }
+
+  #main .rules strong {
+    font-size: 14px;
+  }
+
+  #main .rules span {
+    font-size: 14px;
+    line-height: 1.65;
+  }
+
+  /* Closing CTA band and footer: tightened vertical spacing, 16px side alignment. */
+  #main .closing {
+    padding: 0;
+  }
+
+  #main .closing-row {
+    padding: 32px 16px;
+    gap: 18px;
+  }
+
+  #main .closing-row::before {
+    inset: 0;
+    border-radius: 0;
+  }
+
+  #main .closing-ribbon {
+    right: 0;
+    width: 70%;
+    border-radius: 0;
+    opacity: 0.45;
+  }
+
+  #main .closing-copy {
+    padding: 0;
+  }
+
+  #main .closing h2 {
+    font-size: 20px;
+    line-height: 1.3;
+  }
+
+  #main .closing-copy p {
+    margin-top: 6px;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  #main .closing .cta-row {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  html[lang] body .foot {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  html[lang] body .foot-row {
+    min-height: 52px;
+    padding-block: 8px;
+    gap: 4px 12px;
+  }
+
+  html[lang] body .foot .brand.small {
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  html[lang] body .foot-links {
+    gap: 0 4px;
+  }
+
+  html[lang] body .foot-links a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 6px;
+  }
+}
+
+@media (max-width: 380px) {
+  html[lang] body .top-actions .text-link.guest-only {
+    display: none;
+  }
+}

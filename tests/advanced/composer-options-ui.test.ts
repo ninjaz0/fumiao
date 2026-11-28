@@ -104,12 +104,13 @@ test("cinematography helpers count active fields, clear empty values to null, an
   ]);
 });
 
-test("canvas composer, cinematography panel, and asset packs use unified custom controls without raw mode selects or duplicate H3 mode dropdown", async () => {
+test("canvas composer, cinematography panel, shot list, and asset packs use unified custom controls without raw mode selects or duplicate H3 mode dropdown", async () => {
   const root = process.cwd();
   const [
     optionSelectSource,
     cineSource,
     workspaceSource,
+    shotListSource,
     assetPacksSource,
     aiStoryboardSource,
     overridesCss,
@@ -120,6 +121,7 @@ test("canvas composer, cinematography panel, and asset packs use unified custom 
       "utf8",
     ),
     readFile(join(root, "apps/web/canvas-editor/CanvasWorkspace.tsx"), "utf8"),
+    readFile(join(root, "apps/web/canvas-editor/ShotList.tsx"), "utf8"),
     readFile(join(root, "apps/web/canvas-editor/AssetPacks.tsx"), "utf8"),
     readFile(join(root, "apps/web/canvas-editor/AiStoryboard.tsx"), "utf8"),
     readFile(
@@ -158,6 +160,9 @@ test("canvas composer, cinematography panel, and asset packs use unified custom 
   assert.doesNotMatch(workspaceSource, /className="fm-mode-select"/);
   assert.doesNotMatch(workspaceSource, /menu\s*===\s*['"]h3-mode['"]/);
 
+  // ShotList and AssetPacks also use OptionSelect for mode / turnaround view
+  assert.match(shotListSource, /OptionSelect/);
+  assert.doesNotMatch(shotListSource, /分镜链路[\s\S]{0,120}<select\b/);
   assert.match(assetPacksSource, /OptionSelect[\s\S]*?ariaLabel="三视图生成视角"/);
 
   // canvas-overrides.css defines unified 32px chip height, resets .canvas-pack-entry padding, and styles segmented & cine pills

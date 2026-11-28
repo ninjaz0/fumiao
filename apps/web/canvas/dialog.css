@@ -9,3 +9,23 @@
   color: var(--cv-danger);
   background: color-mix(in srgb, var(--cv-danger) 12%, var(--cv-surface));
 }
+
+.btn {
+  min-height: 38px;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 9px;
+  border: 1px solid var(--cv-line);
+  background: var(--cv-hover);
+  color: var(--cv-text);
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--cv-selected);
+}
+.canvas-error :is(.btn, .secondary) {
+  justify-self: start;
+}

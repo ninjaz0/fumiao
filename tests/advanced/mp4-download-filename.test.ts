@@ -95,10 +95,11 @@ test("mediaDownloadFilename and disposition handle parameterized/mixed-case MIME
   );
 });
 
-test("Studio Download component, archived WebM jobs, and Canvas node downloads produce accurate extensions", async () => {
+test("Studio Download component, Composition MP4/project links, archived WebM jobs, and Canvas node downloads produce accurate extensions", async () => {
   (globalThis as Record<string, unknown>).React = React;
   const key = "abcdef0123456789abcdef0123456789";
   const assetMediaModule = "../../apps/web/studio/AssetMedia.tsx";
+  const compositionModule = "../../apps/web/canvas-editor/Composition.tsx";
   const { Download } = (await import(assetMediaModule)) as {
     Download: (props: {
       id: string;
@@ -106,6 +107,24 @@ test("Studio Download component, archived WebM jobs, and Canvas node downloads p
       detail?: boolean;
     }) => ReturnType<typeof createElement>;
   };
+  const { CompositionDownloadLink } = (await import(compositionModule)) as {
+    CompositionDownloadLink: (props: {
+      result: string;
+      exportResult?: {
+        id: string;
+        state: string;
+        result: string | null;
+        error: string;
+        revision: number;
+        created: number;
+        exporter?: string;
+        output_kind?: "composition" | "project";
+        output_mime?: string;
+        output_filename?: string | null;
+      };
+    }) => ReturnType<typeof createElement>;
+  };
+
   const generatedJobName = jobDownloadFilename({
     result: key,
     kind: "video",
@@ -167,6 +186,36 @@ test("Studio Download component, archived WebM jobs, and Canvas node downloads p
     createElement(Download, { id: key }),
   );
   assert.match(fallbackImageHtml, /download=""/);
+
+  const compositionHtml = renderToStaticMarkup(
+    createElement(CompositionDownloadLink, { result: key }),
+  );
+  assert.match(
+    compositionHtml,
+    new RegExp(`href="/media/${key}\\?download=true"`),
+  );
+  assert.match(compositionHtml, /download="弗淼-abcdef01\.mp4"/);
+  assert.match(compositionHtml, />MP4<\/a>$/);
+
+  const projectZipHtml = renderToStaticMarkup(
+    createElement(CompositionDownloadLink, {
+      result: key,
+      exportResult: {
+        id: "exp-1",
+        state: "done",
+        result: key,
+        error: "",
+        revision: 1,
+        created: 1700000000,
+        exporter: "jianying-exporter/draft",
+        output_kind: "project",
+        output_mime: "application/zip",
+        output_filename: "jianying-draft.zip",
+      },
+    }),
+  );
+  assert.match(projectZipHtml, /download="jianying-draft\.zip"/);
+  assert.match(projectZipHtml, />剪映草稿 ZIP<\/a>$/);
 
   const videoNode = newNode("video", 0, 0, 1);
   const canvasJob: CanvasJob = {

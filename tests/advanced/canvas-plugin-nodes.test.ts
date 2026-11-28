@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { canvasNodeEntries } from "@fumiao/platform/canvas-node-plugins.js";
 import { StudioPackages } from "@fumiao/platform/studio-packages.js";
+import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
 import { runCanvasPlugin } from "@fumiao/original-api/canvas-plugin-runs.js";
 import { canvasesFixture } from "../helpers/canvases.js";
 
@@ -26,13 +27,28 @@ test("retired shot-prompt nodes preserve saved output and reject new runs", asyn
     [file.id, file.version, file],
   );
   await f.db.query(
-    "INSERT INTO studio_packages (id, version, enabled) VALUES ($1, $2, true)",
-    [file.id, file.version],
+    "INSERT INTO studio_packages (id, version, enabled, update_url) VALUES ($1, $2, false, $3)",
+    [file.id, file.version, "https://example.invalid/retired-update.json"],
   );
   assert.deepEqual(await canvasNodeEntries(f.db), []);
   assert.equal((await packages.list(f.admin)).some((pkg) => pkg.id === file.id), false);
   await assert.rejects(packages.preview(f.admin, file), { status: 409 });
   await assert.rejects(packages.install(f.admin, file), { status: 409 });
+  await assert.rejects(packages.change(f.admin, file.id, 1, "enable"), { status: 409 });
+  const updates = new StudioUpdates(f.p);
+  await assert.rejects(
+    updates.configure(f.admin, file.id, { revision: 1, url: "https://example.com/update.json" }),
+    { status: 409 },
+  );
+  await assert.rejects(updates.check(file.id), { status: 409 });
+  await updates.due();
+  const [pkgRow] = (
+    await f.db.query("SELECT checked_at FROM studio_packages WHERE id = $1", [file.id])
+  ).rows;
+  assert.equal(pkgRow.checked_at, null, "retired plugin must not be polled by StudioUpdates.due()");
+
+  const pluginNodeSrc = await readFile("apps/web/canvas-editor/PluginNode.tsx", "utf8");
+  assert.match(pluginNodeSrc, /此示例插件节点已停用，仍可查看和复制已保存的输出/);
 
   const { program: _, ...node } = file.contributes.canvasNodes[0];
   const extension = {

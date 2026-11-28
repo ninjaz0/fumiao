@@ -239,10 +239,18 @@ export function AssetDialog({
           if (ref.current?.open) return;
           if (shouldRestoreFocus) {
             const opener = dialog?.opener;
+            const visible = (element: HTMLElement | null | undefined) =>
+              element?.isConnected &&
+              !element.closest("[inert]") &&
+              element.getClientRects().length > 0
+                ? element
+                : null;
             const target =
-              opener?.isConnected && opener.getClientRects().length
-                ? opener
-                : document.querySelector<HTMLElement>(".workspace-switch");
+              visible(opener) ??
+              visible(
+                document.querySelector<HTMLElement>(".mobile-workspace-switch"),
+              ) ??
+              visible(document.querySelector<HTMLElement>(".workspace-switch"));
             target?.focus({ preventScroll: true });
           }
           onClose();
@@ -396,7 +404,7 @@ export function AssetDialog({
           >
             <h2 id="modal-heading">{content.entry.title}</h2>
             {content.entry.fields?.map((field) => (
-              <label key={field.name}>
+              <label key={field.name} className="formlabel">
                 {field.label}
                 <input
                   name={field.name}

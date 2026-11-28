@@ -1177,6 +1177,13 @@ export class StudioPackages {
     action: "enable" | "disable" | "remove",
   ) {
     this.p.admin(actor);
+    if (action === "enable") {
+      requireValue(
+        id !== retiredShotPromptPluginId,
+        409,
+        "镜头提示词示例插件已停用",
+      );
+    }
     return this.p.db.transaction(async (sql) => {
       await sql.query(
         "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",

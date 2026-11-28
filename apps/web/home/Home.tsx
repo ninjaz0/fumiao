@@ -1,5 +1,6 @@
 import { Header, ThemeButton } from "./controls";
 import { Scene, Ribbon } from "./scenes";
+import "./home-mobile.css";
 
 /** Original homepage structure and copy, rendered by React. CSS remains pinned. */
 export default function Home({ logo }: { logo: string }) {
@@ -173,12 +174,12 @@ export default function Home({ logo }: { logo: string }) {
               <h1 id="hero-title">
                 {"从一个想法，"}
                 <br />
-                {"到一段视频"}
+                {"到一支完整成片"}
               </h1>
               {"\n            "}
               <p className="lead">
                 {
-                  "弗淼 AIGC 是面向个人与团队的多模型创作工作台。写分镜、引用素材、生成镜头并下载采用的视频，都在同一个网站里完成。"
+                  "弗淼 AIGC 是面向个人与团队的多模型创作工作台。写分镜、引用素材、生成镜头、配上旁白，再合成为可下载的成片，都在同一个网站里完成。"
                 }
               </p>
               {"\n            "}
@@ -503,13 +504,13 @@ export default function Home({ logo }: { logo: string }) {
           aria-labelledby="workflow-title"
         >
           {"\n        "}
-          <div className="wrap">
+          <div className="wrap flow-grid">
             {"\n          "}
             <div>
               {"\n            "}
               <div className="section-head">
                 {"\n              "}
-                <h2 id="workflow-title">{"从分镜到镜头"}</h2>
+                <h2 id="workflow-title">{"从分镜到成片，一步接着一步"}</h2>
                 {"\n              "}
                 <p>
                   {
@@ -527,7 +528,7 @@ export default function Home({ logo }: { logo: string }) {
                     <h3>{"分镜"}</h3>
                     <p>
                       {
-                        "在剧本文档中写分镜，或让 AI 拟定 1—12 个镜头。先修改，再采用。"
+                        "在画布中编排镜头，或让 AI 拟定 1—12 个镜头。先修改，再明确采用。"
                       }
                     </p>
                   </div>
@@ -566,10 +567,127 @@ export default function Home({ logo }: { logo: string }) {
                     </p>
                   </div>
                 </li>
+                {"\n              "}
+                <li>
+                  <span className="step-no">{"05"}</span>
+                  <div>
+                    <h3>{"旁白"}</h3>
+                    <p>
+                      {"为每个镜头单独生成旁白；重新生成失败时保留原来的音轨。"}
+                    </p>
+                  </div>
+                </li>
+                {"\n              "}
+                <li>
+                  <span className="step-no">{"06"}</span>
+                  <div>
+                    <h3>{"成片"}</h3>
+                    <p>
+                      {
+                        "按镜头顺序合成 MP4 预览，下载成片、SRT／VTT 字幕或原镜头包。"
+                      }
+                    </p>
+                  </div>
+                </li>
                 {"\n            "}
               </ol>
               {"\n          "}
             </div>
+            {"\n\n          "}
+            <figure className="shots" aria-label="镜头列表界面示意">
+              {"\n            "}
+              <div className="panel-head" aria-hidden="true">
+                <strong>{"镜头列表"}</strong>
+                <span>{"4 个镜头"}</span>
+              </div>
+              {"\n            "}
+              <ol className="shot-list" aria-hidden="true">
+                {"\n              "}
+                <li>
+                  <span className="shot-no">{"1"}</span>
+                  <Scene
+                    className="thumb scene"
+                    data-scene="dawn"
+                    viewBox="0 0 320 200"
+                    preserveAspectRatio="xMidYMid slice"
+                    index={3}
+                  ></Scene>
+                  <div>
+                    <strong>{"开场 · 远景"}</strong>
+                    <span>{"旁白已生成 · 4 秒"}</span>
+                  </div>
+                  <span className="status done">{"已采用"}</span>
+                </li>
+                {"\n              "}
+                <li>
+                  <span className="shot-no">{"2"}</span>
+                  <Scene
+                    className="thumb scene"
+                    data-scene="noon"
+                    viewBox="0 0 320 200"
+                    preserveAspectRatio="xMidYMid slice"
+                    index={4}
+                  ></Scene>
+                  <div>
+                    <strong>{"人物 · 中景"}</strong>
+                    <span>{"旁白已生成 · 5 秒"}</span>
+                  </div>
+                  <span className="status done">{"已采用"}</span>
+                </li>
+                {"\n              "}
+                <li>
+                  <span className="shot-no">{"3"}</span>
+                  <Scene
+                    className="thumb scene"
+                    data-scene="dusk"
+                    viewBox="0 0 320 200"
+                    preserveAspectRatio="xMidYMid slice"
+                    index={5}
+                  ></Scene>
+                  <div>
+                    <strong>{"细节 · 特写"}</strong>
+                    <span>{"2 个候选待比较"}</span>
+                  </div>
+                  <span className="status">{"比较中"}</span>
+                </li>
+                {"\n              "}
+                <li>
+                  <span className="shot-no">{"4"}</span>
+                  <span className="thumb empty">
+                    <svg className="icon" aria-hidden="true">
+                      <use href="#i-film"></use>
+                    </svg>
+                  </span>
+                  <div>
+                    <strong>{"收尾 · 拉远"}</strong>
+                    <span>{"使用镜头 3 的末帧作为首帧"}</span>
+                  </div>
+                  <span className="status muted">{"待生成"}</span>
+                </li>
+                {"\n            "}
+              </ol>
+              {"\n            "}
+              <div className="panel-foot" aria-hidden="true">
+                {"\n              "}
+                <div>
+                  <strong>{"成片"}</strong>
+                  <span>{"旁白替换对应镜头的原音轨，字幕按句分配时间。"}</span>
+                </div>
+                {"\n              "}
+                <span className="fake-button">
+                  <svg className="icon" aria-hidden="true">
+                    <use href="#i-film"></use>
+                  </svg>
+                  {"合成预览"}
+                </span>
+                {"\n            "}
+              </div>
+              {"\n            "}
+              <figcaption className="sr-only">
+                {"界面示意图，镜头名称与状态仅为说明。"}
+              </figcaption>
+              {"\n          "}
+            </figure>
             {"\n        "}
           </div>
           {"\n      "}

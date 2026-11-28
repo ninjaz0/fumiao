@@ -6,7 +6,7 @@ import "./motion.css";
 export const metadata = {
   title: "弗淼 AIGC · 多模型创作工作台",
   description:
-    "弗淼 AIGC 是面向个人与团队的多模型创作工作台：在同一个网站里完成剧本创作、素材管理以及视频、图片和语音生成。",
+    "弗淼 AIGC 是面向个人与团队的多模型创作工作台：在同一个网站里完成分镜、素材、视频与图片生成、旁白和成片。",
 };
 export const viewport = {
   width: "device-width",

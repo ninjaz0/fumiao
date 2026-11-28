@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { deflateRawSync } from "node:zlib";
 import test from "node:test";
 import { chatContext } from "@fumiao/platform/chat-context.js";
@@ -386,4 +387,321 @@ test("F018 + F031 + F012 Proposal-based Canvas Agent, plan_only safety guardrail
     await app.close();
     await f.cleanup();
   }
+});
+
+test("PR #223 Item 9: SkillEditorCard states 64 KiB SKILL.md and 256 KiB ZIP limits and round-trips extra YAML frontmatter fields losslessly", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const skillCardSrc = readFileSync(
+    join(process.cwd(), "apps/web/studio/SkillEditorCard.tsx"),
+    "utf8",
+  );
+  assert.match(skillCardSrc, /64\s*KiB/);
+  assert.match(skillCardSrc, /256\s*KiB/);
+
+  const { serializeSkillMarkdown } = await import(
+    "../../apps/web/studio/skill-markdown.js"
+  );
+
+  const f = await canvasRunsFixture();
+  try {
+    const skills = new OriginalSkills(f.p);
+    const ws = String(f.team.public_id);
+    const created = await skills.create(
+      f.admin,
+      {
+        enabled: true,
+        raw_md: [
+          "---",
+          "name: 高阶导演手册",
+          "slug: pro-director-guide",
+          "description: 包含扩展元数据字段的技能包",
+          "version: 2.1.0",
+          "author: Studio Lead",
+          "strict: true",
+          "tags:",
+          "  - cyberpunk",
+          '  - "noir, rain"',
+          "allowed-tools: [read_canvas, propose_patch]",
+          "---",
+          "",
+          "保持高反差边缘光与紧凑叙事剪辑。",
+        ].join("\n"),
+      },
+      ws,
+    );
+
+    assert.equal(created.frontmatter.version, "2.1.0");
+    assert.equal(created.frontmatter.author, "Studio Lead");
+    assert.equal(created.frontmatter.strict, true);
+    assert.deepEqual(created.frontmatter.tags, ["cyberpunk", "noir, rain"]);
+    assert.deepEqual(created.frontmatter["allowed-tools"], [
+      "read_canvas",
+      "propose_patch",
+    ]);
+
+    // Simulate opening skill in SkillEditorCard edit mode, editing body text, and saving back via raw_md
+    const editorMd = serializeSkillMarkdown(created);
+    const editedMd = editorMd.replace(
+      "保持高反差边缘光与紧凑叙事剪辑。",
+      "保持高反差边缘光、雨夜反光与紧凑叙事剪辑。",
+    );
+    const saved = await skills.update(f.admin, created.id, {
+      expected_revision: created.revision,
+      raw_md: editedMd,
+    });
+
+    assert.equal(saved.name, "高阶导演手册");
+    assert.equal(saved.slug, "pro-director-guide");
+    assert.equal(saved.description, "包含扩展元数据字段的技能包");
+    assert.equal(saved.frontmatter.version, "2.1.0");
+    assert.equal(saved.frontmatter.author, "Studio Lead");
+    assert.equal(saved.frontmatter.strict, true);
+    assert.deepEqual(saved.frontmatter.tags, ["cyberpunk", "noir, rain"]);
+    assert.deepEqual(saved.frontmatter["allowed-tools"], [
+      "read_canvas",
+      "propose_patch",
+    ]);
+    assert.match(saved.body_md, /雨夜反光/);
+
+    // Round 2 Item 3: Editing ONLY skill body must preserve un-normalized/un-truncated raw frontmatter (e.g. 450-char description, raw slug "Short Name", >80-char name, and missing-field fallback)
+    const longDesc = "镜".repeat(450);
+    const longName = "超长技能原始标题_" + "甲".repeat(80);
+    const rawSlugSkill = await skills.create(
+      f.admin,
+      {
+        enabled: true,
+        raw_md: [
+          "---",
+          `name: ${longName}`,
+          'slug: "Short Name"',
+          `description: ${longDesc}`,
+          "category: cinematography",
+          "---",
+          "",
+          "原始正文第一行。",
+        ].join("\n"),
+      },
+      ws,
+    );
+    assert.equal(rawSlugSkill.slug, "short-name");
+    assert.equal(rawSlugSkill.description.length, 400);
+    assert.equal((rawSlugSkill.frontmatter.description as string).length, 450);
+    assert.equal(rawSlugSkill.frontmatter.slug, "Short Name");
+    assert.equal(rawSlugSkill.frontmatter.name, longName);
+
+    const rawSerialized = serializeSkillMarkdown(rawSlugSkill);
+    const bodyEditedMd = rawSerialized.replace(
+      "原始正文第一行。",
+      "仅修改正文后的第二版规则。",
+    );
+    const savedRawMeta = await skills.update(f.admin, rawSlugSkill.id, {
+      expected_revision: rawSlugSkill.revision,
+      raw_md: bodyEditedMd,
+    });
+    assert.equal(savedRawMeta.slug, "short-name");
+    assert.equal(savedRawMeta.frontmatter.slug, "Short Name");
+    assert.equal(savedRawMeta.frontmatter.description, longDesc);
+    assert.equal((savedRawMeta.frontmatter.description as string).length, 450);
+    assert.equal(savedRawMeta.frontmatter.name, longName);
+    assert.equal(savedRawMeta.frontmatter.category, "cinematography");
+    assert.equal(savedRawMeta.body_md, "仅修改正文后的第二版规则。");
+
+    // Fallback when frontmatter lacks name/slug/description (e.g. created via JSON fields instead of raw_md)
+    const jsonCreated = await skills.create(
+      f.admin,
+      {
+        enabled: true,
+        name: "JSON 创建技能",
+        slug: "json-created-skill",
+        description: "无原始 YAML 时使用展示字段填充",
+        body_md: "JSON 初始正文。",
+      },
+      ws,
+    );
+    const jsonSerialized = serializeSkillMarkdown(jsonCreated);
+    assert.match(jsonSerialized, /name: JSON 创建技能/);
+    assert.match(jsonSerialized, /slug: json-created-skill/);
+    assert.match(jsonSerialized, /description: 无原始 YAML 时使用展示字段填充/);
+
+    // Pre-upgrade compatibility: legacy structured PUT updated top-level workspace_skills.name/description
+    // without rewriting frontmatter.name/description (including clearing description to "").
+    // Editing ONLY body_md via serializeSkillMarkdown -> skills.update({ raw_md }) must keep the updated
+    // top-level name/description (and cleared description) while preserving extra frontmatter like aliases!
+    const legacySkill = await skills.create(
+      f.admin,
+      {
+        enabled: true,
+        raw_md: [
+          "---",
+          "name: Old title",
+          "description: Old summary",
+          "aliases:",
+          "  - retained",
+          "---",
+          "",
+          "Old body",
+        ].join("\n"),
+      },
+      ws,
+    );
+    // Simulate pre-upgrade `main` structured PUT updating only top-level columns while leaving import-time frontmatter untouched
+    await f.p.db.query(
+      `UPDATE workspace_skills
+          SET name = $2, description = $3, revision = revision + 1
+        WHERE public_id = $1`,
+      [legacySkill.id, "New title", "New summary"],
+    );
+    const legacyListed = (await skills.list(f.admin, ws)).skills.find(
+      (s) => s.id === legacySkill.id,
+    )!;
+    assert.equal(legacyListed.name, "New title");
+    assert.equal(legacyListed.description, "New summary");
+    assert.equal(legacyListed.frontmatter.name, "Old title");
+    assert.equal(legacyListed.frontmatter.description, "Old summary");
+
+    const legacyBodyEditedMd = serializeSkillMarkdown(legacyListed).replace(
+      "Old body",
+      "New body",
+    );
+    const savedLegacy = await skills.update(f.admin, legacySkill.id, {
+      expected_revision: legacyListed.revision,
+      raw_md: legacyBodyEditedMd,
+    });
+    assert.equal(savedLegacy.name, "New title");
+    assert.equal(savedLegacy.description, "New summary");
+    assert.equal(savedLegacy.body_md, "New body");
+    assert.deepEqual(savedLegacy.frontmatter.aliases, ["retained"]);
+
+    // Also verify historical description cleared via pre-upgrade structured PUT (`description = ''` while stale frontmatter.description remained)
+    await f.p.db.query(
+      `UPDATE workspace_skills
+          SET description = '', frontmatter = $2::jsonb, revision = revision + 1
+        WHERE public_id = $1`,
+      [
+        legacySkill.id,
+        JSON.stringify({
+          name: "New title",
+          description: "Old summary",
+          aliases: ["retained"],
+        }),
+      ],
+    );
+    const clearedListed = (await skills.list(f.admin, ws)).skills.find(
+      (s) => s.id === legacySkill.id,
+    )!;
+    const clearedBodyEditedMd = serializeSkillMarkdown(clearedListed).replace(
+      "New body",
+      "Body after cleared summary",
+    );
+    const savedCleared = await skills.update(f.admin, legacySkill.id, {
+      expected_revision: clearedListed.revision,
+      raw_md: clearedBodyEditedMd,
+    });
+    assert.equal(savedCleared.name, "New title");
+    assert.equal(savedCleared.description, "");
+    assert.equal(savedCleared.body_md, "Body after cleared summary");
+    assert.equal(savedCleared.frontmatter.description, undefined);
+    assert.deepEqual(savedCleared.frontmatter.aliases, ["retained"]);
+
+    // Near 64 KiB round-trip: valid 65,521-byte SKILL.md with inline list must stay <= 64 KiB on body-only edit
+    const nearLimitRawMd =
+      "---\nname: Sample\nslug: sample\naliases: [a,b,c,d,e]\n---\n\n" +
+      "x".repeat(65465);
+    assert.equal(Buffer.byteLength(nearLimitRawMd, "utf8"), 65521);
+    const nearLimitCreated = await skills.create(
+      f.admin,
+      { enabled: true, raw_md: nearLimitRawMd },
+      ws,
+    );
+    const nearLimitSerialized = serializeSkillMarkdown(nearLimitCreated);
+    assert.equal(Buffer.byteLength(nearLimitSerialized, "utf8"), 65521);
+    assert.match(nearLimitSerialized, /^aliases: \[a,b,c,d,e\]$/m);
+    const nearLimitEdited = nearLimitSerialized.replace("\n\nx", "\n\ny");
+    const nearLimitSaved = await skills.update(f.admin, nearLimitCreated.id, {
+      expected_revision: nearLimitCreated.revision,
+      raw_md: nearLimitEdited,
+    });
+    assert.equal(nearLimitSaved.name, "Sample");
+    assert.equal(nearLimitSaved.slug, "sample");
+    assert.deepEqual(nearLimitSaved.frontmatter.aliases, [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+    ]);
+    assert.equal(nearLimitSaved.body_md.length, 65465);
+    assert.ok(nearLimitSaved.body_md.startsWith("yx"));
+
+    // True > 64 KiB input must still be rejected (both >65536 chars via parseBody and >65536 UTF-8 bytes via parseSkillMarkdown)
+    await assert.rejects(() =>
+      skills.update(f.admin, nearLimitCreated.id, {
+        expected_revision: nearLimitSaved.revision,
+        raw_md: nearLimitEdited + "x".repeat(20),
+      }),
+    );
+    await assert.rejects(
+      () =>
+        skills.update(f.admin, nearLimitCreated.id, {
+          expected_revision: nearLimitSaved.revision,
+          raw_md: nearLimitEdited.slice(0, -10) + "中".repeat(10),
+        }),
+      /64 KiB/,
+    );
+
+    // Lists containing commas, quotes, empty strings, or outer spaces must stay in block form for lossless round-trip
+    const unsafeListCreated = await skills.create(
+      f.admin,
+      {
+        enabled: true,
+        raw_md: [
+          "---",
+          "name: Unsafe List Check",
+          "slug: unsafe-list-check",
+          "aliases:",
+          '  - "a,b"',
+          '  - "\\"double\\""',
+          '  - "\'single\'"',
+          '  - ""',
+          '  - " padded "',
+          "---",
+          "",
+          "初始规则。",
+        ].join("\n"),
+      },
+      ws,
+    );
+    const unsafeSerialized = serializeSkillMarkdown(unsafeListCreated);
+    assert.doesNotMatch(unsafeSerialized, /^aliases: \[/m);
+    const unsafeSaved = await skills.update(f.admin, unsafeListCreated.id, {
+      expected_revision: unsafeListCreated.revision,
+      raw_md: unsafeSerialized.replace("初始规则。", "更新后规则。"),
+    });
+    assert.deepEqual(unsafeSaved.frontmatter.aliases, [
+      "a,b",
+      '"double"',
+      "'single'",
+      "",
+      " padded ",
+    ]);
+    assert.equal(unsafeSaved.body_md, "更新后规则。");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("PR #223 Round 3 Item 4: SkillEditorCard locks textarea and cancel button during in-flight save while preserving draft on error", async () => {
+  const cardSrc = await readFile(
+    "apps/web/studio/SkillEditorCard.tsx",
+    "utf8",
+  );
+  assert.match(cardSrc, /readOnly=\{busy\}/);
+  assert.match(cardSrc, /if \(!busy\) setRawMd\(e\.target\.value\)/);
+  assert.match(cardSrc, /disabled=\{busy\}[\s\S]{0,120}取消/);
+  // Save failure path only records error without clearing editing or rawMd
+  assert.match(
+    cardSrc,
+    /setEditing\(null\);\s*await load\(\);\s*\} catch \(e\) \{\s*setError\(\(e as Error\)\.message\);\s*\}/,
+  );
 });
