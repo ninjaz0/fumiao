@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import sharp from "sharp";
-import { OriginalSeries } from "@fumiao/original-api/series.js";
 import { compileCinematographyPrompt } from "@fumiao/original-api/canvas-runs.js";
 import { canvasesFixture } from "../helpers/canvases.js";
 
@@ -49,58 +48,10 @@ async function makeColorGrid3x3(): Promise<Buffer> {
     .toBuffer();
 }
 
-test("F026 Series → Season → Episode → Canvas tree CRUD, auto-bound canvas, and 240-node large canvas save", async () => {
+test("a 240-node canvas saves and preserves every node", async () => {
   const f = await canvasesFixture();
   try {
-    const seriesApi = new OriginalSeries(f.p);
-
-    const created = await seriesApi.create(
-      f.admin,
-      {
-        title: "霓虹雨夜",
-        synopsis: "近未来雨城中的双线悬疑短剧",
-        bible: { style: "赛博写实", aspect: "16:9" },
-      },
-      String(f.team.public_id),
-    );
-    assert.equal(created.title, "霓虹雨夜");
-    assert.equal(created.episodes.length, 0);
-
-    // Create Episode 1 -> auto-creates bound canvas with series bible sticky note
-    const ep1 = await seriesApi.createEpisode(f.admin, created.id, {
-      season_no: 1,
-      episode_no: 1,
-      title: "第一幕·雨中来客",
-    });
-    assert.ok(ep1.canvas_id);
-    assert.equal(ep1.season_no, 1);
-    assert.equal(ep1.episode_no, 1);
-
-    const boundCanvas = await f.canvases.get(f.admin, ep1.canvas_id!);
-    assert.equal(boundCanvas.document.nodes.length, 1);
-    assert.equal(boundCanvas.document.nodes[0].type, "sticky");
-    assert.match(boundCanvas.document.nodes[0].text, /近未来雨城/);
-
-    // Duplicate season+episode rejected with 409
-    await assert.rejects(
-      () =>
-        seriesApi.createEpisode(f.admin, created.id, {
-          season_no: 1,
-          episode_no: 1,
-          title: "重复集",
-        }),
-      { status: 409 },
-    );
-
-    // Update episode status with optimistic lock
-    const updatedEp = await seriesApi.updateEpisode(f.admin, created.id, ep1.id, {
-      expected_revision: 1,
-      status: "producing",
-    });
-    assert.equal(updatedEp.status, "producing");
-    assert.equal(updatedEp.revision, 2);
-
-    // F026: Verify canvas accepts > 200 nodes (240 nodes = 120 shots x 2) and persists cleanly!
+    const canvas = await f.canvases.create(f.admin, {}, String(f.team.public_id));
     const largeNodes = [];
     for (let i = 0; i < 240; i++) {
       largeNodes.push({
@@ -112,9 +63,9 @@ test("F026 Series → Season → Episode → Canvas tree CRUD, auto-bound canvas
         text: `镜头说明 ${i + 1}`,
       });
     }
-    const savedLarge = await f.canvases.save(f.admin, ep1.canvas_id!, {
-      expected_revision: boundCanvas.revision,
-      title: boundCanvas.title,
+    const savedLarge = await f.canvases.save(f.admin, canvas.id, {
+      expected_revision: canvas.revision,
+      title: canvas.title,
       document: {
         schemaVersion: 1,
         nodes: largeNodes,
@@ -122,12 +73,6 @@ test("F026 Series → Season → Episode → Canvas tree CRUD, auto-bound canvas
       },
     });
     assert.equal(savedLarge.document.nodes.length, 240);
-
-    // Listing series returns episodes ordered cleanly
-    const listed = await seriesApi.list(f.admin, String(f.team.public_id));
-    assert.equal(listed.series.length, 1);
-    assert.equal(listed.series[0].episodes.length, 1);
-    assert.equal(listed.series[0].episodes[0].status, "producing");
   } finally {
     await f.cleanup();
   }

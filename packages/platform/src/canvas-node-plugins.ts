@@ -4,11 +4,14 @@ import type { CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes.js";
 import { packageContributions } from "@fumiao/plugin-sdk/contributions.js";
 import type { Sql } from "./db.js";
 
+export const retiredShotPromptPluginId = "example-shot-prompt";
+
 export async function canvasNodeEntries(sql: Sql): Promise<CanvasNodeEntry[]> {
   const releases =
     await sql.query(`SELECT p.id,p.version,r.package->'contributes' AS contributes
     FROM studio_packages p JOIN studio_package_releases r USING(id,version)
-    WHERE p.installed AND p.enabled AND NOT p.removing AND r.package->'contributes' ? 'canvasNodes' ORDER BY p.id`);
+    WHERE p.installed AND p.enabled AND NOT p.removing AND p.id <> $1
+      AND r.package->'contributes' ? 'canvasNodes' ORDER BY p.id`, [retiredShotPromptPluginId]);
   return releases.rows.flatMap((pkg) =>
     (packageContributions(pkg).canvasNodes ?? []).map(
       ({ program: _, ...node }) => ({

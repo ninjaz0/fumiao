@@ -54,7 +54,6 @@ import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
 import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
-import { OriginalSeries } from "@fumiao/original-api/series.js";
 import { OriginalScriptDocuments } from "@fumiao/original-api/script-documents.js";
 import {
   authorizeTokenHttpRequest,
@@ -518,7 +517,6 @@ class OriginalApi {
   private canvasRuns: OriginalCanvasRuns;
   private storyboardExports: OriginalStoryboardExports;
   private batchPrecheck: OriginalBatchPrecheck;
-  private series: OriginalSeries;
   private scriptDocs: OriginalScriptDocuments;
   private apiTokens: OriginalApiTokens;
   private skills: OriginalSkills;
@@ -538,7 +536,6 @@ class OriginalApi {
     this.canvasRuns = new OriginalCanvasRuns(identity.p);
     this.storyboardExports = new OriginalStoryboardExports(identity.p);
     this.batchPrecheck = new OriginalBatchPrecheck(identity.p);
-    this.series = new OriginalSeries(identity.p);
     this.scriptDocs = new OriginalScriptDocuments(identity.p);
     this.apiTokens = new OriginalApiTokens(identity.p);
     this.skills = new OriginalSkills(identity.p);
@@ -662,86 +659,6 @@ class OriginalApi {
     @Body() body: unknown,
   ) {
     return this.packs.turnaround(req.actor, key, body, this.selected(req));
-  }
-  @Get("api/series")
-  listSeries(@Req() req: AuthRequest) {
-    return this.series.list(req.actor, this.selected(req));
-  }
-  @Post("api/series")
-  @HttpCode(200)
-  createSeries(@Req() req: AuthRequest, @Body() body: unknown) {
-    return this.series.create(req.actor, body, this.selected(req));
-  }
-  @Get("api/series/:key")
-  getSeries(@Req() req: AuthRequest, @Param("key") key: string) {
-    return this.series.get(req.actor, key);
-  }
-  @Put("api/series/:key")
-  updateSeries(
-    @Req() req: AuthRequest,
-    @Param("key") key: string,
-    @Body() body: unknown,
-  ) {
-    return this.series.update(req.actor, key, body);
-  }
-  @Delete("api/series/:key")
-  removeSeries(@Req() req: AuthRequest, @Param("key") key: string) {
-    return this.series.remove(req.actor, key);
-  }
-  @Post("api/series/:key/episodes")
-  @HttpCode(200)
-  createEpisode(
-    @Req() req: AuthRequest,
-    @Param("key") key: string,
-    @Body() body: unknown,
-  ) {
-    return this.series.createEpisode(req.actor, key, body);
-  }
-  @Put("api/series/:key/episodes/:ep")
-  updateEpisode(
-    @Req() req: AuthRequest,
-    @Param("key") key: string,
-    @Param("ep") ep: string,
-    @Body() body: unknown,
-  ) {
-    return this.series.updateEpisode(req.actor, key, ep, body);
-  }
-  @Delete("api/series/:key/episodes/:ep")
-  removeEpisode(
-    @Req() req: AuthRequest,
-    @Param("key") key: string,
-    @Param("ep") ep: string,
-  ) {
-    return this.series.removeEpisode(req.actor, key, ep);
-  }
-  @Post("api/series/:key/episodes/:ep/scenes")
-  @HttpCode(200)
-  createScene(
-    @Req() req: AuthRequest,
-    @Param("key") key: string,
-    @Param("ep") ep: string,
-    @Body() body: unknown,
-  ) {
-    return this.series.createScene(req.actor, key, ep, body);
-  }
-  @Put("api/series/:key/episodes/:ep/scenes/:scene")
-  updateScene(
-    @Req() req: AuthRequest,
-    @Param("key") key: string,
-    @Param("ep") ep: string,
-    @Param("scene") scene: string,
-    @Body() body: unknown,
-  ) {
-    return this.series.updateScene(req.actor, key, ep, scene, body);
-  }
-  @Delete("api/series/:key/episodes/:ep/scenes/:scene")
-  removeScene(
-    @Req() req: AuthRequest,
-    @Param("key") key: string,
-    @Param("ep") ep: string,
-    @Param("scene") scene: string,
-  ) {
-    return this.series.removeScene(req.actor, key, ep, scene);
   }
   @Get("api/workspace/scripts")
   listWorkspaceScripts(@Req() req: AuthRequest) {

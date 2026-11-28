@@ -211,9 +211,9 @@ export function ProposalDiffPreview({
       )}
 
       {loading ? (
-        <p className="fm-series-muted">正在加载提案…</p>
+        <p className="canvas-muted">正在加载提案…</p>
       ) : proposals.length === 0 ? (
-        <p className="fm-series-muted">
+        <p className="canvas-muted">
           外部 MCP（Claude Code / Cursor）或画布助手提交的结构化画布变更提案将出现在这里，审阅 Diff 与积分预估后再一键落图。
         </p>
       ) : (

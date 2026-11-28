@@ -17,7 +17,6 @@ import { api, ApiError, workspaceURL, type Studio } from "./api";
 
 import { PluginImport } from "../studio/PluginImport";
 import { VideoThumb } from "../canvas-editor/VideoThumb";
-import { SeriesTree } from "./SeriesTree";
 
 const COVER_VIDEO_PLACEHOLDER_STYLE = {
   display: "block",
@@ -516,7 +515,6 @@ export default function ProjectList({
             {opening?.kind === "create" ? "正在新建…" : "新建画布"}
           </button>
         </div>
-        <SeriesTree workspace={workspace} />
         <div className="canvas-list-toolbar">
           <div>
             {(projects.length > 0 || search) && (

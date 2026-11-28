@@ -311,7 +311,11 @@ export function ComposerMenuContents({
   switch (kind) {
     case "creation":
       return (
-        <div className="choice-list" role="listbox" aria-label="创作类型">
+        <div
+          className="choice-list fm-choice-menu"
+          role="listbox"
+          aria-label="创作类型"
+        >
           {creationOptions.map(([value, label, icon]) => (
             <Option
               key={value}
@@ -394,7 +398,11 @@ export function ComposerMenuContents({
     }
     case "h3-mode":
       return (
-        <div className="choice-list" role="listbox" aria-label="参考模式">
+        <div
+          className="choice-list fm-choice-menu"
+          role="listbox"
+          aria-label="参考模式"
+        >
           {(form?.referenceModes ?? [])
             .map((value) =>
               value === "reference"
@@ -556,7 +564,7 @@ export function ComposerMenuContents({
           <>
             <div className="popover-label">选择质量</div>
             <div
-              className="choice-list"
+              className="choice-list fm-choice-menu"
               role="listbox"
               aria-label="选择图片质量"
             >
@@ -585,7 +593,7 @@ export function ComposerMenuContents({
         <>
           <div className="popover-label">选择时长</div>
           <div
-            className="duration-options"
+            className="duration-options fm-choice-menu"
             role="listbox"
             aria-label="选择视频生成时长"
           >

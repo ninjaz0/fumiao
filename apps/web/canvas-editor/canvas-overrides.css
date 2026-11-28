@@ -637,7 +637,7 @@
   transition: transform 0.15s;
   flex: none;
 }
-button[aria-expanded="true"] > .fm-ui-chevron {
+button[aria-expanded="true"] > .fm-ui-chevron:not(.fm-choice-chevron) {
   transform: rotate(180deg);
 }
 .fm-chip-badge {
@@ -684,13 +684,7 @@ button[aria-expanded="true"] > .fm-ui-chevron {
 .cv-menu.fm-option-menu {
   top: calc(100% + 5px);
   left: 0;
-  min-width: 164px;
-  max-height: 224px;
-  padding: 5px;
-  border: 1px solid var(--cv-line);
-  border-radius: 10px;
-  display: grid;
-  gap: 2px;
+  max-height: 320px;
 }
 .cv-menu.fm-option-menu.fm-option-fixed {
   position: fixed;
@@ -700,21 +694,6 @@ button[aria-expanded="true"] > .fm-ui-chevron {
 .cv-menu.fm-option-menu.fm-option-up {
   top: auto;
   bottom: calc(100% + 5px);
-}
-.cv-menu.fm-option-menu.fm-option-right {
-  left: auto;
-  right: 0;
-}
-.cv-menu.fm-option-menu > button {
-  min-height: 31px;
-  padding: 6px 9px;
-  border-radius: 6px;
-  font-size: 12px;
-  justify-content: space-between;
-}
-.cv-menu.fm-option-menu > button[aria-selected="true"] {
-  font-weight: 600;
-  background: color-mix(in srgb, var(--cv-hover) 75%, transparent);
 }
 .fm-cine-panel {
   display: grid;
@@ -869,29 +848,9 @@ button[aria-expanded="true"] > .fm-ui-chevron {
 .fm-cine-field {
   min-width: 0;
 }
-.fm-cine-grid > .fm-cine-field:nth-child(3n) .cv-menu.fm-option-menu:not(.fm-option-fixed) {
-  left: auto;
-  right: 0;
-}
-.fm-cine-popover .fm-cine-grid > .fm-cine-field:nth-child(3n) .cv-menu.fm-option-menu:not(.fm-option-fixed) {
-  left: 0;
-  right: auto;
-}
-.fm-cine-popover .fm-cine-grid > .fm-cine-field:nth-child(2n) .cv-menu.fm-option-menu:not(.fm-option-fixed) {
-  left: auto;
-  right: 0;
-}
 @media (max-width: 520px) {
   .fm-cine-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .fm-cine-grid > .fm-cine-field:nth-child(3n) .cv-menu.fm-option-menu:not(.fm-option-fixed) {
-    left: 0;
-    right: auto;
-  }
-  .fm-cine-grid > .fm-cine-field:nth-child(2n) .cv-menu.fm-option-menu:not(.fm-option-fixed) {
-    left: auto;
-    right: 0;
   }
 }
 .fm-cine-trigger {
@@ -1296,6 +1255,11 @@ button[aria-expanded="true"] > .fm-ui-chevron {
   display: grid;
   gap: 4px;
   flex: 1;
+}
+.canvas-muted {
+  margin: 0 0 8px;
+  font-size: 13px;
+  opacity: 0.75;
 }
 .fm-proposal-list {
   display: grid;

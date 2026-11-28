@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "id": "example-canvas-node",
+  "label": "文本格式化",
+  "version": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "extensionOnly": true,
+  "contributes": {
+    "version": 1,
+    "canvasNodes": [
+      {
+        "id": "format-text",
+        "title": "文本格式化",
+        "inputs": [{ "id": "text", "title": "原文", "kind": "text" }],
+        "outputs": [{ "id": "result", "title": "格式化文本", "kind": "text" }],
+        "fields": [
+          {
+            "id": "prefix",
+            "title": "前缀",
+            "type": "text",
+            "default": ""
+          }
+        ],
+        "programFile": "format-text.js"
+      }
+    ]
+  }
+}

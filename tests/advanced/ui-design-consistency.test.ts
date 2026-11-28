@@ -256,32 +256,19 @@ test("CinematographyPanel and canvas-overrides.css support right, left, and top 
   );
 });
 
-test("ProjectList, SeriesTree, dialog.css, and CanvasList demote empty series tree, expose editable bible, fix 5-item ep-form grid, and style retry button", () => {
+test("ProjectList, dialog.css, and CanvasList retire SeriesTree while preserving heading, error styles, and retry button", () => {
   const projectListTsx = readRepoFile("apps/web/canvas/ProjectList.tsx");
-  const seriesTreeTsx = readRepoFile("apps/web/canvas/SeriesTree.tsx");
   const dialogCss = readRepoFile("apps/web/canvas/dialog.css");
   const canvasListTsx = readRepoFile("apps/web/canvas/CanvasList.tsx");
 
-  const headingIdx = projectListTsx.indexOf("<h1>画布</h1>");
-  const seriesIdx = projectListTsx.indexOf("<SeriesTree");
-  assert.ok(headingIdx >= 0, "ProjectList.tsx must render <h1>画布</h1>");
-  assert.ok(seriesIdx >= 0, "ProjectList.tsx must render <SeriesTree />");
-  assert.ok(
-    headingIdx < seriesIdx,
-    "<h1>画布</h1> must appear above <SeriesTree /> in ProjectList.tsx",
-  );
+  assert.equal(existsSync(join(repoRoot, "apps/web/canvas/SeriesTree.tsx")), false);
+  assert.equal(existsSync(join(repoRoot, "apps/web/canvas/series-bible.ts")), false);
+  assert.ok(projectListTsx.includes("<h1>画布</h1>"), "ProjectList.tsx must render <h1>画布</h1>");
+  assert.doesNotMatch(projectListTsx, /SeriesTree/);
 
-  assert.match(seriesTreeTsx, /剧集分集管理\s*·\s*0\s*部剧集/);
-  assert.match(seriesTreeTsx, /世界观设定/);
-  assert.match(seriesTreeTsx, /\/api\/series\/\$\{/);
-  assert.match(seriesTreeTsx, /"PUT"/);
-
-  assert.doesNotMatch(
-    dialogCss,
-    /grid-template-columns:\s*auto\s+auto\s+1fr\s+auto\s*;/,
-  );
-  assert.match(dialogCss, /\.fm-ep-form\b/);
-  assert.match(dialogCss, /\.fm-series-panel[\s\S]*border-radius:\s*8px/);
+  assert.doesNotMatch(dialogCss, /\.fm-series-panel\b|\.fm-ep-form\b/);
+  assert.match(dialogCss, /\.btn\b/);
+  assert.match(dialogCss, /\.canvas-error\b/);
 
   assert.match(
     canvasListTsx,

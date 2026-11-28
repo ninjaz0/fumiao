@@ -467,6 +467,61 @@ async function checkDeletedH3Frame(page: Page, studio: string, state: StudioStat
   }
 }
 
+async function checkCompactComposerChoices(page: Page, studio: string) {
+  try {
+    await page.goto(studio);
+    const referenceMode = page.getByRole("button", { name: "选择参考模式" });
+    await expect(referenceMode).toBeVisible();
+    const dock = page.locator("#home-composer .composer-dock");
+    const strip = page.locator("#home-composer .composer-parameters");
+    const parameters = page.locator(
+      "#home-composer .composer-parameters :is(button, select):visible",
+    );
+    for (const [width, height] of [[320, 568], [390, 844]]) {
+      await page.setViewportSize({ width, height });
+      await expect(dock).toHaveAttribute("data-narrow", "true");
+      if ((await dock.getAttribute("data-expanded")) === "true") {
+        await page.keyboard.press("Escape");
+      }
+      await expect(dock).toHaveAttribute("data-expanded", "false");
+      const noOverflow = await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      );
+      assert.ok(noOverflow, `Collapsed ComposerDock has no page overflow at ${width}px`);
+      const stripBox = await strip.boundingBox();
+      assert.ok(
+        stripBox && stripBox.x >= 0 && stripBox.x + stripBox.width <= width,
+        `Collapsed .composer-parameters fits viewport at ${width}px`,
+      );
+
+      await page.locator("#home-composer #prompt").click();
+      await expect(dock).toHaveAttribute("data-expanded", "true");
+      const controls = await parameters.evaluateAll((elements) =>
+        elements.map((element) => ({
+          label: element.getAttribute("aria-label") ?? element.textContent,
+          rect: element.getBoundingClientRect().toJSON() as DOMRectReadOnly,
+        })),
+      );
+      assert.ok(controls.length >= 5, `Visible H3 controls at ${width}px`);
+      for (const [index, { label, rect }] of controls.entries()) {
+        assert.ok(rect.left >= 0 && rect.right <= width, `${label} fits at ${width}px`);
+        for (const { label: otherLabel, rect: other } of controls.slice(index + 1)) {
+          assert.ok(
+            rect.right <= other.left || other.right <= rect.left ||
+              rect.bottom <= other.top || other.bottom <= rect.top,
+            `${label} overlaps ${otherLabel} at ${width}px`,
+          );
+        }
+      }
+      await page.keyboard.press("Escape");
+      await expect(dock).toHaveAttribute("data-expanded", "false");
+    }
+    console.log("Verified Studio controls fit without overlap at 320px and 390px");
+  } finally {
+    await page.close();
+  }
+}
+
 async function checkH3ImageUploadLimit(
   page: Page,
   studio: string,
@@ -856,9 +911,23 @@ export async function studioBrowser(
     await expect(savePrice).toBeDisabled();
     await nav("home");
     const composerCreation = page.locator('.composer [data-menu="creation"]');
+    const composerPopover = page.locator("#popover");
+    await composerCreation.click();
+    await expect(composerPopover.getByRole("option")).toHaveText([
+      "视频生成",
+      "图片生成",
+      "语音生成",
+    ]);
+    const creationBox = await composerCreation.boundingBox();
+    const creationMenuBox = await composerPopover.boundingBox();
+    assert.ok(creationBox && creationMenuBox);
+    assert.ok(Math.abs(creationMenuBox.x - creationBox.x) <= 1);
+    assert.ok(Math.abs(creationMenuBox.width - creationBox.width) <= 1);
+    await expect(composerPopover.locator('[aria-selected="true"]')).not.toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(composerCreation).toBeFocused();
     await composerCreation.focus();
     await page.keyboard.press("Enter");
-    const composerPopover = page.locator("#popover");
     await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(composerPopover.getByRole("option", { name: "图片生成" })).toBeFocused();
@@ -936,7 +1005,7 @@ export async function studioBrowser(
     console.log("Verified typed mention keeps prompt focus, continued typing and Escape restoration");
     await page.locator('.composer [data-menu="creation"]').click();
     await page.evaluate(() => window.document.dispatchEvent(new Event("scroll")));
-    await expect(composerPopover.locator('[aria-selected="true"]')).toBeFocused();
+    await expect(composerPopover).toBeFocused();
     await page
       .locator('#popover [data-act="creation"][data-value="image"]')
       .click();
@@ -1293,6 +1362,7 @@ export async function studioBrowser(
     await checkComposerCreditFeedback(await context.newPage(), studio, before);
     await checkPackRefreshRace(await context.newPage(), studio, before);
     await checkDeletedH3Frame(await context.newPage(), studio, before);
+    await checkCompactComposerChoices(await context.newPage(), studio);
     await checkH3ImageUploadLimit(await context.newPage(), studio, bytes);
     await checkStorageScope(await context.newPage(), web, await state());
     await checkUploadedMediaPreview(browser, web, user);

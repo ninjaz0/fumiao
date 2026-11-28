@@ -78,11 +78,13 @@ export function PluginNodeForm({
   change: (values: CanvasExtension["values"]) => void;
   run: () => void;
 }) {
+  const retired = e.definition.plugin === "example-shot-prompt";
+  const disabled = retired || busy;
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        if (available && !busy) run();
+        if (!retired && available && !busy) run();
       }}
     >
       {e.definition.fields.map((field) => {
@@ -94,6 +96,7 @@ export function PluginNodeForm({
             {field.title}
             {field.type === "select" ? (
               <select
+                disabled={disabled}
                 value={String(value)}
                 onChange={(e) => set(e.target.value)}
               >
@@ -104,6 +107,7 @@ export function PluginNodeForm({
             ) : field.type === "checkbox" ? (
               <input
                 type="checkbox"
+                disabled={disabled}
                 checked={value === true}
                 onChange={(e) => set(e.target.checked)}
               />
@@ -111,6 +115,7 @@ export function PluginNodeForm({
               <input
                 type="number"
                 step="any"
+                disabled={disabled}
                 value={Number(value)}
                 onChange={(e) => {
                   if (Number.isFinite(e.target.valueAsNumber))
@@ -120,6 +125,7 @@ export function PluginNodeForm({
             ) : (
               <input
                 maxLength={2000}
+                disabled={disabled}
                 value={String(value)}
                 onChange={(e) => set(e.target.value)}
               />
@@ -127,13 +133,15 @@ export function PluginNodeForm({
           </label>
         );
       })}
-      {available ? (
+      {available && !retired ? (
         <button type="submit" disabled={busy}>
           运行节点
         </button>
       ) : (
         <p role="status">
-          此节点需要启用 {e.definition.plugin} {e.definition.version}
+          {retired
+            ? "此示例插件节点已停用，仍可查看和复制已保存的输出"
+            : `此节点需要启用 ${e.definition.plugin} ${e.definition.version}`}
         </p>
       )}
     </form>

@@ -7,6 +7,7 @@ import {
   type AddressPause,
 } from "./connection-address.js";
 import { nodeStudioPlugin } from "./node-studio-policy.js";
+import { retiredShotPromptPluginId } from "./canvas-node-plugins.js";
 import { packageFile, type PackageFile } from "@fumiao/plugin-sdk/package-file.js";
 export { packageFile, releaseVersion, sourceURL, type PackageFile } from "@fumiao/plugin-sdk/package-file.js";
 import { verifyPackageSignature, type PackageSignature } from "@fumiao/plugin-sdk/package-signing.js";
@@ -107,6 +108,7 @@ export function parsePackageFile(value: unknown): PackageFile {
 }
 
 async function inspectPackage(file: PackageFile, registry: PluginRegistry) {
+  requireValue(file.id !== retiredShotPromptPluginId, 409, "镜头提示词示例插件已停用");
   const manifest: Manifest = file.extensionOnly
     ? {
         id: file.id,
@@ -1150,7 +1152,9 @@ export class StudioPackages {
       (SELECT COALESCE(jsonb_agg(jsonb_build_object('id',c.id,'label',COALESCE(c.display_label,c.descriptor->>'label'),'kind',c.descriptor->>'kind','enabled',COALESCE((g.flags->>c.id)::boolean,false), 'service',s.connection_id,'services',(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',x.id,'name',x.name) ORDER BY x.name,x.id),'[]'::jsonb) FROM connections x JOIN models m ON m.connection_id=x.id JOIN studio_packages t ON t.id=x.plugin_id AND t.installed AND NOT t.removing WHERE m.catalog_id=c.id AND x.enabled AND NOT x.removed)) ORDER BY c.position,c.id),'[]'::jsonb)
         FROM studio_catalog c CROSS JOIN studio_policy g LEFT JOIN studio_model_service s ON s.model_id=c.id WHERE c.plugin_id IS NOT NULL AND (c.plugin_id=p.id OR EXISTS(SELECT 1 FROM studio_shared_models e WHERE e.model_id=c.id AND e.plugin_id=p.id)) AND NOT c.hidden) AS choices, ARRAY(SELECT m->>'label' FROM jsonb_array_elements(v.manifest->'models') m WHERE m ? 'studio' AND COALESCE((m->>'hidden')::boolean,false)=false AND NOT EXISTS(SELECT 1 FROM studio_catalog owned WHERE owned.id=m->>'id' AND owned.plugin_id IS NULL)) AS models
       FROM studio_packages p JOIN studio_package_releases r USING(id,version)
-      LEFT JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion' WHERE p.installed AND (v.id IS NOT NULL OR r.package ? 'extensionOnly') ORDER BY label,p.id`)
+      LEFT JOIN plugin_versions v ON v.id=p.id AND v.version=r.package->>'adapterVersion'
+      WHERE p.installed AND p.id <> $1 AND (v.id IS NOT NULL OR r.package ? 'extensionOnly')
+      ORDER BY label,p.id`, [retiredShotPromptPluginId])
     ).rows;
     for (const row of rows) {
       const current = (row.publisher_signature as PackageSignature | null) ?? undefined;
@@ -1182,6 +1186,13 @@ export class StudioPackages {
     action: "enable" | "disable" | "remove",
   ) {
     this.p.admin(actor);
+    if (action === "enable") {
+      requireValue(
+        id !== retiredShotPromptPluginId,
+        409,
+        "镜头提示词示例插件已停用",
+      );
+    }
     return this.p.db.transaction(async (sql) => {
       await sql.query(
         "SELECT pg_advisory_xact_lock(hashtext('studio-catalog'))",
