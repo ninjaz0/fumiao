@@ -90,7 +90,31 @@ try {
   await expect(dialog.getByRole("button", { name: "采用分镜，不生成视频", exact: true })).toBeDisabled();
   console.log("Storyboard reopening preserves blank draft fields: passed");
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  message = { ...message, id: 101, content: JSON.stringify([shot]) };
+  // A stored pointer is untrusted, including one whose message number is
+  // valid but whose claimed conversation does not match the authorized source.
+  eventSnapshots = undefined;
+  history = [];
+  activeTurn = null;
+  message = { id: 104, role: "assistant", state: "failed", content: "", error: "最新回合失败" };
+  let otherBills = 0;
+  await page.route("**/api/chat/messages/101/source", route => route.fulfill({
+    json: {cid:"storyboard-test",message:101,content:JSON.stringify([shot])},
+  }));
+  await page.route("**/api/chats/other-chat/bills", route => {
+    otherBills++;
+    return route.fulfill({json:{bills:[{turn:"other-turn",message:101,state:"complete",kind:"fixed",held:"9",charged:"9"}]}});
+  });
+  await page.evaluate(({key,shot})=>{
+    localStorage.setItem(key+"-proposal",JSON.stringify({message:101,shots:[{...shot,title:"保留编辑"}],source:{cid:"other-chat",message:101,turn:"other-turn"}}));
+  },{key,shot});
+  await open.click();
+  await expect(dialog.getByRole("alert")).toHaveText("最新回合失败");
+  await expect(title).toHaveValue("保留编辑");
+  assert.equal(otherBills,0,"An unverified cached source must not request another chat's bills");
+  await expect(dialog.getByText("实扣 9 积分")).toHaveCount(0);
+  console.log("Storyboard invalid cached source preserves edits without loading unrelated bills: passed");
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  message = { id: 101, role: "assistant", state: "complete", content: JSON.stringify([shot]) };
   await page.evaluate(({ key, shot }) => {
     localStorage.setItem(key + "-chat", "storyboard-test");
     localStorage.setItem(key + "-proposal", JSON.stringify([{ ...shot, title: "升级前已编辑" }]));
@@ -130,6 +154,7 @@ try {
     } catch (error) { console.error(error); failures.push(error); }
   }
   assert.equal(failures.length, 0, "Legacy in-flight generation regression failures");
+
 } finally {
   await browser?.close();
   harness.kill("SIGTERM");

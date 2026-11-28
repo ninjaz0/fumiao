@@ -1,3 +1,4 @@
+import { creditUnits, formatCredits } from "./credit-amount.js";
 import { randomUUID } from "node:crypto";
 import type { RequestDisposition } from "@fumiao/plugin-sdk/lifecycle.js";
 import { one, type Sql } from "./db.js";
@@ -228,7 +229,8 @@ export async function tryModerationEquivalentFallback(
   if (!settings?.auto_rewrite) return false;
 
   const currentCatalogId = String(job.catalog_id || job.provider_model || "");
-  const originalPrice = Number(job.price ?? 0);
+  const originalPrice = String(job.price ?? 0);
+  const originalUnits = creditUnits(originalPrice);
 
   // Candidate enabled same-kind models excluding current model, prioritizing explicit fallbackModel
   const pkgFilter = (await hasStudioPackages(sql))
@@ -240,8 +242,8 @@ export async function tryModerationEquivalentFallback(
               c.plugin_id, c.plugin_version, c.config,
               COALESCE(
                 (SELECT MIN(sp.amount) FROM studio_prices sp WHERE sp.model_id = m.catalog_id),
-                $3
-              )::bigint AS min_price
+                $3::numeric
+              ) AS min_price
          FROM models m
          JOIN connections c ON c.id = m.connection_id
         WHERE m.kind = $1
@@ -260,8 +262,8 @@ export async function tryModerationEquivalentFallback(
   let chosen: (typeof candidateRows)[number] | null = null;
   for (const cand of candidateRows) {
     const candCatalog = String(cand.catalog_id || cand.provider_model);
-    const candPrice = Number(cand.min_price ?? originalPrice);
-    if (candPrice > originalPrice) continue;
+    const candPrice = creditUnits(String(cand.min_price ?? originalPrice));
+    if (candPrice > originalUnits) continue;
     const allowed = await one(
       sql,
       "SELECT studio_model_allowed($1, $2) AS ok",
@@ -273,9 +275,10 @@ export async function tryModerationEquivalentFallback(
   }
   if (!chosen) return false;
 
-  const nextPrice = Math.min(originalPrice, Number(chosen.min_price ?? originalPrice));
-  const deltaRefund = originalPrice - nextPrice;
-  if (deltaRefund > 0) {
+  const nextPrice = String(chosen.min_price ?? originalPrice);
+  const difference = originalUnits - creditUnits(nextPrice);
+  if (difference > 0n) {
+    const deltaRefund = formatCredits(difference);
     const released = await one(
       sql,
       "UPDATE wallets SET held = held - $2 WHERE workspace_id = $1 AND held >= $2 RETURNING balance, held",
@@ -354,8 +357,8 @@ export async function tryModerationEquivalentFallback(
       JSON.stringify({
         from: currentCatalogId,
         to: chosen.catalog_id || chosen.provider_model,
-        price_before: originalPrice,
-        price_after: nextPrice,
+        price_before: Number(originalPrice),
+        price_after: Number(nextPrice),
       }),
     ],
   );

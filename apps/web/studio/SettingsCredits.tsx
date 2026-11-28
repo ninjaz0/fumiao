@@ -9,6 +9,8 @@ import { api } from "./api";
 import { openDialogFor } from "./AssetDialog";
 import { Icon } from "./Icon";
 import {
+  creditDecimal,
+  displayCredits,
   evaluateRechargeYuan,
   formatRechargeRangeHint,
 } from "./settings-credits-helpers";
@@ -256,11 +258,11 @@ export function Credits({
       <div className="credit-summary">
         <div>
           <span>可用积分</span>
-          <strong>{credits.available.toLocaleString()}</strong>
+          <strong>{displayCredits(credits.exact?.available ?? credits.available)}</strong>
         </div>
         <div>
           <span>冻结积分</span>
-          <strong>{credits.reserved.toLocaleString()}</strong>
+          <strong>{displayCredits(credits.exact?.reserved ?? credits.reserved)}</strong>
         </div>
       </div>
       <div className="recharge-info">
@@ -405,11 +407,14 @@ export function CreditLedger({ rows }: { rows: CreditEntry[] }) {
     <div className="credit-ledger">
       {rows.length ? (
         rows.map((row) => {
+          const amount = creditDecimal(row.exact?.amount ?? row.amount);
+          const balance = row.exact?.balance ?? row.balance;
           const prefix =
             row.action === "spend"
               ? "−"
               : (row.action === "adjust" || row.action === "recharge") &&
-                  row.amount > 0
+                  !amount.startsWith("-") &&
+                  amount !== "0"
                 ? "+"
                 : "";
           return (
@@ -423,7 +428,14 @@ export function CreditLedger({ rows }: { rows: CreditEntry[] }) {
                   {(row.actor_name || "") + (row.note ? " · " + row.note : "")}
                 </small>
               </div>
-              <span className="credit-amount">{prefix + row.amount}</span>
+              <div className="credit-entry-amounts">
+                <span className="credit-amount">{prefix + amount}</span>
+                {balance != null && (
+                  <span className="credit-entry-balance">
+                    余额 {displayCredits(balance)}
+                  </span>
+                )}
+              </div>
               <time>{date(row.created)}</time>
             </div>
           );

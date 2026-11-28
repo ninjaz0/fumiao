@@ -1,9 +1,12 @@
 import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { creditUnits, formatCredits } from "@fumiao/plugin-sdk/credit-amount.js";
 import { openDialogFor } from "./AssetDialog";
 import { CreditLedger } from "./SettingsCredits";
 import type { AdminOpen, AdminSave } from "./settings-admin";
 import {
   createCreditAdjustmentSession,
+  creditDecimal,
+  displayCredits,
   evaluateCreditAdjustment,
   MAX_CREDIT_ADJUSTMENT,
   type CreditAdjustmentDirection,
@@ -17,6 +20,19 @@ const accountKinds = [
 ] as const;
 const creditHistoryPath = (workspace: number) =>
   "/api/admin/credits?workspace=" + workspace;
+
+function accountTotal(
+  accounts: CreditAccount[],
+  field: "available" | "reserved",
+) {
+  const total = accounts.reduce(
+    (sum, account) =>
+      sum +
+      creditUnits(creditDecimal(account.exact?.[field] ?? account[field])),
+    0n,
+  );
+  return displayCredits(formatCredits(total));
+}
 
 export function CreditAdmin({
   accounts,
@@ -79,17 +95,13 @@ export function CreditAdmin({
         <div>
           <dt>可用积分合计</dt>
           <dd>
-            {visibleAccounts
-              .reduce((sum, a) => sum + a.available, 0)
-              .toLocaleString()}
+            {accountTotal(visibleAccounts, "available")}
           </dd>
         </div>
         <div>
           <dt>任务冻结积分</dt>
           <dd>
-            {visibleAccounts
-              .reduce((sum, a) => sum + a.reserved, 0)
-              .toLocaleString()}
+            {accountTotal(visibleAccounts, "reserved")}
           </dd>
         </div>
         <div>
@@ -135,8 +147,8 @@ export function CreditAdmin({
                     )}
                   </div>
                   <span>
-                    {account.available.toLocaleString()}
-                    <small>{`可用 · 冻结 ${account.reserved.toLocaleString()}`}</small>
+                    {displayCredits(account.exact?.available ?? account.available)}
+                    <small>{`可用 · 冻结 ${displayCredits(account.exact?.reserved ?? account.reserved)}`}</small>
                   </span>
                   <button
                     className="quiet-button"
@@ -303,7 +315,7 @@ function CreditAdjustment({
   return (
     <form id="credit-adjust-form" onSubmit={save}>
       <h2 id="modal-heading">调整积分</h2>
-      <p>{`${account.name} · 可用 ${account.available.toLocaleString("en-US")} 积分`}</p>
+      <p>{`${account.name} · 可用 ${displayCredits(account.exact?.available ?? account.available)} 积分`}</p>
       <label className="formlabel">
         操作
         <select
@@ -370,7 +382,7 @@ function CreditAdjustment({
         <span>调整后预计可用余额</span>
         <strong>
           {evaluation.projected !== null
-            ? `${evaluation.projected.toLocaleString("en-US")} 积分`
+            ? `${displayCredits(evaluation.projected)} 积分`
             : "—"}
         </strong>
       </div>

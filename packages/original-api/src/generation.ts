@@ -1,14 +1,13 @@
+import { resolvePublishedRoute } from "@fumiao/platform/model-access/publication.js";
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
+import { acceptNativeMedia, prepareNativeMedia } from "./native-media.js";
 import { hasStudioPackages } from "@fumiao/platform/studio-plugin-profile.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-text.js";
 import { randomUUID } from "node:crypto";
 import { directorBasis } from "@fumiao/web-compat/director.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
-import {
-  requireValue,
-  DomainError,
-  hash,
-} from "@fumiao/platform/security.js";
+import { requireValue, DomainError, hash } from "@fumiao/platform/security.js";
 import { canonical, validator } from "@fumiao/platform/plugins.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { capacity, JOB_RESERVE } from "@fumiao/platform/capacity.js";
@@ -33,7 +32,14 @@ export type CheckedDirectorVisual = {
   expanded: Awaited<ReturnType<typeof expandOriginalPacks>>;
   source?: NonNullable<Awaited<ReturnType<typeof originalTask>>>;
 };
-export type DirectorGenerationQuote = { amount: number; key: string; binding: string };
+export type DirectorGenerationQuote = {
+  amount: number;
+  exactAmount?: string;
+  key: string | null;
+  binding: string;
+  routeRevision?: string;
+  priceRevisionId?: string;
+};
 
 export class OriginalGeneration {
   constructor(readonly p: Platform) {}
@@ -116,7 +122,7 @@ export class OriginalGeneration {
     try {
       const catalog = await one(
         sql,
-        "SELECT c.*,v.manifest FROM studio_catalog c JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE c.id=$1",
+        "SELECT c.*,v.manifest FROM studio_catalog c LEFT JOIN plugin_versions v ON v.id=c.plugin_id AND v.version=c.plugin_version WHERE c.id=$1",
         [draft.model],
       );
       requireValue(
@@ -129,35 +135,67 @@ export class OriginalGeneration {
         user,
         selected,
       );
-      const plugin = await this.p.registry.resolve(
-        sql,
-        catalog.plugin_id,
-        catalog.plugin_version,
-      );
-      const adapter = plugin.originalSubmission;
+      const native = catalog.source_kind === "builtin";
+      const plugin = native
+        ? undefined
+        : await this.p.registry.resolve(
+            sql,
+            catalog.plugin_id,
+            catalog.plugin_version,
+          );
+      const adapter = plugin?.originalSubmission;
       requireValue(
-        catalog.manifest.originalSubmission && adapter,
+        native || (catalog.manifest.originalSubmission && adapter),
         503,
         "原生成提交适配器尚未启用",
       );
-      adapter.validate(draft, "before-packs");
-      const namespace = adapter.namespace(draft);
+      adapter?.validate(draft, "before-packs");
+      const namespace = native ? "-builtin" : adapter!.namespace(draft);
       requireValue(
         /^(?:|-[a-z0-9-]{1,80})$/.test(namespace),
         500,
         "插件请求命名空间无效",
       );
       const uid = `${user.public_id}${namespace}-${draft.uid}`;
-      if (!quoting) await this.lockSubmission(sql, user, workspace.id);
-      if (!draft.asset_packs.length) adapter.validate(draft, "before-retry");
-      const packages = await hasStudioPackages(sql);
-      const previous = !quoting && await one(
+      // Global policy -> owner identity -> workspace wallet. Configuration and
+      // queue admission remain stable through acceptance; no external calls.
+      const policy = await one(
         sql,
-        packages
-          ? `SELECT * FROM jobs WHERE deleted_at IS NULL AND (original_uid=$1 OR (owner_id=$2 AND catalog_id=$3 AND studio_client_uid=$4 AND EXISTS(SELECT 1 FROM studio_shared_models WHERE model_id=$3))) LIMIT 1`
-          : "SELECT * FROM jobs WHERE original_uid=$1 AND deleted_at IS NULL",
-        packages ? [uid, user.id, draft.model, draft.uid] : [uid],
+        `SELECT price_revision FROM studio_policy${quoting ? "" : " FOR SHARE"}`,
       );
+      if (!quoting) {
+        await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+          "original-submit:" + user.id,
+        ]);
+        await sql.query(
+          "SELECT workspace_id FROM wallets WHERE workspace_id=$1 FOR UPDATE",
+          [workspace.id],
+        );
+      }
+      if (!draft.asset_packs.length) adapter?.validate(draft, "before-retry");
+      const packages = !native && (await hasStudioPackages(sql));
+      const previous =
+        !quoting &&
+        (await one(
+          sql,
+          native
+            ? "SELECT j.public_id,j.workspace_id,j.deleted_at,j.request_hash,j.price_revision FROM model_access_job_uids i JOIN jobs j ON j.id=i.job_id WHERE i.uid=$1"
+            : packages
+              ? `SELECT * FROM jobs WHERE deleted_at IS NULL AND (original_uid=$1 OR (owner_id=$2 AND catalog_id=$3 AND studio_client_uid=$4 AND EXISTS(SELECT 1 FROM studio_shared_models WHERE model_id=$3))) LIMIT 1`
+              : "SELECT * FROM jobs WHERE original_uid=$1 AND deleted_at IS NULL",
+          packages ? [uid, user.id, draft.model, draft.uid] : [uid],
+        ));
+      // A legacy draft defaults to 5 seconds. A native draft without an explicit
+      // duration selects the route default, which must remain distinct on replay.
+      const useRouteDuration = native && draft.kind === "video" &&
+        !Object.hasOwn(draft.params ?? {}, "seconds") && !draft.provided.includes("seconds");
+      // Keep the generation fingerprint compatible with receipts issued before
+      // explicit native quotes. A quote authorizes the order, not its content.
+      const fingerprintDraft: Record<string, unknown> = { ...draft, ...(previous && native ? { price_revision: Number(previous.price_revision) } : {}), ...(useRouteDuration ? { seconds: undefined } : {}), provided: undefined };
+      delete fingerprintDraft.route_revision;
+      delete fingerprintDraft.price_revision_id;
+      delete fingerprintDraft.max_charge;
+      const fingerprint = native ? hash(canonical(fingerprintDraft)) : "";
       if (previous) {
         requireValue(!director, 409, "生成任务已存在，请恢复原提交回执");
         await new OriginalLibrary(this.p).access(
@@ -166,6 +204,18 @@ export class OriginalGeneration {
           { kind: "job", row: previous },
           workspace.id,
         );
+        if (native) {
+          requireValue(
+            !previous.deleted_at,
+            409,
+            "已删除作品的请求编号不能再次生成",
+          );
+          requireValue(
+            previous.request_hash === fingerprint,
+            409,
+            "请求编号已用于其他生成任务",
+          );
+        }
         return { id: Number(previous.public_id) };
       }
       let snapshots: Awaited<ReturnType<typeof expandOriginalPacks>>["snapshots"] = [];
@@ -176,8 +226,93 @@ export class OriginalGeneration {
         draft.prompt = expanded.prompt;
         draft.refs = expanded.refs;
         draft.asset_packs = [];
-        adapter.validate(draft, "before-retry");
+        requireValue(
+          draft.refs.length <= 9 && [...draft.prompt].length <= 12000,
+          400,
+          "参考图片合计最多 9 张，提示词和素材说明合计最多 12000 字",
+        );
+        adapter?.validate(draft, "before-retry");
       }
+      if (native) {
+        const route = await resolvePublishedRoute(sql, draft.model);
+        requireValue(route, 409, "模型线路已更新");
+        if (draft.parent)
+          requireValue(
+            await this.task(sql, user, workspace.id, draft.parent),
+            404,
+            "来源任务不可访问",
+          );
+        if (director) {
+          requireValue(
+            await one(
+              sql,
+              `SELECT id FROM connections WHERE id=$1 AND enabled AND NOT removed${quoting ? "" : " FOR SHARE"}`,
+              [route.connectionId],
+            ),
+            409,
+            "当前线路已停止接单",
+          );
+          const prepared = await prepareNativeMedia(
+            this.p,
+            sql,
+            user,
+            workspace.id,
+            route,
+            draft,
+            !quoting,
+            Boolean(meta?.tailParentJobId),
+          );
+          requireValue(pythonStrip(draft.prompt), 400, "请输入提示词");
+          const binding = await directorBasis({
+            native: true,
+            model: route.modelId,
+            route: route.routeRevisionId,
+            price: route.priceRevisionId,
+            connection: route.connectionRevisionId,
+            references: prepared.references,
+          });
+          const actual: DirectorGenerationQuote = {
+            amount: Number(prepared.amount),
+            exactAmount: prepared.amount,
+            key: route.priceRevisionId,
+            binding,
+            routeRevision: route.routeRevisionId,
+            priceRevisionId: route.priceRevisionId,
+          };
+          if (quoting) return actual;
+          requireValue(
+            director.quote?.binding === binding &&
+              director.quote.key === route.priceRevisionId &&
+              creditUnits(director.quote.exactAmount ?? String(director.quote.amount)) ===
+                creditUnits(prepared.amount),
+            409,
+            "模型连接、参考素材或积分报价已变更，请重新预检",
+          );
+          draft.route_revision = director.quote.routeRevision ?? route.routeRevisionId;
+          draft.price_revision_id = director.quote.priceRevisionId ?? route.priceRevisionId;
+          draft.max_charge = prepared.amount;
+        }
+        requireValue(
+          priceRevision != null &&
+            BigInt(priceRevision) === BigInt(policy.price_revision),
+          409,
+          "积分价格已更新，请确认新价格后重新提交",
+        );
+        return acceptNativeMedia(
+          this.p,
+          sql,
+          user,
+          workspace.id,
+          route,
+          draft,
+          uid,
+          fingerprint,
+          Number(policy.price_revision),
+          snapshots,
+          meta,
+        );
+      }
+      requireValue(plugin && adapter, 503, "原生成提交适配器尚未启用");
       // The policy check precedes reference validation and billing in the original.
       if (packages)
         requireValue(
@@ -383,10 +518,17 @@ export class OriginalGeneration {
           config: typeof model.config === "string" ? hash(model.config) : model.config,
           references,
         });
-        const actual = { amount: quote.amount, key: quote.key, binding };
+        const exactAmount = formatCredits(creditUnits(String(quote.amount)));
+        const actual: DirectorGenerationQuote = { amount: quote.amount, exactAmount, key: quote.key, binding };
         if (quoting) return actual;
-        requireValue(director.quote?.binding === binding && director.quote.key === quote.key &&
-          director.quote.amount === quote.amount, 409, "模型连接、参考素材或积分报价已变更，请重新预检");
+        requireValue(
+          director.quote?.binding === binding &&
+            director.quote.key === quote.key &&
+            creditUnits(director.quote.exactAmount ?? String(director.quote.amount)) ===
+              creditUnits(exactAmount),
+          409,
+          "模型连接、参考素材或积分报价已变更，请重新预检",
+        );
       }
       const input = {
         modelId: model.id,

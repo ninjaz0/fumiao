@@ -24,6 +24,7 @@ import { Invites } from "./SettingsInvites";
 import { PluginPage, pluginPageClient } from "./PluginPage";
 import { PluginPanel } from "./PluginPanel";
 import { Members } from "./SettingsMembers";
+import { SettingsModelAccess } from "./SettingsModelAccess";
 import { ModelSettings, type ModelSettingsPreferences } from "./SettingsModels";
 import { PluginSettings } from "./SettingsPlugins";
 import { PriceSettings } from "./SettingsPrices";
@@ -47,6 +48,7 @@ import { SettingsRedeem } from "./SettingsRedeem";
 const adminTabs = [
   ["observability", "运营大盘", "sliders", "billing"],
   ["plugins", "插件", "link", "services"],
+  ["modelAccess", "模型接入", "link", "services"],
   ["models", "模型管理", "model", "services"],
   ["prices", "生成定价", "sliders", "billing"],
   ["creditAdmin", "积分管理", "drive", "billing"],
@@ -99,6 +101,11 @@ export function Settings({
   const admin = state.me.role === "admin";
   const workspace = state.workspace_id;
   const request = useRef(0);
+  const accessModel = useRef<string | undefined>(undefined);
+  function editAccessModel(id?: string) {
+    accessModel.current = id;
+    navigate("modelAccess");
+  }
   const [rechargePending, setRechargePending] = useState<{
     version: number;
     kind: "recharge" | "history";
@@ -281,6 +288,7 @@ export function Settings({
         if (key === tab) return;
         ++request.current;
         setRechargePending(null);
+        accessModel.current = undefined;
         navigate(key);
       }}
     >
@@ -288,6 +296,7 @@ export function Settings({
         <PriceSettings
           key={`${state.me.id}:${workspace}`}
           visible={tab === "prices"}
+          editModel={editAccessModel}
           state={state}
           request={adminRequest}
           refresh={refresh}
@@ -388,10 +397,19 @@ export function Settings({
             navigate={navigate}
           />
         )}
+        {admin && tab === "modelAccess" && (
+          <SettingsModelAccess
+            initialModel={accessModel.current}
+            state={state}
+            request={adminRequest}
+            refresh={refresh}
+          />
+        )}
         {admin && tab === "models" && (
           <ModelSettings
             state={state}
             preferences={modelPreferences}
+            editModel={editAccessModel}
             request={adminRequest}
             refresh={refresh}
             notify={notify}
@@ -415,7 +433,11 @@ export function Settings({
           />
         )}
         {admin && tab === "chatService" && (
-          <ChatSettings request={adminRequest} notify={notify} />
+          <ChatSettings
+            request={adminRequest}
+            notify={notify}
+            setup={() => editAccessModel()}
+          />
         )}
         {admin && tab === "workspaces" && (
           <Workspaces

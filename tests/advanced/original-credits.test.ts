@@ -4,6 +4,16 @@ import { randomUUID } from "node:crypto";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { OriginalCredits } from "@fumiao/original-api/credits.js";
 import { one } from "@fumiao/platform/db.js";
+import { acceptTask } from "@fumiao/platform/accept.js";
+import {
+  creditUnits,
+  formatCredits,
+  tokenCost,
+} from "@fumiao/platform/credit-amount.js";
+import { OriginalBillingExtras } from "@fumiao/original-api/billing-extras.js";
+import { OriginalBudgets } from "@fumiao/original-api/budgets-api.js";
+import { checkAndRecordBudget, computeScopeSpend } from "@fumiao/platform/budgets.js";
+import { canvasRunsFixture } from "../helpers/canvas-runs.js";
 import { databaseFixture } from "../helpers/database.js";
 const password = "safe-test-password";
 async function fixture() {
@@ -209,4 +219,175 @@ test("pre-snapshot Advanced retries retain their receipt without inventing finan
   } finally {
     await f.cleanup();
   }
+});
+
+test("minimum token price survives a recharge, a refund and statement export", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  const { db, p, admin, workspace } = f;
+  const credits = new OriginalCredits(p);
+  const wallet = () => credits.wallet(db, Number(workspace.public_id));
+  await db.query(
+    "UPDATE wallets SET balance=100000000000 WHERE workspace_id=$1",
+    [workspace.id],
+  );
+  const tiny = formatCredits(tokenCost(1n, "0.000001"));
+  const firstJob = await f.runs.generate(
+    admin,
+    await f.project(),
+    "v",
+    f.body(),
+  );
+  const accepted = await one(
+    db,
+    "SELECT id, model_id FROM jobs WHERE public_id=$1",
+    [firstJob.id],
+  );
+  await p.cancel(admin, accepted.id);
+  const model = await one(
+    db,
+    `SELECT m.*, c.plugin_id, c.plugin_version, c.config
+    FROM models m JOIN connections c ON c.id=m.connection_id WHERE m.id=$1`,
+    [accepted.model_id],
+  );
+  const reserve = () =>
+    db.transaction((sql) =>
+      acceptTask(
+        p,
+        sql,
+        admin,
+        workspace.id,
+        model,
+        { key: randomUUID(), prompt: "测试", references: [], params: {} },
+        randomUUID(),
+        { amount: tiny, key: null, revision: null },
+      ),
+    );
+  const settle = (id: string, state: "completed" | "failed") =>
+    db.transaction(async (sql) => {
+      const job = await one(sql, "SELECT * FROM jobs WHERE id=$1 FOR UPDATE", [
+        id,
+      ]);
+      await p.settle(sql, job, state, undefined, undefined, undefined, {
+        preserveTiming: true,
+      });
+    });
+
+  await settle((await reserve()).id, "completed");
+  await db.transaction((sql) =>
+    p.credit(sql, workspace.id, 1, "payment", "recharge"),
+  );
+  const afterRecharge = await wallet();
+  assert.equal(afterRecharge.exact.balance, "100000000000.999999999999");
+  assert.equal(typeof afterRecharge.balance, "number");
+  const retry = await reserve();
+  assert.equal((await wallet()).exact.available, "100000000000.999999999998");
+  await settle(retry.id, "failed");
+  assert.deepEqual((await wallet()).exact, afterRecharge.exact);
+  const history = await credits.history(db, Number(workspace.public_id));
+  assert.equal(history[0].action, "refund");
+  assert.equal(history[0].exact.amount, tiny);
+  assert.equal(
+    history.find((row) => row.action === "spend")?.exact.amount,
+    tiny,
+  );
+  const billing = new OriginalBillingExtras(p);
+  assert.ok(
+    (await billing.exportStatement(admin, "csv")).bytes
+      .toString()
+      .includes("100000000000.999999999999"),
+  );
+  const pdf = (await billing.exportStatement(admin, "pdf")).bytes.toString(
+    "ascii",
+  );
+  assert.ok(
+    pdf.includes(
+      Buffer.from("100000000000.999999999999", "utf16le")
+        .swap16()
+        .toString("hex")
+        .toUpperCase(),
+    ),
+  );
+});
+
+test("token price is exact to one trillionth of a credit and rejects excess scale", () => {
+  assert.equal(tokenCost(1n, "0.000001"), 1n);
+  assert.equal(
+    formatCredits(creditUnits("100000000000") - 1n),
+    "99999999999.999999999999",
+  );
+  assert.equal(
+    formatCredits(creditUnits("-0.000000000001")),
+    "-0.000000000001",
+  );
+  assert.throws(() => tokenCost(1n, "-1"));
+  assert.throws(() => tokenCost(1n, "0.0000001"));
+  assert.throws(() => creditUnits("0.0000000000001"));
+});
+
+test("a budget cap rejects a one-trillionth overage on a large committed spend", async (t) => {
+  const f = await fixture();
+  t.after(() => f.cleanup());
+  const ws = await one(f.db, "SELECT id FROM workspaces WHERE public_id=2");
+  await f.db.query(
+    `INSERT INTO budget_policies(scope_type,scope_id,period,warn_limit,cap_limit,mode)
+    VALUES('workspace',$1,'total',0,100000000000,'cap')`,
+    [ws.id],
+  );
+  await f.db.query(
+    `INSERT INTO ledger(id,workspace_id,key,action,amount)
+    VALUES(gen_random_uuid(),$1,'past-spend','spend',100000000000)`,
+    [ws.id],
+  );
+  await assert.rejects(
+    checkAndRecordBudget(f.db, {
+      workspaceId: ws.id,
+      amount: "0.000000000001",
+    }),
+    /100000000000\.000000000001 \/ 上限/,
+  );
+});
+
+test("studio budget limits round-trip decimal inputs alongside legacy integer fields", async (t) => {
+  const f = await fixture();
+  t.after(() => f.cleanup());
+  const budgets = new OriginalBudgets(f.p);
+  const body = {
+    period: "total",
+    mode: "cap",
+    warn_limit: 0,
+    cap_limit: "1.000000000001",
+  };
+  await budgets.upsertPolicy(f.admin, body);
+  const policy = (await budgets.list(f.admin)).policies[0];
+  assert.equal(policy.exact.cap_limit, "1.000000000001");
+  assert.equal(typeof policy.cap_limit, "number");
+  await assert.rejects(
+    budgets.upsertPolicy(f.admin, { ...body, warn_limit: "1.000000000002" }),
+    { status: 400 },
+  );
+  await assert.rejects(
+    budgets.upsertPolicy(f.admin, { ...body, cap_limit: "1.0000000000001" }),
+    { status: 422 },
+  );
+});
+
+
+test("historical signed spend and current spend count toward both project and workspace budgets", async (t) => {
+  const f = await canvasRunsFixture();
+  t.after(() => f.cleanup());
+  const project = await f.project();
+  const accepted = await f.runs.generate(f.admin, project, "v", f.body());
+  await f.db.query(`INSERT INTO ledger(id,workspace_id,job_id,key,action,amount,balance_snapshot,held_snapshot)
+    SELECT gen_random_uuid(),workspace_id,id,'import-ledger:signed','spend',-5,995,0
+      FROM jobs WHERE public_id=$1`, [accepted.id]);
+  await f.db.query(`INSERT INTO ledger(id,workspace_id,job_id,key,action,amount,balance_snapshot,held_snapshot)
+    SELECT gen_random_uuid(),workspace_id,id,'current-debit','spend',0.25,994.75,0
+      FROM jobs WHERE public_id=$1`, [accepted.id]);
+
+  for (const [type, id] of [["workspace", f.workspace.id], ["project", project]] as const) {
+    assert.equal((await computeScopeSpend(f.db, type, String(id), "total")).exact.spent, "5.25");
+  }
+  const history = await new OriginalCredits(f.p).history(f.db, Number(f.workspace.public_id));
+  assert.ok(history.some((row) => row.action === "spend" && row.exact.amount === "-5"));
 });

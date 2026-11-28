@@ -40,6 +40,7 @@ import {
   referenceAsset,
   referenceLabel,
   selectedModel,
+  type MediaQuote,
   type FrameSlot,
   quote,
   type DraftSession,
@@ -49,7 +50,8 @@ import {
 const imageAccept =
   "image/jpeg,image/png,image/webp,image/heic,image/heif,image/heic-sequence,image/heif-sequence,image/avif,image/tiff,image/bmp,image/gif,.jpg,.jpeg,.png,.webp,.heic,.heif,.avif,.tif,.tiff,.bmp,.gif";
 
-type Estimate = {
+type Estimate = Partial<MediaQuote> & {
+  quoteError?: string;
   duration?: {
     high?: number;
     median?: number;
@@ -57,6 +59,10 @@ type Estimate = {
     source?: string;
   };
 };
+export function quoteFromEstimate(value?: Estimate): MediaQuote | undefined {
+  if (value?.price_revision !== undefined && value.route_revision && value.price_revision_id && value.max_charge !== undefined)
+    return { price_revision: value.price_revision, route_revision: value.route_revision, price_revision_id: value.price_revision_id, max_charge: value.max_charge };
+}
 export type RequestEstimate = (
   body: ReturnType<typeof estimateBody>,
 ) => Promise<Estimate>;
@@ -78,7 +84,7 @@ export function useEstimate(
   const serialized = body && JSON.stringify(body);
   const requestKey =
     serialized && state
-      ? `${state.me.id}/${state.workspace_id}/${serialized}`
+      ? `${state.me.id}/${state.workspace_id}/${state.pricing?.revision}/${serialized}`
       : null;
   const key = useRef<string | null>(null);
   useEffect(() => {
@@ -95,8 +101,8 @@ export function useEstimate(
         try {
           const result = await request(JSON.parse(serialized));
           if (live) setEstimate(result);
-        } catch {
-          if (live) setEstimate(undefined);
+        } catch (error) {
+          if (live) setEstimate({ quoteError: (error as Error).message || "无法取得当前报价" });
         }
       })();
     }, 220);
@@ -207,7 +213,8 @@ export function Composer({
   const plainPrompt = frameMode || audio;
   const frameOptions = h3Options(draft.h3);
   const references = useMemo(() => packReferences(session), [session]);
-  const price = quote(state, draft);
+  const offered = quoteFromEstimate(estimate);
+  const price = quote(state, draft, offered);
   const available = modelAvailable(state, model);
   const unavailable = Boolean(state.studio_plugins) && !available;
   const hasAvailableModel = Object.keys(modelsForKind(state, draft.kind)).some(
@@ -219,6 +226,8 @@ export function Composer({
   const { status, submitReason } = composerFeedback(state, session, {
     uploading,
     submitting,
+    offered,
+    quoteError: estimate?.quoteError,
   });
   const statusMessage = status || (unavailable && hasAnyAvailableModel && !hasAvailableModel
     ? "当前类型暂无可用模型，可切换创作类型"
@@ -279,7 +288,7 @@ export function Composer({
   const estimateLabel = duration?.high
     ? (duration.source === "legacy" ? "历史参考总耗时约 " : "约 ") +
       estimateTime(duration.median ?? duration.high)
-    : estimate
+    : estimate && !estimate.quoteError
       ? "观测中"
       : "";
   const hint = duration?.samples
@@ -706,6 +715,7 @@ export function Composer({
           {!unavailable && form?.parameterObject && (
             <ParameterFields
               form={form}
+              keepHistorical={Boolean(state.pricing.published?.some(p => p.model === model))}
               values={draft.params ?? {}}
               change={(params) =>
                 update({ ...session, draft: { ...draft, params } })
@@ -803,7 +813,7 @@ export function Composer({
             >
               {model &&
                 (price.amount === undefined ? (
-                  "未定价"
+                  price.label
                 ) : (
                   <>
                     <svg
@@ -813,7 +823,7 @@ export function Composer({
                     >
                       <path d="M12 2C13.4 8.7 15.3 10.6 22 12C15.3 13.4 13.4 15.3 12 22C10.6 15.3 8.7 13.4 2 12C8.7 10.6 10.6 8.7 12 2Z" />
                     </svg>
-                    <span>{price.amount}</span>
+                    <span>{offered && "最高 "}{price.amount}</span>
                   </>
                 ))}
             </span>
@@ -868,7 +878,7 @@ export function Composer({
       <div className="composer-status" aria-live="polite">
         {statusMessage && <span className="fm-state-change" key={statusMessage}>{statusMessage}</span>}
       </div>
-      {available && price.amount !== undefined && price.available < price.amount && (
+      {available && price.amount !== undefined && !price.allowed && (
         <button className="quiet-button" onClick={onRecharge}>去充值</button>
       )}
       {restoreDraft && (

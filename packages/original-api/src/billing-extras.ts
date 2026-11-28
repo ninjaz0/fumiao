@@ -1,3 +1,4 @@
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { one } from "@fumiao/platform/db.js";
 import type { Actor, Platform } from "@fumiao/platform/platform.js";
@@ -73,7 +74,7 @@ function wrapDisplayText(text: string, maxCols: number): string[] {
   let current = "";
   let cols = 0;
   for (const ch of clean) {
-    const chWidth = ch.charCodeAt(0) > 0x7f ? 2 : 1;
+    const chWidth = displayWidth(ch);
     if (cols + chWidth > maxCols && current) {
       lines.push(current);
       current = ch;
@@ -110,8 +111,8 @@ function parseRangeBound(raw: string | undefined, endOfDay: boolean): Date | nul
 export function buildLedgerStatementPdf(options: {
   workspaceName: string;
   workspacePublicId: number;
-  balance: number;
-  reserved: number;
+  balance: string;
+  reserved: string;
   generatedAtIso: string;
   rangeLabel?: string;
   totalCount?: number;
@@ -119,64 +120,114 @@ export function buildLedgerStatementPdf(options: {
     id: number;
     createdIso: string;
     action: string;
-    amount: number;
-    balance: number;
-    reserved: number;
+    amount: string;
+    balance: string;
+    reserved: string;
     note: string;
   }>;
 }): Buffer {
   const totalCount = options.totalCount ?? options.rows.length;
-  const totalIn = options.rows
-    .filter((r) => ["recharge", "grant", "adjust"].includes(r.action) && r.amount > 0)
-    .reduce((sum, r) => sum + r.amount, 0);
-  const totalOut = options.rows
-    .filter((r) => r.action === "spend")
-    .reduce((sum, r) => sum + Math.abs(r.amount), 0);
+  let totalIn = 0n;
+  let totalOut = 0n;
+  for (const row of options.rows) {
+    const amount = creditUnits(row.amount);
+    if (["recharge", "grant", "adjust"].includes(row.action) && amount > 0n)
+      totalIn += amount;
+    if (row.action === "spend") totalOut += amount < 0n ? -amount : amount;
+  }
+  const available = formatCredits(
+    creditUnits(options.balance) - creditUnits(options.reserved),
+  );
 
   const rangeText = options.rangeLabel || "全部时间";
-  const headerLines = [
+  // STSong uses 4.25pt per ASCII column and 8.5pt per CJK character at this size.
+  const maxCols = 128;
+  const rule = "-".repeat(94);
+  const heading = [
     "弗淼工作台 · 积分账户对账单 (FUMIAO CREDIT STATEMENT)",
-    `工作区：#${options.workspacePublicId} ${options.workspaceName}    统计区间：${rangeText}`,
+    ...wrapDisplayText(
+      `工作区：#${options.workspacePublicId} ${options.workspaceName}    统计区间：${rangeText}`,
+      maxCols,
+    ),
     `生成时间：${options.generatedAtIso.replace("T", " ").slice(0, 19)} UTC    记录数：${options.rows.length} / 总计 ${totalCount} 条`,
-    `余额快照：总余额 ${options.balance} | 冻结 ${options.reserved} | 可用 ${options.balance - options.reserved} 积分（入账合计 +${totalIn} / 扣费合计 -${totalOut}）`,
-    "----------------------------------------------------------------------------------------------",
+    `余额快照：总余额 ${options.balance} | 冻结 ${options.reserved}`,
+    `可用 ${available} 积分`,
+    `入账合计 +${formatCredits(totalIn)} / 扣费合计 -${formatCredits(totalOut)}`,
+  ];
+  const tableHeading = [
+    rule,
     "编号     | 时间(UTC)           | 类型       | 变动积分 | 余额快照 | 备注",
-    "----------------------------------------------------------------------------------------------",
+    rule,
   ];
 
-  // Expand every ledger entry into 1+ wrapped display lines (never silently truncating notes!)
-  const bodyLines: string[] = [];
+  // Reserve room for the footer and repeat the column labels on continuation pages.
+  const linesPerPage = 51;
+  const pageChunks: string[][] = [];
+  let page: string[] = [];
+  const nextPage = () => {
+    pageChunks.push(page);
+    page = [];
+  };
+  for (const line of heading) {
+    if (page.length === linesPerPage) nextPage();
+    page.push(line);
+  }
+  if (page.length + tableHeading.length >= linesPerPage) nextPage();
+  page.push(...tableHeading);
   for (const r of options.rows) {
     const idCol = padRightDisplay(String(r.id), 8);
-    const tsCol = padRightDisplay(r.createdIso.slice(0, 19).replace("T", " "), 19);
-    const actLabel = ACTION_LABELS_ZH[r.action] || r.action;
-    const actCol = padRightDisplay(actLabel, 10);
+    const tsCol = padRightDisplay(
+      r.createdIso.slice(0, 19).replace("T", " "),
+      19,
+    );
+    const actCol = padRightDisplay(ACTION_LABELS_ZH[r.action] || r.action, 10);
     const signedAmt =
       r.action === "spend"
-        ? `-${Math.abs(r.amount)}`
+        ? `-${r.amount.replace(/^-/, "")}`
         : r.action === "hold"
           ? `(${r.amount})`
-          : r.amount >= 0
+          : !r.amount.startsWith("-")
             ? `+${r.amount}`
-            : String(r.amount);
-    const amtCol = signedAmt.padStart(8);
-    const balCol = String(r.balance).padStart(8);
-    const wrappedNote = wrapDisplayText(r.note || "-", 30);
-    bodyLines.push(`${idCol} | ${tsCol} | ${actCol} | ${amtCol} | ${balCol} | ${wrappedNote[0]}`);
-    for (let i = 1; i < wrappedNote.length; i++) {
-      bodyLines.push(`${" ".repeat(65)} | ${wrappedNote[i]}`);
+            : r.amount;
+    const identity = `${idCol} | ${tsCol} | ${actCol}`;
+    const values = `${signedAmt.padStart(8)} | ${r.balance.padStart(8)}`;
+    const prefix = `${identity} | ${values} | `;
+    const noteWidth = maxCols - displayWidth(prefix);
+    let row: string[];
+    if (noteWidth >= 24) {
+      const [first, ...rest] = wrapDisplayText(r.note || "-", noteWidth);
+      row = [
+        prefix + first,
+        ...rest.map((line) => " ".repeat(displayWidth(prefix)) + line),
+      ];
+    } else {
+      // Keep both numbers intact when a large snapshot leaves too little room for notes.
+      row = [
+        identity,
+        `    变动积分 ${signedAmt} | 余额快照 ${r.balance}`,
+        ...wrapDisplayText(`备注：${r.note || "-"}`, maxCols - 4).map(
+          (line) => "    " + line,
+        ),
+      ];
+    }
+    if (
+      row.length <= linesPerPage - tableHeading.length &&
+      page.length + row.length > linesPerPage
+    ) {
+      nextPage();
+      page.push(...tableHeading);
+    }
+    for (const line of row) {
+      if (page.length === linesPerPage) {
+        nextPage();
+        page.push(...tableHeading);
+      }
+      page.push(line);
     }
   }
-  if (!bodyLines.length) {
-    bodyLines.push("（该时间范围内无积分流水记录）");
-  }
-
-  const linesPerPage = 42;
-  const pageChunks: string[][] = [];
-  for (let i = 0; i < bodyLines.length; i += linesPerPage) {
-    pageChunks.push(bodyLines.slice(i, i + linesPerPage));
-  }
-  const pageCount = Math.max(1, pageChunks.length);
+  if (!options.rows.length) page.push("（该时间范围内无积分流水记录）");
+  nextPage();
+  const pageCount = pageChunks.length;
 
   // Object layout:
   // 1: Catalog
@@ -195,9 +246,8 @@ export function buildLedgerStatementPdf(options: {
     pageObjIds.push(pageObjId);
 
     const lines = [
-      ...headerLines,
-      ...(pageChunks[pageIdx] ?? []),
-      "----------------------------------------------------------------------------------------------",
+      ...pageChunks[pageIdx],
+      rule,
       `第 ${pageIdx + 1} / ${pageCount} 页    已导出 ${options.rows.length} 条记录（总计 ${totalCount} 条）`,
     ];
 
@@ -227,7 +277,9 @@ export function buildLedgerStatementPdf(options: {
     ...dynamicObjects,
   ];
 
-  const chunks: Buffer[] = [Buffer.from("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n", "binary")];
+  const chunks: Buffer[] = [
+    Buffer.from("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n", "binary"),
+  ];
   const offsets: number[] = [0];
   let cursor = chunks[0].length;
   for (const obj of objects) {
@@ -238,7 +290,10 @@ export function buildLedgerStatementPdf(options: {
   }
 
   const xrefOffset = cursor;
-  const xrefLines = [`xref\n0 ${objects.length + 1}\n`, "0000000000 65535 f \n"];
+  const xrefLines = [
+    `xref\n0 ${objects.length + 1}\n`,
+    "0000000000 65535 f \n",
+  ];
   for (let i = 1; i < offsets.length; i++) {
     xrefLines.push(`${String(offsets[i]).padStart(10, "0")} 00000 n \n`);
   }
@@ -416,7 +471,7 @@ export class OriginalBillingExtras {
         name: String(code.name),
         workspace_id: Number(ws.public_id),
         balance: Number(wallet.balance),
-        available: Number(wallet.balance) - Number(wallet.held),
+        available: Number(formatCredits(creditUnits(String(wallet.balance)) - creditUnits(String(wallet.held)))),
       };
     });
   }
@@ -991,8 +1046,8 @@ export class OriginalBillingExtras {
         const pdfBytes = buildLedgerStatementPdf({
           workspaceName: String(ws.name || `工作区 ${ws.public_id}`),
           workspacePublicId: Number(ws.public_id),
-          balance: Number(wallet?.balance ?? 0),
-          reserved: Number(wallet?.held ?? 0),
+          balance: formatCredits(creditUnits(String(wallet?.balance ?? 0))),
+          reserved: formatCredits(creditUnits(String(wallet?.held ?? 0))),
           generatedAtIso: new Date().toISOString(),
           rangeLabel,
           totalCount,
@@ -1000,9 +1055,9 @@ export class OriginalBillingExtras {
             id: Number(r.public_id ?? i + 1),
             createdIso: new Date(r.created_at).toISOString(),
             action: String(r.action),
-            amount: Number(r.amount),
-            balance: Number(r.balance_snapshot ?? 0),
-            reserved: Number(r.held_snapshot ?? 0),
+            amount: formatCredits(creditUnits(String(r.amount))),
+            balance: formatCredits(creditUnits(String(r.balance_snapshot ?? 0))),
+            reserved: formatCredits(creditUnits(String(r.held_snapshot ?? 0))),
             note: String(r.note ?? ""),
           })),
         });
@@ -1035,9 +1090,9 @@ export class OriginalBillingExtras {
             csvCell(r.public_id ?? ""),
             csvCell(new Date(r.created_at).toISOString()),
             csvCell(ACTION_LABELS_ZH[String(r.action)] ?? r.action),
-            csvCell(r.amount),
-            csvCell(r.balance_snapshot ?? ""),
-            csvCell(r.held_snapshot ?? ""),
+            csvCell(formatCredits(creditUnits(String(r.amount)))),
+            csvCell(r.balance_snapshot === null ? "" : formatCredits(creditUnits(String(r.balance_snapshot)))),
+            csvCell(r.held_snapshot === null ? "" : formatCredits(creditUnits(String(r.held_snapshot)))),
             csvCell(r.actor_name),
             csvCell(r.note ?? ""),
           ].join(","),

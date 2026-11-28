@@ -104,10 +104,33 @@ export class OriginalJobs {
         "DELETE FROM document_assets WHERE asset_id=ANY($1::uuid[])",
         [ids],
       );
+      if (job.source_kind === "builtin" && ids.length) {
+        // Persist cleanup before dropping the last reference to private bytes.
+        await sql.query(
+          `INSERT INTO model_access_staging(job_id,output_index,asset_id,object_key)
+          SELECT $1,(metadata->>'outputIndex')::integer,id,object_key FROM assets WHERE id=ANY($2::uuid[])`,
+          [job.id, ids],
+        );
+      }
       await sql.query("DELETE FROM assets WHERE id=ANY($1::uuid[])", [ids]);
-      return assets.map((a) => a.object_key as string);
+      return {
+        keys: assets.map((a) => a.object_key as string),
+        tracked: job.source_kind === "builtin",
+      };
     });
-    for (const key of objects) await this.p.storage.remove(key);
+    for (const key of objects.keys) {
+      try {
+        await this.p.storage.remove(key);
+      } catch (error) {
+        if (!objects.tracked) throw error;
+        continue;
+      }
+      if (objects.tracked)
+        await this.p.db.query(
+          "DELETE FROM model_access_staging WHERE object_key=$1",
+          [key],
+        );
+    }
     return { ok: true };
   }
 }

@@ -73,11 +73,13 @@ type ChatConfig = {
 };
 
 export function ChatSettings({
+  setup,
   request,
   notify,
 }: {
   request: AdminRequest;
   notify: (message: string) => void;
+  setup: () => void;
 }) {
   const [config, setConfig] = useState<ChatConfig>();
   const [error, setError] = useState("");
@@ -130,6 +132,9 @@ export function ChatSettings({
           request={request}
         />
       ))}
+      <button className="ledger-button" type="button" onClick={setup}>
+        接入模型或接管兼容对话连接
+      </button>
     </section>
   );
 }

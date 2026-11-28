@@ -271,7 +271,7 @@ export function ComposerMenuContents({
   state: StudioState;
   session: DraftSession;
   uploading: boolean;
-  update: (session: DraftSession) => void;
+  update: (session: DraftSession, options?: { keepSubmitId: boolean }) => void;
   close: (focus?: boolean) => void;
   preview: (id: string) => void;
   insert: (id: string) => void;
@@ -327,7 +327,7 @@ export function ComposerMenuContents({
               pick={() => {
                 if (uploading) return;
                 const next = changeCreation(state, session, value);
-                if (next !== session) update(next);
+                if (next !== session) update(next, { keepSubmitId: true });
                 close(true);
               }}
             />

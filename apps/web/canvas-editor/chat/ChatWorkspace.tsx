@@ -2,17 +2,20 @@ import {useEffect,useLayoutEffect,useRef,useState,useMemo,type ClipboardEvent,ty
 import {ArrowUp,Square,Plus,Copy,Check,RotateCcw,Trash2,Pencil,PanelLeft,X,FileText,MessageSquare,ArrowDown,LoaderCircle,ExternalLink} from 'lucide-react';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
+import {useChatQuote,quoteFunded,type ChatQuote} from './useChatQuote';
+import {ChatBill,type TurnBill} from './ChatBill';
 import {ModelSelect} from './ModelSelect';
 import {ConversationList,type Conversation} from './ConversationList';
 import {chatFreshness} from './freshness';
 import {scrollMotion} from '../../app/motion';
 import {chatSettingsHref,hasAvailableChatModels} from './guidance';
 
-export type Message={id:number;role:'user'|'assistant';content:string;state:string;model:string;author_name:string;error?:string;context:string;reply_to:number|null};
-type Snapshot={conversation:Conversation;messages:Message[]};
-type Config={models:Record<string,{label:string;provider:string}>;pricing:{revision:number;items:{key:string;amount:number|null}[]};credits:{available:number}};
+export type Message={id:number;role:'user'|'assistant';content:string;state:string;model:string;author_name:string;error?:string;turn?:string|null;context:string;reply_to:number|null};
+type Snapshot={conversation:Conversation;messages:Message[];accepted_turn?:string};
+type PendingSend={cid:string;body:{uid:string;model:string;text:string;expected_revision:number;price_revision:string|number;retry:number|null;context?:ChatContext;max_charge?:string}};
+type Config={models:Record<string,{label:string;provider:string;billing?:"token"}>;pricing:{revision:number;items:{key:string;amount:number|null}[]};credits:{available:number;exact?:{available:string}}};
 export type ChatContext={project:string;node:string;expected_revision:number;writeback?:boolean;script_ids?:string[];node_ids?:string[]};
-export type ApplyOptions={automatic?:boolean;expectedText?:string;targetNode?:string;targetProject?:string;uid?:string};
+export type ApplyOptions={automatic?:boolean;expectedRevision?:number;expectedText?:string;targetNode?:string;targetProject?:string;uid?:string};
 type Props={workspace:number;userId:number;isAdmin?:boolean;configureLabel?:string;configureHref?:string;onConfigureModels?:(event:MouseEvent<HTMLButtonElement|HTMLAnchorElement>)=>void;compact?:boolean;inline?:boolean;onActivityChange?:(active:boolean)=>void;project?:string;node?:string;nodeTitle?:string;getContext?:()=>Promise<ChatContext>;onApply?:(cid:string,message:Message,mode:'new'|'replace',options?:ApplyOptions)=>Promise<void>;onClose?:()=>void;openCanvas?:(event:MouseEvent<HTMLAnchorElement>)=>void;onRecharge?:()=>void};
 class ApiError extends Error {constructor(public status:number,message:string){super(message)}}
 export async function chatRequest<T=any>(workspace:number,path:string,body?:unknown,method?:string):Promise<T>{
@@ -48,15 +51,25 @@ export function ChatWorkspace(props:Props){
  const [picker,setPicker]=useState<Message|null>(null),[projects,setProjects]=useState<{id:string;title:string}[]>([]),[target,setTarget]=useState(''),[canvasName,setCanvasName]=useState('新画布');
  const [applied,setApplied]=useState<{id:string;message:number}|null>(null);
  const [listLoading,setListLoading]=useState(true),[listError,setListError]=useState('');
- const [writes,setWrites]=useState<Record<string,{cid:string;uid:string}>>(()=>{try{return JSON.parse(sessionStorage.getItem(scope+'-writes')||'{}')}catch{return {}}}),[applying,setApplying]=useState(false),[updatedMessage,setUpdatedMessage]=useState<number|null>(null);
+ const [writes,setWrites]=useState<Record<string,{cid:string;uid:string;expectedRevision?:number}>>(()=>{try{return JSON.parse(sessionStorage.getItem(scope+'-writes')||'{}')}catch{return {}}}),[applying,setApplying]=useState(false),[updatedMessage,setUpdatedMessage]=useState<number|null>(null);
  const writing=useRef<number|null>(null);
- const saveWrites=(fn:(current:Record<string,{cid:string;uid:string}>)=>Record<string,{cid:string;uid:string}>)=>setWrites(current=>{const next=fn(current);sessionStorage.setItem(scope+'-writes',JSON.stringify(next));return next});
+ const saveWrites=(fn:(current:Record<string,{cid:string;uid:string;expectedRevision?:number}>)=>Record<string,{cid:string;uid:string;expectedRevision?:number}>)=>setWrites(current=>{const next=fn(current);sessionStorage.setItem(scope+'-writes',JSON.stringify(next));return next});
  const forgetWrite=(id:number)=>saveWrites(current=>{const next={...current};delete next[id];return next});
  const deletedWasCurrent=useRef(false);
  const operationPending=useRef(false);
  const creatingConversation=useRef(false);
  const initialHistory=useRef(true), cfgRef=useRef<Config|null>(null);
  const scroll=useRef<HTMLDivElement>(null),input=useRef<HTMLTextAreaElement>(null),follow=useRef(true),alive=useRef(true),current=useRef(cid),pending=useRef<{signature:string;uid:string}|null>(null);
+ const [pendingVersion,refreshPending]=useState(0);
+ const pendingKey=(id:string)=>scope+'-pending-send-'+id;
+ const waiting=useMemo(()=>{
+  if(!cid)return null;
+  try{const value=JSON.parse(sessionStorage.getItem(pendingKey(cid))||'null') as PendingSend|null;return value?.cid===cid&&value.body?.uid?value:null}catch{return null}
+ },[scope,cid,pendingVersion]);
+ const savePending=(p:PendingSend,done=false)=>{
+  if(done)sessionStorage.removeItem(pendingKey(p.cid));else sessionStorage.setItem(pendingKey(p.cid),JSON.stringify(p));
+  refreshPending(v=>v+1);
+ };
  const req=<T=any,>(path:string,body?:unknown,method?:string)=>chatRequest<T>(workspace,path,body,method);
  const loadList=async()=>{const started=acceptConversation.startList();try{const r=await req<{conversations:Conversation[]}>('/api/chats'+(project?'?project='+encodeURIComponent(project)+'&node='+encodeURIComponent(node||''):''));if(alive.current){setList(items=>acceptConversation.reconcile(r.conversations,items,started));setListError('');if(initialHistory.current&&compact&&!current.current&&r.conversations.length){const id=r.conversations[0].id;current.current=id;setCid(id);sessionStorage.setItem(scope+'-active',id)}initialHistory.current=false}}catch(e){if(alive.current)setListError((e as Error).message);throw e}finally{if(alive.current)setListLoading(false)}};
  const loadConfig=async()=>{const c=await req<Config>('/api/chat/config');if(alive.current){cfgRef.current=c;setConfig(c);setModel(m=>m in c.models?m:Object.keys(c.models)[0]||'')}};
@@ -93,7 +106,7 @@ export function ChatWorkspace(props:Props){
   const source=data.messages.find(m=>m.id===message.reply_to);let context:any={};try{context=JSON.parse(source?.context||'{}')}catch{}
   if(!context.writeback||context.project!==project||context.node!==node||typeof context.text!=='string'){forgetWrite(message.id);return}
   writing.current=message.id;setApplying(true);
-  void props.onApply(data.conversation.id,message,'replace',{automatic:true,expectedText:context.text,targetNode:context.node,targetProject:context.project,uid:writes[message.id].uid})
+  void props.onApply(data.conversation.id,message,'replace',{automatic:true,expectedRevision:writes[message.id].expectedRevision,expectedText:context.text,targetNode:context.node,targetProject:context.project,uid:writes[message.id].uid})
    .then(()=>{if(alive.current){setUpdatedMessage(message.id);setNotice('已更新节点文字，可撤销')}})
    .catch(e=>{if(alive.current)setError((e as Error).message)})
    .finally(()=>{forgetWrite(message.id);writing.current=null;if(alive.current)setApplying(false)});
@@ -102,13 +115,39 @@ export function ChatWorkspace(props:Props){
  const activeWork=busy||running||applying||Object.keys(writes).length>0;
  const activityCallback=useRef(props.onActivityChange);activityCallback.current=props.onActivityChange;
  useEffect(()=>{activityCallback.current?.(activeWork)},[activeWork]);
- const price=config?.pricing.items.find(p=>p.key===model+'|reply')?.amount;
- const creditNotice=model&&config&&!running&&(price==null
-  ? <p className="fm-chat-balance" role="status">当前对话模型尚未定价</p>
-  : config.credits.available<price&&<p className="fm-chat-balance" role="status">
-   当前空间积分不足{props.onRecharge&&<button type="button" onClick={props.onRecharge}>去充值</button>}
-  </p>);
- const canSend=!!model&&price!=null&&!!config&&config.credits.available>=price&&!busy&&!applying&&!running&&!loading&&(!cid||!!data);
+ const native=config?.models[model]?.billing==="token";
+ const balance=config?.credits.exact?.available;
+ const revision=data?.conversation.revision;
+ const latest=data?.messages.at(-1);
+ const retryId=latest && ['failed','stopped','interrupted'].includes(latest.state)?latest.id:undefined;
+ const quoteKey=JSON.stringify([workspace,model,cid,revision,project,node,config?.pricing.revision,balance]);
+ const quoteFor=async(text:string,retry?:number)=>req<ChatQuote>('/api/chat/quote',{cid:cid||null,model,text,retry,context:await props.getContext?.()});
+ const offered=useChatQuote(native&&!waiting&&!running&&draft.trim()?JSON.stringify([quoteKey,draft]):null,()=>quoteFor(draft));
+ const retryOffer=useChatQuote(native&&!waiting&&!running&&retryId?JSON.stringify([quoteKey,retryId]):null,()=>quoteFor('',retryId));
+ const fixedPrice=config?.pricing.items.find(p=>p.key===model+'|reply')?.amount;
+ const price=native?offered.quote?.max_charge:fixedPrice;
+ const funds=(p:string|number|null|undefined)=>!!config&&quoteFunded(balance,config.credits.available,p);
+ const creditNotice=model&&config&&!running&&(native
+  ? (offered.error||retryOffer.error)&&<p className="fm-chat-balance" role="status">{offered.error||retryOffer.error}<button type="button" onClick={()=>{offered.refresh();retryOffer.refresh()}}>重新报价</button>{props.onRecharge&&<button type="button" onClick={props.onRecharge}>去充值</button>}</p>
+  : price==null?<p className="fm-chat-balance" role="status">当前对话模型尚未定价</p>
+  : !funds(price)&&<p className="fm-chat-balance" role="status">当前空间积分不足{props.onRecharge&&<button type="button" onClick={props.onRecharge}>去充值</button>}</p>);
+ const ready=!!model&&!waiting&&!busy&&!applying&&!running&&!loading&&(!cid||!!data);
+ const canSend=ready&&funds(price);
+ const canRetry=ready&&funds(native?retryOffer.quote?.max_charge:fixedPrice);
+ const [billing,setBilling]=useState<{cid:string;bills:TurnBill[];error?:string}>();
+ const [billVersion,refreshBills]=useState(0);
+ useEffect(()=>{
+  if(!cid||!revision)return;
+  let current=true;
+  void req<{bills:TurnBill[]}>('/api/chats/'+cid+'/bills').then(r=>{if(current)setBilling({cid,bills:r.bills})},
+   ()=>{if(current)setBilling({cid,bills:[],error:'账单载入失败'})});
+  return ()=>{current=false};
+ },[cid,workspace,revision,billVersion]);
+ const bills=billing?.cid===cid?billing.bills:[];
+ const billError=billing?.cid===cid&&billing.error&&<button type="button" onClick={()=>refreshBills(v=>v+1)}>账单载入失败，重试</button>;
+ const priceLabel=native?'本次最高扣费':'每条完整回复';
+ const priceHint=price==null?(native?(offered.error?'报价不可用':draft.trim()?'报价中':'按 Token 计费'):'未定价'):undefined;
+ const cost=<span className="fm-chat-cost fm-number" title={price!=null?`${priceLabel} ${price} 积分，可用 ${config?.credits.available}`:priceHint} aria-label={price!=null?`${priceLabel} ${price} 积分`:priceHint}>{priceHint??<><Credit/>{native?'最高 ':''}{price}</>}</span>;
  const noModels=hasAvailableChatModels(config)===false;
  const canConfigure=props.isAdmin??Boolean(props.onConfigureModels||props.configureHref);
  const configureLabel=props.configureLabel||'前往配置对话模型';
@@ -130,8 +169,37 @@ export function ChatWorkspace(props:Props){
   try{await fn()}catch(e){if(alive.current)setError((e as Error).message)}
   finally{operationPending.current=false;creatingConversation.current=false;if(alive.current)setBusy(false)}
  };
+ const transmit=async(p:PendingSend,replay=false)=>{
+  const {cid:sentId,body}=p;
+  let result:Snapshot;
+  try{result=await req<Snapshot>('/api/chats/'+sentId+'/messages',body)}
+  catch(e){
+   if(e instanceof ApiError&&e.status>=400&&e.status<500){
+    savePending(p,true);
+    if(e.status===409){
+     offered.refresh();retryOffer.refresh();update(await req('/api/chats/'+sentId));await loadConfig();
+    }
+   }
+   throw e;
+  }
+  savePending(p,true);
+  if(body.context?.writeback&&props.onApply){
+   const reply=result.accepted_turn && result.messages.find(m=>m.role==='assistant' && m.turn===result.accepted_turn);
+   if(reply)saveWrites(current=>({...current,[reply.id]:{cid:result.conversation.id,uid:current[reply.id]?.uid||crypto.randomUUID(),expectedRevision:replay?body.context?.expected_revision:undefined}}));
+  }
+  update(result);
+  if(!body.retry)setDraft(latest=>{
+    const key=scope+'-draft-'+sentId;
+    if(current.current!==sentId){if(sessionStorage.getItem(key)===body.text)sessionStorage.removeItem(key);return latest}
+    if(latest===body.text){sessionStorage.removeItem(key);return ''}
+    return latest;
+  });
+  pending.current=null;follow.current=true;await loadConfig();
+ };
+ const confirmSend=waiting&&!busy&&<button className="fm-chat-primary" type="button" onClick={()=>void safely(()=>transmit(waiting,true))}>确认上次发送</button>;
  const send=async(retry?:number)=>safely(async()=>{
-  if(!model||(!retry&&!draft.trim()))return;
+  const quote=retry?retryOffer.quote:offered.quote;
+  if(waiting||!model||(!retry&&!draft.trim())||(native&&!quote))return;
   setPendingDraft(null);
   let active=data;
   creatingConversation.current=!active;
@@ -140,11 +208,8 @@ export function ChatWorkspace(props:Props){
   creatingConversation.current=false;
   const signature=JSON.stringify([active.conversation.id,model,draft,retry]);
   if(pending.current?.signature!==signature)pending.current={signature,uid:crypto.randomUUID()};
-  try{
-   const result=await req<Snapshot>('/api/chats/'+active.conversation.id+'/messages',{uid:pending.current.uid,model,text:retry?'':draft,expected_revision:active.conversation.revision,price_revision:config!.pricing.revision,retry:retry||null,context});
-   if(context?.writeback&&props.onApply){const reply=[...result.messages].reverse().find(m=>m.role==='assistant');if(reply)saveWrites(current=>({...current,[reply.id]:{cid:result.conversation.id,uid:current[reply.id]?.uid||crypto.randomUUID()}}))}
-   update(result);const sentId=active.conversation.id;setDraft(latest=>{if(current.current!==sentId){if(sessionStorage.getItem(scope+'-draft-'+sentId)===draft)sessionStorage.removeItem(scope+'-draft-'+sentId);return latest}if(latest===draft){sessionStorage.removeItem(scope+'-draft-');sessionStorage.removeItem(scope+'-draft-'+sentId);return ''}sessionStorage.setItem(scope+'-draft-'+sentId,latest);return latest});pending.current=null;follow.current=true;await loadConfig();
-  }catch(e){if(e instanceof ApiError&&e.status===409){update(await req('/api/chats/'+active.conversation.id));await loadConfig()}throw e}
+  const request={cid:active.conversation.id,body:{uid:pending.current.uid,model,text:retry?'':draft,expected_revision:active.conversation.revision,price_revision:config!.pricing.revision,...quote,retry:retry||null,context}};
+  savePending(request);await transmit(request);
  });
  const stop=()=>safely(async()=>{update(await req('/api/chats/'+cid+'/stop',{}));await loadConfig()});
  const removeConversation=async(item:Conversation)=>{const r=await req<{conversation:Pick<Conversation,'id'|'revision'>}>('/api/chats/'+item.id,undefined,'DELETE');acceptConversation.remove(r.conversation);deletedWasCurrent.current=item.id===current.current;setDeleted(item.id);setList(items=>items.filter(c=>c.id!==item.id));if(deletedWasCurrent.current)choose('');setHistory(false)};
@@ -158,7 +223,6 @@ export function ChatWorkspace(props:Props){
   const result=await req('/api/chats/'+cid+'/apply',{uid:crypto.randomUUID(),message:picker.id,project:p.id,expected_revision:p.revision,mode:'new'});
   setApplied({id:result.id,message:picker.id});setPicker(null);setNotice('已放入画布');
  });
- const latest=data?.messages.at(-1);
  const inlineFailure=latest&&['failed','stopped','interrupted'].includes(latest.state)?latest.error||(latest.state==='stopped'?'已停止，积分已退回':'生成中断，积分已退回'):'';
  const draftLimit=draft.length>=DRAFT_WARN&&<p className="fm-chat-balance fm-chat-limit fm-number">{draft.length}/{DRAFT_LIMIT} 字{clipped>0&&<span role="alert">，已达上限，粘贴内容末尾 {clipped} 字未保留</span>}</p>;
  const draftConfirmBanner=pendingDraft!==null&&(
@@ -190,12 +254,13 @@ export function ChatWorkspace(props:Props){
    {network&&<p className="fm-text-state" role="status">正在重新连接</p>}
    <div className="composer-bottom fm-text-bottom">
     {model&&config&&<><ModelSelect models={config.models} value={model} disabled={busy||applying||running} onChange={setModel}/>
-    <span className="fm-chat-cost fm-number" title={price!=null?`每次生成 ${price} 积分，可用 ${config.credits.available}`:'该模型尚未定价'} aria-label={price!=null?`${price} 积分`:undefined}>{price==null?'未定价':<><Credit/>{price}</>}</span></>}
+    {cost}</>}
     {(running||applying)&&<span className="fm-text-state" role="status">{applying?'正在写入':'生成中'}</span>}
     {running?<button type="button" className="fm-chat-send" aria-label="停止生成" onClick={()=>void stop()} disabled={busy}><Square className="fm-state-change" size={15} fill="currentColor"/></button>:model&&<button type="submit" className="fm-chat-send" aria-label="生成文本" disabled={!canSend||!draft.trim()}><ArrowUp className="fm-state-change" size={21}/></button>}
    </div>
    {draftLimit}
-   {creditNotice}
+   {confirmSend}{!waiting&&creditNotice}
+   {billError}{bills.filter(b=>b.user_message===latest?.reply_to).map(b=><ChatBill key={b.turn} bill={b}/>)}
   </form>
  </div>;
  const headerTitle=compact?props.nodeTitle||'AI 写作':data?.conversation.title||'新对话';
@@ -215,8 +280,8 @@ export function ChatWorkspace(props:Props){
     <div className="fm-chat-messages">
      {(loading||(!config&&!error))&&!data?<p className="fm-chat-empty-note" role="status">正在载入对话…</p>:!data?.messages.length?(noModels?<div className="fm-chat-empty fm-chat-empty-unavailable" role="status"><MessageSquare size={28} strokeWidth={1.5}/><h2>暂无可用对话模型</h2><p>{canConfigure?'当前空间暂无可用对话模型，请前往设置完成配置或开通模型权限。':'当前空间暂无可用对话模型，请联系管理员开通。'}</p>{canConfigure&&<div className="fm-chat-empty-actions">{renderConfigureAction(true)}</div>}</div>:<div className="fm-chat-empty"><MessageSquare size={28} strokeWidth={1.5}/><h2>{compact?'想怎样修改这段文字？':'从一个想法开始'}</h2><p>{compact?'回复完成后更新节点文字，可撤销。':'构思故事、打磨文案，或整理下一支视频的提示词。'}</p><div className="fm-chat-starters">{(compact?['润色这段文字','改写成视频提示词']:['帮我构思一段视频脚本','把灵感整理成拍摄提纲']).map(s=><button type="button" key={s} onClick={()=>applyPresetDraft(s)}>{s}<ArrowUp size={14}/></button>)}</div></div>):data.messages.map((m,index)=><article key={m.id} className={'fm-chat-message '+m.role}>
       {m.role==='user'?<><div className="fm-chat-author">{m.author_name||'你'}</div><div className="fm-chat-bubble">{m.content}</div>{JSON.parse(m.context||'{}').node&&<small className="fm-chat-context-tag"><FileText size={13}/>含节点文字</small>}</>:<><div className="fm-chat-author">{config?.models[m.model]?.label||({'deepseek-flash':'DeepSeek Flash','gpt-4.1':'GPT-4.1'}[m.model]||m.model)}</div>{m.content?<Markdown text={m.content}/>:m.state==='running'?<p className="fm-chat-wait fm-state-change" role="status"><LoaderCircle size={15} className="fm-chat-spinner"/>正在回复</p>:null}{m.state!=='running'&&m.state!=='complete'&&<p className="fm-chat-incomplete fm-state-change">{m.error||(m.state==='stopped'?'已停止，积分已退回':'回复中断，积分已退回')}</p>}
-       <div className="fm-chat-message-actions">{m.content&&<button type="button" aria-label="复制回答" title={copied===m.id?'已复制':'复制回答'} onClick={()=>void copy(m)}>{copied===m.id?<Check className="fm-state-change" size={16}/>:<Copy className="fm-state-change" size={16}/>}</button>}{m.state==='complete'&&<>{updatedMessage===m.id&&<span className="fm-chat-written fm-state-change"><Check size={14}/>已更新文字</span>}{props.onApply&&(()=>{const src=data.messages.find(item=>item.id===m.reply_to);let ctx:any={};try{ctx=JSON.parse(src?.context||'{}')}catch{}return Boolean(ctx.node&&typeof ctx.text==='string'&&(!project||!ctx.project||ctx.project===project))?<button type="button" disabled={busy||applying} onClick={()=>void adopt(m,'replace')}>替换文字</button>:null})()}<button type="button" disabled={busy} onClick={()=>void adopt(m,'new')}><Plus size={14}/>{compact?'新建文本节点':'放入画布'}</button>{applied?.message===m.id&&<a href={'/canvas/'+applied.id+'?workspace='+workspace} onClick={props.openCanvas}>打开画布<ExternalLink size={13}/></a>}</>}{index===data.messages.length-1&&['failed','stopped','interrupted'].includes(m.state)&&<button type="button" disabled={!canSend} onClick={()=>void send(m.id)}><RotateCcw size={14}/>重试</button>}</div></>}
-     </article>)}
+       <div className="fm-chat-message-actions">{m.content&&<button type="button" aria-label="复制回答" title={copied===m.id?'已复制':'复制回答'} onClick={()=>void copy(m)}>{copied===m.id?<Check className="fm-state-change" size={16}/>:<Copy className="fm-state-change" size={16}/>}</button>}{m.state==='complete'&&<>{updatedMessage===m.id&&<span className="fm-chat-written fm-state-change"><Check size={14}/>已更新文字</span>}{props.onApply&&(()=>{const src=data.messages.find(item=>item.id===m.reply_to);let ctx:any={};try{ctx=JSON.parse(src?.context||'{}')}catch{}return Boolean(ctx.node&&typeof ctx.text==='string'&&(!project||!ctx.project||ctx.project===project))?<button type="button" disabled={busy||applying} onClick={()=>void adopt(m,'replace')}>替换文字</button>:null})()}<button type="button" disabled={busy} onClick={()=>void adopt(m,'new')}><Plus size={14}/>{compact?'新建文本节点':'放入画布'}</button>{applied?.message===m.id&&<a href={'/canvas/'+applied.id+'?workspace='+workspace} onClick={props.openCanvas}>打开画布<ExternalLink size={13}/></a>}</>}{index===data.messages.length-1&&['failed','stopped','interrupted'].includes(m.state)&&<button type="button" disabled={!canRetry} onClick={()=>void send(m.id)}><RotateCcw size={14}/>重试{native&&retryOffer.quote&&` · 最高 ${retryOffer.quote.max_charge} 积分`}</button>}</div>{bills.filter(b=>b.message===m.id||(b.superseded&&b.user_message===m.reply_to)).map(b=><ChatBill key={b.turn} bill={b}/>)}</>}
+     </article>)}{billError}
     </div>
    </div>
    {newBelow&&<button type="button" className="fm-chat-latest fm-chat-icon" aria-label="查看最新回复" onClick={()=>{follow.current=true;scroll.current?.scrollTo({top:scroll.current.scrollHeight,behavior:scrollMotion()});setNewBelow(false)}}><ArrowDown size={18}/></button>}
@@ -230,10 +295,10 @@ export function ChatWorkspace(props:Props){
     {draftConfirmBanner}
     <form className="fm-chat-composer" onSubmit={e=>{e.preventDefault();if(canSend)void send()}}>
      <textarea ref={input} aria-label="发送消息" placeholder={model?(compact?'说说你的修改想法…':'发送消息…'):'暂无可用模型'} value={draft} maxLength={DRAFT_LIMIT} rows={2} onChange={e=>updateDraft(e.target.value,(e.nativeEvent as InputEvent).inputType==='insertFromPaste')} onPaste={measurePaste} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend&&draft.trim())void send()}}}/>
-     {(model||running)&&<div className="fm-chat-composer-bottom">{model&&config&&<><ModelSelect models={config.models} value={model} disabled={busy||applying||running} onChange={setModel}/><span className="fm-chat-cost fm-number" title={price!=null?`每条完整回复 ${price} 积分，可用 ${config.credits.available}`:'该模型尚未定价'} aria-label={price!=null?`${price} 积分`:undefined}>{price==null?'未定价':<><Credit/>{price}</>}</span></>}{running?<button type="button" className="fm-chat-send" aria-label="停止回复" onClick={()=>void stop()} disabled={busy}><Square className="fm-state-change" size={15} fill="currentColor"/></button>:<button type="submit" className="fm-chat-send" aria-label="发送" disabled={!canSend||!draft.trim()}><ArrowUp className="fm-state-change" size={21}/></button>}</div>}
+     {(model||running)&&<div className="fm-chat-composer-bottom">{model&&config&&<><ModelSelect models={config.models} value={model} disabled={busy||applying||running} onChange={setModel}/>{cost}</>}{running?<button type="button" className="fm-chat-send" aria-label="停止回复" onClick={()=>void stop()} disabled={busy}><Square className="fm-state-change" size={15} fill="currentColor"/></button>:<button type="submit" className="fm-chat-send" aria-label="发送" disabled={!canSend||!draft.trim()}><ArrowUp className="fm-state-change" size={21}/></button>}</div>}
     </form>
     {draftLimit}
-    {creditNotice}
+    {confirmSend}{!waiting&&creditNotice}
    </div>
   </section>
  </div>;

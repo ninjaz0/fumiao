@@ -620,6 +620,31 @@
 #modal :is(.credit-ledger-row, .recharge-order-row):last-child {
   border-bottom-width: 0;
 }
+.ledger-settings .credit-ledger-row,
+#modal .credit-ledger-row {
+  grid-template-columns: minmax(0, 1fr) fit-content(42%) 150px;
+}
+.credit-entry-amounts {
+  text-align: right;
+}
+.credit-entry-amounts,
+.credit-account-row > span,
+.credit-admin .console-stats dd {
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.credit-entry-balance {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--secondary);
+}
+@media (max-width: 760px) {
+  .ledger-settings .credit-ledger-row,
+  #modal .credit-ledger-row {
+    grid-template-columns: minmax(0, 1fr) fit-content(52%);
+  }
+}
 .ledger-list-more {
   display: flex;
   justify-content: center;

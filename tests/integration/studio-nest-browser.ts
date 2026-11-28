@@ -267,7 +267,18 @@ async function checkComposerCreditFeedback(
       json: {
         ...state,
         model_access: { ...state.model_access, "breeze-tts-2": true },
-        credits: { ...state.credits, available: availableCredits },
+        credits: {
+          ...state.credits,
+          available: availableCredits,
+          ...(state.credits?.exact
+            ? {
+                exact: {
+                  ...state.credits.exact,
+                  available: String(availableCredits),
+                },
+              }
+            : {}),
+        },
         pricing: {
           ...state.pricing,
           items: state.pricing.items.map((item) =>

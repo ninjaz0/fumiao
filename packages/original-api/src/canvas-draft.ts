@@ -1,3 +1,4 @@
+import { mediaQuoteFields } from "./drafts.js";
 import {
   canvasExtensionSchema,
   validCanvasResult,
@@ -67,7 +68,7 @@ export const canvasParamsFields: Fields = {
   flow_source_job: positive,
   ratio: literal(["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"], "16:9"),
   quality: literal([480, 768], 480),
-  seconds: { ...integer(5), min: 0, max: 15 },
+  seconds: { ...integer(5), min: -1, max: 120 },
   seed: { ...integer(null), nullable: true, min: 0, max: 2 ** 53 - 1 },
   sampling_steps: literal([16, 20, 32, 50], 20),
   fast_mode: { kind: "boolean", strict: false, default: false },
@@ -260,6 +261,7 @@ export const canvasBgmRunFields: Fields = {
   },
 };
 export const canvasRunFields: Fields = {
+  ...mediaQuoteFields,
   ...canvasExactRevisionFields,
   price_revision: {
     ...integer(null),
@@ -308,7 +310,7 @@ export const canvasBatchRunFields: Fields = {
   ...canvasBatchPrecheckFields,
   ...canvasRunFields,
   precheck_token: { kind: "string", max: 128, optional: true },
-  expected_total_credits: { kind: "integer", min: 0, max: 100_000_000, optional: true },
+  expected_total_credits: { kind: "credits", min: 0, max: 100_000_000, optional: true },
   executable_keys: {
     kind: "list",
     item: { kind: "string", min: 1, max: 160 },
@@ -330,9 +332,13 @@ export const canvasGridCropFields: Fields = {
   col: { ...integer(0), min: 0, max: 2 },
 };
 export const batchQuoteItemFields: Fields = {
+  refs: { kind: "list", item: media, max: 12, optional: true },
+  canvas_tail: { ...object({ project: media, parent: identifier }), optional: true },
+  reference_count: { ...integer(), min: 0, max: 12, optional: true },
+  params: { kind: "dictionary", optional: true },
   kind: literal(["image", "video", "audio"]),
   model: text(180, ""),
-  seconds: { ...integer(5), min: 0, max: 15, optional: true },
+  seconds: { ...integer(5), min: -1, max: 120, optional: true },
   quality: { ...literal([480, 768]), optional: true },
   resolution: { ...literal(["1K", "2K", "4K"]), optional: true },
   image_quality: { ...literal(["low", "medium", "high"]), optional: true },

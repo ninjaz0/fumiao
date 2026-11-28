@@ -37,6 +37,7 @@ export class ChatExecution {
         "UPDATE chat_turns SET lease_token=$2,lease_until=$3 WHERE id=$1",
         [id, lease, this.chats.clock() + this.leaseSeconds],
       );
+      if (turn.native_snapshot) return { turn, lease, skills: [], rows: [] };
       const rows = (
         await sql.query(
           `SELECT role,content,state,context FROM chat_messages

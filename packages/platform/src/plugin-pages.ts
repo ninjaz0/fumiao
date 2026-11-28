@@ -359,7 +359,7 @@ export class PluginPages {
         await sql.query(
           `SELECT c.id,coalesce(c.display_label,c.descriptor->>'label') AS label,
         c.descriptor->>'kind' AS kind,studio_plugin_accepts($1) AND studio_model_allowed(c.id,$2) AS enabled
-        FROM studio_catalog c WHERE NOT c.hidden AND (c.plugin_id=$1 OR EXISTS (
+        FROM studio_catalog c WHERE c.plugin_id IS NOT NULL AND NOT c.hidden AND (c.plugin_id=$1 OR EXISTS (
           SELECT 1 FROM studio_shared_models s WHERE s.model_id=c.id AND s.plugin_id=$1))
         ORDER BY c.position,c.id`,
           [pkg.id, workspace],

@@ -1,3 +1,4 @@
+import { creditUnits, formatCredits } from "./credit-amount.js";
 import { one, type Sql } from "./db.js";
 import { DomainError } from "./security.js";
 
@@ -9,8 +10,8 @@ export type BudgetPolicyRow = {
   scope_type: "workspace" | "project";
   scope_id: string;
   period: BudgetPeriod;
-  warn_limit: number;
-  cap_limit: number;
+  warn_limit: string | number;
+  cap_limit: string | number;
   mode: BudgetMode;
   enabled: boolean;
   revision: number;
@@ -18,10 +19,7 @@ export type BudgetPolicyRow = {
 };
 
 export async function hasBudgetTables(sql: Sql): Promise<boolean> {
-  const row = await one(
-    sql,
-    "SELECT to_regclass('budget_policies') AS name",
-  );
+  const row = await one(sql, "SELECT to_regclass('budget_policies') AS name");
   return Boolean(row?.name);
 }
 
@@ -47,7 +45,10 @@ async function resolveProjectScopeKey(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
       trimmed,
     );
-  const hasDocs = await one(sql, "SELECT to_regclass('documents') IS NOT NULL AS ok");
+  const hasDocs = await one(
+    sql,
+    "SELECT to_regclass('documents') IS NOT NULL AS ok",
+  );
   if (!hasDocs?.ok) {
     return { canonicalUuid: isUuid ? trimmed : null, policyKeys: [trimmed] };
   }
@@ -65,6 +66,17 @@ async function resolveProjectScopeKey(
   return { canonicalUuid: String(doc.id), policyKeys: keys };
 }
 
+function budgetUsage(spent: unknown, held: unknown) {
+  const spentUnits = creditUnits(String(spent ?? 0));
+  const heldUnits = creditUnits(String(held ?? 0));
+  const exact = {
+    spent: formatCredits(spentUnits),
+    held: formatCredits(heldUnits),
+    committed: formatCredits(spentUnits + heldUnits),
+  };
+  return { spent: Number(exact.spent), held: Number(exact.held), exact };
+}
+
 /**
  * Computes spent + currently held credits within the given scope and period.
  * - `spent`: settled ledger `action = 'spend'` rows within the current period window.
@@ -80,54 +92,53 @@ export async function computeScopeSpend(
   scopeType: "workspace" | "project",
   scopeId: string,
   period: BudgetPeriod,
-): Promise<{ spent: number; held: number }> {
+) {
   const startExpr = periodStartExpr(period);
   if (scopeType === "workspace") {
     const spentRow = await one(
       sql,
-      `SELECT COALESCE(SUM(amount), 0) AS total
+      `SELECT COALESCE(SUM(ABS(amount)), 0) AS total
          FROM ledger
         WHERE workspace_id = $1 AND action = 'spend' AND created_at >= ${startExpr}`,
       [scopeId],
     );
     const heldRow = await one(
       sql,
-      `SELECT COALESCE(SUM(price), 0) AS total
-         FROM jobs
-        WHERE workspace_id = $1
-          AND deleted_at IS NULL
-          AND state IN ('queued', 'dispatching', 'running', 'finalizing', 'uncertain')`,
+      `SELECT
+        (SELECT COALESCE(SUM(price), 0) FROM jobs WHERE workspace_id=$1 AND deleted_at IS NULL
+           AND state IN ('queued','dispatching','running','finalizing','uncertain'))
+        + (SELECT COALESCE(SUM(amount), 0) FROM chat_charges WHERE workspace_id=$1 AND state='held') AS total`,
       [scopeId],
     );
-    return {
-      spent: Number(spentRow?.total ?? 0),
-      held: Number(heldRow?.total ?? 0),
-    };
+    return budgetUsage(spentRow?.total, heldRow?.total);
   }
 
   // Project-scoped budget: canonicalize public_id or UUID -> documents.id UUID
   const { canonicalUuid } = await resolveProjectScopeKey(sql, scopeId);
-  if (!canonicalUuid) return { spent: 0, held: 0 };
+  if (!canonicalUuid) return budgetUsage(0, 0);
 
   const tables = await one(
     sql,
     `SELECT to_regclass('job_projects') IS NOT NULL AS jp,
-            to_regclass('canvas_job_links') IS NOT NULL AS cjl`,
+            to_regclass('canvas_job_links') IS NOT NULL AS cjl,
+            to_regclass('chat_turn_bills') IS NOT NULL AS chat`,
   );
   const sources: string[] = [];
   if (tables?.jp) {
     sources.push("SELECT job_id FROM job_projects WHERE project_id = $1::uuid");
   }
   if (tables?.cjl) {
-    sources.push("SELECT job_id FROM canvas_job_links WHERE project_id = $1::uuid");
+    sources.push(
+      "SELECT job_id FROM canvas_job_links WHERE project_id = $1::uuid",
+    );
   }
-  if (!sources.length) return { spent: 0, held: 0 };
+  if (!sources.length) return budgetUsage(0, 0);
   const projectJobsCte = `WITH proj_jobs AS (${sources.join(" UNION ")})`;
 
   const spentRow = await one(
     sql,
     `${projectJobsCte}
-      SELECT COALESCE(SUM(l.amount), 0) AS total
+      SELECT COALESCE(SUM(ABS(l.amount)), 0) AS total
         FROM ledger l
         JOIN proj_jobs pj ON pj.job_id = l.job_id
        WHERE l.action = 'spend' AND l.created_at >= ${startExpr}`,
@@ -143,10 +154,24 @@ export async function computeScopeSpend(
          AND j.state IN ('queued', 'dispatching', 'running', 'finalizing', 'uncertain')`,
     [canonicalUuid],
   );
-  return {
-    spent: Number(spentRow?.total ?? 0),
-    held: Number(heldRow?.total ?? 0),
-  };
+  if (!tables?.chat) return budgetUsage(spentRow?.total, heldRow?.total);
+  const chat = await one(
+    sql,
+    `SELECT
+    COALESCE((SELECT SUM(c.amount) FROM chat_charges c WHERE c.project_id=$1 AND c.state='held'),0) AS held,
+    COALESCE((SELECT SUM(ABS(l.amount)) FROM chat_charges c JOIN chat_turns t ON t.id=c.turn_id
+              JOIN ledger l ON l.workspace_id=c.workspace_id AND (l.chat_turn_id=t.id OR (l.chat_turn_id IS NULL AND l.original_chat_turn=t.public_id))
+              WHERE c.project_id=$1 AND l.action='spend' AND l.created_at>=${startExpr}),0) AS spent`,
+    [canonicalUuid],
+  );
+  return budgetUsage(
+    formatCredits(
+      creditUnits(String(spentRow.total)) + creditUnits(String(chat.spent)),
+    ),
+    formatCredits(
+      creditUnits(String(heldRow.total)) + creditUnits(String(chat.held)),
+    ),
+  );
 }
 
 export type BudgetEvaluation = {
@@ -159,11 +184,11 @@ export type BudgetEvaluation = {
     scopeId: string;
     period: BudgetPeriod;
     mode: BudgetMode;
-    spent: number;
-    held: number;
-    projected: number;
-    warnLimit: number;
-    capLimit: number;
+    spent: string;
+    held: string;
+    projected: string;
+    warnLimit: string;
+    capLimit: string;
     exceededCap: boolean;
     exceededWarn: boolean;
   }>;
@@ -178,7 +203,7 @@ export async function evaluateBudgetImpact(
   options: {
     workspaceId: string;
     projectId?: string | null;
-    amount: number;
+    amount: number | string;
   },
 ): Promise<BudgetEvaluation> {
   const empty: BudgetEvaluation = {
@@ -187,7 +212,8 @@ export async function evaluateBudgetImpact(
     warnings: [],
     policies: [],
   };
-  if (options.amount <= 0) return empty;
+  const amount = creditUnits(String(options.amount));
+  if (amount <= 0n) return empty;
   if (!(await hasBudgetTables(sql))) return empty;
 
   const scopes: Array<{
@@ -231,21 +257,21 @@ export async function evaluateBudgetImpact(
     ).rows as BudgetPolicyRow[];
 
     for (const policy of policies) {
-      const { spent, held } = await computeScopeSpend(
+      const { exact } = await computeScopeSpend(
         sql,
         scope.type,
         scope.canonicalId,
         policy.period,
       );
-      const projected = spent + held + options.amount;
-      const warnLimit = Number(policy.warn_limit);
-      const capLimit = Number(policy.cap_limit);
+      const projected = creditUnits(exact.committed) + amount;
+      const warnLimit = creditUnits(String(policy.warn_limit));
+      const capLimit = creditUnits(String(policy.cap_limit));
       const scopeName = scope.type === "project" ? "项目" : "空间";
       const exceededCap =
-        policy.mode === "cap" && capLimit > 0 && projected > capLimit;
+        policy.mode === "cap" && capLimit > 0n && projected > capLimit;
       const exceededWarn =
         (policy.mode === "warn" || policy.mode === "cap") &&
-        warnLimit > 0 &&
+        warnLimit > 0n &&
         projected >= warnLimit;
 
       out.policies.push({
@@ -254,11 +280,11 @@ export async function evaluateBudgetImpact(
         scopeId: scope.canonicalId,
         period: policy.period,
         mode: policy.mode,
-        spent,
-        held,
-        projected,
-        warnLimit,
-        capLimit,
+        spent: exact.spent,
+        held: exact.held,
+        projected: formatCredits(projected),
+        warnLimit: formatCredits(warnLimit),
+        capLimit: formatCredits(capLimit),
         exceededCap,
         exceededWarn,
       });
@@ -266,11 +292,11 @@ export async function evaluateBudgetImpact(
       if (exceededCap) {
         out.blocked = true;
         out.blocks.push(
-          `已超出${scopeName}${periodLabel(policy.period)}预算上限（已承诺 ${spent + held} + 本次 ${options.amount} = ${projected} / 上限 ${capLimit} 积分），请联系管理员调整预算策略`,
+          `已超出${scopeName}${periodLabel(policy.period)}预算上限（已承诺 ${exact.committed} + 本次 ${options.amount} = ${formatCredits(projected)} / 上限 ${formatCredits(capLimit)} 积分），请联系管理员调整预算策略`,
         );
       } else if (exceededWarn) {
         out.warnings.push(
-          `预计触达${scopeName}${periodLabel(policy.period)}预算告警阈值（预计 ${projected} / 告警 ${warnLimit} 积分）`,
+          `预计触达${scopeName}${periodLabel(policy.period)}预算告警阈值（预计 ${formatCredits(projected)} / 告警 ${formatCredits(warnLimit)} 积分）`,
         );
       }
     }
@@ -289,7 +315,7 @@ export async function checkAndRecordBudget(
   options: {
     workspaceId: string;
     projectId?: string | null;
-    amount: number;
+    amount: number | string;
   },
 ): Promise<void> {
   const evalResult = await evaluateBudgetImpact(sql, options);

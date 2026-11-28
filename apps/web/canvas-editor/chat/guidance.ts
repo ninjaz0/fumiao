@@ -1,4 +1,4 @@
-export type ChatConfigTarget = "plugins" | "chatService" | "models";
+export type ChatConfigTarget = "modelAccess" | "plugins" | "chatService" | "models";
 
 type PolicyFlags = { revision: number; enabled: Record<string, boolean> };
 
@@ -37,6 +37,7 @@ export function resolveChatConfigTarget(
     );
     if (!allowedByPolicy) return "models";
   }
+  if (state.studio_plugins && !chatModels.length) return "modelAccess";
   return state.studio_plugins ? "plugins" : "chatService";
 }
 
@@ -79,7 +80,7 @@ export function chatSettingsPath(state?: ChatGuidanceState | null): string {
 
 export function chatSettingsHref(
   workspace: number,
-  target: ChatConfigTarget = "plugins",
+  target: ChatConfigTarget = "modelAccess",
   scope?: string,
 ): string {
   const params = new URLSearchParams({

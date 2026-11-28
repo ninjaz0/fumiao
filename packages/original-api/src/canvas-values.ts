@@ -1,3 +1,4 @@
+export { tailParentNode } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { CanvasDocument, CanvasNode } from "./canvas-draft.js";
 import { pythonJsonText } from "@fumiao/plugin-sdk/json.js";
 
@@ -74,4 +75,9 @@ export function canvasDialogueTakes(node: CanvasNode) {
       .filter((id) => !line.audio_stale?.includes(id))
       .map((id) => ({ node: `dialogue:${node.id}:${line.id}`, id })),
   );
+}
+
+/** Script import stores document linkage alongside the user-selected model parameters. */
+export function canvasMediaParameters(extra?: Record<string, unknown> | null) {
+  return Object.fromEntries(Object.entries(extra ?? {}).filter(([name]) => !name.startsWith("script_")));
 }

@@ -9,6 +9,7 @@ import { Executor } from "@fumiao/platform/executor.js";
 import { ProviderError, type ProviderPlugin } from "@fumiao/plugin-sdk/index.js";
 import { grantDueSubscriptions } from "@fumiao/platform/subscriptions.js";
 import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
+import { OriginalObservability } from "@fumiao/original-api/admin-observability.js";
 import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
 import { OriginalBillingExtras } from "@fumiao/original-api/billing-extras.js";
 import { OriginalBudgets } from "@fumiao/original-api/budgets-api.js";
@@ -835,6 +836,24 @@ test("#4 + #8 F034: subscription zero double-counting, single-use order_id, idem
   assert.equal(renewalReplay.subscription.period_credits, 350);
   const planList = await billing.listPlans(f.admin, wsPublicId);
   assert.equal(planList.subscriptions.find((sub) => sub.id === renewed.subscription.id)?.period_credits, 350);
+
+  // Both activation debits belong on the statement. Neither bought inference.
+  const modelReport = new OriginalObservability(f.p);
+  const packsOnly = await modelReport.summary(f.admin, 7);
+  assert.equal(packsOnly.totals.exact.credits_revenue, "0");
+  assert.equal(packsOnly.totals.cost_unknown_jobs, 0);
+  assert.deepEqual(packsOnly.channels, []);
+  const statement = (await billing.exportStatement(f.admin, "csv", wsPublicId)).bytes.toString();
+  assert.match(statement, /周期配额包核销/);
+  assert.match(statement, /周期配额包开通/);
+
+  // Imported model charges may have lost their original job/turn link.
+  await f.db.query(`INSERT INTO ledger(id,workspace_id,key,action,amount,balance_snapshot,held_snapshot)
+    VALUES(gen_random_uuid(),$1,'import-ledger:old-model-spend','spend',-5,405,0)`, [f.workspace.id]);
+  const withLegacy = await modelReport.summary(f.admin, 7);
+  assert.equal(withLegacy.totals.exact.credits_revenue, "5");
+  assert.equal(withLegacy.totals.cost_unknown_jobs, 1);
+  assert.equal(withLegacy.channels[0].model_key, "未关联模型");
 
   // 5. #8 Chinese Multi-Page PDF + Explicit Date-Range CSV Reconciliation
   await f.p.db.query("UPDATE workspaces SET name = '测试中文制片空间' WHERE id = $1", [f.workspace.id]);

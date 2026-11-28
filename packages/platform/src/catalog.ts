@@ -1,11 +1,21 @@
+import { requirePublishedRouteAccess } from "./model-access/published-routes.js";
+import { creditUnits, formatCredits } from "./credit-amount.js";
+import { prepareMediaParameters } from "./prepare-input.js";
 import {
+  adoptedModels,
+  hasModelAccess,
   hasStudioPackages,
   listedStudioCatalog,
 } from "./studio-plugin-profile.js";
 import type { Database, Sql } from "./db.js";
 import { one } from "./db.js";
-import { requireValue } from "./security.js";
+import { DomainError, requireValue } from "./security.js";
 import type { Manifest, StudioModel } from "@fumiao/plugin-sdk/index.js";
+import {
+  publishedPrice,
+  resolvePublishedRoute,
+  type PublishedPrice,
+} from "./model-access/published-routes.js";
 import { matcher } from "./schema.js";
 
 /** Registers public UI and billing data only from immutable, versioned plugin manifests. */
@@ -14,7 +24,8 @@ export async function registerStudioModels(
   manifest: Manifest,
   bump: boolean,
 ) {
-  const specs = manifest.models.filter((m) => m.studio);
+  const adopted = await adoptedModels(sql, manifest.id);
+  const specs = manifest.models.filter((m) => m.studio && !adopted.has(m.id));
   if (!specs.length) return;
   await sql.query("SELECT * FROM studio_policy FOR UPDATE");
   const additions: Record<string, boolean> = Object.create(null);
@@ -117,7 +128,8 @@ export class StudioCatalog {
         [manifest.id],
       )
     ).rows;
-    const specs = manifest.models.filter((m) => m.studio);
+    const adopted = await adoptedModels(sql, manifest.id);
+    const specs = manifest.models.filter((m) => m.studio && !adopted.has(m.id));
     requireValue(
       retireMissing ||
         existing.every((row) => specs.some((m) => m.id === row.id)),
@@ -295,25 +307,41 @@ export class StudioCatalog {
   }
   async prices(sql: Sql = this.db) {
     // A single statement keeps the amount list and revision in the same snapshot.
-    const rows = (
-      await sql.query(
-        `SELECT p.*,c.descriptor,g.price_revision FROM studio_policy g
-         LEFT JOIN (studio_prices p JOIN ${await listedStudioCatalog(sql, "models")} c ON c.id=p.model_id) ON true
-         ORDER BY c.price_position,p.position,p.key`,
-      )
-    ).rows;
+    const native = await hasModelAccess(sql);
+    // Cast decimal columns to text before JSONB aggregation. JS must never parse
+    // a six-place price as a floating point number.
+    const published = native
+      ? `(SELECT jsonb_agg(jsonb_build_object('model',c.id,
+      'purpose',s.purpose,'input',s.input::text,'output',s.output::text,'unit',s.unit::text,
+      'cache_read',s.cache_read::text,'cache_write',s.cache_write::text) ORDER BY c.price_position,c.id)
+      FROM model_access_publications p JOIN model_access_price_revisions s ON s.id=p.price_revision_id
+      JOIN studio_catalog c ON c.id=p.catalog_id)`
+      : "NULL";
+    const row = await one(
+      sql,
+      `SELECT g.price_revision, ${published} AS published,
+      (SELECT jsonb_agg(jsonb_build_object('key',p.key,'model',p.model_id,'kind',c.descriptor->>'kind',
+       'tier',p.tier,'label',p.label,'amount',p.amount) ORDER BY c.price_position,p.position,p.key)
+       FROM studio_prices p JOIN ${await listedStudioCatalog(sql, "models")} c
+       ON c.id=p.model_id AND c.plugin_id IS NOT NULL) AS items FROM studio_policy g`,
+    );
+    const entries: { model: string; price: PublishedPrice }[] = (
+      row.published ?? []
+    ).map((r: Record<string, any>) => ({
+      model: r.model,
+      price: publishedPrice(r),
+    }));
     return {
-      revision: rows[0].price_revision,
-      items: rows
-        .filter((r) => r.key !== null)
-        .map((r) => ({
-          key: r.key,
-          model: r.model_id,
-          kind: r.descriptor.kind,
-          tier: r.tier,
-          label: r.label,
-          amount: r.amount === null ? null : Number(r.amount),
-        })),
+      revision: Number(row.price_revision),
+      items: (row.items ?? []) as {
+        key: string;
+        model: string;
+        kind: string;
+        tier: string;
+        label: string;
+        amount: number | null;
+      }[],
+      ...(entries.length ? { published: entries } : {}),
     };
   }
   async savePrices(
@@ -501,11 +529,19 @@ export class StudioCatalog {
     modelId: string,
     workspace: string,
     params: Record<string, unknown>,
-    options?: { requireConnection?: boolean },
+    options?: {
+      requireConnection?: boolean;
+      kind?: string;
+      nativeParams?: Record<string, unknown>;
+      referenceCount?: number;
+    },
   ): Promise<{
     allowed: boolean;
     priced: boolean;
     amount: number;
+    exactAmount?: string;
+    route_revision?: string;
+    price_revision_id?: string;
     key: string | null;
     revision: number;
     reason?: string;
@@ -513,11 +549,9 @@ export class StudioCatalog {
     const requireConnection = options?.requireConnection ?? true;
     const global = await one(sql, "SELECT price_revision FROM studio_policy");
     const revision = Number(global?.price_revision ?? 1);
-    const catalog = await one(
-      sql,
-      "SELECT * FROM studio_catalog WHERE id=$1",
-      [modelId],
-    );
+    const catalog = await one(sql, "SELECT * FROM studio_catalog WHERE id=$1", [
+      modelId,
+    ]);
     if (!catalog) {
       return {
         allowed: false,
@@ -528,13 +562,53 @@ export class StudioCatalog {
         reason: `模型“${modelId}”未安装或已下架`,
       };
     }
+    if (catalog.source_kind === "builtin") {
+      try {
+        const route = await resolvePublishedRoute(sql, modelId);
+        requireValue(
+          route && (!options?.kind || route.purpose === options.kind) && (route.price.kind === "image" || route.price.kind === "video"),
+          409,
+          "该线路不支持媒体估价",
+        );
+        await requirePublishedRouteAccess(sql, route, workspace);
+        const { count } = prepareMediaParameters(
+          route,
+          {
+            ...(route.purpose === "video" && params.seconds !== undefined ? { seconds: params.seconds } : {}),
+            ...options?.nativeParams,
+          },
+          options?.referenceCount ?? 0,
+        );
+        const amount = formatCredits(
+          creditUnits(route.price.unit) * BigInt(count),
+        );
+        return {
+          allowed: true,
+          priced: true,
+          amount: Number(amount),
+          exactAmount: amount,
+          route_revision: route.routeRevisionId,
+          price_revision_id: route.priceRevisionId,
+          key: null,
+          revision,
+        };
+      } catch (error) {
+        if (!(error instanceof DomainError)) throw error;
+        return {
+          allowed: false,
+          priced: false,
+          amount: 0,
+          key: null,
+          revision,
+          reason: error.message,
+        };
+      }
+    }
     const hasPackages = await hasStudioPackages(sql);
     if (hasPackages) {
-      const accepts = await one(
-        sql,
-        "SELECT studio_plugin_accepts($1) AS ok",
-        [catalog.plugin_id],
-      );
+      const accepts = await one(sql, "SELECT studio_plugin_accepts($1) AS ok", [
+        catalog.plugin_id,
+      ]);
       if (!accepts?.ok) {
         return {
           allowed: false,
@@ -596,9 +670,10 @@ export class StudioCatalog {
       }
     }
     const allTiers = (
-      await sql.query("SELECT * FROM studio_prices WHERE model_id=$1 ORDER BY position", [
-        modelId,
-      ])
+      await sql.query(
+        "SELECT * FROM studio_prices WHERE model_id=$1 ORDER BY position",
+        [modelId],
+      )
     ).rows;
     const expanded: Record<string, unknown> = { ...params };
     if (
@@ -620,7 +695,9 @@ export class StudioCatalog {
         expanded.size = `${dims[idx]}x${dims[idx + 1]}`;
       }
     }
-    const matched = allTiers.filter((p) => matcher.validate(p.matcher, expanded));
+    const matched = allTiers.filter((p) =>
+      matcher.validate(p.matcher, expanded),
+    );
     let chosen: Record<string, any> | null = matched[0] ?? null;
     if (!chosen && typeof params.resolution === "string") {
       const q = String(params.image_quality ?? params.quality ?? "medium");
@@ -631,9 +708,8 @@ export class StudioCatalog {
       const sec = String(params.seconds);
       const qual = params.quality !== undefined ? String(params.quality) : "";
       chosen =
-        allTiers.find(
-          (p) => p.tier === `${qual}|${sec}` || p.tier === sec,
-        ) ?? null;
+        allTiers.find((p) => p.tier === `${qual}|${sec}` || p.tier === sec) ??
+        null;
     }
     if (!chosen && allTiers.length === 1) chosen = allTiers[0];
     if (!chosen) {

@@ -1,3 +1,4 @@
+import { creditUnits } from "@fumiao/plugin-sdk/credit-amount.js";
 import type { MenuEntry, PluginPageEntry } from "@fumiao/plugin-sdk/contributions";
 import type { InstalledSettingsPage } from "@fumiao/plugin-sdk/settings-pages";
 import {
@@ -7,6 +8,7 @@ import {
 import { resolve as resolveFlow } from "../canvas-editor/flowPicker";
 import {
   formError,
+  imageFormatName,
   matches,
   normalizeForm,
   type FormValues,
@@ -43,6 +45,9 @@ export type InviteCode = {
   revision: number;
 };
 export type CreditEntry = {
+  balance?: number;
+  reserved?: number;
+  exact?: { amount: string; balance: string; reserved: string };
   id: number;
   action: string;
   amount: number;
@@ -52,6 +57,8 @@ export type CreditEntry = {
   job?: number | null;
 };
 export type CreditAccount = {
+  balance?: number;
+  exact?: { available: string; reserved: string; balance: string };
   workspace: number;
   kind: Space["kind"];
   name: string;
@@ -93,6 +100,7 @@ export type Job = {
   prompt: string;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
   result?: string;
+  results?: string[];
   result_mime?: string;
   refs: string[];
   seconds: number;
@@ -200,6 +208,10 @@ export type StudioState = {
   };
   flow: { configured: boolean };
   pricing: {
+    published?: {
+      model: string;
+      price: import("@fumiao/web-compat/model-access.js").PublishedPrice;
+    }[];
     items: {
       key: string;
       model: string;
@@ -209,7 +221,7 @@ export type StudioState = {
     }[];
     revision: number;
   };
-  credits: { available: number; reserved: number };
+  credits: { available: number; reserved: number; exact?: { available: string; reserved: string; balance: string } };
   credit_history: CreditEntry[];
   credit_accounts?: CreditAccount[];
 };
@@ -337,21 +349,29 @@ function readSnapshot(
   const raw = value as Partial<DraftSnapshot>;
   if (!raw.draft || typeof raw.draft !== "object") return null;
   const draft = { ...initialDraft, ...raw.draft };
-  if (!state.studio_plugins) {
+  if (!state.studio_plugins && !isPublishedImage(state, draft)) {
     if (!["image", "audio"].includes(draft.kind)) draft.kind = "video";
     if (!state.images.models[draft.model])
       draft.model = state.images.default_model;
     if (!state.video_models[draft.videoModel]) draft.videoModel = H3;
   }
-  return {
-    ...restoreDraftReferences(state, draft, raw.refs, storedTypes),
+  const snapshot = {
+    draft,
+    refs: Array.isArray(raw.refs) ? raw.refs : [],
     parent: typeof raw.parent === "number" ? raw.parent : null,
-    retainedSeed: typeof raw.retainedSeed === "number" ? raw.retainedSeed : null,
+    retainedSeed:
+      typeof raw.retainedSeed === "number" ? raw.retainedSeed : null,
     submitId:
       typeof raw.submitId === "string" && raw.submitId
         ? raw.submitId
         : crypto.randomUUID(),
   };
+  return isPublishedImage(state, draft)
+    ? restoreImageSnapshot(state, snapshot, storedTypes)
+    : {
+        ...snapshot,
+        ...restoreDraftReferences(state, draft, raw.refs, storedTypes),
+      };
 }
 export const displayName = (member: Member) => member.nickname || member.name;
 export const mediaURL = (key: string) => "/media/" + key;
@@ -427,18 +447,16 @@ export function readDraftBackup(state: StudioState): DraftSession | null {
 function restoreStoredDraft(state: StudioState, saved: StoredDraft | null): DraftSession {
   const storedTypes = saved?.referenceTypes;
   const draft = { ...initialDraft, ...saved?.draft };
-  if (saved?.draft && !state.studio_plugins) {
+  if (saved?.draft && !state.studio_plugins && !isPublishedImage(state, draft)) {
     if (!["image", "audio"].includes(draft.kind)) draft.kind = "video";
     if (!state.images.models[draft.model])
       draft.model = state.images.default_model;
     if (!state.video_models[draft.videoModel]) draft.videoModel = H3;
   }
   const normalizedDraft =
-    saved?.draft &&
-    state.studio_plugins &&
-    !modelAvailable(state, selectedModel(draft))
+    saved?.draft && keepUnavailableDraft(state, draft)
       ? draft
-      : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft));
+      : normalizeParams(state, saved?.draft ? draft : ensureModel(state, draft), Boolean(saved?.draft));
   const session: DraftSession = {
     parent: typeof saved?.parent === "number" ? saved.parent : null,
     retainedSeed:
@@ -668,7 +686,28 @@ export function seedError(form: ModelForm | undefined, raw: string): string {
   if (parsed < min) return `随机种子需为不小于 ${min} 的整数`;
   return "";
 }
-export function normalizeParams(state: StudioState, draft: Draft): Draft {
+export const publishedMedia = (state: StudioState, model: string) =>
+  state.pricing?.published?.some(p => p.model === model && p.price.kind !== "chat") ?? false;
+
+export type MediaQuote = { price_revision: number; route_revision: string; price_revision_id: string; max_charge: string };
+
+function historicalNativeParameters(
+  kind: Job["kind"],
+  form: ModelForm,
+  values: FormValues,
+): FormValues {
+  if (kind === "image" && values.output_format !== undefined) {
+    const name = imageFormatName(values.output_format);
+    if (
+      name !== values.output_format &&
+      form.fields.output_format?.enum?.includes(name)
+    )
+      return { ...values, output_format: name };
+  }
+  return values;
+}
+
+export function normalizeParams(state: StudioState, draft: Draft, preserveNative = false): Draft {
   const form = modelForm(state, draft);
   const flow = flowSpec(state, selectedModel(draft));
   const supportsH3 = draft.kind === "video" && form?.referenceModes && !flow;
@@ -693,9 +732,13 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
       flowSourceJob: flow.mode === "extend" ? draft.flowSourceJob : null,
     };
   }
-  const values = form
-    ? normalizeForm(form, { ...draftValues(draft), ...draft.params })
-    : {};
+  const native = publishedMedia(state, selectedModel(draft));
+  let values: FormValues = {};
+  if (form) {
+    values = native && preserveNative && draft.params
+      ? historicalNativeParameters(draft.kind, form, draft.params)
+      : normalizeForm(form, native ? draft.params ?? {} : { ...draftValues(draft), ...draft.params });
+  }
   const seed = typeof draft.seed === "string" ? draft.seed.trim() : "";
   const h3 = supportsH3
     ? h3Options(
@@ -711,7 +754,7 @@ export function normalizeParams(state: StudioState, draft: Draft): Draft {
     flowSourceJob: null,
     params: form?.parameterObject ? values : undefined,
     ratio: String(values.ratio ?? draft.ratio),
-    quality: String(values.quality ?? draft.quality),
+    quality: native ? draft.quality : String(values.quality ?? draft.quality),
     seconds: String(values.seconds ?? draft.seconds),
     resolution: String(values.resolution ?? draft.resolution),
     imageQuality: String(values.image_quality ?? draft.imageQuality),
@@ -742,6 +785,47 @@ function restoreParent(state: StudioState, saved: DraftSnapshot) {
     retainedSeed: hasParent ? saved.retainedSeed : null,
   };
 }
+
+function isPublishedImage(state: StudioState, draft: Draft) {
+  return draft.kind === "image" && publishedMedia(state, draft.model);
+}
+
+export function keepUnavailableDraft(state: StudioState, draft: Draft) {
+  return (
+    (state.studio_plugins || isPublishedImage(state, draft)) &&
+    !modelAvailable(state, selectedModel(draft))
+  );
+}
+
+function restoreImageSnapshot(
+  state: StudioState,
+  saved: DraftSnapshot,
+  storedTypes?: StoredReferenceTypes,
+): DraftSnapshot {
+  const form = modelForm(state, saved.draft);
+  const params =
+    form && saved.draft.params && modelAvailable(state, saved.draft.model)
+      ? historicalNativeParameters("image", form, saved.draft.params)
+      : saved.draft.params;
+  const draft =
+    params === saved.draft.params ? saved.draft : { ...saved.draft, params };
+  const restored = restoreDraftReferences(
+    state,
+    draft,
+    saved.refs,
+    storedTypes,
+  );
+  const parent = restoreParent(state, saved);
+  const sameRequest =
+    parent.parent === saved.parent &&
+    restored.refs.length === saved.refs.length;
+  return {
+    ...restored,
+    ...parent,
+    submitId: sameRequest ? saved.submitId : crypto.randomUUID(),
+  };
+}
+
 export function changeCreation(
   state: StudioState,
   session: DraftSession,
@@ -749,12 +833,29 @@ export function changeCreation(
 ): DraftSession {
   const { draft } = session;
   if (draft.kind === kind) return session;
+  // The image that was open when entering audio is newer than a legacy image slot.
+  const savedImage =
+    kind === "image" &&
+    [
+      draft.kind === "audio" ? session.suspendedMediaDraft : null,
+      session.suspendedImageDraft,
+    ].find((saved) => saved && isPublishedImage(state, saved.draft));
+  if (savedImage) {
+    return {
+      ...restoreImageSnapshot(state, savedImage),
+      suspendedAudioDraft: suspendAudioDraft(session),
+      suspendedImageDraft: null,
+      suspendedMediaDraft: null,
+    };
+  }
+  const submitId = crypto.randomUUID();
   if (kind === "audio") {
     const mediaSnapshot = draftSnapshot(session);
     const savedAudio = session.suspendedAudioDraft;
     if (savedAudio) {
       return {
         ...savedAudio,
+        submitId,
         draft: ensureCreation(
           state,
           { ...savedAudio.draft, packs: [] },
@@ -781,7 +882,7 @@ export function changeCreation(
       refs: [],
       parent: null,
       retainedSeed: null,
-      submitId: session.submitId,
+      submitId,
       suspendedImageDraft: session.suspendedImageDraft,
       suspendedAudioDraft: null,
       suspendedMediaDraft: mediaSnapshot,
@@ -793,6 +894,7 @@ export function changeCreation(
       const saved = session.suspendedImageDraft;
       return {
         ...saved,
+        submitId,
         draft: ensureCreation(state, saved.draft, "image"),
         refs: saved.refs.filter((id) => referenceAsset(state, id)),
         ...restoreParent(state, saved),
@@ -806,6 +908,7 @@ export function changeCreation(
       const sameKind = saved.draft.kind === kind;
       return {
         ...saved,
+        submitId,
         draft: ensureCreation(state, saved.draft, kind),
         refs: saved.refs.filter((id) => referenceAsset(state, id)),
         ...(sameKind
@@ -837,7 +940,7 @@ export function changeCreation(
       refs: [],
       parent: null,
       retainedSeed: null,
-      submitId: session.submitId,
+      submitId,
       suspendedImageDraft: session.suspendedImageDraft,
       suspendedAudioDraft: audioSnapshot,
       suspendedMediaDraft: null,
@@ -847,6 +950,7 @@ export function changeCreation(
     const saved = session.suspendedImageDraft;
     return {
       ...saved,
+      submitId,
       refs: saved.refs.filter((id) => referenceAsset(state, id)),
       ...restoreParent(state, saved),
       suspendedImageDraft: null,
@@ -856,6 +960,7 @@ export function changeCreation(
   }
   return {
     ...session,
+    submitId,
     draft: ensureCreation(state, draft, kind),
     parent: null,
     retainedSeed: null,
@@ -1119,7 +1224,14 @@ function updateSnapshotPacks<T extends DraftSnapshot>(
     draft = { ...draft, packs: mapped.packs };
   }
   if (draft === snapshot.draft) return snapshot;
-  const nextSnapshot = { ...snapshot, draft };
+  const removedImagePack =
+    isPublishedImage(nextState, draft) &&
+    (draft.packs?.length ?? 0) < (snapshot.draft.packs?.length ?? 0);
+  const nextSnapshot = {
+    ...snapshot,
+    draft,
+    ...(removedImagePack && { submitId: crypto.randomUUID() }),
+  };
   const plain = frames(draft) || draft.kind === "audio";
   if (plain) return nextSnapshot;
   const prevRefs = packReferences(snapshot);
@@ -1453,7 +1565,9 @@ export function referenceIssue(
   if (form?.parameterObject) {
     const issue = formError(
       form,
-      job ? normalizeForm(form, savedParameters(job)) : (draft.params ?? {}),
+      job
+        ? jobFormParameters(job, form, publishedMedia(state, model))
+        : (draft.params ?? {}),
     );
     if (issue) return issue;
   }
@@ -1527,12 +1641,15 @@ export function flowIssue(
     : "";
 }
 
-export function estimateBody(state: StudioState, session: DraftSession) {
+export function estimateBody(state: StudioState, session: Pick<DraftSession, "draft" | "refs">) {
   const { draft } = session;
+  const model = selectedModel(draft);
+  if (publishedMedia(state, model))
+    return { kind: draft.kind, model, params: draft.params ?? {}, refs: packReferences(session) };
   const audio = draft.kind === "audio";
   return {
     kind: draft.kind,
-    model: selectedModel(draft),
+    model,
     ratio: draft.ratio,
     quality: Number(draft.quality),
     seconds: Number(draft.seconds),
@@ -1566,6 +1683,18 @@ function savedParameters(job: Job): FormValues {
     }
   );
 }
+
+function jobFormParameters(
+  job: Job,
+  form: ModelForm,
+  published: boolean,
+): FormValues {
+  const params = savedParameters(job);
+  return published
+    ? historicalNativeParameters(job.kind, form, params)
+    : normalizeForm(form, params);
+}
+
 export function loadJob(
   state: StudioState,
   session: DraftSession,
@@ -1598,7 +1727,7 @@ export function loadJob(
     ),
     fast_mode:
       Number(job.sampling_steps) === state.model_forms?.[job.model]?.fastSteps,
-  });
+  }, true);
   const wasAudio = session.draft.kind === "audio";
   return {
     ...session,
@@ -1621,6 +1750,7 @@ export function generationRequest(
   session: DraftSession,
   job?: Job,
   retryId?: string,
+  offered?: MediaQuote,
 ) {
   const { draft, parent, submitId, refs } = session;
   const kind = job?.kind || draft.kind;
@@ -1632,8 +1762,10 @@ export function generationRequest(
     parent: job?.id ?? parent,
     uid: retryId ?? submitId,
     price_revision: state.pricing?.revision,
+    ...offered,
   };
-  if (state.model_forms?.[model]?.parameterObject) {
+  const form = state.model_forms?.[model];
+  if (form?.parameterObject) {
     return {
       kind,
       path:
@@ -1646,7 +1778,7 @@ export function generationRequest(
         ...common,
         model,
         params: job
-          ? normalizeForm(state.model_forms?.[model], savedParameters(job))
+          ? jobFormParameters(job, form, publishedMedia(state, model))
           : (draft.params ?? {}),
         ...(kind === "audio"
           ? {}
@@ -1734,8 +1866,14 @@ export function generationRequest(
 export const resultTab = (kind: Job["kind"]) =>
   kind === "image" ? "images" : kind === "audio" ? "audio" : "videos";
 
-export function quote(state: StudioState, draft: Draft) {
+export function quote(state: StudioState, draft: Draft, offered?: MediaQuote) {
   const model = selectedModel(draft);
+  if (publishedMedia(state, model)) {
+    const amount = offered?.max_charge;
+    const available = state.credits?.exact?.available ?? String(state.credits?.available ?? 0);
+    const allowed = amount !== undefined && creditUnits(available) >= creditUnits(amount);
+    return { amount, available, allowed, label: amount === undefined ? "正在估价" : `最高 ${amount} 积分${allowed ? "" : " · 余额不足"}` };
+  }
   const form = state.model_forms?.[model];
   const values = form?.parameterObject
     ? (draft.params ?? {})
@@ -1748,30 +1886,37 @@ export function quote(state: StudioState, draft: Draft) {
       : (state.pricing?.items.find(({ key }) => key === `${model}|${tier}`)
           ?.amount ?? undefined);
   const available = state.credits?.available || 0;
+  const exactAvailable = state.credits?.exact?.available;
+  const allowed =
+    amount !== undefined &&
+    (exactAvailable !== undefined
+      ? creditUnits(exactAvailable) >= creditUnits(String(amount))
+      : available >= amount);
   return {
     amount,
     available,
-    allowed: amount !== undefined && available >= amount,
+    allowed,
     label:
       amount === undefined
         ? "未定价"
-        : `${amount} 积分${available < amount ? " · 余额不足" : ""}`,
+        : `${amount} 积分${!allowed ? " · 余额不足" : ""}`,
   };
 }
 
 export function composerFeedback(
   state: StudioState,
   session: DraftSession,
-  options: { uploading?: boolean; submitting?: boolean } = {},
+  options: { uploading?: boolean; submitting?: boolean; offered?: MediaQuote; quoteError?: string } = {},
 ) {
   const { draft } = session;
   const model = selectedModel(draft);
   const available = modelAvailable(state, model);
-  const issue = referenceIssue(state, session) || flowIssue(state, session);
+  const quoteError = publishedMedia(state, model) ? options.quoteError : undefined;
+  const issue = quoteError || referenceIssue(state, session) || flowIssue(state, session);
   const limit = promptLimit(draft);
   const overLimit = draft.prompt.length > limit;
   const hasPrompt = !!draft.prompt.trim();
-  const price = quote(state, draft);
+  const price = quote(state, draft, options.offered);
   const unpricedReason =
     (modelForm(state, draft)?.tiers.length ?? 0) > 1
       ? "当前规格尚未定价"
@@ -1780,7 +1925,7 @@ export function composerFeedback(
   const priceReason = price.allowed
     ? ""
     : price.amount === undefined
-      ? unpricedReason
+      ? publishedMedia(state, model) ? quoteError || "正在估价" : unpricedReason
       : "当前空间积分不足";
 
   const limitReason = overLimit

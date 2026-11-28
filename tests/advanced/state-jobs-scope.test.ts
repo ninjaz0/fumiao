@@ -29,7 +29,7 @@ test(
           fn({
             query: async (query, params) => {
               const result = await sql.query(query, params);
-              if (/SELECT j\.\*/.test(query) && /AS remote_studio/.test(query))
+              if (/WHERE j\.workspace_id=\$1/.test(query) && /AS remote_studio/.test(query))
                 reads.push({ query, rows: result.rows });
               return result;
             },
@@ -44,6 +44,8 @@ test(
         ],
       );
       assert.equal(reads.length, 1);
+      assert.doesNotMatch(reads[0].query, /j\.\*|j\.receipt\b/);
+      assert(reads[0].rows.every((row) => !("receipt" in row)));
       assert.equal(
         reads[0].rows.length,
         2,

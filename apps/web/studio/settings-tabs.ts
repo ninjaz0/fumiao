@@ -3,6 +3,7 @@ import type { PluginPageEntry } from "@fumiao/plugin-sdk/contributions.js";
 export const adminSettingsTabs = [
   "observability",
   "plugins",
+  "modelAccess",
   "models",
   "prices",
   "creditAdmin",

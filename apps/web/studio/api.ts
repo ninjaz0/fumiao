@@ -104,7 +104,11 @@ export async function api<T>(
   const value = await response.json().catch(() => ({}));
   signal?.throwIfAborted();
   if (!response.ok) {
-    throw new ApiError(errorDetail(value.detail), response.status);
+    throw new ApiError(
+      errorDetail(value.detail),
+      response.status,
+      typeof value.code === "string" ? value.code : undefined,
+    );
   }
   return value;
 }

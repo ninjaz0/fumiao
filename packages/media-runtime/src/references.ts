@@ -14,9 +14,16 @@ type Command = (
   args: string[],
   timeout: number,
   signal: AbortSignal,
+  failOnStderr?: boolean,
 ) => Promise<string>;
 /** A killed process is reaped before its slot and staging files are released. */
-export const mediaCommand: Command = (command, args, timeout, signal) =>
+export const mediaCommand: Command = (
+  command,
+  args,
+  timeout,
+  signal,
+  failOnStderr,
+) =>
   new Promise((resolve, reject) => {
     signal.throwIfAborted();
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -45,6 +52,7 @@ export const mediaCommand: Command = (command, args, timeout, signal) =>
       else output.push(chunk);
     });
     child.stderr.on("data", (chunk) => {
+      if (failOnStderr) stop(new Error("Media decoder reported an error"));
       size += chunk.length;
       if (size > 1 << 20) stop(new Error("Media process output exceeds limit"));
     });

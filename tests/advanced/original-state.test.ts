@@ -8,6 +8,7 @@ import { PluginRegistry } from "@fumiao/platform/plugins.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { Executor } from "@fumiao/platform/executor.js";
 import { GpuGateway } from "@fumiao/platform/gpu.js";
+import { OriginalCredits } from "@fumiao/original-api/credits.js";
 import { OriginalState } from "@fumiao/original-api/state.js";
 import { OriginalGeneration } from "@fumiao/original-api/generation.js";
 import {
@@ -132,6 +133,10 @@ test("completed provider text with NUL remains readable through full state and c
     );
     assert.equal(visible.prompt, text);
     assert.equal(visible.result, asset.public_id);
+    const credits = await new OriginalCredits(f.p).list(f.admin, String(f.team.public_id));
+    const spend = credits.history.find((entry) => entry.job === Number(job.public_id) && entry.action === "spend");
+    assert.equal(spend?.exact.amount, "1");
+    assert.equal(Object.hasOwn(spend!, "media_bill"), false);
     const canvas = await f.db.transaction((sql) =>
       f.state.canvasJobs(sql, f.team.id),
     );

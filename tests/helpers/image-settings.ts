@@ -13,7 +13,7 @@ export type ProbeWire = {
   disconnect?: boolean;
   repeat?: number;
 };
-export async function imageSettingsFixture() {
+export async function imageSettingsFixture(throughMigration?: string) {
   let wire: ProbeWire = { raw: "{}" };
   const requests: any[] = [];
   const server = createServer(async (req, res) => {
@@ -46,7 +46,7 @@ export async function imageSettingsFixture() {
   let f: Awaited<ReturnType<typeof databaseFixture>> | undefined,
     app: Awaited<ReturnType<typeof createOriginalApp>> | undefined;
   try {
-    f = await databaseFixture();
+    f = await databaseFixture(throughMigration);
     await f.p.registry.installBuiltins(f.db);
     const identity = new OriginalIdentity(f.p),
       password = "image-settings-fixture",

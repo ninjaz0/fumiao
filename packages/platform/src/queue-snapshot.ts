@@ -81,7 +81,7 @@ export class QueueForecasts {
       ).stamp,
     );
     const jobs = (
-      await sql.query(`SELECT j.*,c.enabled AS connection_enabled,
+      await sql.query(`SELECT j.id,j.public_id,j.workspace_id,j.connection_id,j.plugin_id,j.plugin_version,j.config_snapshot,j.provider_model,j.kind,j.state,j.remote_id,j.input,c.enabled AS connection_enabled,
    (COALESCE(mp.enabled,true) AND (m.catalog_id IS NOT NULL OR m.enabled) AND studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id) AND u.active) AS allowed
    FROM jobs j JOIN connections c ON c.id=j.connection_id JOIN models m ON m.id=j.model_id JOIN users u ON u.id=j.owner_id
    LEFT JOIN model_permissions mp ON mp.model_id=j.model_id AND mp.workspace_id=j.workspace_id
@@ -166,6 +166,7 @@ export class QueueForecasts {
         j.config_snapshot ?? connectionMap.get(j.connection_id)?.config,
       );
     for (const connection of connections) {
+      if (connection.plugin_id == null) continue;
       const owned = jobs.filter((j) => j.connection_id === connection.id);
       const currentConfigKey = healthConfigKey(this.p, connection.config);
       const jobConfigKey = (j: any) =>

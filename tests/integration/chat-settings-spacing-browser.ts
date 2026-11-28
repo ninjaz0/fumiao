@@ -148,8 +148,14 @@ test(
           emptyStatusHeight: 0,
         },
       );
+      await section
+        .getByRole("button", { name: "接入模型或接管兼容对话连接" })
+        .click();
+      await expect(
+        page.getByRole("heading", { name: "模型接入", exact: true }),
+      ).toBeVisible();
       console.log(
-        "Verified section spacing, centered provider headings, and visible feedback",
+        "Verified provider spacing, save feedback, and navigation to model access",
       );
     } finally {
       try {

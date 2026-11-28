@@ -86,6 +86,9 @@ import {
 } from "./original-recharge.js";
 import { OriginalChatController } from "./original-chat.js";
 import { OriginalPluginPagesController, isPluginPageAction } from "./original-plugin-pages.js";
+import { OriginalModelAccessController } from "./original-model-access.js";
+import { OriginalModelAccess } from "@fumiao/original-api/model-access.js";
+import type { HttpTransport } from "@fumiao/platform/plugin-host.js";
 import { OriginalProviderController } from "./original-providers.js";
 import {
   OriginalNodesController,
@@ -164,7 +167,8 @@ function failure(error: any, res: Response) {
       .end("Internal Server Error");
     return;
   }
-  originalJson(res, { detail }, status);
+  const code = error instanceof DomainError ? error.publicCode : undefined;
+  originalJson(res, { detail, ...(code ? { code } : {}) }, status);
   if (status >= 500)
     console.error("Original API request failed", error.name, error.code || "");
 }
@@ -1068,7 +1072,10 @@ class OriginalApi {
     return this.identity.changePassword(req.actor, token(req), body);
   }
 }
-export async function createOriginalApp(p: Platform) {
+export async function createOriginalApp(
+  p: Platform,
+  options: { modelAccessHttp?: HttpTransport<string | Uint8Array> } = {},
+) {
   const identity = new OriginalIdentity(p);
   const site = process.env.PUBLIC_URL || "http://localhost:3000";
   const aliases = additionalBrowserOrigins();
@@ -1078,6 +1085,7 @@ export async function createOriginalApp(p: Platform) {
       OriginalApi,
       OriginalChatController,
       OriginalProviderController,
+      OriginalModelAccessController,
       OriginalPluginPagesController,
       OriginalNodesController,
       OriginalAgentController,
@@ -1086,6 +1094,10 @@ export async function createOriginalApp(p: Platform) {
     ],
     providers: [
       { provide: OriginalIdentity, useValue: identity },
+      {
+        provide: OriginalModelAccess,
+        useValue: new OriginalModelAccess(identity, options.modelAccessHttp),
+      },
       { provide: OriginalRecharge, useValue: recharge },
     ],
   })
@@ -1207,6 +1219,15 @@ export async function createOriginalApp(p: Platform) {
             await agentPolicies.enforceForAgentAction(p.db, auth.workspaceId);
           }
         }
+      } catch (error) {
+        failure(error, res);
+        return;
+      }
+    }
+    if (/^\/api\/admin\/model-access(?:\/|$)/i.test(path)) {
+      try {
+        req.actor = await identity.actor(token(req));
+        p.admin(req.actor);
       } catch (error) {
         failure(error, res);
         return;
@@ -1371,6 +1392,7 @@ export function listRegisteredOriginalRoutes(): Array<{
     OriginalNodesController,
     OriginalPluginPagesController,
     OriginalProviderController,
+    OriginalModelAccessController,
     OriginalRechargeController,
     OriginalAgentController,
   ];

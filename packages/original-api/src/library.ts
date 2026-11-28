@@ -17,6 +17,9 @@ import { normalizeMediaMime } from "@fumiao/plugin-sdk/media-filename.js";
 import { parseBody } from "./validation.js";
 import { identityBodies } from "./contracts.js";
 import { zipStream, type ArchiveEntry } from "./zip.js";
+// Only native media carries a host-written delivery index. Existing plugin
+// queries retain their historical tie-breakers.
+export const nativeOutputIndex = "CASE WHEN j.plugin_id IS NULL THEN (a.metadata->>'outputIndex')::int END";
 type Selection = { kind: "job" | "asset"; row: any };
 const terminal = ["completed", "failed", "cancelled"];
 const extensions: Record<string, string> = {
@@ -103,7 +106,7 @@ export class OriginalLibrary {
   async result(sql: Sql, row: any) {
     return one(
       sql,
-      "SELECT a.* FROM assets a JOIN job_assets r ON r.asset_id=a.id WHERE r.job_id=$1 AND r.role='output' ORDER BY a.created_at,a.public_id LIMIT 1",
+      `SELECT a.* FROM assets a JOIN job_assets r ON r.asset_id=a.id JOIN jobs j ON j.id=r.job_id WHERE r.job_id=$1 AND r.role='output' ORDER BY ${nativeOutputIndex},a.created_at,a.public_id LIMIT 1`,
       [row.id],
     );
   }
@@ -171,7 +174,7 @@ export class OriginalLibrary {
     const rows = ids.length
       ? (
           await sql.query(
-            "SELECT DISTINCT ON (r.job_id) a.*,r.job_id FROM assets a JOIN job_assets r ON r.asset_id=a.id WHERE r.job_id=ANY($1::uuid[]) AND r.role='output' ORDER BY r.job_id,a.created_at,a.public_id",
+            `SELECT DISTINCT ON (r.job_id) a.*,r.job_id FROM assets a JOIN job_assets r ON r.asset_id=a.id JOIN jobs j ON j.id=r.job_id WHERE r.job_id=ANY($1::uuid[]) AND r.role='output' ORDER BY r.job_id,${nativeOutputIndex},a.created_at,a.public_id`,
             [ids],
           )
         ).rows

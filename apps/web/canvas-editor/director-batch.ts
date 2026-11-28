@@ -15,13 +15,14 @@ export type BatchReceipt = {
   submitted: (BatchReceiptItem & { job_id: number })[];
   skipped: (BatchReceiptItem & { reason: string })[];
   total_credits: number;
+  exact_total_credits?: string;
 };
 
 export type DirectorSubmission = {
   expected_revision: number;
   price_revision: number;
   precheck_token: string;
-  expected_total_credits: number;
+  expected_total_credits: number | string;
   director: DirectorBatchSelection;
   uid: string;
 };

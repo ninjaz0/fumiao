@@ -6,10 +6,7 @@ import express, {
 } from "express";
 import type { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { DomainError } from "@fumiao/platform/security.js";
-import {
-  decodePythonJson,
-  pythonJsonText,
-} from "@fumiao/plugin-sdk/json.js";
+import { decodePythonJson, pythonJsonText } from "@fumiao/plugin-sdk/json.js";
 import {
   parseBody,
   ValidationError,
@@ -20,6 +17,8 @@ import {
   chatCreateFields,
   chatRenameFields,
   chatSendFields,
+  chatQuoteFields,
+  parseChatSend,
 } from "@fumiao/original-api/chat-draft.js";
 import {
   originalSessionToken,
@@ -27,6 +26,8 @@ import {
 } from "./original-request.js";
 
 const routes: { path: RegExp; methods: Record<string, Fields | null> }[] = [
+  { path: /^\/api\/chat\/messages\/[^/]+\/source$/, methods: { GET: null } },
+  { path: /^\/api\/chat\/quote$/, methods: { POST: chatQuoteFields } },
   { path: /^\/api\/chats$/, methods: { GET: null, POST: chatCreateFields } },
   {
     path: /^\/api\/chats\/[^/]+$/,
@@ -38,11 +39,13 @@ const routes: { path: RegExp; methods: Record<string, Fields | null> }[] = [
   },
   { path: /^\/api\/chats\/[^/]+\/(?:stop|restore)$/, methods: { POST: null } },
   { path: /^\/api\/chats\/[^/]+\/apply$/, methods: { POST: chatApplyFields } },
-  { path: /^\/api\/chats\/[^/]+\/events$/, methods: { GET: null } },
+  { path: /^\/api\/chats\/[^/]+\/(?:events|bills)$/, methods: { GET: null } },
 ];
 
 export const isOriginalChatRequest = (req: Request) =>
-  /^\/api\/chats(?:\/|$)/i.test(decodePath(req.path));
+  /^\/api\/(?:chats(?:\/|$)|chat\/(?:quote\/?$|messages\/))/i.test(
+    decodePath(req.path),
+  );
 
 export function originalChatRequest(
   identity: OriginalIdentity,
@@ -83,7 +86,8 @@ export function originalChatRequest(
           raw(req, res, (error) => (error ? reject(error) : resolve())),
         );
         req.body = readChatBody(req);
-        parseBody(req.body, fields, true);
+        if (fields === chatSendFields) parseChatSend(req.body);
+        else parseBody(req.body, fields, true);
       }
       (req as OriginalAuthRequest).actor = await identity.actor(
         originalSessionToken(req),

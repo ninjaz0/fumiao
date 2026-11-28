@@ -16,7 +16,7 @@ import {
 } from "@fumiao/web-compat/director.js";
 export { canvasConflict };
 import { OriginalIdentity } from "./identity.js";
-import { archiveEntry, OriginalLibrary } from "./library.js";
+import { archiveEntry, nativeOutputIndex, OriginalLibrary } from "./library.js";
 import { parseBody } from "./validation.js";
 import {
   canvasGridCropFields,
@@ -47,7 +47,7 @@ const selectProject = `SELECT d.*,c.title AS original_title,c.document,c.created
 const selectNodeJob = `SELECT j.state,a.public_id AS result FROM canvas_job_links l
   JOIN jobs j ON j.id=l.job_id AND j.deleted_at IS NULL
   LEFT JOIN LATERAL (SELECT a.public_id FROM job_assets r JOIN assets a ON a.id=r.asset_id
-    WHERE r.job_id=j.id AND r.role='output' ORDER BY a.created_at,a.public_id LIMIT 1) a ON true`;
+    WHERE r.job_id=j.id AND r.role='output' ORDER BY ${nativeOutputIndex},a.created_at,a.public_id LIMIT 1) a ON true`;
 export async function canvasNodeMedia(
   sql: Sql,
   project: string,

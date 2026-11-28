@@ -4,7 +4,7 @@ import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { edgeSpeechSettings } from "@fumiao/platform/tts/edge-plugin.js";
 import { ordinaryFlowSource } from "@fumiao/platform/retired-jobs.js";
 import { edgeRenderingSettings } from "@fumiao/platform/tts/edge-tts.js";
-import type { Sql } from "@fumiao/platform/db.js";
+import { one, type Sql } from "@fumiao/platform/db.js";
 import { DomainError, requireValue } from "@fumiao/platform/security.js";
 import {
   canvasTailSourceId,
@@ -16,6 +16,7 @@ import {
   type DirectorVoiceSettings,
 } from "@fumiao/web-compat/director.js";
 import type { CanvasDocument, CanvasNode, CinematographySpec } from "./canvas-draft.js";
+import { canvasMediaParameters } from "./canvas-values.js";
 import { canvasNodeMedia } from "./canvases.js";
 import { resolveDialogueInput } from "./dialogue.js";
 import { expandOriginalPacks, originalFlowSource } from "./generation-inputs.js";
@@ -155,7 +156,7 @@ export async function resolveCanvasVisualBase(
   projectId: string,
   document: CanvasDocument,
   node: CanvasNode,
-  bindings: CanvasSubmissionModels,
+  bindings?: CanvasSubmissionModels,
   resolvedSources?: Awaited<ReturnType<typeof resolveCanvasSources>>,
 ) {
   const text: string[] = [];
@@ -175,8 +176,19 @@ export async function resolveCanvasVisualBase(
   }
   const prompt = canvasVisualPrompt(canvasRawPrompt(text, node), node);
   const params = node.params;
-  const model = params.model || bindings.default(node.type);
-  const rule = bindings.rules.get(model);
+  const builtin = Boolean(
+    params.model &&
+      (await one(
+        sql,
+        "SELECT id FROM studio_catalog WHERE id=$1 AND plugin_id IS NULL",
+        [params.model],
+      )),
+  );
+  const resolvedBindings = builtin
+    ? undefined
+    : (bindings ?? (await CanvasSubmissionModels.read(sql)));
+  const model = params.model || resolvedBindings!.default(node.type);
+  const rule = resolvedBindings?.rules.get(model);
   let native: CanvasNode["params"]["h3"] = null;
   if (node.type === "video" && rule?.nativeH3) {
     const empty = { first_frame: null, last_frame: null, video_audio: [] };
@@ -189,13 +201,13 @@ export async function resolveCanvasVisualBase(
       native = { ...empty, video_audio: native?.video_audio ?? [], mode: "reference" };
     }
   }
-  return { prompt, refs, sources, model, rule, native, linked };
+  return { prompt, refs, sources, model, rule, native, linked, builtin };
 }
 
 /** Build the same request fields for an ordinary canvas run or a director run.
  * Automatic tail chaining is applied before this step by ordinary canvas runs. */
 export function canvasVisualPayload(node: CanvasNode, base: CanvasVisualBase, seedOffset = 0) {
-  const { model, native, rule, prompt } = base;
+  const { model, native, rule, prompt, builtin } = base;
   const params = node.params;
   let refs = base.refs;
   const frameRefs = (frames: CanvasNode["params"]["h3"]) => [frames?.first_frame, frames?.last_frame]
@@ -213,13 +225,23 @@ export function canvasVisualPayload(node: CanvasNode, base: CanvasVisualBase, se
       400, "请先移除 H3 参考素材后切换模型生成",
     );
   }
+  const rawExtra =
+    node.extra_params &&
+    typeof node.extra_params === "object" &&
+    !Array.isArray(node.extra_params) &&
+    Object.keys(node.extra_params).length > 0
+      ? node.extra_params
+      : undefined;
+  const extraParams = rawExtra
+    ? (builtin ? canvasMediaParameters(rawExtra) : rawExtra)
+    : undefined;
   const common = {
     prompt,
     refs,
     ratio: params.ratio,
     asset_packs: node.asset_packs,
     model,
-    ...(node.extra_params && Object.keys(node.extra_params).length ? { params: node.extra_params } : {}),
+    ...(extraParams && Object.keys(extraParams).length ? { params: extraParams } : {}),
   };
   return node.type === "image"
     ? { ...common, resolution: params.resolution, image_quality: params.image_quality }
@@ -293,7 +315,7 @@ export async function resolveDirectorInput(
   }
   const base = await resolveCanvasVisualBase(
     sql, project.id, document, node,
-    bindings ?? await CanvasSubmissionModels.read(sql),
+    bindings,
     sources,
   );
   const payload = canvasVisualPayload(node, base);

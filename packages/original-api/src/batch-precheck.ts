@@ -1,5 +1,7 @@
 import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
 import { directorAudioTargets, directorBasis, directorScriptConflict, directorShotIds, directorTargetKey, type DirectorBatchSelection, type DirectorTarget } from "@fumiao/web-compat/director.js";
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
+import { canvasMediaQuotes } from "./canvas-media-quote.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
 import { evaluateBudgetImpact } from "@fumiao/platform/budgets.js";
 import type { Platform } from "@fumiao/platform/platform.js";
@@ -25,13 +27,7 @@ import { parseBody } from "./validation.js";
 import { OriginalGeneration, type DirectorGenerationQuote } from "./generation.js";
 import { parseDraft } from "./drafts.js";
 
-const ACTIVE_STATES = [
-  "queued",
-  "dispatching",
-  "running",
-  "finalizing",
-  "uncertain",
-];
+import { activeCanvasJobStates, readCanvasTail, withTailCount } from "./canvas-tail.js";
 
 export type PrecheckStage = "image" | "video" | "narration" | "dialogue";
 export type PrecheckHealth = "ready" | "warning" | "blocked";
@@ -44,6 +40,9 @@ export type PrecheckItem = {
   stage: PrecheckStage;
   model: string;
   credits: number;
+  exact_credits: string;
+  route_revision?: string;
+  price_revision_id?: string;
   status: PrecheckHealth;
   issues: string[];
 };
@@ -209,6 +208,10 @@ export class OriginalBatchPrecheck {
         image_quality?: string;
         ratio?: string;
         count?: number;
+        reference_count?: number;
+        refs?: string[];
+        canvas_tail?: { project: string; parent: string };
+        params?: Record<string, unknown>;
       }[];
     };
     return this.p.db.transaction(async (sql) => {
@@ -228,13 +231,13 @@ export class OriginalBatchPrecheck {
       });
       const wallet = await one(
         sql,
-        "SELECT balance, held FROM wallets WHERE workspace_id=$1",
+        "SELECT balance-held AS available FROM wallets WHERE workspace_id=$1",
         [workspace.id],
       );
       const available =
-        Number(wallet?.balance ?? 0) - Number(wallet?.held ?? 0);
+        creditUnits(String(wallet?.available ?? 0));
       let priceRevision = 1;
-      let totalCredits = 0;
+      let totalUnits = 0n;
       const items = [];
       for (const [index, item] of body.items.entries()) {
         const count = item.count ?? 1;
@@ -261,6 +264,14 @@ export class OriginalBatchPrecheck {
           ...(item.image_quality ? { image_quality: item.image_quality } : {}),
           ...(item.ratio ? { ratio: item.ratio } : {}),
         };
+        let referenceCount = item.refs ? new Set(item.refs).size : item.reference_count;
+        if (item.canvas_tail) {
+          const project = await this.canvases.project(sql, user, item.canvas_tail.project);
+          requireValue(project.workspace_id === workspace.id, 404, "画布不存在");
+          const refs = new Set(item.refs ?? []);
+          const tail = await readCanvasTail(sql, project.id, workspace.id, item.canvas_tail.parent, [...refs]);
+          referenceCount = withTailCount(refs, tail);
+        }
         const q = !model
           ? {
               allowed: false,
@@ -286,17 +297,24 @@ export class OriginalBatchPrecheck {
                 model,
                 workspace.id,
                 params,
+                { kind: item.kind, nativeParams: item.params, referenceCount },
               );
+        if (item.seconds !== undefined && (item.seconds < 0 || item.seconds > 15))
+          requireValue(await one(sql, "SELECT 1 FROM studio_catalog WHERE id=$1 AND plugin_id IS NULL AND descriptor->>'kind'='video'", [model]), 422, "镜头时长超出范围");
         priceRevision = q.revision;
-        const subtotal = q.amount * count;
-        if (q.allowed && q.priced) totalCredits += subtotal;
+        const subtotal =
+          creditUnits(String(q.exactAmount ?? q.amount)) * BigInt(count);
+        if (q.allowed && q.priced) totalUnits += subtotal;
         items.push({
           index,
           kind: item.kind,
           model,
           count,
           unit_credits: q.amount,
-          credits: subtotal,
+          exact_unit_credits: String(q.exactAmount ?? q.amount),
+          exact_credits: formatCredits(subtotal),
+          ...(q.route_revision && { route_revision: q.route_revision, price_revision_id: q.price_revision_id }),
+          credits: Number(formatCredits(subtotal)),
           allowed: q.allowed,
           priced: q.priced,
           ...(q.reason ? { reason: q.reason } : {}),
@@ -305,9 +323,11 @@ export class OriginalBatchPrecheck {
       return {
         price_revision: priceRevision,
         items,
-        total_credits: totalCredits,
-        available_credits: available,
-        sufficient: available >= totalCredits,
+        total_credits: Number(formatCredits(totalUnits)),
+        exact_total_credits: formatCredits(totalUnits),
+        exact_available_credits: formatCredits(available),
+        available_credits: Number(formatCredits(available)),
+        sufficient: available >= totalUnits,
       };
     });
   }
@@ -337,7 +357,7 @@ export class OriginalBatchPrecheck {
       const busyRows = await sql.query<{ node: string }>(
         `SELECT DISTINCT l.node FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id AND j.deleted_at IS NULL
          WHERE l.project_id=$1 AND j.state=ANY($2::text[]) AND l.node=ANY($3::text[])`,
-        [project.id, ACTIVE_STATES, selection.targets.map(directorLinkNode)],
+        [project.id, activeCanvasJobStates, selection.targets.map(directorLinkNode)],
       );
       const busy = new Set(busyRows.rows.map(({ node }) => node));
       const directorItems: DirectorTicket = {};
@@ -345,7 +365,7 @@ export class OriginalBatchPrecheck {
       for (const target of selection.targets) {
         const { node, shots } = directorTargetShots(document, ordered, target);
         const item: PrecheckItem = {
-          ...target, title: node.title || node.id, node_type: node.type, model: "", credits: 0, status: "ready", issues: [],
+          ...target, title: node.title || node.id, node_type: node.type, model: "", credits: 0, exact_credits: "0", status: "ready", issues: [],
         };
         const line = node.dialogue_lines?.find(({ id }) => id === target.line_id);
         if (line) item.title += ` · ${line.speaker ? line.speaker + "：" : ""}${line.text}`;
@@ -374,7 +394,13 @@ export class OriginalBatchPrecheck {
             String(project.workspace_number), "checked" in input ? input.checked : undefined,
           );
           directorItems[directorTargetKey(target)] = { basis: input.basis, quote };
-          item.credits = quote.amount;
+          const itemExact = quote.exactAmount ?? formatCredits(creditUnits(String(quote.amount)));
+          item.exact_credits = itemExact;
+          item.credits = Number(itemExact);
+          if (quote.routeRevision && quote.priceRevisionId) {
+            item.route_revision = quote.routeRevision;
+            item.price_revision_id = quote.priceRevisionId;
+          }
         } catch (error) {
           if (!(error instanceof DomainError)) throw error;
           item.status = "blocked";
@@ -382,12 +408,14 @@ export class OriginalBatchPrecheck {
         }
         items.push(item);
       }
-      const wallet = await one(sql, "SELECT balance,held FROM wallets WHERE workspace_id=$1", [project.workspace_id]);
-      const availableCredits = Number(wallet?.balance ?? 0) - Number(wallet?.held ?? 0);
+      const wallet = await one(sql, "SELECT balance-held AS available FROM wallets WHERE workspace_id=$1", [project.workspace_id]);
+      const availableUnits = creditUnits(String(wallet?.available ?? 0));
+      const availableExact = formatCredits(availableUnits);
       const price = await one(sql, "SELECT price_revision FROM studio_policy");
       const priceRevision = Number(price?.price_revision ?? 1);
-      const totalCredits = items.reduce((sum, item) => sum + item.credits, 0);
-      const budget = await evaluateBudgetImpact(sql, { workspaceId: project.workspace_id, projectId: project.id, amount: totalCredits });
+      const totalUnits = items.reduce((sum, item) => sum + (item.status === "blocked" ? 0n : creditUnits(item.exact_credits)), 0n);
+      const totalExact = formatCredits(totalUnits);
+      const budget = await evaluateBudgetImpact(sql, { workspaceId: project.workspace_id, projectId: project.id, amount: totalExact });
       const executableKeys = Object.keys(directorItems);
       const precheckToken = await directorBasis({
         user: user.id, project: project.id, requestHash, revision, priceRevision, directorItems,
@@ -401,7 +429,9 @@ export class OriginalBatchPrecheck {
           summary: {
             total: items.length, ready: executableKeys.length, warning: 0,
             blocked: items.length - executableKeys.length, runnable: executableKeys.length,
-            total_credits: totalCredits, available_credits: availableCredits, sufficient: availableCredits >= totalCredits,
+            total_credits: Number(totalExact), exact_total_credits: totalExact,
+            available_credits: Number(availableExact), exact_available_credits: availableExact,
+            sufficient: availableUnits >= totalUnits,
             budget_blocked: budget.blocked, budget_blocks: budget.blocks, budget_warnings: budget.warnings,
           },
         },
@@ -414,7 +444,7 @@ export class OriginalBatchPrecheck {
        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
        ON CONFLICT (token) DO UPDATE SET created_at=now(),budget_blocked=EXCLUDED.budget_blocked`,
       [result.precheck_token, user.id, snapshot.projectId, result.revision, result.price_revision, requestHash,
-        result.executable_keys, result.summary.total_credits, result.summary.budget_blocked, JSON.stringify(snapshot.directorItems)],
+        result.executable_keys, result.summary.exact_total_credits, result.summary.budget_blocked, JSON.stringify(snapshot.directorItems)],
     );
     return result;
   }
@@ -451,11 +481,11 @@ export class OriginalBatchPrecheck {
       });
       const wallet = await one(
         sql,
-        "SELECT balance, held FROM wallets WHERE workspace_id=$1",
+        "SELECT balance-held AS available FROM wallets WHERE workspace_id=$1",
         [project.workspace_id],
       );
       const availableCredits =
-        Number(wallet?.balance ?? 0) - Number(wallet?.held ?? 0);
+        creditUnits(String(wallet?.available ?? 0));
       const policyRow = await one(
         sql,
         "SELECT price_revision FROM studio_policy",
@@ -471,45 +501,27 @@ export class OriginalBatchPrecheck {
           `SELECT DISTINCT l.node FROM canvas_job_links l
            JOIN jobs j ON j.id = l.job_id AND j.deleted_at IS NULL
            WHERE l.project_id=$1 AND j.state = ANY($2::text[])`,
-          [project.id, ACTIVE_STATES],
+          [project.id, activeCanvasJobStates],
         )
       ).rows;
       const busyNodes = new Set(busyRows.map((r) => r.node));
 
-      // Check referenced AssetPack revisions once.
-      const packPublicIds = [
-        ...new Set(targets.flatMap((n) => n.asset_packs.map((p) => p.id))),
-      ];
-      const livePackRevisions = new Map<
-        string,
-        { revision: number; name: string; assetsCount: number }
-      >();
-      if (packPublicIds.length) {
-        const pRows = (
-          await sql.query(
-            `SELECT d.public_id, d.title, d.revision, d.body, d.pack_text
-             FROM documents d
-             LEFT JOIN asset_pack_meta m ON m.pack_id=d.id
-             WHERE d.public_id = ANY($1::text[]) AND d.kind='pack' AND NOT d.deleted
-             AND (d.workspace_id=$2 OR COALESCE(m.scope,'workspace')='global')`,
-            [packPublicIds, project.workspace_id],
-          )
-        ).rows;
-        for (const r of pRows) {
-          livePackRevisions.set(r.public_id, {
-            revision: Number(r.revision),
-            name: r.pack_text?.name ?? r.title,
-            assetsCount: Array.isArray(r.body?.assets)
-              ? r.body.assets.length
-              : 0,
-          });
-        }
-      }
-
       const items: PrecheckItem[] = [];
       const stages = [...new Set(body.stages)];
-
-      for (const node of targets) {
+      const { executionOrder, quote } = await canvasMediaQuotes(
+        sql,
+        doc,
+        targets,
+        {
+          projectId: project.id,
+          workspaceId: project.workspace_id,
+          bindings,
+          canvases: this.canvases,
+          catalog: this.catalog,
+          includesImages: stages.includes("image"),
+        },
+      );
+      for (const node of executionOrder) {
         for (const stage of stages) {
           if (stage === "image" && node.type !== "image") continue;
           if (stage === "video" && node.type !== "video") continue;
@@ -521,8 +533,9 @@ export class OriginalBatchPrecheck {
 
           const issues: string[] = [];
           let status: PrecheckHealth = "ready";
-          let credits = 0;
+          let units = 0n;
           let model = "";
+          let routeQuote: Pick<PrecheckItem, "price_revision_id" | "route_revision"> | undefined;
 
           if (staleRevision) {
             issues.push("画布已有新版本，提交前请先同步保存");
@@ -530,106 +543,10 @@ export class OriginalBatchPrecheck {
           }
 
           if (stage === "image" || stage === "video") {
-            if (busyNodes.has(node.id)) {
-              issues.push("该节点当前有运行中的任务");
-              status = "blocked";
-            }
-            const connectedTexts: string[] = [];
-            let connectedImageCount = 0;
-            for (const { node: src, kind, value } of await resolveCanvasSources(sql, project.id, doc, node.id)) {
-              if (kind === "text") {
-                if (!value) {
-                  issues.push(`上游文本节点「${src.title || src.id}」为空`);
-                  status = "blocked";
-                } else {
-                  connectedTexts.push(value);
-                }
-              } else {
-                connectedImageCount++;
-                if (!value) {
-                  // If upstream image is also being run in this batch, warn instead of hard block!
-                  if (
-                    stages.includes("image") &&
-                    targets.some((t) => t.id === src.id)
-                  ) {
-                    issues.push(
-                      `依赖上游图片「${src.title || src.id}」，将按顺序先生成图片`,
-                    );
-                    if (status === "ready") status = "warning";
-                  } else {
-                    issues.push(`上游参考图「${src.title || src.id}」尚未就绪`);
-                    status = "blocked";
-                  }
-                }
-              }
-            }
-            const combinedPrompt = canvasRawPrompt(connectedTexts, node);
-            if (!combinedPrompt) {
-              issues.push("缺少提示词或连接的上游文本");
-              status = "blocked";
-            } else if ([...combinedPrompt].length > 12000) {
-              issues.push("提示词超过 12000 字上限");
-              status = "blocked";
-            }
-
-            let packImageCount = 0;
-            for (const sel of node.asset_packs) {
-              const live = livePackRevisions.get(sel.id);
-              if (!live) {
-                issues.push(`绑定的素材包已删除或不可访问 (${sel.id.slice(0, 6)})`);
-                status = "blocked";
-              } else {
-                packImageCount += live.assetsCount;
-                if (live.revision !== sel.revision) {
-                  issues.push(`素材包「${live.name}」已有新版本，请重新选择`);
-                  status = "blocked";
-                }
-              }
-            }
-            const totalRefs =
-              connectedImageCount +
-              packImageCount +
-              (node.params.h3_refs?.length ?? 0);
-            if (totalRefs > 9) {
-              issues.push(`参考图片合计 ${totalRefs} 张，超过上限 9 张`);
-              status = "blocked";
-            }
-
-            model = node.params.model || "";
-            if (!model) {
-              try {
-                model = bindings.default(stage);
-              } catch {
-                issues.push(
-                  stage === "image" ? "未配置默认生图模型" : "未配置默认视频模型",
-                );
-                status = "blocked";
-              }
-            }
-            if (model) {
-              const q = await this.catalog.quoteReadOnly(
-                sql,
-                model,
-                project.workspace_id,
-                stage === "image"
-                  ? {
-                      resolution: node.params.resolution,
-                      image_quality: node.params.image_quality,
-                      ratio: node.params.ratio,
-                    }
-                  : {
-                      seconds: node.params.seconds,
-                      quality: node.params.quality,
-                      ratio: node.params.ratio,
-                    },
-              );
-              if (!q.allowed || !q.priced) {
-                issues.push(q.reason || "当前模型不可用或未定价");
-                status = "blocked";
-              } else {
-                credits = q.amount;
-              }
-            }
+            const media = await quote(node, stage, busyNodes.has(node.id));
+            ({ model, units, routeQuote } = media);
+            issues.push(...media.issues);
+            if (media.status !== "ready") status = media.status;
           } else if (stage === "narration") {
             if (!pythonStrip(node.narration_text)) {
               issues.push("镜头未填写旁白文本");
@@ -662,7 +579,7 @@ export class OriginalBatchPrecheck {
                 issues.push(q.reason || "音频配音服务尚未配置或连接已停用");
                 status = "blocked";
               } else {
-                credits = q.amount;
+                units = creditUnits(String(q.exactAmount ?? q.amount));
                 if (model === "edge-tts") {
                   issues.push("使用内置免费 Edge TTS 兜底引擎（0 积分）");
                   if (status === "ready") status = "warning";
@@ -678,7 +595,7 @@ export class OriginalBatchPrecheck {
               status = "blocked";
             } else {
               // F027 + F010: Quote EACH line using its actual resolved character/explicit voice model!
-              let lineCreditsSum = 0;
+              let lineCreditsSum = 0n;
               const usedModels = new Set<string>();
               let edgeLineCount = 0;
               for (const line of validLines) {
@@ -717,11 +634,11 @@ export class OriginalBatchPrecheck {
                   continue;
                 }
                 usedModels.add(lineModel);
-                lineCreditsSum += q.amount;
+                lineCreditsSum += creditUnits(String(q.amount));
                 if (lineModel === "edge-tts") edgeLineCount++;
               }
               model = [...usedModels].join(", ");
-              credits = lineCreditsSum;
+              units = lineCreditsSum;
               if (status !== "blocked" && edgeLineCount > 0) {
                 issues.push(
                   edgeLineCount === validLines.length
@@ -739,17 +656,22 @@ export class OriginalBatchPrecheck {
             node_type: node.type,
             stage,
             model,
-            credits: status === "blocked" ? 0 : credits,
+            ...routeQuote,
+            exact_credits: status === "blocked" ? "0" : formatCredits(units),
+            credits: status === "blocked" ? 0 : Number(formatCredits(units)),
             status,
             issues,
           });
         }
       }
 
+      const targetOrder = new Map(targets.map((node, i) => [node.id, i]));
+      items.sort((a,b) => targetOrder.get(a.node_id)! - targetOrder.get(b.node_id)!);
       const readyCount = items.filter((i) => i.status === "ready").length;
       const warningCount = items.filter((i) => i.status === "warning").length;
       const blockedCount = items.filter((i) => i.status === "blocked").length;
-      const totalCredits = items.reduce((sum, i) => sum + i.credits, 0);
+      const totalUnits = items.reduce((sum, i) => sum + creditUnits(i.exact_credits), 0n);
+      const totalCredits = formatCredits(totalUnits);
       const budgetImpact = await evaluateBudgetImpact(sql, {
         workspaceId: project.workspace_id,
         projectId: String(project.id),
@@ -760,7 +682,7 @@ export class OriginalBatchPrecheck {
         .map((i) => `${i.node_id}:${i.stage}`);
       const executableItems = items
         .filter((i) => i.status !== "blocked")
-        .map((i) => `${i.node_id}:${i.stage}:${i.model}:${i.credits}`)
+        .map((i) => `${i.node_id}:${i.stage}:${i.model}:${i.exact_credits}`)
         .sort();
       const precheckToken = hash(
         JSON.stringify({
@@ -769,7 +691,9 @@ export class OriginalBatchPrecheck {
           request_hash: requestHash,
           revision: Number(project.revision),
           price_revision: priceRevision,
-          total_credits: totalCredits,
+          // Keep integer precheck tickets issued before precision migration verifiable.
+          total_credits: Number.isSafeInteger(Number(totalCredits)) && !totalCredits.includes(".")
+            ? Number(totalCredits) : totalCredits,
           executable: executableItems,
         }),
       );
@@ -789,9 +713,11 @@ export class OriginalBatchPrecheck {
             warning: warningCount,
             blocked: blockedCount,
             runnable: readyCount + warningCount,
-            total_credits: totalCredits,
-            available_credits: availableCredits,
-            sufficient: availableCredits >= totalCredits,
+            total_credits: Number(totalCredits),
+            exact_total_credits: totalCredits,
+            available_credits: Number(formatCredits(availableCredits)),
+            exact_available_credits: formatCredits(availableCredits),
+            sufficient: availableCredits >= totalUnits,
             budget_blocked: budgetImpact.blocked,
             budget_blocks: budgetImpact.blocks,
             budget_warnings: budgetImpact.warnings,
@@ -826,7 +752,7 @@ export class OriginalBatchPrecheck {
           snapshot.result.price_revision,
           requestHash,
           snapshot.result.executable_keys,
-          snapshot.result.summary.total_credits,
+          snapshot.result.summary.exact_total_credits,
           snapshot.result.summary.budget_blocked,
         ],
       );

@@ -10,6 +10,14 @@ import {
   type Page,
 } from "@playwright/test";
 import { newNode } from "../../apps/web/canvas-editor/types.js";
+import { resolveChatConfigTarget } from "../../apps/web/canvas-editor/chat/guidance.js";
+
+function headingForTarget(target: ReturnType<typeof resolveChatConfigTarget>) {
+  if (target === "modelAccess") return "模型接入";
+  if (target === "plugins") return "插件";
+  if (target === "models") return "模型开关";
+  return "对话服务";
+}
 
 const emptyConfigPayload = {
   models: {},
@@ -19,7 +27,7 @@ const emptyConfigPayload = {
 
 export async function verifyChatEmptyGuidance(page: Page) {
   const state = await (await page.request.get("/api/state")).json();
-  const expectedHeading = state.studio_plugins ? "插件" : "对话服务";
+  const expectedHeading = headingForTarget(resolveChatConfigTarget(state));
   await page.locator('nav [data-nav="home"]').click();
   await page.route("**/api/chat/config", (route) =>
     route.fulfill({ json: emptyConfigPayload }),
@@ -236,8 +244,8 @@ export async function verifyAdminCanvasEmptyGuidance(
 ) {
   const state = await (await page.request.get("/api/state")).json();
   const workspace = state.workspace_id;
-  const expectedTab = state.studio_plugins ? "plugins" : "chatService";
-  const expectedHeading = state.studio_plugins ? "插件" : "对话服务";
+  const expectedTab = resolveChatConfigTarget(state);
+  const expectedHeading = headingForTarget(expectedTab);
   const headers = { Origin: origin, "X-Workspace-Id": String(workspace) };
 
   const created = await page.request.post("/api/canvases", {

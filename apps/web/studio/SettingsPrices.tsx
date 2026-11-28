@@ -33,10 +33,11 @@ function revealFocusedPrice(bar: HTMLDivElement | null) {
 export function PriceSettings({
   state,
   visible,
+  editModel,
   request,
   refresh,
   notify,
-}: AdminSave & { state: StudioState; visible: boolean }) {
+}: AdminSave & { state: StudioState; visible: boolean; editModel: (id:string)=>void }) {
   const [draft, setDraft] = useState<PriceDraft | null>(null);
   const [confirmed, setConfirmed] = useState<StudioState["pricing"] | null>(
     null,
@@ -181,6 +182,27 @@ export function PriceSettings({
             <dd className="price-rate">{PRICE_CREDIT_RATE_TEXT}</dd>
           </div>
         </dl>
+        {!!latest.published?.length && (
+          <section className="ledger-card">
+            <h3 className="credit-heading">模型接入售价</h3>
+            {latest.published.map(({ model, price }) => (
+              <div className="price-row published-price-row" key={model}>
+                <button className="ledger-button" onClick={()=>editModel(model)}>{state.model_catalog[model]?.label ?? model} · 编辑售价</button>
+                {price.kind === "chat" ? (
+                  <span>
+                    每百万 Token 输入 {price.input}、输出 {price.output}
+                    、缓存命中 {price.cache_read ?? price.input}、缓存写入{" "}
+                    {price.cache_write ?? price.input} 积分
+                  </span>
+                ) : (
+                  <span>
+                    {price.unit} 积分 / {price.kind === "image" ? "张" : "秒"}
+                  </span>
+                )}
+              </div>
+            ))}
+          </section>
+        )}
         <form id="price-form" onSubmit={save} onFocus={onPriceFocus}>
           {summary.sections.map((section) => (
             <PriceSection

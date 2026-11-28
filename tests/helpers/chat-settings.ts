@@ -2,8 +2,8 @@ import { imageSettingsFixture } from "./image-settings.js";
 import { chatProviderFixture } from "./chat-provider.js";
 import { chatStreaming } from "@fumiao/plugin-chat/stream.js";
 import { OriginalChatSettings } from "@fumiao/original-api/chat-settings.js";
-export async function chatSettingsFixture() {
-  const f = await imageSettingsFixture(),
+export async function chatSettingsFixture(throughMigration?: string) {
+  const f = await imageSettingsFixture(throughMigration),
     wire = await chatProviderFixture();
   try {
     await f.db.transaction((sql) =>

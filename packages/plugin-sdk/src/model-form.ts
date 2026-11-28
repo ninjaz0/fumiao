@@ -34,6 +34,7 @@ export interface ModelForm {
   fields: Record<string, FormField>;
   required?: string[];
   combinations?: Condition[];
+  mutuallyExclusive?: { field: string; alternatives: string[]; hint: string };
   tiers: { tier: string; when: Condition }[];
   references: {
     min: number;
@@ -70,6 +71,15 @@ export interface FormConstraintEvaluation {
 }
 
 export const displayRatios = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
+
+/** Public image output choices use standard format names, including for upstream MIME aliases. */
+export function imageFormatName(value: unknown) {
+  const name = typeof value === "string"
+    ? value.toLowerCase().replace(/^image\//, "")
+    : "";
+  return name === "jpg" ? "jpeg" : name;
+}
+
 export function choices(
   values: string[] | number[],
   initial = values[0],
@@ -125,6 +135,23 @@ export function evaluateFormConstraints(
           const key = JSON.stringify(v);
           disabledOptions[key] ??= rule.reason;
         }
+      }
+    }
+
+    const exclusive = form.mutuallyExclusive;
+    if (exclusive) {
+      const peers =
+        name === exclusive.field
+          ? exclusive.alternatives
+          : exclusive.alternatives.includes(name)
+            ? [exclusive.field]
+            : [];
+      if (peers.some((peer) => values[peer] !== undefined)) {
+        disabledReason = exclusive.hint;
+        // A restored conflict must still let the creator clear either side.
+        if (values[name] === undefined) disabled = true;
+        for (const option of field.enum ?? [])
+          disabledOptions[JSON.stringify(option)] = exclusive.hint;
       }
     }
 

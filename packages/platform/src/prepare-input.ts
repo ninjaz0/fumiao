@@ -1,3 +1,6 @@
+import { imageOutputFormat } from "./model-access/image-formats.js";
+import { imageReferenceLimits, isImageControl } from "./model-access/media-form.js";
+import { prepareVideoParameters } from "./model-access/video-parameters.js";
 import { z } from "zod";
 import type { Platform } from "./platform.js";
 import type { Sql } from "./db.js";
@@ -113,4 +116,86 @@ export async function prepareSubmission(
       throw new DomainError(400, e.message);
     throw e;
   }
+}
+
+/** Validate only explicitly offered image controls. References travel separately
+ * from caller parameters so data URLs and provider routing fields cannot be injected. */
+export function prepareImageParameters(
+  route: import("./model-access/publication.js").FrozenModelRoute,
+  raw: Record<string, unknown>,
+  referenceCount: number,
+) {
+  const caps = route.capabilities;
+  const format = imageOutputFormat(caps, raw.output_format);
+  const fields: Record<string, unknown> = format
+    ? { output_format: format }
+    : {};
+  const options: Record<string, string[] | undefined> = {
+    size: caps.sizes,
+    resolution: caps.resolutions,
+    aspect_ratio: caps.aspect_ratios,
+  };
+  for (const [name, value] of Object.entries(raw)) {
+    if (name === "output_format") continue;
+    const choices = options[name];
+    const def = Object.hasOwn(caps.definitions ?? {}, name)
+      ? caps.definitions![name]
+      : undefined;
+    requireValue(
+      isImageControl(name) && (caps.names?.includes(name) || choices?.length),
+      400,
+      "线路不支持此图片参数",
+    );
+    requireValue(
+      typeof value === "boolean" ||
+        (typeof value === "string" &&
+          value.length <= 128 &&
+          !value.includes("\0")) ||
+        (typeof value === "number" && Number.isSafeInteger(value)),
+      400,
+      "图片参数无效",
+    );
+    if (choices?.length)
+      requireValue(
+        typeof value === "string" && choices.includes(value),
+        400,
+        "图片参数超出线路范围",
+      );
+    if (def) {
+      const valid =
+        def.type === "enum"
+          ? typeof value !== "boolean" && def.values.includes(value)
+          : def.type === "range"
+            ? typeof value === "number" && value >= def.min && value <= def.max
+            : typeof value === "boolean";
+      requireValue(valid, 400, "图片参数超出线路范围");
+    }
+    fields[name] = value;
+  }
+  const count = fields.n ?? 1;
+  requireValue(
+    typeof count === "number" &&
+      Number.isInteger(count) &&
+      count >= 1 &&
+      count <= 16,
+    400,
+    "图片张数无效",
+  );
+  const refs = imageReferenceLimits(caps);
+  requireValue(
+    referenceCount >= refs.min && referenceCount <= refs.max,
+    400,
+    "参考图片数量不符合线路要求",
+  );
+  return { params: fields, count };
+}
+
+export function prepareMediaParameters(
+  route: import("./model-access/publication.js").FrozenModelRoute,
+  raw: Record<string, unknown>,
+  referenceCount: number,
+) {
+  return route.purpose === "video"
+    ? prepareVideoParameters(route, raw, referenceCount)
+    : prepareImageParameters(route, raw, referenceCount);
 }
