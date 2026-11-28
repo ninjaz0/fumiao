@@ -5,6 +5,7 @@ import type { Platform } from "../platform.js";
 import { generationTransport, requirePublicHttps } from "../plugin-host.js";
 import { inspectProviderOutput } from "../provider-output.js";
 import { DomainError, requireValue } from "../security.js";
+import { wakeTailFrameChildren } from "../tail-frame.js";
 import { resolveConnectionRevision } from "./connections.js";
 import { prepareVideoParameters } from "./video-parameters.js";
 import { routeScopeAllows, type FrozenModelRoute } from "./publication.js";
@@ -16,6 +17,7 @@ import {
   readBody,
   readReferences,
   stage,
+  staleMediaRetryToUncertain,
   submissionClient,
   type Transport,
   validation,
@@ -343,6 +345,16 @@ async function finalize(
 
 async function retry(sql: Sql, current: Job) {
   const finalizing = current.has_receipt;
+  if (
+    await staleMediaRetryToUncertain(
+      sql,
+      current,
+      finalizing
+        ? "视频成片下载长时间失败，已转为人工核查"
+        : "上游视频任务长时间未完成，已转为人工核查",
+    )
+  )
+    return;
   await sql.query(
     `UPDATE jobs SET state=$2,lease_token=NULL,lease_until=NULL,
     request_note=$3,request_retry_at=now()+$4::interval WHERE id=$1`,
@@ -463,5 +475,32 @@ export async function executeNativeVideos(
         );
       else await retry(sql, current);
     });
+  }
+  const finished = await one(
+    p.db,
+    "SELECT state, result FROM jobs WHERE id=$1",
+    [job.id],
+  );
+  if (
+    finished &&
+    (finished.state === "completed" ||
+      finished.state === "failed" ||
+      finished.state === "cancelled")
+  ) {
+    const firstAsset = Array.isArray(finished.result?.assets)
+      ? finished.result.assets[0]
+      : undefined;
+    await wakeTailFrameChildren(
+      p,
+      {
+        id: job.id,
+        workspace_id: job.workspace_id,
+        owner_id: job.owner_id,
+        kind: job.kind ?? "video",
+      },
+      finished.state,
+      firstAsset,
+      AbortSignal.timeout(45_000),
+    ).catch(() => {});
   }
 }

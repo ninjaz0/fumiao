@@ -1886,14 +1886,20 @@ export function quote(state: StudioState, draft: Draft, offered?: MediaQuote) {
       : (state.pricing?.items.find(({ key }) => key === `${model}|${tier}`)
           ?.amount ?? undefined);
   const available = state.credits?.available || 0;
+  const exactAvailable = state.credits?.exact?.available;
+  const allowed =
+    amount !== undefined &&
+    (exactAvailable !== undefined
+      ? creditUnits(exactAvailable) >= creditUnits(String(amount))
+      : available >= amount);
   return {
     amount,
     available,
-    allowed: amount !== undefined && available >= amount,
+    allowed,
     label:
       amount === undefined
         ? "未定价"
-        : `${amount} 积分${available < amount ? " · 余额不足" : ""}`,
+        : `${amount} 积分${!allowed ? " · 余额不足" : ""}`,
   };
 }
 

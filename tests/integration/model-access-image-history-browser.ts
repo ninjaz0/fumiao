@@ -14,7 +14,11 @@ import { chatsFixture } from "../helpers/chats.js";
 
 test("成员从已交付的 MIME 格式图片重新编辑、确认再次生成与查看原回执", async (t) => {
   const f = await chatsFixture();
-  t.after(f.cleanup);
+  let closeBrowser: (() => Promise<void>) | undefined;
+  t.after(async () => {
+    await closeBrowser?.();
+    await f.cleanup();
+  });
   await f.db.query(
     "INSERT INTO studio_plugin_profile(mode) VALUES('compatible') ON CONFLICT DO NOTHING",
   );
@@ -143,10 +147,13 @@ test("成员从已交付的 MIME 格式图片重新编辑、确认再次生成�
   });
   const css = await readFile("baseline/production/static/studio.css", "utf8");
   const browser = await chromium.launch();
-  t.after(() => browser.close());
   const page = await browser.newPage({
     viewport: { width: 1440, height: 960 },
   });
+  closeBrowser = async () => {
+    await page.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
+    await browser.close();
+  };
   await page
     .context()
     .addCookies([{ name: "fm_session", value: f.tokens[1], url: f.url }]);

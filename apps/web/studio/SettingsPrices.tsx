@@ -186,7 +186,7 @@ export function PriceSettings({
           <section className="ledger-card">
             <h3 className="credit-heading">模型接入售价</h3>
             {latest.published.map(({ model, price }) => (
-              <div className="price-row" key={model}>
+              <div className="price-row published-price-row" key={model}>
                 <button className="ledger-button" onClick={()=>editModel(model)}>{state.model_catalog[model]?.label ?? model} · 编辑售价</button>
                 {price.kind === "chat" ? (
                   <span>

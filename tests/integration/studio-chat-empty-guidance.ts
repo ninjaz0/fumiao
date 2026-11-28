@@ -19,7 +19,7 @@ const emptyConfigPayload = {
 
 export async function verifyChatEmptyGuidance(page: Page) {
   const state = await (await page.request.get("/api/state")).json();
-  const expectedHeading = state.studio_plugins ? "插件" : "对话服务";
+  const expectedHeading = state.studio_plugins ? "模型接入" : "对话服务";
   await page.locator('nav [data-nav="home"]').click();
   await page.route("**/api/chat/config", (route) =>
     route.fulfill({ json: emptyConfigPayload }),
@@ -236,8 +236,8 @@ export async function verifyAdminCanvasEmptyGuidance(
 ) {
   const state = await (await page.request.get("/api/state")).json();
   const workspace = state.workspace_id;
-  const expectedTab = state.studio_plugins ? "plugins" : "chatService";
-  const expectedHeading = state.studio_plugins ? "插件" : "对话服务";
+  const expectedTab = state.studio_plugins ? "modelAccess" : "chatService";
+  const expectedHeading = state.studio_plugins ? "模型接入" : "对话服务";
   const headers = { Origin: origin, "X-Workspace-Id": String(workspace) };
 
   const created = await page.request.post("/api/canvases", {

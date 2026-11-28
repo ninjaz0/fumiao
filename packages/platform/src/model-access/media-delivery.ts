@@ -106,9 +106,39 @@ export async function readReferences(p: Platform, job: Record<string, any>) {
 export async function leased(sql: Sql, job: Record<string, any>) {
   return one(
     sql,
-    "SELECT id,state,kind,remote_id,price,workspace_id,owner_id,source_kind,native_snapshot,meter,receipt IS NOT NULL AS has_receipt FROM jobs WHERE id=$1 AND lease_token=$2 FOR UPDATE",
+    "SELECT id,state,kind,remote_id,price,workspace_id,owner_id,source_kind,native_snapshot,meter,created_at,receipt IS NOT NULL AS has_receipt FROM jobs WHERE id=$1 AND lease_token=$2 FOR UPDATE",
     [job.id, job.lease_token],
   );
+}
+
+const MAX_MEDIA_RETRY_AGE_MS = 4 * 60 * 60 * 1000;
+
+export async function staleMediaRetryToUncertain(
+  sql: Sql,
+  current: Record<string, any>,
+  note: string,
+): Promise<boolean> {
+  const createdAt = current.created_at
+    ? new Date(current.created_at).getTime()
+    : NaN;
+  if (!Number.isFinite(createdAt) || Date.now() - createdAt < MAX_MEDIA_RETRY_AGE_MS)
+    return false;
+  const staged = await one(
+    sql,
+    "SELECT 1 FROM model_access_staging WHERE job_id=$1 LIMIT 1",
+    [current.id],
+  );
+  if (staged) return false;
+  await sql.query(
+    `UPDATE jobs SET state='uncertain',request_uncertain=true,lease_token=NULL,lease_until=NULL,
+    request_retry_at=NULL,error=$2,request_note=$2,updated_at=now() WHERE id=$1`,
+    [current.id, note],
+  );
+  await sql.query(
+    "INSERT INTO job_events(job_id,state) VALUES($1,'uncertain')",
+    [current.id],
+  );
+  return true;
 }
 
 /** This job can use its own hold once across the complete delivery. Recheck

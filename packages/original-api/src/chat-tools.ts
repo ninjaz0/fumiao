@@ -342,6 +342,20 @@ export async function executeChatTool(
     }
     const proposals = new OriginalCanvasProposals(store.p);
     try {
+      if (tool.boundProject && projectId !== tool.boundProject) {
+        throw new DomainError(403, "当前对话仅允许操作绑定的画布");
+      }
+      const canvasRow = await one(
+        store.p.db,
+        "SELECT workspace_id FROM documents WHERE public_id=$1 AND kind='canvas' AND NOT deleted",
+        [projectId],
+      );
+      requireValue(canvasRow, 404, "画布不存在或已删除");
+      requireValue(
+        String(canvasRow.workspace_id) === verified.workspaceId,
+        403,
+        "目标画布不属于当前对话所在工作区",
+      );
       if (tool.builtin === "read_canvas_graph") {
         const graph = await proposals.readGraph(verified.actor, projectId);
         return JSON.stringify({ ok: true, graph }).slice(0, 16000);

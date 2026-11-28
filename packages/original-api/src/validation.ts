@@ -178,15 +178,28 @@ export function parseBody(
           );
         }
       }
-    } else if (field.kind === "credits" && typeof value === "string" && value.includes(".")) {
-      try {
-        const units = creditUnits(value);
-        if ((field.min !== undefined && units < creditUnits(String(field.min))) ||
-            (field.max !== undefined && units > creditUnits(String(field.max)))) {
-          issue(key, "value_error", "积分金额超出允许范围", value);
-        } else out[key] = formatCredits(units);
-      } catch {
+    } else if (
+      field.kind === "credits" &&
+      ((typeof value === "string" && value.includes(".")) ||
+        (typeof value === "number" &&
+          Number.isFinite(value) &&
+          !Number.isInteger(value)))
+    ) {
+      const text = typeof value === "number" ? String(value) : value;
+      if (/[eE]/.test(text)) {
         issue(key, "value_error", "积分必须为至多十二位小数的十进制数", value);
+      } else {
+        try {
+          const units = creditUnits(text);
+          if (
+            (field.min !== undefined && units < creditUnits(String(field.min))) ||
+            (field.max !== undefined && units > creditUnits(String(field.max)))
+          ) {
+            issue(key, "value_error", "积分金额超出允许范围", value);
+          } else out[key] = formatCredits(units);
+        } catch {
+          issue(key, "value_error", "积分必须为至多十二位小数的十进制数", value);
+        }
       }
     } else if (field.kind === "literal") {
       const choices = field.values!;

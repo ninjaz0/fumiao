@@ -11,7 +11,11 @@ import { chatsFixture } from "../helpers/chats.js";
 
 test("画布报价服务短断后可直接重试，保留原镜头和参数到主动提交", async (t) => {
   const f = await chatsFixture();
-  t.after(f.cleanup);
+  let closeBrowser: (() => Promise<void>) | undefined;
+  t.after(async () => {
+    await closeBrowser?.();
+    await f.cleanup();
+  });
   await f.db.query(
     "INSERT INTO studio_plugin_profile(mode) VALUES('compatible') ON CONFLICT DO NOTHING",
   );
@@ -97,10 +101,13 @@ test("画布报价服务短断后可直接重试，保留原镜头和参数到�
     "utf8",
   );
   const browser = await chromium.launch();
-  t.after(() => browser.close());
   const page = await browser.newPage({
     viewport: { width: 1440, height: 960 },
   });
+  closeBrowser = async () => {
+    await page.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
+    await browser.close();
+  };
   const quotes: unknown[] = [];
   const paid: unknown[] = [];
   await page.route("https://canvas.test/**", async (route) => {

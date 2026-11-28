@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { creditUnits } from "@fumiao/plugin-sdk/credit-amount.js";
 
 export type ChatQuote = {
   max_charge: string;
@@ -54,9 +55,5 @@ export function quoteFunded(
   if (price == null) return false;
   if (available === undefined || typeof price === "number")
     return numeric >= Number(price);
-  const units = (value: string) => {
-    const [whole, frac = ""] = value.split(".");
-    return BigInt(whole + frac.padEnd(12, "0"));
-  };
-  return units(available) >= units(price);
+  return creditUnits(available) >= creditUnits(price);
 }

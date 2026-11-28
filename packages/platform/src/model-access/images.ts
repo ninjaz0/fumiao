@@ -22,6 +22,7 @@ import {
   readBody,
   readReferences,
   stage,
+  staleMediaRetryToUncertain,
   submissionClient,
   type Transport,
   validation,
@@ -234,13 +235,21 @@ export async function executeNativeImages(
     await p.db.transaction(async (sql) => {
       const current = await leased(sql, job);
       if (!current) return;
-      if (current.has_receipt)
+      if (current.has_receipt) {
+        if (
+          await staleMediaRetryToUncertain(
+            sql,
+            current,
+            "图片成片下载长时间失败，已转为人工核查",
+          )
+        )
+          return;
         await sql.query(
           `UPDATE jobs SET state='finalizing',lease_token=NULL,lease_until=NULL,
         request_retry_at=now()+interval '5 seconds',request_note='等待重试图片验收' WHERE id=$1`,
           [job.id],
         );
-      else
+      } else
         await interruptedMediaSubmission(
           p,
           sql,

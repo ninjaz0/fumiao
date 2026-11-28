@@ -13,6 +13,7 @@ import {
 import type { Response } from "express";
 import { one } from "@fumiao/platform/db.js";
 import { DomainError, requireValue } from "@fumiao/platform/security.js";
+import { creditUnits, formatCredits } from "@fumiao/plugin-sdk/credit-amount.js";
 import { nativeOutputIndex } from "@fumiao/original-api/library.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
@@ -339,6 +340,7 @@ export class OriginalMcpController {
           state: row.state,
           model: row.provider_model,
           price: Number(row.price),
+          exact_price: formatCredits(creditUnits(String(row.price))),
           result_asset: row.result_asset ?? null,
           error: row.error ?? null,
         };

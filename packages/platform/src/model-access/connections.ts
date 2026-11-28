@@ -553,7 +553,7 @@ export class ModelAccessConnections {
     };
     return this.db.transaction(async (sql) => {
       await sql.query(
-        "INSERT INTO connections(id,name,source_kind,config,enabled) VALUES($1,$2,'builtin',$3,true)",
+        "INSERT INTO connections(id,name,source_kind,config,enabled,concurrency) VALUES($1,$2,'builtin',$3,true,8)",
         [id, input.name ?? new URL(address).host, this.vault.seal({})],
       );
       await writeRevision(sql, this.vault, id, 1, config, directScope);
@@ -602,7 +602,7 @@ export class ModelAccessConnections {
       }
       const id = randomUUID();
       await sql.query(
-        "INSERT INTO connections(id,name,source_kind,config,enabled) VALUES($1,$2,'builtin',$3,true)",
+        "INSERT INTO connections(id,name,source_kind,config,enabled,concurrency) VALUES($1,$2,'builtin',$3,true,8)",
         [id, source.row!.name, this.vault.seal({})],
       );
       await writeRevision(sql, this.vault, id, 1, config, scope);

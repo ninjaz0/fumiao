@@ -258,12 +258,28 @@ export async function wakeTailFrameChildren(
           first_frame: tail.id,
         };
       }
+      let updatedView: Record<string, any> | undefined;
       if (child.source_kind !== "builtin")
         input.params.tail_inherited_from = videoAsset!.public_id;
-      await sql.query(
-        "UPDATE jobs SET input=$2,request_retry_at=NULL,request_note=NULL,updated_at=now() WHERE id=$1",
-        [child.id, JSON.stringify(input)],
-      );
+      else if (child.original_view && typeof child.original_view === "object") {
+        updatedView = structuredClone(child.original_view) as Record<string, any>;
+        const viewRefs: string[] = Array.isArray(updatedView.refs)
+          ? updatedView.refs.filter((r: unknown) => typeof r === "string")
+          : [];
+        if (!viewRefs.includes(tail.public_id)) viewRefs.unshift(tail.public_id);
+        updatedView.refs = viewRefs;
+      }
+      if (updatedView) {
+        await sql.query(
+          "UPDATE jobs SET input=$2,original_view=$3,request_retry_at=NULL,request_note=NULL,updated_at=now() WHERE id=$1",
+          [child.id, JSON.stringify(input), JSON.stringify(updatedView)],
+        );
+      } else {
+        await sql.query(
+          "UPDATE jobs SET input=$2,request_retry_at=NULL,request_note=NULL,updated_at=now() WHERE id=$1",
+          [child.id, JSON.stringify(input)],
+        );
+      }
       await sql.query("DELETE FROM job_tail_chains WHERE child_job_id=$1", [
         child.id,
       ]);

@@ -533,10 +533,10 @@ test("固定价重放原回合后只写回原助手消息和受理的画布版�
 });
 
 test("真实固定价分镜编辑后保留原账单，复制到另一真实画布的来源不显示账单", async (t) => {
+  const { page, bundle } = await composerPage(t);
   const { chatsFixture } = await import("../helpers/chats.js");
   const f = await chatsFixture();
   t.after(f.cleanup);
-  const { page, bundle } = await composerPage(t);
   const shot = { title: "山谷", prompt: "晨光", narration: "", seconds: 5 };
   const a = (await f.request("POST", "/api/canvases", { title: "画布甲" }))
     .body;

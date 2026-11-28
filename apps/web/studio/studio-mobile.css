@@ -929,9 +929,17 @@
   #app .ledger-settings .price-row > span:first-child {
     min-width: 0;
   }
-  #app .ledger-settings .price-row > span:last-child {
+  #app .ledger-settings .price-row:not(.published-price-row) > span:last-child {
     flex: none;
     white-space: nowrap;
+  }
+  #app .ledger-settings .published-price-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  #app .ledger-settings .published-price-row > span:last-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   #app .settings-page.ledger-settings .settings-content .price-row input {
     flex: none;
