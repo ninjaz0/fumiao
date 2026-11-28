@@ -651,10 +651,14 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       )
         closeMenu();
     };
+    const rail = !narrowScreen ? shell.current?.querySelector(".side") : null;
+    const railResize = rail ? new ResizeObserver(positionMenu) : null;
+    if (rail) railResize?.observe(rail);
     window.addEventListener("resize", positionMenu);
     document.addEventListener("pointerdown", outside);
     document.addEventListener("scroll", positionMenu, true);
     return () => {
+      railResize?.disconnect();
       window.removeEventListener("resize", positionMenu);
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("scroll", positionMenu, true);

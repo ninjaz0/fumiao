@@ -69,22 +69,25 @@
   }
   #app .shell > .rail-backdrop {
     position: fixed;
-    inset: 0 0 0 var(--mobile-drawer-width);
+    inset: 0;
     z-index: 19;
     background: rgb(0 0 0 / 22%);
     opacity: 0;
     pointer-events: none;
     transition:
+      left var(--motion-exit) var(--motion-ease),
       opacity var(--motion-exit) var(--motion-ease),
       display var(--motion-exit) allow-discrete;
   }
   #app .shell:not(.collapsed) > .rail-backdrop {
+    left: var(--mobile-drawer-width);
     opacity: 1;
     pointer-events: auto;
     transition-duration: var(--motion-enter);
   }
   @starting-style {
     #app .shell:not(.collapsed) > .rail-backdrop {
+      left: 0;
       opacity: 0;
     }
   }
