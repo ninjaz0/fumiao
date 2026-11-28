@@ -62,6 +62,8 @@ export type DirectorShotInputs = {
   }[];
 };
 
+export const canvasConflict =
+  "画布已被其他成员修改。你的修改已保留，请重新载入或下载本地副本。";
 export const directorBatchUnclaimed = "本次提交未创建回执。";
 export const directorLocalScriptDraft = "主剧本有未保存的修改。请先保存并同步，或使用已确认的版本继续。";
 export const directorScriptConflict = "主剧本已更新，请重新预览后同步。";

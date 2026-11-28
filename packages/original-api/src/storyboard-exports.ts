@@ -65,19 +65,31 @@ const mimeExt: Record<string, string> = {
 const cleanupBatchSize = 16;
 type ExportScope = "canvas" | "episode";
 
-async function lockEpisodeJobs(sql: Sql, workspace: string, document: CanvasDocument, shotIds: string[]) {
+async function lockEpisodeJobs(
+  sql: Sql,
+  projectId: string,
+  workspace: string,
+  document: CanvasDocument,
+  shotIds: string[],
+) {
   const shots = new Set(shotIds);
   const mediaNodes = new Set(shotIds);
   for (const { source, target } of document.edges) {
     if (shots.has(target)) mediaNodes.add(source);
   }
   const jobs = new Set<number>();
+  const unpinnedNodes: string[] = [];
+  const packIds = new Set<string>();
+  const speakers = new Set<string>();
   const add = (id?: number | null) => {
     if (id != null) jobs.add(id);
   };
   for (const node of document.nodes) {
     if (!shots.has(node.id)) continue;
     add(node.params.flow_source_job);
+    for (const pack of node.asset_packs ?? []) {
+      if (pack.id) packIds.add(pack.id);
+    }
     if (node.tail_inherited) {
       const predecessor = canvasTailSourceId(document, node.id);
       if (predecessor) mediaNodes.add(predecessor);
@@ -87,6 +99,9 @@ async function lockEpisodeJobs(sql: Sql, workspace: string, document: CanvasDocu
         const line = node.dialogue_lines?.find(({ id }) => id === target.line_id);
         add(line?.audio_job);
         add(line?.audio_pending);
+        if (line?.pack_id) packIds.add(line.pack_id);
+        const speaker = line?.speaker ? pythonStrip(line.speaker) : "";
+        if (speaker) speakers.add(speaker);
       } else {
         add(node.narration_job);
         add(node.narration_pending);
@@ -94,14 +109,38 @@ async function lockEpisodeJobs(sql: Sql, workspace: string, document: CanvasDocu
     }
   }
   for (const node of document.nodes) {
-    if (mediaNodes.has(node.id) && !node.use_media) add(node.active_job);
+    if (!mediaNodes.has(node.id) || node.use_media || node.extension) continue;
+    if (node.active_job != null) add(node.active_job);
+    else unpinnedNodes.push(node.id);
   }
   // Job deletion and settlement take the job before its assets. Lock jobs
   // across all shots before any adopted clip or reference can lock an asset.
-  if (jobs.size) await sql.query(
-    "SELECT id FROM jobs WHERE workspace_id=$1 AND public_id=ANY($2::bigint[]) ORDER BY id FOR SHARE",
-    [workspace, [...jobs]],
-  );
+  if (jobs.size || unpinnedNodes.length) {
+    await sql.query(
+      `SELECT j.id FROM jobs j
+       WHERE j.workspace_id=$1 AND j.deleted_at IS NULL AND (
+         j.public_id=ANY($2::bigint[])
+         OR EXISTS (
+           SELECT 1 FROM canvas_job_links l
+           WHERE l.project_id=$3 AND l.node=ANY($4::text[]) AND l.job_id=j.id
+             AND j.state='completed'
+         )
+       )
+       ORDER BY j.id FOR SHARE OF j`,
+      [workspace, [...jobs], projectId, unpinnedNodes],
+    );
+  }
+  // Pack edits lock documents(kind='pack') before assets. Lock referenced packs
+  // in canonical UUID order with NOWAIT before locking any shot or reference assets.
+  if (packIds.size || speakers.size) {
+    await sql.query(
+      `SELECT id FROM documents
+       WHERE workspace_id=$1 AND kind='pack' AND NOT deleted
+         AND (public_id=ANY($2::text[]) OR title=ANY($3::text[]))
+       ORDER BY id FOR SHARE NOWAIT`,
+      [workspace, [...packIds], [...speakers]],
+    );
+  }
 }
 
 type ExportObject = {
@@ -316,7 +355,7 @@ export class OriginalStoryboardExports {
       );
       const shots: Shot[] = [],
         assets = new Map<string, any>();
-      if (isEpisode) await lockEpisodeJobs(sql, project.workspace_id, doc, shotIds);
+      if (isEpisode) await lockEpisodeJobs(sql, project.id, project.workspace_id, doc, shotIds);
       const models = isEpisode ? await CanvasSubmissionModels.read(sql, {
         strict: false,
         workspaceId: project.workspace_id,

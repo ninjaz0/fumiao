@@ -10,7 +10,7 @@
 
 .fm-director-desk {
   position: absolute;
-  inset: var(--fm-header-bottom, 66px) var(--fm-agent-width, 0px) 0 0;
+  inset: max(66px, var(--fm-workspace-top, var(--fm-header-bottom, 66px))) var(--fm-agent-width, 0px) 0 0;
   z-index: 14;
   overflow: auto;
   padding: clamp(16px, 3vw, 40px);
@@ -182,11 +182,8 @@
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 980px) {
-  .fm-director-desk { top: calc(var(--fm-header-bottom, 62px) + 46px); }
-}
-
 @media (max-width: 760px) {
+  .fm-director-desk { padding-bottom: 56px; }
   .fm-director-content { grid-template-columns: 1fr; }
   .fm-director-list ol { max-height: 27vh; }
   .fm-director-sync-diff { grid-template-columns: minmax(0, 1fr); }

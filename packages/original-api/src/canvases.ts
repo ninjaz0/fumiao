@@ -9,7 +9,12 @@ import { ReferencePacks } from "@fumiao/platform/packs.js";
 import { createTailFrameAsset } from "@fumiao/platform/tail-frame.js";
 import { cropGridCell } from "@fumiao/platform/grid-crop.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
-import { directorScriptConflict, type DirectorProduction } from "@fumiao/web-compat/director.js";
+import {
+  canvasConflict,
+  directorScriptConflict,
+  type DirectorProduction,
+} from "@fumiao/web-compat/director.js";
+export { canvasConflict };
 import { OriginalIdentity } from "./identity.js";
 import { archiveEntry, OriginalLibrary } from "./library.js";
 import { parseBody } from "./validation.js";
@@ -35,8 +40,6 @@ import {
   type CanvasValidationResources,
 } from "./canvas-validation.js";
 import { canvasTemplates } from "./canvas-templates.js";
-export const canvasConflict =
-  "画布已被其他成员修改。你的修改已保留，请重新载入或下载本地副本。";
 const selectProject = `SELECT d.*,c.title AS original_title,c.document,c.created,c.updated,c.last_editor,c.archived_at,c.archive_change_id,
   w.public_id AS workspace_number,u.public_id AS owner_number,e.public_id AS editor_number
   FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id

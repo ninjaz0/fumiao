@@ -1054,8 +1054,8 @@ export function CanvasWorkspace({
     selectOne(nodeId);
     requestAnimationFrame(() => focusNodes([nodeId]));
   };
-  const changeDirectorDocument = (updater: (current: Doc) => Doc) => {
-    doc.change((draft) => ({ ...draft, document: updater(draft.document) }));
+  const changeDirectorDocument = (updater: (current: Doc) => Doc, history = true) => {
+    doc.change((draft) => ({ ...draft, document: updater(draft.document) }), history);
   };
   const confirmDirectorOrder = async () => {
     const current = doc.ref.current.document;
@@ -1073,7 +1073,10 @@ export function CanvasWorkspace({
   ), [project.id]);
   const readDirectorAudioInputs = useCallback(async (document: Doc, nodes: string[], revision: number) => {
     const ids = [...new Set(nodes)].filter((id) => document.director?.shot_ids.includes(id));
-    const checked = await Promise.all(ids.map(readDirectorInputs));
+    const checked: DirectorShotInputs[] = [];
+    for (let i = 0; i < ids.length; i += 4) {
+      checked.push(...await Promise.all(ids.slice(i, i + 4).map(readDirectorInputs)));
+    }
     if (checked.some((input) => input.revision !== revision)) throw new Error("画布版本已变更，请重新载入");
     return Object.assign({}, ...checked.map((input) => input.audio_inputs)) as DirectorAudioInputs;
   }, [readDirectorInputs]);
@@ -1664,12 +1667,12 @@ export function CanvasWorkspace({
     doc.change((draft) => {
       const document = promoteOrdinaryCanvasAudio(draft.document, runById);
       return document === draft.document ? draft : { ...draft, document };
-    });
+    }, false);
   }, [runById, doc.value.document, doc.status]);
   useEffect(() => {
     if (doc.status !== "saved") return;
-    const document = doc.value.document;
-    const nodes = directorCompletedAudioNodes(document, runById);
+    const currentDoc = doc.value.document;
+    const nodes = directorCompletedAudioNodes(currentDoc, runById);
     if (!nodes.length) return;
     const revision = doc.revision.current;
     let current = true;
@@ -1678,21 +1681,28 @@ export function CanvasWorkspace({
       if (reading) return;
       reading = true;
       try {
-        const inputs = await readDirectorAudioInputs(document, nodes, revision);
-        if (!current || document !== doc.ref.current.document || revision !== doc.revision.current) return;
-        const next = directorAudioPromotion(document, runs, inputs);
-        if (next !== document) changeDirectorDocument(() => next);
+        const inputs = await readDirectorAudioInputs(currentDoc, nodes, revision);
+        if (!current || currentDoc !== doc.ref.current.document || revision !== doc.revision.current) return;
+        const next = directorAudioPromotion(currentDoc, runs, inputs);
+        if (next !== currentDoc) changeDirectorDocument(() => next, false);
       } catch {
         // Preserve pending takes while the saved inputs are unavailable.
       } finally {
         reading = false;
       }
     };
-    void promote();
-    const retry = window.setInterval(() => void promote(), 5000);
+    if (!document.hidden) void promote();
+    const retry = window.setInterval(() => {
+      if (!document.hidden) void promote();
+    }, 5000);
+    const onVisible = () => {
+      if (!document.hidden) void promote();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       current = false;
       window.clearInterval(retry);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [doc.status, doc.value.document, runById, readDirectorAudioInputs]);
   const beginEditing = useCallback(
@@ -6052,6 +6062,7 @@ export function CanvasWorkspace({
         <button
           type="button"
           className="fm-agent-orb"
+          aria-label="AI 创作助手"
           onClick={() => {
             setAgentTab("chat");
             setAgentDock(true);
@@ -6061,7 +6072,7 @@ export function CanvasWorkspace({
           }}
         >
           <span className="fm-agent-orb-dot" aria-hidden="true" />
-          AI 创作助手
+          <span className="fm-agent-orb-label">AI 创作助手</span>
         </button>
       )}
       <FloatingCanvasAgent

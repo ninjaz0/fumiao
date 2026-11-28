@@ -1854,7 +1854,7 @@
   transition: outline-color 0.25s ease;
 }
 
-@media (max-width: 1480px) {
+@media (max-width: 1620px) {
   .canvas-workspace:has(.fm-floating-agent.is-docked) {
     --fm-subbar-offset: 46px;
   }
@@ -1863,12 +1863,12 @@
     left: calc((100% - var(--fm-agent-width, 0px)) / 2);
     transform: translateX(-50%);
   }
-  .canvas-workspace:has(.fm-floating-agent.is-docked) .fm-doc-workspace {
+  .canvas-workspace:has(.fm-floating-agent.is-docked) :is(.fm-doc-workspace, .fm-director-desk) {
     top: var(--fm-workspace-top, calc(var(--fm-header-bottom, 62px) + 46px));
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1320px) {
   .canvas-workspace {
     --fm-subbar-offset: 46px;
   }
@@ -1880,7 +1880,8 @@
     transform: translateX(-50%);
     z-index: 22;
   }
-  .fm-doc-workspace {
+  .fm-doc-workspace,
+  .fm-director-desk {
     top: var(--fm-workspace-top, calc(var(--fm-header-bottom, 62px) + 46px));
   }
 }
@@ -1890,9 +1891,21 @@
     --fm-agent-width: 0px !important;
     --fm-subbar-offset: 46px;
   }
-  .fm-doc-workspace {
+  .fm-surface-switcher > button {
+    padding: 4px 10px;
+    gap: 4px;
+    font-size: 12px;
+  }
+  .canvas-workspace[data-surface="canvas"][data-composer-open="true"] .fm-surface-switcher {
+    left: 12px;
+    transform: none;
+  }
+  .fm-doc-workspace,
+  .fm-director-desk {
     top: var(--fm-workspace-top, calc(var(--fm-header-bottom, 62px) + 46px));
     right: 0;
+  }
+  .fm-doc-workspace {
     flex-direction: column;
   }
   .fm-doc-sidebar {
@@ -1944,7 +1957,8 @@
     padding: 0 10px 0 7px;
     font-size: 11.5px;
   }
-  .canvas-workspace[data-surface="document"] .fm-agent-orb {
+  .canvas-workspace[data-surface="document"] .fm-agent-orb,
+  .canvas-workspace[data-surface="director"] .fm-agent-orb {
     bottom: 10px;
     right: 10px;
     height: 32px;
@@ -1957,9 +1971,13 @@
   }
 }
 
-@media (max-width: 560px) {
-  .canvas-workspace[data-surface="canvas"][data-composer-open="true"] .fm-surface-switcher {
-    left: 12px;
-    transform: none;
+@media (max-width: 480px) {
+  .canvas-workspace[data-surface="canvas"][data-composer-open="true"] .fm-agent-orb {
+    width: 30px;
+    padding: 0;
+    justify-content: center;
+  }
+  .canvas-workspace[data-surface="canvas"][data-composer-open="true"] .fm-agent-orb .fm-agent-orb-label {
+    display: none;
   }
 }
