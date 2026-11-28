@@ -13,7 +13,7 @@ import {
 import Auth from "../auth/Auth";
 import { ApiError, workspaceURL } from "../canvas/api";
 import { ChatWorkspace } from "../canvas-editor/chat/ChatWorkspace";
-import { matchChoiceMenuRect } from "../canvas-editor/choice-menu-position";
+import { positionStudioPopover } from "../canvas-editor/choice-menu-position";
 import {
   resolveChatConfigTarget,
   resolveChatModelScope,
@@ -592,39 +592,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const estimate = useEstimate(state, session, requestEstimate);
 
   const positionMenu = useCallback(() => {
-    const trigger = anchor.current;
-    const element = popover.current;
-    if (!trigger?.isConnected || !element) return;
-    if (matchMedia("(max-width: 760px)").matches) {
-      element.dataset.sheet = "";
-      element.style.left = "";
-      element.style.top = "";
-      element.style.removeProperty("--motion-popover-x");
-      element.style.removeProperty("--motion-popover-y");
-      return;
-    }
-    delete element.dataset.sheet;
-    const box = trigger.getBoundingClientRect();
-    const beside = trigger.dataset.menu === "workspaces" && innerWidth > 760;
-    const choice = element.querySelector(".fm-choice-menu")
-      ? matchChoiceMenuRect(box, innerWidth)
-      : null;
-    element.style.width = choice ? `${choice.width}px` : "";
-    const left = choice?.left ?? Math.min(
-      Math.max(12, beside ? box.right + 12 : box.left - 16),
-      innerWidth - element.offsetWidth - 12,
+    positionStudioPopover(
+      anchor.current,
+      popover.current,
+      innerWidth,
+      innerHeight,
+      matchMedia("(max-width: 760px)").matches,
     );
-    let top = beside ? box.top : box.bottom + 8;
-    const above = top + element.offsetHeight > innerHeight - 14;
-    if (choice) trigger.dataset.choiceDirection = above ? "up" : "down";
-    else delete trigger.dataset.choiceDirection;
-    if (above) top = Math.max(12, box.top - element.offsetHeight - 8);
-    Object.assign(element.style, {
-      left: left + "px",
-      top: top + "px",
-    });
-    element.style.setProperty("--motion-popover-x", beside ? "-4px" : "0px");
-    element.style.setProperty("--motion-popover-y", beside ? "0px" : above ? "4px" : "-4px");
   }, []);
 
   useLayoutEffect(() => {

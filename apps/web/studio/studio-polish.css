@@ -67,6 +67,10 @@
 @container (max-width: 260px) {
   .composer .composer-parameters {
     display: flex;
+    min-height: 0;
+  }
+  .composer .composer-parameters > :is(.creation-type, .model-name) > .icon {
+    display: block;
   }
 }
 .section-head {

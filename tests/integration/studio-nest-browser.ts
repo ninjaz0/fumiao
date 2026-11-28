@@ -461,9 +461,30 @@ async function checkCompactComposerChoices(page: Page, studio: string) {
     await page.goto(studio);
     const referenceMode = page.getByRole("button", { name: "选择参考模式" });
     await expect(referenceMode).toBeVisible();
-    const parameters = page.locator(".composer-parameters :is(button, select):visible");
+    const dock = page.locator("#home-composer .composer-dock");
+    const strip = page.locator("#home-composer .composer-parameters");
+    const parameters = page.locator(
+      "#home-composer .composer-parameters :is(button, select):visible",
+    );
     for (const [width, height] of [[320, 568], [390, 844]]) {
       await page.setViewportSize({ width, height });
+      await expect(dock).toHaveAttribute("data-narrow", "true");
+      if ((await dock.getAttribute("data-expanded")) === "true") {
+        await page.keyboard.press("Escape");
+      }
+      await expect(dock).toHaveAttribute("data-expanded", "false");
+      const noOverflow = await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      );
+      assert.ok(noOverflow, `Collapsed ComposerDock has no page overflow at ${width}px`);
+      const stripBox = await strip.boundingBox();
+      assert.ok(
+        stripBox && stripBox.x >= 0 && stripBox.x + stripBox.width <= width,
+        `Collapsed .composer-parameters fits viewport at ${width}px`,
+      );
+
+      await page.locator("#home-composer #prompt").click();
+      await expect(dock).toHaveAttribute("data-expanded", "true");
       const controls = await parameters.evaluateAll((elements) =>
         elements.map((element) => ({
           label: element.getAttribute("aria-label") ?? element.textContent,
@@ -481,6 +502,8 @@ async function checkCompactComposerChoices(page: Page, studio: string) {
           );
         }
       }
+      await page.keyboard.press("Escape");
+      await expect(dock).toHaveAttribute("data-expanded", "false");
     }
     console.log("Verified Studio controls fit without overlap at 320px and 390px");
   } finally {
