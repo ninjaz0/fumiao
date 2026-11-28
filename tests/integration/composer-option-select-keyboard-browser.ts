@@ -12,17 +12,19 @@ test(
   { timeout: 60_000 },
   async () => {
     const root = process.cwd();
-    const [baseCss, overridesCss, bundle] = await Promise.all([
+    const [baseCss, overridesCss, choiceMenuCss, bundle] = await Promise.all([
       readFile(join(root, "baseline/production/static/canvas.css"), "utf8"),
       readFile(
         join(root, "apps/web/canvas-editor/canvas-overrides.css"),
         "utf8",
       ),
+      readFile(join(root, "apps/web/app/choice-menu.css"), "utf8"),
       esbuild.build({
         stdin: {
           contents: `
             import React, { useState } from "react";
             import { createRoot } from "react-dom/client";
+            import { LayoutGrid } from "lucide-react";
             import { CinematographyPanel } from "./apps/web/canvas-editor/CinematographyPanel";
             import { OptionSelect } from "./apps/web/canvas-editor/OptionSelect";
             import { GENERATION_MODE_OPTIONS } from "./apps/web/canvas-editor/composer-options";
@@ -36,6 +38,7 @@ test(
                     <div className="fm-composer-wave3-bar">
                       <OptionSelect
                         ariaLabel="分镜生成链路"
+                        icon={LayoutGrid}
                         value={mode}
                         options={GENERATION_MODE_OPTIONS}
                         onChange={setMode}
@@ -66,7 +69,7 @@ test(
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <style>${baseCss}\n${overridesCss}</style>
+  <style>${baseCss}\n${overridesCss}\n${choiceMenuCss}</style>
 </head>
 <body>
   <div id="app"></div>
@@ -95,15 +98,42 @@ test(
         exact: true,
       });
       await expect(modeBtn).toBeVisible();
+      const initialWidth = (await modeBtn.boundingBox())?.width;
       await expect(modeBtn).toHaveAttribute("aria-expanded", "false");
       await modeBtn.click();
-      await page.getByRole("option", { name: "宫格构图预览", exact: true }).click();
+      const modeMenu = page.getByRole("listbox", { name: "分镜生成链路" });
+      const modeOptions = modeMenu.getByRole("option");
+      const order = ["标准首帧", "经典首尾帧", "全能参考", "宫格构图预览"];
+      await expect(modeOptions).toHaveText(order);
+      const gridOption = modeMenu.getByRole("option", { name: "宫格构图预览" });
+      const before = await gridOption.locator("span").boundingBox();
+      assert.ok(before);
+      await gridOption.click();
       const modeGridBtn = page.getByRole("button", {
         name: "分镜生成链路：宫格构图预览",
         exact: true,
       });
       await expect(modeGridBtn).toBeVisible();
+      assert.equal((await modeGridBtn.boundingBox())?.width, initialWidth);
       await expect(modeGridBtn).toHaveAttribute("aria-expanded", "false");
+      await modeGridBtn.click();
+      await expect(modeOptions).toHaveText(order);
+      const after = await gridOption.locator("span").boundingBox();
+      assert.ok(after);
+      assert.equal(after.x, before.x, "the label stays put when selected");
+      const labelLineCount = await gridOption.locator("span").evaluate((label) => {
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        return range.getClientRects().length;
+      });
+      assert.equal(labelLineCount, 1, "the longest label fits on one line");
+      await expect(gridOption).toHaveAttribute("aria-selected", "true");
+      await expect(gridOption).not.toBeFocused();
+      await page.mouse.move(0, 0);
+      const selectedBackground = await gridOption.evaluate((el) => getComputedStyle(el).backgroundColor);
+      await gridOption.hover();
+      await expect(gridOption).toHaveCSS("background-color", selectedBackground);
+      await page.keyboard.press("Escape");
 
       const shotSizeUnset = page.getByRole("button", {
         name: "导演参数-景别：不限定",
@@ -186,12 +216,13 @@ test(
   { timeout: 60_000 },
   async () => {
     const root = process.cwd();
-    const [baseCss, overridesCss, bundle] = await Promise.all([
+    const [baseCss, overridesCss, choiceMenuCss, bundle] = await Promise.all([
       readFile(join(root, "baseline/production/static/canvas.css"), "utf8"),
       readFile(
         join(root, "apps/web/canvas-editor/canvas-overrides.css"),
         "utf8",
       ),
+      readFile(join(root, "apps/web/app/choice-menu.css"), "utf8"),
       esbuild.build({
         stdin: {
           contents: `
@@ -240,7 +271,7 @@ test(
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <style>${baseCss}\n${overridesCss}</style>
+  <style>${baseCss}\n${overridesCss}\n${choiceMenuCss}</style>
 </head>
 <body style="margin:0">
   <div id="app"></div>
@@ -275,9 +306,20 @@ test(
         exact: true,
       });
       await expect(lightingListbox).toBeVisible();
+      await expect(lightingBtn).toHaveAttribute("data-choice-direction", "up");
+      await expect(lightingBtn.locator(".fm-choice-chevron")).toHaveCSS("transform", "matrix(-1, 0, 0, -1, 0, 0)");
       const popBox = await page.locator(".fm-cine-popover").boundingBox();
       const upMenuBox = await lightingListbox.boundingBox();
-      assert.ok(popBox && upMenuBox);
+      const lightingButtonBox = await lightingBtn.boundingBox();
+      assert.ok(popBox && upMenuBox && lightingButtonBox);
+      assert.ok(
+        Math.abs(upMenuBox.x - lightingButtonBox.x) <= 1,
+        "the dropdown and the right-column trigger have the same left edge",
+      );
+      assert.ok(
+        Math.abs(upMenuBox.x + upMenuBox.width - lightingButtonBox.x - lightingButtonBox.width) <= 1,
+        "the dropdown and the trigger also share the right edge",
+      );
       assert.ok(
         upMenuBox.y < popBox.y,
         `Upward menu (${upMenuBox.y}) must extend above .fm-cine-popover top (${popBox.y}) without clipping`,
@@ -319,6 +361,8 @@ test(
         exact: true,
       });
       await expect(shotListbox).toBeVisible();
+      await expect(shotSizeBtn).toHaveAttribute("data-choice-direction", "down");
+      await expect(shotSizeBtn.locator(".fm-choice-chevron")).toHaveCSS("transform", "none");
       const allShotOpts = shotListbox.getByRole("option");
       const lastShotOpt = allShotOpts.nth((await allShotOpts.count()) - 1);
       await lastShotOpt.scrollIntoViewIfNeeded();
@@ -372,6 +416,255 @@ test(
           return el.scrollHeight > el.clientHeight && el.scrollTop > 0;
         });
       assert.equal(canScrollPopover, true, "short-screen .fm-cine-popover must remain vertically scrollable");
+    } finally {
+      try {
+        await browser?.close();
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
+  },
+);
+
+test(
+  "Studio popover clears desktop choice width on mobile sheet transition and Canvas choice menus support ArrowUp from container and restore trigger focus on selection",
+  { timeout: 60_000 },
+  async () => {
+    const root = process.cwd();
+    const [
+      studioCss,
+      polishCss,
+      mobileCss,
+      canvasCss,
+      overridesCss,
+      choiceMenuCss,
+      bundle,
+    ] = await Promise.all([
+      readFile(join(root, "baseline/production/static/studio.css"), "utf8"),
+      readFile(join(root, "apps/web/studio/studio-polish.css"), "utf8"),
+      readFile(join(root, "apps/web/studio/studio-mobile.css"), "utf8"),
+      readFile(join(root, "baseline/production/static/canvas.css"), "utf8"),
+      readFile(join(root, "apps/web/canvas-editor/canvas-overrides.css"), "utf8"),
+      readFile(join(root, "apps/web/app/choice-menu.css"), "utf8"),
+      esbuild.build({
+        stdin: {
+          contents: `
+            import React, { useCallback, useLayoutEffect, useRef, useState } from "react";
+            import { createRoot } from "react-dom/client";
+            import {
+              alignChoiceMenuToTrigger,
+              positionStudioPopover,
+              restoreChoiceMenuTriggerFocus,
+              stepChoiceMenuFocus,
+            } from "./apps/web/canvas-editor/choice-menu-position";
+
+            function Harness() {
+              const [studioOpen, setStudioOpen] = useState(true);
+              const [canvasMenu, setCanvasMenu] = useState<"candidates" | null>(null);
+              const [candidateCount, setCandidateCount] = useState<1 | 2>(1);
+              const studioTriggerRef = useRef<HTMLButtonElement | null>(null);
+              const popoverRef = useRef<HTMLDivElement | null>(null);
+              const openedByKeyboard = useRef(false);
+
+              const reposition = useCallback(() => {
+                positionStudioPopover(
+                  studioTriggerRef.current,
+                  popoverRef.current,
+                  window.innerWidth,
+                  window.innerHeight,
+                  window.matchMedia("(max-width: 760px)").matches,
+                );
+              }, []);
+
+              useLayoutEffect(() => {
+                if (!studioOpen) return;
+                reposition();
+                window.addEventListener("resize", reposition);
+                return () => window.removeEventListener("resize", reposition);
+              }, [studioOpen, reposition]);
+
+              const mountCanvasChoice = useCallback((el: HTMLDivElement | null) => {
+                const cleanup = alignChoiceMenuToTrigger(el);
+                if (el && openedByKeyboard.current) {
+                  (el.querySelector<HTMLButtonElement>('button[aria-pressed="true"]:not(:disabled)') ?? el).focus();
+                } else {
+                  el?.focus({ preventScroll: true });
+                }
+                return cleanup;
+              }, []);
+
+              return (
+                <div>
+                  <div id="app" style={{ padding: 24 }}>
+                    <button
+                      ref={studioTriggerRef}
+                      type="button"
+                      className="fm-choice-trigger fm-choice-trigger-wide"
+                      data-menu="reference-mode"
+                      aria-label="选择参考模式"
+                      onClick={() => setStudioOpen((v) => !v)}
+                      style={{ marginTop: 680 }}
+                    >
+                      <span>全能参考</span>
+                    </button>
+                  </div>
+                  <div
+                    id="popover"
+                    ref={popoverRef}
+                    className={"popover" + (studioOpen ? " open" : "")}
+                  >
+                    <div className="choice-list fm-choice-menu" role="listbox" aria-label="选择参考模式">
+                      <button type="button" role="option" aria-selected="true"><span>全能参考</span></button>
+                      <button type="button" role="option" aria-selected="false"><span>首尾帧</span></button>
+                    </div>
+                  </div>
+                  <div
+                    className="canvas-editor"
+                    onKeyDown={(e) => {
+                      const pop = (e.target as HTMLElement).closest(".cv-menu");
+                      if (!pop) return;
+                      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+                        e.preventDefault();
+                        const buttons = Array.from(pop.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+                        const next = stepChoiceMenuFocus(buttons, buttons.indexOf(document.activeElement as HTMLButtonElement), e.key);
+                        if (next >= 0) buttons[next]?.focus();
+                      }
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        restoreChoiceMenuTriggerFocus(pop);
+                        setCanvasMenu(null);
+                      }
+                    }}
+                  >
+                    <div className="parameter-wrap menu-trigger" style={{ position: "relative", marginTop: 40 }}>
+                      <button
+                        type="button"
+                        className="parameter fm-choice-trigger fm-choice-trigger-count"
+                        aria-label="候选数量"
+                        aria-expanded={canvasMenu === "candidates"}
+                        data-choice-direction="up"
+                        onKeyDown={(e) => {
+                          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                            e.preventDefault();
+                            openedByKeyboard.current = true;
+                            setCanvasMenu("candidates");
+                          }
+                        }}
+                        onClick={(e) => {
+                          openedByKeyboard.current = e.detail === 0;
+                          setCanvasMenu((cur) => (cur === "candidates" ? null : "candidates"));
+                        }}
+                      >
+                        {candidateCount} 个
+                      </button>
+                      {canvasMenu === "candidates" && (
+                        <div
+                          ref={mountCanvasChoice}
+                          className="cv-menu duration-menu candidate-menu fm-choice-menu"
+                          role="group"
+                          aria-label="候选数量"
+                          tabIndex={-1}
+                        >
+                          {([1, 2] as const).map((count) => (
+                            <button
+                              key={count}
+                              type="button"
+                              aria-pressed={candidateCount === count}
+                              onClick={(e) => {
+                                setCandidateCount(count);
+                                restoreChoiceMenuTriggerFocus(e.currentTarget);
+                                setCanvasMenu(null);
+                              }}
+                            >
+                              <span>{count} 个候选</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            createRoot(document.getElementById("root")!).render(<Harness />);
+          `,
+          resolveDir: root,
+          sourcefile: "studio-canvas-choice-regression.tsx",
+          loader: "tsx",
+        },
+        bundle: true,
+        format: "iife",
+        platform: "browser",
+        jsx: "automatic",
+        write: false,
+      }),
+    ]);
+
+    const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>${polishCss}\n${mobileCss}\n${choiceMenuCss}\n${canvasCss}\n${overridesCss}</style>
+  <style>${studioCss}</style>
+</head>
+<body style="margin:0">
+  <div id="root"></div>
+  <script>${bundle.outputFiles[0]!.text}</script>
+</body>
+</html>`;
+
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+
+    let browser: Browser | undefined;
+    try {
+      browser = await chromium.launch({ headless: true });
+      const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      await page.goto(`http://127.0.0.1:${port}/`);
+
+      const studioBtn = page.getByRole("button", { name: "选择参考模式" });
+      const popover = page.locator("#popover");
+      await expect(studioBtn).toHaveAttribute("data-choice-direction", "up");
+      const desktopPopBox = await popover.boundingBox();
+      const desktopBtnBox = await studioBtn.boundingBox();
+      assert.ok(desktopPopBox && desktopBtnBox);
+      assert.ok(Math.abs(desktopPopBox.width - desktopBtnBox.width) <= 1);
+
+      // Resize down to mobile (375x667): #popover[data-sheet] must expand to full 375px width and clear data-choice-direction!
+      await page.setViewportSize({ width: 375, height: 667 });
+      await expect(popover).toHaveAttribute("data-sheet", "");
+      await expect(studioBtn).not.toHaveAttribute("data-choice-direction");
+      const mobileSheetBox = await popover.boundingBox();
+      assert.ok(mobileSheetBox);
+      assert.ok(
+        Math.abs(mobileSheetBox.width - 375) <= 1,
+        `Mobile #popover[data-sheet] must be full width 375px, got ${mobileSheetBox.width}`,
+      );
+
+      // Switch back to desktop to verify Canvas .cv-menu pointer-open ArrowUp + selection focus restoration
+      await page.setViewportSize({ width: 1280, height: 800 });
+      const countBtn = page.getByRole("button", { name: "候选数量" });
+      await countBtn.click();
+      const candidateMenu = page.getByRole("group", { name: "候选数量" });
+      await expect(candidateMenu).toBeFocused();
+      await page.keyboard.press("ArrowUp");
+      await expect(candidateMenu.getByRole("button", { name: "2 个候选" })).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(candidateMenu).toHaveCount(0);
+      await expect(countBtn).toHaveText("2 个");
+      await expect(countBtn).toBeFocused();
+
+      // Closed Canvas trigger opens on ArrowDown and focuses selected option ("2 个候选")
+      await page.keyboard.press("ArrowDown");
+      await expect(candidateMenu.getByRole("button", { name: "2 个候选" })).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(countBtn).toBeFocused();
     } finally {
       try {
         await browser?.close();

@@ -13,6 +13,7 @@ import {
 import Auth from "../auth/Auth";
 import { ApiError, workspaceURL } from "../canvas/api";
 import { ChatWorkspace } from "../canvas-editor/chat/ChatWorkspace";
+import { positionStudioPopover } from "../canvas-editor/choice-menu-position";
 import {
   resolveChatConfigTarget,
   resolveChatModelScope,
@@ -163,6 +164,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const popover = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLButtonElement | null>(null);
   const menuFocusTarget = useRef<HTMLElement | null>(null);
+  const menuOpenedByPointer = useRef(false);
   const menuTimer = useRef(0);
   const toastTimer = useRef(0);
   const busy = useRef(new Set<string>());
@@ -590,33 +592,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
   const estimate = useEstimate(state, session, requestEstimate);
 
   const positionMenu = useCallback(() => {
-    const trigger = anchor.current;
-    const element = popover.current;
-    if (!trigger?.isConnected || !element) return;
-    if (matchMedia("(max-width: 760px)").matches) {
-      element.dataset.sheet = "";
-      element.style.left = "";
-      element.style.top = "";
-      element.style.removeProperty("--motion-popover-x");
-      element.style.removeProperty("--motion-popover-y");
-      return;
-    }
-    delete element.dataset.sheet;
-    const box = trigger.getBoundingClientRect();
-    const beside = trigger.dataset.menu === "workspaces" && innerWidth > 760;
-    const left = Math.min(
-      Math.max(12, beside ? box.right + 12 : box.left - 16),
-      innerWidth - element.offsetWidth - 12,
+    positionStudioPopover(
+      anchor.current,
+      popover.current,
+      innerWidth,
+      innerHeight,
+      matchMedia("(max-width: 760px)").matches,
     );
-    let top = beside ? box.top : box.bottom + 8;
-    const above = top + element.offsetHeight > innerHeight - 14;
-    if (above) top = Math.max(12, box.top - element.offsetHeight - 8);
-    Object.assign(element.style, {
-      left: left + "px",
-      top: top + "px",
-    });
-    element.style.setProperty("--motion-popover-x", beside ? "-4px" : "0px");
-    element.style.setProperty("--motion-popover-y", beside ? "0px" : above ? "4px" : "-4px");
   }, []);
 
   useLayoutEffect(() => {
@@ -631,13 +613,17 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
         Array.from(element?.querySelectorAll<HTMLElement>(selector) ?? []).find(
           (control) => control.getClientRects().length > 0,
         );
-      const option =
-        visible(
-          '[aria-selected="true"]:not(:disabled), [role="radio"][aria-checked="true"]:not(:disabled)',
-        ) ??
-        visible(
-          'button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex="0"], a[href]',
-        ) ?? element;
+      const pointerChoiceMenu =
+        menuOpenedByPointer.current && element?.querySelector(".fm-choice-menu");
+      const option = pointerChoiceMenu
+        ? element
+        : (visible(
+            '[aria-selected="true"]:not(:disabled), [role="radio"][aria-checked="true"]:not(:disabled)',
+          ) ??
+          visible(
+            'button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex="0"], a[href]',
+          ) ??
+          element);
       option?.focus({ preventScroll: true });
     }
     const outside = (event: Event) => {
@@ -649,23 +635,33 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       )
         closeMenu();
     };
+    const rail = !narrowScreen ? shell.current?.querySelector(".side") : null;
+    const railResize = rail ? new ResizeObserver(positionMenu) : null;
+    if (rail) railResize?.observe(rail);
     window.addEventListener("resize", positionMenu);
     document.addEventListener("pointerdown", outside);
     document.addEventListener("scroll", positionMenu, true);
     return () => {
+      railResize?.disconnect();
       window.removeEventListener("resize", positionMenu);
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("scroll", positionMenu, true);
     };
   }, [menu, menuShown, menuOpenVersion, closeMenu, positionMenu]);
 
-  function openMenu(kind: StudioMenu, button: HTMLButtonElement, focus = true) {
+  function openMenu(
+    kind: StudioMenu,
+    button: HTMLButtonElement,
+    focus = true,
+    pointer = false,
+  ) {
     if (anchor.current === button) {
       closeMenu();
       return;
     }
     clearTimeout(menuTimer.current);
     anchor.current = button;
+    menuOpenedByPointer.current = pointer;
     menuFocusTarget.current = focus
       ? button
       : document.activeElement as HTMLElement;
@@ -2157,15 +2153,16 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
             const current = options.indexOf(
               document.activeElement as HTMLElement,
             );
+            const down = event.key === "ArrowDown";
             const index =
               event.key === "Home"
                 ? 0
                 : event.key === "End"
                   ? options.length - 1
-                  : (current +
-                      (event.key === "ArrowDown" ? 1 : -1) +
-                      options.length) %
-                    options.length;
+                  : current < 0 && target === event.currentTarget
+                    ? down ? 0 : options.length - 1
+                    : (current + (down ? 1 : -1) + options.length) %
+                      options.length;
             options[index]?.focus();
           }
         }}

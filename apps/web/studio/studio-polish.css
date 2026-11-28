@@ -64,6 +64,15 @@
   color: var(--secondary);
   line-height: 1.5;
 }
+@container (max-width: 260px) {
+  .composer .composer-parameters {
+    display: flex;
+    min-height: 0;
+  }
+  .composer .composer-parameters > :is(.creation-type, .model-name) > .icon {
+    display: block;
+  }
+}
 .section-head {
   margin-bottom: 16px;
 }
@@ -283,19 +292,58 @@
   font-weight: 500;
 }
 
-/* Layout commits once when the navigation rail changes width. */
-.shell.collapsed .side,
-.shell .side {
-  transition: background-color var(--motion-feedback) var(--motion-ease);
-}
-.shell :is(.floating-composer, .detail-view),
-.shell.collapsed :is(.floating-composer, .detail-view) {
-  transition: none;
-}
-.side :is(.nav-label, .brand > span) {
-  transition: opacity var(--motion-feedback) var(--motion-ease);
+@media (min-width: 761px) {
+  .shell {
+    --rail-duration: 240ms;
+    --rail-ease: cubic-bezier(0.28, 0.42, 0.28, 1);
+    --rail-motion: var(--rail-duration) var(--rail-ease);
+    --rail-label-duration: 150ms;
+    --rail-label-delay: 56ms;
+  }
+  .shell.collapsed {
+    --rail-duration: 190ms;
+    --rail-label-duration: 90ms;
+    --rail-label-delay: 0ms;
+  }
+  #app .shell.collapsed .side,
+  #app .shell .side {
+    transition:
+      width var(--rail-motion),
+      min-width var(--rail-motion),
+      background-color var(--rail-motion);
+  }
+  /* Fixed work surfaces follow the width of the rail on desktop. */
+  #app .shell :is(.floating-composer, .detail-view),
+  #app .shell.collapsed :is(.floating-composer, .detail-view) {
+    transition: left var(--rail-motion);
+  }
+  #app .side :is(.nav-label, .brand > span) {
+    translate: 0 0;
+    transition:
+      opacity var(--rail-label-duration) var(--motion-ease) var(--rail-label-delay),
+      translate var(--rail-label-duration) var(--motion-ease) var(--rail-label-delay),
+      visibility var(--rail-label-duration) linear var(--rail-label-delay);
+  }
+  #app .collapsed .side :is(.nav-label, .brand > span) {
+    translate: -4px 0;
+  }
+  #app .side .collapse-button {
+    transition:
+      opacity var(--rail-label-duration) var(--motion-ease) var(--rail-label-delay),
+      visibility var(--rail-label-duration) linear var(--rail-label-delay);
+  }
 }
 /* The phone drawer and its backdrop live in studio-mobile.css. */
+
+#popover.popover:has(.fm-choice-menu) {
+  box-sizing: border-box;
+  max-width: 100vw;
+  padding: 4px;
+}
+
+#popover.popover:has(.fm-choice-menu):focus {
+  outline: none;
+}
 
 #popover.popover {
   opacity: 0;
