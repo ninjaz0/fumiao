@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 import { one } from "./db.js";
+import { retiredShotPromptPluginId } from "./canvas-node-plugins.js";
 import type { Platform, Actor } from "./platform.js";
 import { DomainError, requireValue } from "./security.js";
 import {
@@ -148,6 +149,11 @@ export class StudioUpdates {
   constructor(readonly p: Platform) {}
   async configure(actor: Actor, id: string, value: unknown) {
     this.p.admin(actor);
+    requireValue(
+      id !== retiredShotPromptPluginId,
+      409,
+      "镜头提示词示例插件已停用",
+    );
     const input = z
       .object({
         revision: z.number().int(),
@@ -187,6 +193,11 @@ export class StudioUpdates {
     },
   ) {
     if (apply) this.p.admin(apply.actor);
+    requireValue(
+      id !== retiredShotPromptPluginId,
+      409,
+      "镜头提示词示例插件已停用",
+    );
     const row = await one(
       this.p.db,
       "SELECT * FROM studio_packages WHERE id=$1 AND installed",
@@ -240,6 +251,11 @@ export class StudioUpdates {
   }
   async review(actor: Actor, id: string) {
     this.p.admin(actor);
+    requireValue(
+      id !== retiredShotPromptPluginId,
+      409,
+      "镜头提示词示例插件已停用",
+    );
     const row = await one(
       this.p.db,
       "SELECT * FROM studio_packages WHERE id=$1 AND installed",
@@ -264,10 +280,12 @@ export class StudioUpdates {
   }
   async due() {
     // Claim the daily probe before network I/O so worker replicas do not duplicate it.
-    const rows = await this.p.db
-      .query(`UPDATE studio_packages SET checked_at=now() WHERE id IN (
-      SELECT id FROM studio_packages WHERE installed AND update_url IS NOT NULL AND
-      (checked_at IS NULL OR checked_at<now()-interval '1 day') ORDER BY checked_at NULLS FIRST LIMIT 5 FOR UPDATE SKIP LOCKED) RETURNING id`);
+    const rows = await this.p.db.query(
+      `UPDATE studio_packages SET checked_at=now() WHERE id IN (
+      SELECT id FROM studio_packages WHERE installed AND NOT removing AND id <> $1 AND update_url IS NOT NULL AND
+      (checked_at IS NULL OR checked_at<now()-interval '1 day') ORDER BY checked_at NULLS FIRST LIMIT 5 FOR UPDATE SKIP LOCKED) RETURNING id`,
+      [retiredShotPromptPluginId],
+    );
     await Promise.allSettled(rows.rows.map((r) => this.check(r.id)));
   }
 }

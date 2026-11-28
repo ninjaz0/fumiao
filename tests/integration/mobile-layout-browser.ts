@@ -855,61 +855,13 @@ async function checkCanvasList(page: Page) {
   if (evidence) await page.screenshot({ path: `${evidence}/page-canvas-list-dark.png`, animations: "disabled" });
   await setTheme(page, "light");
 
-  // 剧集分集管理卡片：位于页面主标题下方、标题一行省略、无剧集时默认折叠可展开创建、“新建剧集”视觉 36px 且触控 >= 44px
-  const headingAboveSeries = await page.evaluate(() => {
-    const heading = document.querySelector<HTMLElement>(".project-list-heading")!.getBoundingClientRect();
-    const series = document.querySelector<HTMLElement>(".fm-series-panel")!.getBoundingClientRect();
-    return heading.bottom <= series.top + 1;
-  });
-  assert.equal(headingAboveSeries, true, "画布主标题位于剧集分集管理面板上方");
-
-  const seriesMetrics = await page.evaluate(() => {
-    const h2 = document.querySelector<HTMLElement>(".fm-series-head h2")!;
-    const titleSpan = h2.querySelector<HTMLElement>("span");
-    const btn = document.querySelector<HTMLElement>(".fm-series-head > button")!;
-    const btnRect = btn.getBoundingClientRect();
-    const after = getComputedStyle(btn, "::after");
-    const hasAfter = after.content !== "none" && after.content !== "normal";
-    const hitH = hasAfter ? btnRect.height - (parseFloat(after.top) || 0) - (parseFloat(after.bottom) || 0) : btnRect.height;
-    const hitW = hasAfter ? btnRect.width - (parseFloat(after.left) || 0) - (parseFloat(after.right) || 0) : btnRect.width;
-    return {
-      h2Height: h2.getBoundingClientRect().height,
-      titleEllipsis: titleSpan ? getComputedStyle(titleSpan).textOverflow : "none",
-      btnHeight: btnRect.height,
-      hitH,
-      hitW,
-    };
-  });
-  assert.ok(seriesMetrics.h2Height <= 28, `剧集卡片标题单行高度 <= 28px: ${seriesMetrics.h2Height}`);
-  assert.equal(seriesMetrics.titleEllipsis, "ellipsis", "剧集卡片标题超长省略");
-  assert.ok(Math.abs(seriesMetrics.btnHeight - 36) <= 1, `新建剧集按钮视觉高度 36px: ${seriesMetrics.btnHeight}`);
-  assert.ok(seriesMetrics.hitH >= 43.5 && seriesMetrics.hitW >= 43.5, `新建剧集触控区域 >= 44px: ${JSON.stringify(seriesMetrics)}`);
-
-  if (!(await page.locator(".fm-series-card").count())) {
-    const panel = page.locator(".fm-series-panel");
-    await expect(panel).toHaveClass(/\bis-collapsed\b/);
-    await expect(panel.locator(".fm-series-head h2")).toContainText("剧集分集管理 · 0 部剧集");
-    await expect(panel.locator(".fm-series-form, .fm-series-list")).toHaveCount(0);
-
-    await panel.getByRole("button", { name: "新建剧集", exact: true }).tap();
-    await expect(panel).not.toHaveClass(/\bis-collapsed\b/);
-    await expect(panel.locator(".fm-series-form")).toBeVisible();
-    await expect(panel.getByRole("button", { name: "结构化 JSON", exact: true })).toBeVisible();
-    assert.ok(
-      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
-      "展开新建剧集与世界观设定表单后无横向滚动",
-    );
-    await panel.locator(".fm-series-form").getByRole("button", { name: "取消", exact: true }).tap();
-    await expect(panel).toHaveClass(/\bis-collapsed\b/);
-
-    // 桌面端 (>=761px) 保持 #223 空剧集折叠降级形态与 72px 顶栏外观不变
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await expect(panel).toHaveClass(/\bis-collapsed\b/);
-    const desktopHeader = (await page.locator(".list-header").boundingBox())!;
-    assert.ok(Math.abs(desktopHeader.height - 72) <= 1, `桌面端画布列表顶栏保持 72px: ${desktopHeader.height}`);
-    if (evidence) await page.screenshot({ path: `${evidence}/page-canvas-list-desktop.png`, animations: "disabled" });
-    await page.setViewportSize({ width: 375, height: 667 });
-  }
+  // 剧集项目树已下线：页面不再渲染 .fm-series-panel，桌面端 72px 顶栏保持不变
+  await expect(page.locator(".fm-series-panel")).toHaveCount(0);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const desktopHeader = (await page.locator(".list-header").boundingBox())!;
+  assert.ok(Math.abs(desktopHeader.height - 72) <= 1, `桌面端画布列表顶栏保持 72px: ${desktopHeader.height}`);
+  if (evidence) await page.screenshot({ path: `${evidence}/page-canvas-list-desktop.png`, animations: "disabled" });
+  await page.setViewportSize({ width: 375, height: 667 });
 
   // 页面标题 20px、“新建画布”按钮 40px（触控 >= 44px）、分段切换 40px（触控 >= 44px）
   await expect(page.locator(".project-list-heading h1")).toHaveCSS("font-size", "20px");
@@ -1017,93 +969,15 @@ async function checkCanvasList(page: Page) {
   await expect(page.locator(".project-list-body .empty")).toHaveCount(0);
   await hideDevPortal(page);
 
-  // 嵌套分集与分场表单（.fm-ep-form）：创建临时剧集与分集，检查 375px 下按钮不溢出且位于 .fm-series-card 内，随后清理
   const reqHeaders = {
     Origin: editorUrl.origin,
     ...(workspace ? { "X-Workspace-Id": workspace } : {}),
   };
   const seriesRes = await page.context().request.post("/api/series", {
     headers: reqHeaders,
-    data: { title: "移动端分场按钮验证", synopsis: "" },
+    data: { title: "旧剧集接口下线验证", synopsis: "" },
   });
-  assert.ok(seriesRes.ok(), `创建临时剧集失败: ${seriesRes.status()}`);
-  const tempSeries = (await seriesRes.json()) as { id: string };
-  let tempEpCanvasId: string | null = null;
-  try {
-    const epRes = await page.context().request.post(`/api/series/${encodeURIComponent(tempSeries.id)}/episodes`, {
-      headers: reqHeaders,
-      data: { season_no: 1, episode_no: 1, title: "第一集" },
-    });
-    assert.ok(epRes.ok(), `创建临时分集失败: ${epRes.status()}`);
-    const tempEp = (await epRes.json()) as { id: string; canvas_id: string | null };
-    tempEpCanvasId = tempEp.canvas_id;
-
-    await page.goto(`/canvas${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ""}`);
-    await expect(page.locator(".list-header")).toBeVisible();
-    await hideDevPortal(page);
-
-    const card = page.locator(".fm-series-card").filter({ hasText: "移动端分场按钮验证" });
-    await expect(card).toBeVisible();
-    if ((await card.locator(".fm-series-toggle").first().getAttribute("aria-expanded")) !== "true") {
-      await card.locator(".fm-series-toggle").first().tap();
-    }
-    await card.getByRole("button", { name: "填写设定", exact: true }).tap();
-    await expect(card.locator(".fm-series-bible-editor")).toBeVisible();
-    assert.ok(
-      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
-      "展开剧集世界观设定编辑器后无横向溢出",
-    );
-    await card.locator(".fm-series-bible-editor").getByRole("button", { name: "取消", exact: true }).tap();
-
-    const seasonGroup = card.locator(".fm-season-group").first();
-    if ((await seasonGroup.locator(".fm-series-toggle").first().getAttribute("aria-expanded")) !== "true") {
-      await seasonGroup.locator(".fm-series-toggle").first().tap();
-    }
-    await card.getByRole("button", { name: "加一集", exact: true }).tap();
-    await seasonGroup.getByRole("button", { name: "加一场", exact: true }).tap();
-    const sceneCreateBtn = seasonGroup.locator(".fm-ep-form button.primary", { hasText: "创建并打开分场画布" });
-    await expect(sceneCreateBtn).toBeVisible();
-
-    const formMetrics = await card.evaluate((cardEl) => {
-      const cardRect = cardEl.getBoundingClientRect();
-      const buttons = [...cardEl.querySelectorAll<HTMLButtonElement>(".fm-ep-form > button")];
-      return {
-        pageNoOverflow: document.documentElement.scrollWidth <= innerWidth,
-        buttonCount: buttons.length,
-        buttons: buttons.map((btn) => {
-          const r = btn.getBoundingClientRect();
-          return {
-            text: btn.textContent?.trim() ?? "",
-            scrollW: btn.scrollWidth,
-            clientW: btn.clientWidth,
-            height: r.height,
-            withinCard: r.left >= cardRect.left - 0.5 && r.right <= cardRect.right + 0.5,
-          };
-        }),
-      };
-    });
-    assert.equal(formMetrics.pageNoOverflow, true, "展开分集/分场创建表单后页面无横向溢出");
-    assert.equal(formMetrics.buttonCount, 4, "分集与嵌套分场表单共渲染 4 个操作按钮");
-    for (const btn of formMetrics.buttons) {
-      assert.ok(
-        btn.scrollW <= btn.clientW + 1,
-        `按钮 "${btn.text}" 文字不溢出: scrollWidth=${btn.scrollW}, clientWidth=${btn.clientW}`,
-      );
-      assert.ok(btn.height >= 43.5, `按钮 "${btn.text}" 触控高度 >= 44px: ${btn.height}`);
-      assert.equal(btn.withinCard, true, `按钮 "${btn.text}" 完全位于 .fm-series-card 内`);
-    }
-  } finally {
-    const delSeries = await page.context().request.delete(`/api/series/${encodeURIComponent(tempSeries.id)}`, {
-      headers: reqHeaders,
-    });
-    assert.ok([200, 204, 404].includes(delSeries.status()), `清理临时剧集失败: ${delSeries.status()}`);
-    if (tempEpCanvasId) {
-      const delCanvas = await page.context().request.delete(`/api/canvases/${encodeURIComponent(tempEpCanvasId)}`, {
-        headers: reqHeaders,
-      });
-      assert.ok([200, 204, 404].includes(delCanvas.status()), `清理临时分集画布失败: ${delCanvas.status()}`);
-    }
-  }
+  assert.equal(seriesRes.status(), 404, "旧 /api/series 接口已下线并返回 404");
 }
 
 async function checkHomeAndLogin(browser: Browser, origin: string) {

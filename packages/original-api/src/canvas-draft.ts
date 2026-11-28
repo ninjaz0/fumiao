@@ -281,59 +281,6 @@ export const batchQuoteItemFields: Fields = {
 export const batchQuoteFields: Fields = {
   items: { ...list(object(batchQuoteItemFields), 120), min: 1 },
 };
-export const seriesCreateFields: Fields = {
-  title: { kind: "string", min: 1, max: 120 },
-  synopsis: { kind: "string", max: 4000, default: "" },
-  bible: { kind: "dictionary", optional: true },
-};
-export const seriesUpdateFields: Fields = {
-  expected_revision: { kind: "integer", min: 1 },
-  title: { kind: "string", min: 1, max: 120, optional: true },
-  synopsis: { kind: "string", max: 4000, optional: true },
-  bible: { kind: "dictionary", optional: true },
-};
-export const episodeCreateFields: Fields = {
-  season_no: { kind: "integer", min: 1, max: 99, default: 1 },
-  episode_no: { kind: "integer", min: 1, max: 999 },
-  title: { kind: "string", min: 1, max: 120 },
-  status: {
-    kind: "literal",
-    values: ["draft", "producing", "review", "done"],
-    default: "draft",
-  },
-  canvas_id: {
-    kind: "string",
-    pattern: "^[a-f0-9]{32}$",
-    strictPattern: true,
-    nullable: true,
-    optional: true,
-  },
-};
-export const episodeUpdateFields: Fields = {
-  expected_revision: { kind: "integer", min: 1 },
-  season_no: { kind: "integer", min: 1, max: 99, optional: true },
-  episode_no: { kind: "integer", min: 1, max: 999, optional: true },
-  title: { kind: "string", min: 1, max: 120, optional: true },
-  status: {
-    kind: "literal",
-    values: ["draft", "producing", "review", "done"],
-    optional: true,
-  },
-};
-export const sceneCreateFields: Fields = {
-  scene_no: { kind: "integer", min: 1, max: 999 },
-  title: { kind: "string", min: 1, max: 120 },
-  summary: { kind: "string", max: 2000, default: "" },
-  canvas_id: { kind: "string", max: 64, nullable: true, optional: true },
-  group_node_id: { kind: "string", max: 80, nullable: true, optional: true },
-  create_canvas: { kind: "boolean", strict: false, default: true },
-};
-export const sceneUpdateFields: Fields = {
-  scene_no: { kind: "integer", min: 1, max: 999, optional: true },
-  title: { kind: "string", min: 1, max: 120, optional: true },
-  summary: { kind: "string", max: 2000, optional: true },
-  group_node_id: { kind: "string", max: 80, nullable: true, optional: true },
-};
 export type CanvasParams = {
   h3: {
     mode: "reference" | "frames";

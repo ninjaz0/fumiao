@@ -45,7 +45,7 @@ pnpm exec fumiao-plugin build voice-length
 | `settingsPages` | 在插件设置里添加、删除工作区备注 | `package/notes.js` 的 `view` 和 `action` |
 | `settings` | 保存全站与工作区的显示选项，升级时迁移旧值 | `package/release.json` 的设置 schema、`package/migrate.js` |
 | `pages` | 工作台侧栏的审片清单 | `package/board.js` |
-| `canvasNodes` | 把输入文案和景别转换为镜头提示词 | `package/compose.js` |
+| `canvasNodes` | 为输入文本添加前缀并输出到画布节点 | `package/format-text.js` |
 | `actions` | 从任务菜单写入、读取审片备注 | `package/save.js`、`package/read.js` |
 | `events` | 收到 `asset.created` 后保存素材分类 | `package/classify.js` |
 | `chatTools` | 估算一段旁白的朗读时长 | `package/reading-time.js` |

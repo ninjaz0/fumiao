@@ -54,7 +54,7 @@ export function requireTokenScope(
 
 export type TokenRouteRule = {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  /** Canonical Express/NestJS route template (e.g. `/api/series/:key`). */
+  /** Canonical Express/NestJS route template (e.g. `/api/canvases/:key`). */
   template: string;
   /** Compiled matcher derived from `template`. */
   path: RegExp;
@@ -158,18 +158,6 @@ export const TOKEN_REST_ALLOWLIST: readonly TokenRouteRule[] = [
   tokenRule("POST", "/api/skills/import-zip", "skill:write", "Skills", "上传包含 SKILL.md 的 ZIP 技能包"),
   tokenRule("PUT", "/api/skills/:key", "skill:write", "Skills", "更新指定工作区技能"),
   tokenRule("DELETE", "/api/skills/:key", "skill:write", "Skills", "删除指定工作区技能"),
-  // Series -> Season -> Episode -> Scene hierarchy (matching real Nest PUT routes)
-  tokenRule("GET", "/api/series", "canvas:read", "Series", "列出当前工作区剧集/季/集/场层级结构"),
-  tokenRule("GET", "/api/series/:key", "canvas:read", "Series", "读取单个剧集详情与季/集/场树"),
-  tokenRule("POST", "/api/series", "canvas:write", "Series", "创建剧集项目"),
-  tokenRule("PUT", "/api/series/:key", "canvas:write", "Series", "更新剧集信息"),
-  tokenRule("DELETE", "/api/series/:key", "canvas:write", "Series", "删除剧集项目"),
-  tokenRule("POST", "/api/series/:key/episodes", "canvas:write", "Series", "在指定季下创建分集与绑定画布"),
-  tokenRule("PUT", "/api/series/:key/episodes/:ep", "canvas:write", "Series", "更新分集标题、季号、集号或梗概"),
-  tokenRule("DELETE", "/api/series/:key/episodes/:ep", "canvas:write", "Series", "删除分集"),
-  tokenRule("POST", "/api/series/:key/episodes/:ep/scenes", "canvas:write", "Series", "在指定分集下创建分场与绑定画布"),
-  tokenRule("PUT", "/api/series/:key/episodes/:ep/scenes/:scene", "canvas:write", "Series", "更新分场标题、场号或分组映射"),
-  tokenRule("DELETE", "/api/series/:key/episodes/:ep/scenes/:scene", "canvas:write", "Series", "删除分场"),
   // Workspace script documents (Canvas × Script fusion)
   tokenRule("GET", "/api/workspace/scripts", "canvas:read", "Scripts", "列出当前工作区剧本文档与文件夹树"),
   tokenRule("POST", "/api/workspace/scripts", "canvas:write", "Scripts", "创建工作区剧本文档或文件夹"),

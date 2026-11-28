@@ -1256,6 +1256,11 @@ button[aria-expanded="true"] > .fm-ui-chevron:not(.fm-choice-chevron) {
   gap: 4px;
   flex: 1;
 }
+.canvas-muted {
+  margin: 0 0 8px;
+  font-size: 13px;
+  opacity: 0.75;
+}
 .fm-proposal-list {
   display: grid;
   gap: 10px;

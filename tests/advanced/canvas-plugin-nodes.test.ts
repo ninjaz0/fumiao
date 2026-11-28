@@ -5,14 +5,78 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { canvasNodeEntries } from "@fumiao/platform/canvas-node-plugins.js";
 import { StudioPackages } from "@fumiao/platform/studio-packages.js";
+import { StudioUpdates } from "@fumiao/platform/studio-updates.js";
 import { runCanvasPlugin } from "@fumiao/original-api/canvas-plugin-runs.js";
 import { canvasesFixture } from "../helpers/canvases.js";
 
-const sample = () =>
+const legacyShotPrompt = () =>
   readFile(
-    "plugins/example-shot-prompt/example-shot-prompt.fmplugin.json",
+    "tests/fixtures/legacy-shot-prompt.fmplugin.json",
     "utf8",
   ).then(JSON.parse);
+
+const sample = async () => ({ ...(await legacyShotPrompt()), id: "test-canvas-node" });
+
+test("retired shot-prompt nodes preserve saved output and reject new runs", async (t) => {
+  const f = await canvasesFixture();
+  t.after(f.cleanup);
+  const file = await legacyShotPrompt();
+  const packages = new StudioPackages(f.p);
+  await f.db.query(
+    "INSERT INTO studio_package_releases (id, version, package) VALUES ($1, $2, $3)",
+    [file.id, file.version, file],
+  );
+  await f.db.query(
+    "INSERT INTO studio_packages (id, version, enabled, update_url) VALUES ($1, $2, false, $3)",
+    [file.id, file.version, "https://example.invalid/retired-update.json"],
+  );
+  assert.deepEqual(await canvasNodeEntries(f.db), []);
+  assert.equal((await packages.list(f.admin)).some((pkg) => pkg.id === file.id), false);
+  await assert.rejects(packages.preview(f.admin, file), { status: 409 });
+  await assert.rejects(packages.install(f.admin, file), { status: 409 });
+  await assert.rejects(packages.change(f.admin, file.id, 1, "enable"), { status: 409 });
+  const updates = new StudioUpdates(f.p);
+  await assert.rejects(
+    updates.configure(f.admin, file.id, { revision: 1, url: "https://example.com/update.json" }),
+    { status: 409 },
+  );
+  await assert.rejects(updates.check(file.id), { status: 409 });
+  await updates.due();
+  const [pkgRow] = (
+    await f.db.query("SELECT checked_at FROM studio_packages WHERE id = $1", [file.id])
+  ).rows;
+  assert.equal(pkgRow.checked_at, null, "retired plugin must not be polled by StudioUpdates.due()");
+
+  const pluginNodeSrc = await readFile("apps/web/canvas-editor/PluginNode.tsx", "utf8");
+  assert.match(pluginNodeSrc, /此示例插件节点已停用，仍可查看和复制已保存的输出/);
+
+  const { program: _, ...node } = file.contributes.canvasNodes[0];
+  const extension = {
+    definition: { ...node, plugin: file.id, version: file.version },
+    values: { framing: "全景" },
+    result: { prompt: "全景：日出" },
+  };
+  const project = await f.canvases.create(f.admin, {});
+  const saved = await f.canvases.save(f.admin, project.id, {
+    title: project.title,
+    expected_revision: project.revision,
+    document: {
+      nodes: [
+        { id: "text", type: "text", x: 0, y: 0, text: "日出" },
+        { id: "shot", type: "plugin", x: 350, y: 0, extension },
+      ],
+      edges: [{ id: "input", source: "text", target: "shot", targetPort: "script" }],
+    },
+  });
+  await assert.rejects(
+    runCanvasPlugin(f.canvases, f.admin, project.id, "shot", {
+      expected_revision: saved.revision,
+      uid: randomUUID(),
+    }),
+    { status: 409 },
+  );
+  assert.deepEqual((await f.canvases.get(f.admin, project.id)).document.nodes[1].extension, extension);
+});
 
 test("canvas ports resolve a sandbox node from the saved revision and replay the same run once", async (t) => {
   const f = await canvasesFixture();
