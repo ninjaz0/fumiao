@@ -17,9 +17,10 @@ function describe(job: Job) {
   ] as const;
 }
 
-export function VideoVersions({ runs, adopted, onAdopt }: {
+export function VideoVersions({ runs, adopted, disabled, onAdopt }: {
   runs: Job[];
   adopted: number | null;
+  disabled?: boolean;
   onAdopt: (id: number) => void;
 }) {
   const [leftId, setLeft] = useState(runs[0]?.id);
@@ -27,8 +28,10 @@ export function VideoVersions({ runs, adopted, onAdopt }: {
   const [error, setError] = useState("");
   const leftPlayer = useRef<HTMLVideoElement>(null);
   const rightPlayer = useRef<HTMLVideoElement>(null);
-  const left = runs.find((job) => job.id === leftId);
-  const right = runs.find((job) => job.id === rightId);
+  const left = runs.find((job) => job.id === leftId) ?? runs[0];
+  const right = runs.find((job) => job.id === rightId && job.id !== left?.id)
+    ?? runs.find((job) => job.id === adopted && job.id !== left?.id)
+    ?? runs.find((job) => job.id !== left?.id);
 
   const playBoth = async () => {
     const players = [leftPlayer.current, rightPlayer.current];
@@ -81,7 +84,7 @@ export function VideoVersions({ runs, adopted, onAdopt }: {
           <video key={job.id} ref={index === 0 ? leftPlayer : rightPlayer} src={"/media/" + job.result + "#t=0.05"}
             controls playsInline muted={index === 1} preload="metadata" />
           <button className={job.id === adopted ? "secondary version-adopt" : "primary version-adopt"}
-            disabled={job.id === adopted}
+            disabled={disabled || job.id === adopted}
             onClick={() => onAdopt(job.id)}>{job.id === adopted ? "已采用" : "采用这一版"}</button>
           <dl className="version-specs">
             {describe(job).map(([label, value], field) => (

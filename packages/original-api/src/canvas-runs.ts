@@ -1,6 +1,7 @@
 import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { randomUUID } from "node:crypto";
-import { canvasShotOrder, canvasSourceKind, tailParentNode } from "@fumiao/plugin-sdk/canvas-ports.js";
+import { directorBatchUnclaimed, directorTargetKey, type DirectorBatchSelection, type DirectorTarget } from "@fumiao/web-compat/director.js";
+import { canvasShotOrder, tailParentNode } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
@@ -9,31 +10,47 @@ import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { uuid5 } from "@fumiao/platform/uuid.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
+import { isBgmMusicModel } from "@fumiao/plugin-sdk/speech-routing.js";
 import type { OriginalActor } from "./identity.js";
 import { parseBody } from "./validation.js";
 import { parseDraft } from "./drafts.js";
 import {
+  canvasBatchFields,
   canvasBatchRunFields,
   canvasBgmRunFields,
   canvasCandidatesFields,
   canvasDialogueRunFields,
   canvasRunFields,
   parseCanvasDocument,
-  type CinematographySpec,
 } from "./canvas-draft.js";
 import {
+  canvasBatchRequestHash,
+  directorDraft,
+  directorLinkNode,
+  directorTargetShots,
   expandGroupNodeIds,
+  normalizeDirectorSelection,
+  requireDirectorAudioTarget,
   OriginalBatchPrecheck,
+  validateDirectorSelection,
+  type DirectorTicket,
+  type DirectorTicketItem,
   type PrecheckStage,
 } from "./batch-precheck.js";
 import {
   createTailFrameAsset,
   hasTailChainTable,
 } from "@fumiao/platform/tail-frame.js";
-import { resolveSpeakerVoice } from "./dialogue.js";
+import { resolveDialogueInput } from "./dialogue.js";
+import {
+  canvasNarrationInput,
+  canvasVisualPayload,
+  directorRenderedVoice,
+  resolveCanvasVisualBase,
+  resolveDirectorInput,
+} from "./director-inputs.js";
 import {
   canvasBytes,
-  canvasMediaParameters,
   canvasDocumentJson,
   canvasText,
   parseCanvasRunJson,
@@ -45,42 +62,7 @@ import { OriginalState } from "./state.js";
 
 const namespaceUrl = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
 
-import { isBgmMusicModel } from "@fumiao/plugin-sdk/speech-routing.js";
-
-/** F030: Compiles structured 6-dimension director cinematography spec into clean prompt text. */
-export function compileCinematographyPrompt(
-  basePrompt: string,
-  spec?: CinematographySpec | null,
-  generationMode?: string,
-  gridLayout?: "2x2" | "3x3" | null,
-): string {
-  const parts: string[] = [];
-  if (generationMode === "grid_preview") {
-    const grid = gridLayout === "2x2" ? "2x2 四宫格" : "3x3 九宫格";
-    const count = gridLayout === "2x2" ? 4 : 9;
-    parts.push(
-      `【${grid}分镜构图预览】在一张画布上平均划分为 ${grid}（共 ${count} 个等大独立连续分镜画面），细黑线整齐分隔，无文字水印，主体与场景风格连贯：`,
-    );
-  }
-  parts.push(basePrompt.trim());
-  if (spec) {
-    const entries: [string, string | undefined][] = [
-      ["景别", spec.shot_size],
-      ["机位", spec.camera_angle],
-      ["运镜", spec.camera_movement],
-      ["光影", spec.lighting],
-      ["镜头", spec.lens],
-      ["氛围", spec.mood],
-    ];
-    const tags = entries
-      .filter(([, v]) => typeof v === "string" && v.trim().length > 0)
-      .map(([k, v]) => `${k}:${v!.trim()}`);
-    if (tags.length) {
-      parts.push(`【导演参数：${tags.join(" / ")}】`);
-    }
-  }
-  return parts.filter(Boolean).join("\n\n").slice(0, 12000);
-}
+export { compileCinematographyPrompt } from "./director-inputs.js";
 type Run = {
   route_revision?: string;
   price_revision_id?: string;
@@ -88,6 +70,12 @@ type Run = {
   uid: string;
   expected_revision: number | bigint;
   price_revision: number | bigint | null;
+};
+type BatchRunResponse = {
+  submitted: { node: string; stage: PrecheckStage; job_id: number; line_id?: string }[];
+  skipped: { node: string; stage: PrecheckStage; reason: string; line_id?: string }[];
+  total_credits: number;
+  exact_total_credits?: string;
 };
 export class OriginalCanvasRuns {
   readonly canvases: OriginalCanvases;
@@ -109,7 +97,9 @@ export class OriginalCanvasRuns {
           const p = await this.canvases.project(sql, user, project);
           const links = (
             await sql.query(
-              `SELECT l.id::text,l.node,l.inputs,j.public_id AS job FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
+              `SELECT l.id::text,l.node,l.inputs,j.public_id AS job,
+                j.original_view->'audio_settings' AS audio_settings, j.input->'params' AS prepared_audio
+                FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
           WHERE l.project_id=$1 AND j.deleted_at IS NULL ORDER BY l.id DESC`,
               [p.id],
             )
@@ -171,12 +161,16 @@ export class OriginalCanvasRuns {
             runs: links.map((l) => {
               const j = byId.get(Number(l.job));
               requireValue(j, 503, "画布任务尚未完成原状态迁移");
+              const inputs = parseCanvasRunJson(canvasText(l.inputs));
+              const voice = j.kind === "audio" ? directorRenderedVoice(j.model, l.audio_settings, l.prepared_audio,
+                inputs && typeof inputs === "object" ? inputs as Record<string, unknown> : undefined) : {};
               return {
                 ...Object.fromEntries(fields.map((key) => [key, j[key]])),
                 ...(j.result_mime ? { result_mime: j.result_mime } : {}),
+                ...(Object.keys(voice).length ? { audio_settings: voice } : {}),
                 link_id: parseCanvasRunJson(l.id),
                 canvas_node: l.node,
-                inputs: parseCanvasRunJson(canvasText(l.inputs)),
+                inputs,
                 batch: byJob.get(j.id) ?? null,
                 model_label: bindings.rules.get(j.model)?.showModelLabel
                   ? (models[j.model]?.label ?? null)
@@ -270,9 +264,8 @@ export class OriginalCanvasRuns {
       return { id: Number(old.job) };
     }
     requireValue(p.revision === body.expected_revision, 409, canvasConflict);
-    const doc = parseCanvasDocument(canvasDocumentJson(p.document)),
-      nodes = new Map(doc.nodes.map((n) => [n.id, n])),
-      node = nodes.get(nid);
+    const doc = parseCanvasDocument(canvasDocumentJson(p.document));
+    const node = doc.nodes.find((item) => item.id === nid);
     requireValue(
       node && (node.type === "image" || node.type === "video"),
       400,
@@ -291,109 +284,10 @@ export class OriginalCanvasRuns {
       409,
       "这个节点还有生成任务，请等待完成",
     );
-    const texts: string[] = [],
-      sources: (
-        { node: string; text: string } | { node: string; media: string }
-      )[] = [];
-    let refs: string[] = [];
-    for (const edge of doc.edges) {
-      if (edge.target !== nid) continue;
-      const source = nodes.get(edge.source)!;
-      const extValue =
-        source.extension && edge.sourcePort
-          ? source.extension.result?.[edge.sourcePort]
-          : undefined;
-      if (canvasSourceKind(source, edge.sourcePort) === "text") {
-        const text = pythonStrip(
-          source.extension ? (extValue ?? "") : source.text,
-        );
-        requireValue(
-          text,
-          409,
-          `参考文本“${source.title || "文本"}”还没有内容`,
-        );
-        texts.push(text);
-        sources.push({ node: source.id, text });
-      } else {
-        const key = source.extension
-          ? extValue
-          : await this.canvases.mediaForNode(sql, p.id, source);
-        requireValue(key, 409, `参考图片“${source.title || "图片"}”尚未就绪`);
-        if (!refs.includes(key)) refs.push(key);
-        sources.push({ node: source.id, media: key });
-      }
-    }
-    const rawPrompt = [
-      ...texts,
-      ...(pythonStrip(node.prompt) ? [pythonStrip(node.prompt)] : []),
-    ].join("\n\n");
-    requireValue(
-      rawPrompt && [...rawPrompt].length <= 12000,
-      400,
-      "请输入提示词或连接文本，合计不超过 12000 字",
-    );
-    const prompt = compileCinematographyPrompt(
-      rawPrompt,
-      node.cinematography,
-      node.generation_mode,
-      node.grid_layout,
-    );
     const params = node.params;
-    const builtin =
-      params.model &&
-      (await one(
-        sql,
-        "SELECT id FROM studio_catalog WHERE id=$1 AND plugin_id IS NULL",
-        [params.model],
-      ));
-    const bindings = builtin
-      ? undefined
-      : await CanvasSubmissionModels.read(sql);
-    const model = params.model || bindings!.default(node.type);
-    const rule = bindings?.rules.get(model);
-
-    // F011: Honor explicit node.generation_mode instead of letting stale params.h3.mode override it.
-    let native =
-      node.type === "video" && rule?.nativeH3
-        ? params.h3
-          ? node.generation_mode === "omni_ref"
-            ? {
-                ...params.h3,
-                mode: "reference" as const,
-                first_frame: null,
-                last_frame: null,
-              }
-            : node.generation_mode === "first_last_frame"
-              ? { ...params.h3, mode: "frames" as const }
-              : params.h3
-          : node.generation_mode === "first_last_frame"
-            ? {
-                mode: "frames" as const,
-                first_frame: null,
-                last_frame: null,
-                video_audio: [] as string[],
-              }
-            : node.generation_mode === "omni_ref"
-              ? {
-                  mode: "reference" as const,
-                  first_frame: null,
-                  last_frame: null,
-                  video_audio: [] as string[],
-                }
-              : null
-        : null;
-    if (
-      node.type === "video" &&
-      rule?.nativeH3 &&
-      node.generation_mode === "omni_ref" &&
-      params.h3
-    ) {
-      const carried = [params.h3.first_frame, params.h3.last_frame].filter(
-        (id): id is string => Boolean(id),
-      );
-      if (carried.length) refs = [...new Set([...refs, ...carried])];
-    }
-
+    const base = await resolveCanvasVisualBase(sql, p.id, doc, node);
+    let { refs, native } = base;
+    const { builtin, rule } = base;
     // F028: Automatic tail-frame chain discovery for video shots marked `tail_inherited: true`.
     // Never touches shots where `tail_inherited` is falsy (preserves explicit first frames).
     let pendingTailParentJobId: string | null = null;
@@ -425,76 +319,17 @@ export class OriginalCanvasRuns {
       }
     }
 
-    if (native)
-      refs =
-        native.mode === "frames"
-          ? [
-              ...new Set(
-                [native.first_frame, native.last_frame].filter(
-                  (id): id is string => !!id,
-                ),
-              ),
-            ]
-          : [...new Set([...refs, ...params.h3_refs])];
-    else if (node.generation_mode === "first_last_frame" && params.h3) {
-      const frameRefs = [params.h3.first_frame, params.h3.last_frame].filter(
-        (id): id is string => !!id,
-      );
-      if (frameRefs.length) refs = [...new Set([...frameRefs, ...refs])];
-    } else if (node.generation_mode === "omni_ref" && params.h3_refs.length) {
-      refs = [...new Set([...refs, ...params.h3_refs])];
-    } else
-      requireValue(
-        !params.h3_refs.length || !params.model || rule?.nativeH3,
-        400,
-        "请先移除 H3 参考素材后切换模型生成",
-      );
-    const extraParams =
-      node.extra_params &&
-      typeof node.extra_params === "object" &&
-      !Array.isArray(node.extra_params) &&
-      Object.keys(node.extra_params).length > 0
-        ? node.extra_params
-        : undefined;
-    const common = {
-      uid: uuid5(
-        namespaceUrl,
-        `fumiao:canvas:${p.public_id}:${nid}:${body.uid}`,
-      ),
-      prompt,
-      refs,
-      ratio: params.ratio,
-      ...(body.route_revision !== undefined && { route_revision: body.route_revision }),
-      ...(body.price_revision_id !== undefined && { price_revision_id: body.price_revision_id }),
-      ...(body.max_charge !== undefined && { max_charge: body.max_charge }),
-      price_revision:
-        typeof body.price_revision === "number" ? body.price_revision : null,
-      asset_packs: node.asset_packs,
-      model,
-      ...(extraParams ? { params: builtin ? canvasMediaParameters(extraParams) : extraParams } : {}),
-    };
+    const payload = canvasVisualPayload(node, { ...base, refs, native }, seedOffset);
     const draft = parseDraft(
       node.type,
-      node.type === "image"
-        ? {
-            ...common,
-            resolution: params.resolution,
-            image_quality: params.image_quality,
-          }
-        : {
-            ...common,
-            h3: native,
-            flow_source_job: params.flow_source_job,
-            quality: params.quality,
-            seconds: params.seconds,
-            seed:
-              params.seed === null
-                ? null
-                : (params.seed + seedOffset) % 2 ** 53,
-            sampling_steps:
-              rule?.fixedSamplingSteps ??
-              (params.fast_mode ? 4 : params.sampling_steps),
-          },
+      {
+        ...payload,
+        ...(body.route_revision !== undefined && { route_revision: body.route_revision }),
+        ...(body.price_revision_id !== undefined && { price_revision_id: body.price_revision_id }),
+        ...(body.max_charge !== undefined && { max_charge: body.max_charge }),
+        uid: uuid5(namespaceUrl, `fumiao:canvas:${p.public_id}:${nid}:${body.uid}`),
+        price_revision: typeof body.price_revision === "number" ? body.price_revision : null,
+      },
       await new StudioCatalog(this.p.db).catalog(sql),
     );
     const result = await this.generation.submitOn(
@@ -516,10 +351,10 @@ export class OriginalCanvasRuns {
     });
     await this.link(sql, p, user, nid, body.uid, result.id, {
       revision: p.revision,
-      prompt,
-      refs,
-      sources,
-      params,
+      prompt: payload.prompt,
+      refs: payload.refs,
+      sources: base.sources,
+      params: node.params,
       asset_packs: node.asset_packs,
     });
     if (pendingTailParentJobId && (await hasTailChainTable(sql))) {
@@ -665,9 +500,7 @@ export class OriginalCanvasRuns {
         "audio",
         {
           uid: uuid5(body.uid, `voice:${p.public_id}:${nid}`),
-          model: bindings.resolveAudio(node.narration_model),
-          prompt: node.narration_text,
-          instruction: node.narration_instruction,
+          ...canvasNarrationInput(node, bindings),
           price_revision:
             typeof body.price_revision === "number"
               ? body.price_revision
@@ -809,8 +642,6 @@ export class OriginalCanvasRuns {
       }[] = [];
 
       for (const line of targets) {
-        const cleanText = pythonStrip(line.text);
-        requireValue(cleanText, 400, "对白台词不能为空");
         const nodeName = `dialogue:${nid}:${line.id}`;
         const uid = uuid5(body.uid, `dialogue:${p.public_id}:${nid}:${line.id}`);
         const old = await this.previous(sql, user, uid);
@@ -877,19 +708,13 @@ export class OriginalCanvasRuns {
           registry: this.p.registry,
         });
         catalog ??= await new StudioCatalog(this.p.db).catalog(sql);
-        const resolved = await resolveSpeakerVoice(sql, p.workspace_id, line);
-        const model = bindings.resolveAudio(resolved.model);
+        const { voice: resolved, payload } = await resolveDialogueInput(sql, p.workspace_id, line, bindings);
+        const { model, prompt: cleanText } = payload;
         requireValue(
           !(await this.busy(sql, p.id, nodeName)),
           409,
           `对白「${line.speaker || line.id}」仍在生成`,
         );
-        const extraParams: Record<string, unknown> = {};
-        if (resolved.voiceId) extraParams.voice = resolved.voiceId;
-        if (resolved.rate) extraParams.rate = resolved.rate;
-        if (resolved.pitch) extraParams.pitch = resolved.pitch;
-        if (resolved.instruction) extraParams.instruction = resolved.instruction;
-
         const draft = parseDraft(
           "audio",
           {
@@ -897,10 +722,7 @@ export class OriginalCanvasRuns {
               body.uid,
               `dialogue-job:${p.public_id}:${nid}:${line.id}`,
             ),
-            model,
-            prompt: cleanText,
-            instruction: resolved.instruction,
-            ...(Object.keys(extraParams).length ? { params: extraParams } : {}),
+            ...payload,
             price_revision:
               typeof body.price_revision === "number"
                 ? body.price_revision
@@ -941,6 +763,87 @@ export class OriginalCanvasRuns {
       return { items };
     });
   }
+  private async submitDirectorItem(
+    sql: Sql,
+    user: OriginalActor,
+    projectKey: string,
+    body: Run,
+    selection: DirectorBatchSelection,
+    target: DirectorTarget,
+    ticketItem?: DirectorTicketItem,
+  ) {
+    const project = await this.canvases.project(sql, user, projectKey, true);
+    const key = directorTargetKey(target);
+    const uid = uuid5(body.uid, `director:${project.id}:${key}`);
+    const nodeName = directorLinkNode(target);
+    const previous = await one(sql,
+      `SELECT j.public_id,j.price FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
+       WHERE l.project_id=$1 AND l.owner_id=$2 AND l.uid=$3 AND l.node=$4`,
+      [project.id, user.id, uid, nodeName],
+    );
+    if (previous) {
+      return {
+        id: Number(previous.public_id),
+        exactCredits: formatCredits(creditUnits(String(previous.price))),
+      };
+    }
+    requireValue(ticketItem, 409, "预检已标记阻塞，请检查此项后重新预检");
+    await this.ownerLock(sql, user);
+    const executionKey = `canvas-director:${project.id}:${key}:${uid}`;
+    if ((target.stage === "image" || target.stage === "video") && (user.tokenId || user.agentAction)) {
+      await enforceAgentPolicyInTx(sql, project.workspace_id, {
+        projectId: project.id,
+        nodeId: target.node_id,
+        executionKey,
+        approvedProposalId: user.agentAction?.approvedProposalId ?? null,
+      });
+    }
+    await this.generation.lockSubmission(sql, user, project.workspace_id);
+    const document = parseCanvasDocument(canvasDocumentJson(project.document));
+    const { ordered } = await validateDirectorSelection(
+      sql, this.canvases, { workspace_id: project.workspace_id, revision: project.revision },
+      document, body.expected_revision, selection, true,
+    );
+    const { node } = directorTargetShots(document, ordered, target);
+    requireDirectorAudioTarget(node, target);
+    requireValue(!(await this.busy(sql, project.id, nodeName)), 409, "此项正在生成，请等待任务结束");
+    const bindings = await CanvasSubmissionModels.read(sql, {
+      strict: false, workspaceId: project.workspace_id, vault: this.p.vault, registry: this.p.registry,
+    });
+    const input = await resolveDirectorInput(
+      sql, { id: project.id, workspace_id: project.workspace_id }, document, target, bindings, { lock: true },
+    );
+    requireValue(input.basis === ticketItem.basis, 409, "生成输入、素材或声线已变更，请重新预检");
+    const catalog = await new StudioCatalog(this.p.db).catalog(sql);
+    const draft = directorDraft(input, catalog, uid);
+    const submitted = await this.generation.submitOn(
+      sql, user, draft, String(project.workspace_number), body.price_revision,
+      { projectId: project.id, nodeId: target.node_id, executionKey },
+      { checked: "checked" in input ? input.checked : undefined, quote: ticketItem.quote },
+    );
+    const inputs = {
+      ...input.payload,
+      director_basis: input.basis,
+      revision: project.revision,
+      ...("sources" in input ? { sources: input.sources } : {}),
+      ...(input.stage === "dialogue" ? {
+        line_id: input.line.id,
+        speaker: input.line.speaker,
+        pack_id: input.voice.packId,
+        voice_id: input.voice.voiceId ?? null,
+        text: input.payload.prompt,
+      } : {}),
+      ...(input.stage === "narration" ? { text: input.payload.prompt } : {}),
+    };
+    await this.link(sql, project, user, nodeName, uid, submitted.id, inputs);
+    return {
+      id: submitted.id,
+      exactCredits:
+        ticketItem.quote.exactAmount ??
+        formatCredits(creditUnits(String(ticketItem.quote.amount))),
+    };
+  }
+
   /**
    * F007 + F010: Partial workflow group / multi-node batch rerun (`POST /api/canvases/:key/batch-runs`).
    * Expands group nodes into children and submits only requested stages (`image`, `video`,
@@ -948,31 +851,21 @@ export class OriginalCanvasRuns {
    * `in_progress` -> `completed` receipt state machine in `canvas_batch_runs`.
    */
   async batchRun(user: OriginalActor, projectKey: string, value: unknown) {
-    type BatchRunResponse = {
-      submitted: {
-        node: string;
-        stage: PrecheckStage;
-        job_id: number;
-        line_id?: string;
-      }[];
-      skipped: { node: string; stage: PrecheckStage; reason: string }[];
-      total_credits: number;
-      exact_total_credits?: string;
-    };
-
-    const body = parseBody(value, canvasBatchRunFields, true) as Run & {
+    const body = parseBody(value, canvasBatchFields(value, canvasBatchRunFields), true) as Run & {
       node_ids: string[];
       stages: PrecheckStage[];
+      director?: DirectorBatchSelection;
       precheck_token?: string;
       expected_total_credits?: number | string;
       executable_keys?: string[];
     };
-    const requestHash = hash(
-      JSON.stringify({
-        node_ids: [...new Set(body.node_ids)].sort(),
-        stages: [...new Set(body.stages)].sort(),
-      }),
-    );
+    const director = body.director && normalizeDirectorSelection(body.director);
+    const selectionHash = canvasBatchRequestHash({ ...body, director });
+    const requestHash = director ? hash(JSON.stringify({
+      selectionHash, expected_revision: String(body.expected_revision), price_revision: String(body.price_revision),
+      precheck_token: body.precheck_token, expected_total_credits: body.expected_total_credits,
+    })) : selectionHash;
+    const unclaimed = (message: string) => director ? directorBatchUnclaimed + message : message;
     const claimId = randomUUID();
     const itemUid = (node: string, stage: PrecheckStage) =>
       uuid5(body.uid, `batch:${projectKey}:${node}:${stage}`);
@@ -1222,13 +1115,13 @@ export class OriginalCanvasRuns {
       }
 
       // 2. NEW submission: enforce expected_revision + mandatory server-bound precheck ticket!
-      const { plan, shotIndexMap } = loadExecutionPlan(p);
-      requireValue(p.revision === body.expected_revision, 409, canvasConflict);
+      const { plan, shotIndexMap } = director ? { plan: [], shotIndexMap: new Map<string, number>() } : loadExecutionPlan(p);
+      requireValue(p.revision === body.expected_revision, 409, unclaimed(canvasConflict));
       requireValue(
         typeof body.precheck_token === "string" &&
           body.precheck_token.trim().length > 0,
         400,
-        "请先执行批量预检并携带有效预检票据后再确认提交",
+        unclaimed("请先执行批量预检并携带有效预检票据后再确认提交"),
       );
 
       let serverAllowedKeys: Set<string> | null = null;
@@ -1237,6 +1130,7 @@ export class OriginalCanvasRuns {
         const ticket = await one(
           sql,
           `SELECT token, revision, price_revision, request_hash, executable_keys, total_credits, budget_blocked
+                    ${director ? ", director_items" : ""}
              FROM canvas_precheck_tickets
             WHERE token=$1 AND owner_id=$2 AND project_id=$3`,
           [body.precheck_token, user.id, p.id],
@@ -1244,18 +1138,25 @@ export class OriginalCanvasRuns {
         requireValue(
           ticket,
           409,
-          "预检票据不存在或已失效，请重新预检后再确认提交",
+          unclaimed("预检票据不存在或已失效，请重新预检后再确认提交"),
         );
         requireValue(
-          String(ticket.request_hash) === requestHash &&
+          String(ticket.request_hash) === selectionHash &&
             Number(ticket.revision) === Number(p.revision),
           409,
-          "画布版本或选中节点/阶段与预检票据不一致，请重新预检",
+          unclaimed("画布版本或选中节点/阶段与预检票据不一致，请重新预检"),
         );
         requireValue(
           !ticket.budget_blocked,
           402,
-          "预检显示已超出预算硬上限，无法提交",
+          unclaimed("预检显示已超出预算硬上限，无法提交"),
+        );
+        if (director) requireValue(
+          ticket.director_items &&
+          Number(ticket.price_revision) === body.price_revision &&
+          (body.expected_total_credits === undefined ||
+            creditUnits(String(ticket.total_credits)) === creditUnits(String(body.expected_total_credits))),
+          409, unclaimed("报价版本或积分与预检票据不一致，请重新预检"),
         );
         serverAllowedKeys = new Set(
           Array.isArray(ticket.executable_keys)
@@ -1279,6 +1180,60 @@ export class OriginalCanvasRuns {
 
     if (init.kind === "completed") {
       return init.replayResponse;
+    }
+
+    const refreshClaim = async (sql: Sql) => ensureClaim(await one(
+      sql,
+      `UPDATE canvas_batch_runs SET updated_at=now()
+       WHERE owner_id=$1 AND project_id=$2 AND uid=$3 AND claim_id=$4 AND status='in_progress' RETURNING uid`,
+      [user.id, init.projectUuid, body.uid, claimId],
+    ));
+    const claim = (keys: Set<string>, initialResponse: Record<string, unknown> = {}) => one(
+      this.p.db,
+      `INSERT INTO canvas_batch_runs(
+         owner_id, project_id, uid, request_hash, status,
+         expected_revision, allowed_keys, response, updated_at, claim_id
+       ) VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], $8::jsonb, now(), $7)
+       ON CONFLICT (owner_id, project_id, uid) DO NOTHING RETURNING uid`,
+      [user.id, init.projectUuid, body.uid, requestHash, Number(body.expected_revision), [...keys].sort(), claimId, JSON.stringify(initialResponse)],
+    );
+
+    if (director) {
+      requireValue(init.hasRunsTable, 503, "批量回执尚未启用");
+      let allowed = init.serverAllowedKeys;
+      if (init.kind !== "new" || !(await claim(allowed ?? new Set()))) {
+        const outcome = await waitOrReclaim(init.projectUuid);
+        if (outcome.mode === "completed") return outcome.response;
+        allowed = outcome.allowedKeys;
+      }
+      const ticket = await one(
+        this.p.db,
+        "SELECT director_items FROM canvas_precheck_tickets WHERE token=$1 AND owner_id=$2 AND project_id=$3",
+        [body.precheck_token, user.id, init.projectUuid],
+      );
+      const checked = (ticket?.director_items ?? {}) as DirectorTicket;
+      const response: BatchRunResponse = { submitted: [], skipped: [], total_credits: 0 };
+      let totalUnits = 0n;
+      for (const target of director.targets) {
+        const { node_id: node, ...stage } = target;
+        const key = directorTargetKey(target);
+        const item = allowed?.has(key) ? checked[key] : undefined;
+        try {
+          const result = await this.p.db.transaction(async (sql) => {
+            await refreshClaim(sql);
+            return this.submitDirectorItem(sql, user, projectKey, body, director, target, item);
+          });
+          response.submitted.push({ node, ...stage, job_id: result.id });
+          totalUnits += creditUnits(result.exactCredits);
+        } catch (error) {
+          if (!(error instanceof DomainError)) throw error;
+          response.skipped.push({ node, ...stage, reason: error.message });
+        }
+      }
+      const exactTotal = formatCredits(totalUnits);
+      response.total_credits = Number(exactTotal);
+      response.exact_total_credits = exactTotal;
+      return complete(this.p.db, init.projectUuid, response);
     }
 
     let plan = init.plan;
@@ -1359,26 +1314,7 @@ export class OriginalCanvasRuns {
 
       // Persist the original executable targets before dispatching any jobs.
       if (!resume && init.hasRunsTable) {
-        const claimed = await one(
-          this.p.db,
-          `INSERT INTO canvas_batch_runs(
-               owner_id, project_id, uid, request_hash, status,
-               expected_revision, allowed_keys, response, updated_at, claim_id
-             )
-             VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], $8::jsonb, now(), $7)
-             ON CONFLICT (owner_id, project_id, uid) DO NOTHING
-             RETURNING uid`,
-          [
-            user.id,
-            init.projectUuid,
-            body.uid,
-            requestHash,
-            Number(body.expected_revision),
-            [...allowedKeys].sort(),
-            claimId,
-            JSON.stringify({ native_quotes: nativeQuotes }),
-          ],
-        );
+        const claimed = await claim(allowedKeys, { native_quotes: nativeQuotes });
         resume = !claimed;
       }
     }
@@ -1445,17 +1381,7 @@ export class OriginalCanvasRuns {
         }
 
         if (init.hasRunsTable) {
-          ensureClaim(
-            await one(
-              this.p.db,
-              `UPDATE canvas_batch_runs
-                SET updated_at = now()
-              WHERE owner_id=$1 AND project_id=$2 AND uid=$3
-                AND claim_id=$4 AND status='in_progress'
-              RETURNING uid`,
-              [user.id, init.projectUuid, body.uid, claimId],
-            ),
-          );
+          await refreshClaim(this.p.db);
         }
 
         const uid = itemUid(node.id, stage);

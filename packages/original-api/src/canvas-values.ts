@@ -1,5 +1,5 @@
 export { tailParentNode } from "@fumiao/plugin-sdk/canvas-ports.js";
-import type { CanvasDocument } from "./canvas-draft.js";
+import type { CanvasDocument, CanvasNode } from "./canvas-draft.js";
 import { pythonJsonText } from "@fumiao/plugin-sdk/json.js";
 
 /** Keep Python integers exact through request errors and stored run snapshots. */
@@ -66,6 +66,15 @@ export function canvasVoiceIds(
   }
   // Difference builds a new small set by iterating the initial set.
   return tableOrder(tableOrder(values));
+}
+
+export function canvasDialogueTakes(node: CanvasNode) {
+  if (node.type !== "video") return [];
+  return (node.dialogue_lines ?? []).flatMap((line) =>
+    canvasVoiceIds(line.audio_job ?? null, line.audio_pending ?? null)
+      .filter((id) => !line.audio_stale?.includes(id))
+      .map((id) => ({ node: `dialogue:${node.id}:${line.id}`, id })),
+  );
 }
 
 /** Script import stores document linkage alongside the user-selected model parameters. */

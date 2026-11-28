@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { canvasConflict } from "@fumiao/web-compat/director.js";
 import { api, ApiError } from "./api";
 import { draftEquals } from "./performance";
 import type { Draft, Project } from "./types";
 const clone = <T>(v: T): T => structuredClone(v);
+type ScriptSaveGuard = { script_id: string; script_revision: number };
+const guardMatchesDraft = (guard: ScriptSaveGuard | undefined, draft: Draft) => Boolean(guard &&
+  guard.script_id === draft.document.director?.script_id && guard.script_revision === draft.document.director.script_revision,
+);
 export function useDocument(project: Project, userId: number) {
   const [editorId] = useState(() => {
     let id = sessionStorage.getItem("fm-canvas-editor");
@@ -15,15 +20,17 @@ export function useDocument(project: Project, userId: number) {
     revision: number;
     conflict: boolean;
     dirty: boolean;
+    scriptGuard?: ScriptSaveGuard;
   } | null>(null);
   if (!initial.current) {
     let draft: Draft = { title: project.title, document: project.document },
       revision = project.revision,
       conflict = false,
       dirty = false;
+    let scriptGuard: ScriptSaveGuard | undefined;
     try {
       const saved = JSON.parse(localStorage.getItem(key) || "null") as
-        | { draft: Draft; revision: number }
+        | { draft: Draft; revision: number; scriptGuard?: ScriptSaveGuard }
         | null;
       if (
         saved?.draft &&
@@ -34,13 +41,15 @@ export function useDocument(project: Project, userId: number) {
         revision = saved.revision;
         dirty = true;
         conflict = revision !== project.revision;
+        scriptGuard = saved.scriptGuard;
       }
     } catch {}
-    initial.current = { draft, revision, conflict, dirty };
+    initial.current = { draft, revision, conflict, dirty, scriptGuard };
   }
   const [value, setValue] = useState(initial.current.draft),
     ref = useRef(value);
   const revision = useRef(initial.current.revision),
+    scriptGuard = useRef(initial.current.scriptGuard),
     serial = useRef(initial.current.dirty ? 1 : 0),
     ack = useRef(0);
   const hasUnsavedChanges = useCallback(() => serial.current !== ack.current, []);
@@ -72,7 +81,7 @@ export function useDocument(project: Project, userId: number) {
       } else {
         localStorage.setItem(
           key,
-          JSON.stringify({ revision: revision.current, draft: ref.current }),
+          JSON.stringify({ revision: revision.current, draft: ref.current, scriptGuard: scriptGuard.current }),
         );
       }
       return true;
@@ -141,7 +150,13 @@ export function useDocument(project: Project, userId: number) {
     },
     [apply, end],
   );
-  const flush = useCallback(async (): Promise<number> => {
+  const flush = useCallback(async (expectedScriptRevision?: number): Promise<number> => {
+    if (expectedScriptRevision !== undefined && serial.current !== ack.current) {
+      const director = ref.current.document.director;
+      if (!director || director.script_revision !== expectedScriptRevision) throw new Error("本集剧本版本与同步预览不一致");
+      scriptGuard.current = { script_id: director.script_id, script_revision: expectedScriptRevision };
+      remember();
+    }
     if (blocked.current) throw new Error("请先处理保存冲突");
     if (busy.current) {
       await busy.current;
@@ -149,17 +164,23 @@ export function useDocument(project: Project, userId: number) {
     }
     if (serial.current === ack.current) return revision.current;
     const snapshot = clone(ref.current),
-      seq = serial.current;
+      seq = serial.current,
+      guard = scriptGuard.current;
     setStatus("saving");
     setError("");
     const work = api<Draft & { revision: number }>(
       `/api/canvases/${project.id}/document`,
-      { ...snapshot, expected_revision: revision.current },
+      {
+        ...snapshot,
+        expected_revision: revision.current,
+        ...(guard && guardMatchesDraft(guard, snapshot) ? { expected_script_revision: guard.script_revision } : {}),
+      },
       "PUT",
     )
       .then((result) => {
         revision.current = result.revision;
         ack.current = seq;
+        if (scriptGuard.current === guard) scriptGuard.current = undefined;
         if (alive.current) {
           if (serial.current === seq) {
             const serverDraft = {
@@ -177,7 +198,8 @@ export function useDocument(project: Project, userId: number) {
         return revision.current;
       })
       .catch((e) => {
-        const conflict = e instanceof ApiError && e.status === 409;
+        const conflict =
+          e instanceof ApiError && e.status === 409 && e.message === canvasConflict;
         const saveError = conflict
           ? new ApiError("画布已被其他成员修改，请先处理保存冲突。", e.status)
           : e;

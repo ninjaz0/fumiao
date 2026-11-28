@@ -5,6 +5,7 @@ import {
   type CanvasExtension,
 } from "@fumiao/plugin-sdk/canvas-nodes.js";
 import { requireValue } from "@fumiao/platform/security.js";
+import type { DirectorProduction } from "@fumiao/web-compat/director.js";
 import { parseBody, type Field, type Fields } from "./validation.js";
 const integer = (defaultValue?: unknown): Field => ({
   kind: "integer",
@@ -47,6 +48,12 @@ const identifier: Field = {
   pattern: "^[a-zA-Z0-9_-]{1,80}$",
   strictPattern: true,
 };
+const directorDigest: Field = {
+  kind: "string",
+  pattern: "^[a-f0-9]{64}$",
+  strictPattern: true,
+  optional: true,
+};
 const positive: Field = { ...integer(null), nullable: true, gt: 0 };
 const h3Fields: Fields = {
   mode: literal(["reference", "frames"]),
@@ -78,6 +85,7 @@ export const dialogueLineFields: Fields = {
   instruction: { ...text(300), optional: true },
   audio_job: { ...positive, optional: true },
   audio_pending: { ...positive, optional: true },
+  audio_stale: { ...list({ ...integer(), min: 1 }, 2), optional: true },
 };
 export const canvasBgmFields: Fields = {
   asset_id: { ...media, nullable: true, default: null },
@@ -158,6 +166,33 @@ export const canvasDocumentFields: Fields = {
     1200,
   ),
   shots: { ...list({ kind: "string" }, 200), nullable: true, default: null },
+  director: {
+    kind: "object",
+    optional: true,
+    extra: true,
+    fields: {
+      script_id: media,
+      script_revision: { ...integer(), min: 1, max: 2 ** 31 - 1 },
+      shot_ids: { kind: "list", item: identifier, max: 200 },
+      order_basis: directorDigest,
+      shots: {
+        kind: "list",
+        max: 200,
+        optional: true,
+        item: {
+          kind: "object",
+          extra: true,
+          fields: {
+            node_id: identifier,
+            source: { kind: "dictionary", item: directorDigest, optional: true },
+            story_basis: directorDigest,
+            material_basis: directorDigest,
+            adoption_basis: directorDigest,
+          },
+        },
+      },
+    },
+  },
   bgm: { ...object(canvasBgmFields), nullable: true, optional: true },
   bgm_applied_job: { ...integer(), nullable: true, gt: 0, optional: true },
   loudnorm: { kind: "boolean", strict: false, optional: true },
@@ -172,6 +207,7 @@ export const canvasNewFields: Fields = {
 };
 export const canvasSaveFields: Fields = {
   expected_revision: { ...integer(), min: 1 },
+  expected_script_revision: { ...integer(), min: 1, exactInteger: true, optional: true },
   title: { ...text(80), min: 1 },
   document: object(canvasDocumentFields),
 };
@@ -190,6 +226,9 @@ export const canvasPluginRunFields: Fields = {
 };
 export const storyboardExportFields: Fields = {
   exporter: text(120, "storyboard/mp4"),
+  scope: literal(["canvas", "episode"], "canvas"),
+  script_revision: { ...integer(), min: 1, exactInteger: true, optional: true },
+  use_confirmed_script: { kind: "boolean", strict: true, optional: true },
   uid: { kind: "uuid" },
   bgm_asset: { ...media, nullable: true, optional: true },
   bgm_volume: { kind: "float", min: 0.02, max: 1, optional: true },
@@ -237,6 +276,27 @@ export const canvasCandidatesFields: Fields = {
   count: literal([1, 2], 1),
 };
 const batchStageField = literal(["image", "video", "narration", "dialogue"]);
+const directorBatchFields: Fields = {
+  director: {
+    kind: "object",
+    optional: true,
+    extra: true,
+    fields: {
+      script_revision: { kind: "integer", min: 1, max: 2 ** 31 - 1 },
+      use_confirmed_script: { kind: "boolean", strict: true, optional: true },
+      targets: {
+        kind: "list",
+        item: object({
+          node_id: identifier,
+          stage: batchStageField,
+          line_id: { ...identifier, optional: true },
+        }),
+        min: 1,
+        max: 480,
+      },
+    },
+  },
+};
 export const canvasBatchPrecheckFields: Fields = {
   expected_revision: { ...integer(null), nullable: true, min: 1 },
   node_ids: { ...list(identifier, 120), min: 1 },
@@ -244,14 +304,11 @@ export const canvasBatchPrecheckFields: Fields = {
     ...list(batchStageField, 4),
     default: ["image", "video"],
   },
+  ...directorBatchFields,
 };
 export const canvasBatchRunFields: Fields = {
+  ...canvasBatchPrecheckFields,
   ...canvasRunFields,
-  node_ids: { ...list(identifier, 120), min: 1 },
-  stages: {
-    ...list(batchStageField, 4),
-    default: ["image", "video"],
-  },
   precheck_token: { kind: "string", max: 128, optional: true },
   expected_total_credits: { kind: "credits", min: 0, max: 100_000_000, optional: true },
   executable_keys: {
@@ -261,6 +318,13 @@ export const canvasBatchRunFields: Fields = {
     optional: true,
   },
 };
+export function canvasBatchFields(value: unknown, fields: Fields): Fields {
+  if (value && typeof value === "object" && Object.hasOwn(value, "director")) {
+    const { node_ids: _nodes, stages: _stages, ...director } = fields;
+    return director;
+  }
+  return fields;
+}
 export const canvasGridCropFields: Fields = {
   rows: literal([2, 3], 3),
   cols: literal([2, 3], 3),
@@ -316,6 +380,7 @@ export type DialogueLine = {
   instruction?: string;
   audio_job?: number | null;
   audio_pending?: number | null;
+  audio_stale?: number[];
 };
 export type CanvasBgm = {
   asset_id: string | null;
@@ -379,6 +444,7 @@ export type CanvasDocument = {
     targetPort?: string;
   }[];
   shots?: string[];
+  director?: DirectorProduction;
   bgm?: CanvasBgm | null;
   bgm_applied_job?: number | null;
   loudnorm?: boolean;
@@ -419,6 +485,7 @@ export function parseCanvasSave(value: unknown) {
   const body = parseBody(value, canvasSaveFields, true);
   return {
     expected_revision: body.expected_revision as number,
+    expected_script_revision: body.expected_script_revision as number | undefined,
     title: body.title as string,
     document: canvasDocumentValue(body.document),
   };

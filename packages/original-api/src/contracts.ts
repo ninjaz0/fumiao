@@ -253,6 +253,7 @@ export const canvasContracts: Contract[] = [
     literalQuery: { format: { choices: ["srt", "vtt"], default: "srt" } },
   },
   { method: "GET", path: /^\/api\/canvases\/[^/]+\/runs$/ },
+  { method: "GET", path: /^\/api\/canvases\/[^/]+\/nodes\/[^/]+\/director-inputs$/ },
   {
     method: "POST",
     path: /^\/api\/canvases\/[^/]+\/bgm$/,

@@ -9,6 +9,12 @@ import { ReferencePacks } from "@fumiao/platform/packs.js";
 import { createTailFrameAsset } from "@fumiao/platform/tail-frame.js";
 import { cropGridCell } from "@fumiao/platform/grid-crop.js";
 import { pythonStrip } from "@fumiao/plugin-sdk/python-values.js";
+import {
+  canvasConflict,
+  directorScriptConflict,
+  type DirectorProduction,
+} from "@fumiao/web-compat/director.js";
+export { canvasConflict };
 import { OriginalIdentity } from "./identity.js";
 import { archiveEntry, nativeOutputIndex, OriginalLibrary } from "./library.js";
 import { parseBody } from "./validation.js";
@@ -27,14 +33,13 @@ import {
   canvasDocumentBytes,
   canvasDocumentJson,
   canvasVoiceIds,
+  canvasDialogueTakes,
 } from "./canvas-values.js";
 import {
   validateCanvasDocument,
   type CanvasValidationResources,
 } from "./canvas-validation.js";
 import { canvasTemplates } from "./canvas-templates.js";
-export const canvasConflict =
-  "画布已被其他成员修改。你的修改已保留，请重新载入或下载本地副本。";
 const selectProject = `SELECT d.*,c.title AS original_title,c.document,c.created,c.updated,c.last_editor,c.archived_at,c.archive_change_id,
   w.public_id AS workspace_number,u.public_id AS owner_number,e.public_id AS editor_number
   FROM documents d JOIN workspaces w ON w.id=d.workspace_id JOIN users u ON u.id=d.owner_id
@@ -43,6 +48,29 @@ const selectNodeJob = `SELECT j.state,a.public_id AS result FROM canvas_job_link
   JOIN jobs j ON j.id=l.job_id AND j.deleted_at IS NULL
   LEFT JOIN LATERAL (SELECT a.public_id FROM job_assets r JOIN assets a ON a.id=r.asset_id
     WHERE r.job_id=j.id AND r.role='output' ORDER BY ${nativeOutputIndex},a.created_at,a.public_id LIMIT 1) a ON true`;
+export async function canvasNodeMedia(
+  sql: Sql,
+  project: string,
+  node: CanvasNode,
+  adoptedOnly = false,
+  fixedInput = false,
+  lock = fixedInput,
+): Promise<string | null> {
+  if (node.use_media) return node.media_id;
+  if (adoptedOnly && !node.active_job) return null;
+  const row = await one(
+    sql,
+    `${selectNodeJob}
+    WHERE l.project_id=$1 AND l.node=$2 ${node.active_job ? "AND j.public_id=$3" : "ORDER BY l.id DESC LIMIT 1"}
+    ${adoptedOnly ? "AND j.kind='video' AND j.workspace_id=(SELECT workspace_id FROM documents WHERE id=$1) FOR SHARE OF j" : ""}
+    ${fixedInput && node.active_job ? `AND j.state='completed'
+      AND j.workspace_id=(SELECT workspace_id FROM documents WHERE id=$1)
+      ${lock ? "FOR SHARE OF j" : ""}` : ""}`,
+    [project, node.id, ...(node.active_job ? [node.active_job] : [])],
+  );
+  if (!row) return adoptedOnly || (fixedInput && node.active_job) ? null : node.media_id;
+  return row.state === "completed" && row.result ? row.result : null;
+}
 type ShotVideo = {
   id: string;
   public_id: string;
@@ -209,7 +237,7 @@ export class OriginalCanvases {
     await this.limit(sql, workspace);
     const document = parseCanvasDocument(raw);
     const row = await this.insert(sql, user, workspace, title, document);
-    await this.references(sql, user, row, document);
+    await this.references(sql, user, row, document, null);
     await this.nodes(sql, row.id, document);
     return { id: String(row.public_id), title };
   }
@@ -271,24 +299,7 @@ export class OriginalCanvases {
       return this.publicProject(row, user);
     });
   }
-  async mediaForNode(
-    sql: Sql,
-    project: string,
-    node: CanvasNode,
-  ): Promise<string | null> {
-    if (node.use_media) return node.media_id;
-    const row = await one(
-      sql,
-      `${selectNodeJob}
-      WHERE l.project_id=$1 AND l.node=$2 ${node.active_job ? "AND j.public_id=$3" : "ORDER BY l.id DESC LIMIT 1"}`,
-      [project, node.id, ...(node.active_job ? [node.active_job] : [])],
-    );
-    return row
-      ? row.state === "completed" && row.result
-        ? row.result
-        : null
-      : node.media_id;
-  }
+  mediaForNode = canvasNodeMedia;
   private async listCoverJobs(
     sql: Sql,
     pending: { project: string; node: CanvasNode }[],
@@ -322,10 +333,17 @@ export class OriginalCanvases {
       );
     return media;
   }
-  async videoForShot(sql: Sql, project: string, node: CanvasNode) {
-    const key = await this.mediaForNode(sql, project, node);
+  async videoForShot(
+    sql: Sql,
+    project: string,
+    node: CanvasNode,
+    adoptedOnly = false,
+    assetLock: "wait" | "nowait" = "wait",
+  ) {
+    const key = await this.mediaForNode(sql, project, node, adoptedOnly);
     const { rows } = await sql.query<ShotVideo>(
-      "SELECT id,public_id,workspace_id,mime,size FROM assets WHERE public_id=$1 AND original_kind='video' AND state='ready' FOR SHARE",
+      `SELECT id,public_id,workspace_id,mime,size FROM assets
+       WHERE public_id=$1 AND original_kind='video' AND state='ready' FOR SHARE${assetLock === "nowait" ? " NOWAIT" : ""}`,
       [key],
     );
     return rows[0];
@@ -482,7 +500,7 @@ export class OriginalCanvases {
       };
     });
   }
-  private async lockResources(sql: Sql, document: CanvasDocument) {
+  private async lockResources(sql: Sql, row: { id: string; workspace_id: string }, document: CanvasDocument) {
     const jobs = [
       ...new Set(
         document.nodes
@@ -492,11 +510,16 @@ export class OriginalCanvases {
     ];
     // Lock job rows before assets, as settlement and deletion do. Canonical order
     // avoids deadlocks between canvases referencing the same resource set.
-    if (jobs.length)
-      await sql.query(
-        "SELECT id FROM jobs WHERE public_id=ANY($1::bigint[]) ORDER BY id FOR SHARE",
-        [jobs],
-      );
+    const takes = document.nodes.flatMap(canvasDialogueTakes);
+    const locked = jobs.length || takes.length ? (await sql.query<{ id: string }>(
+      `SELECT j.id FROM jobs j WHERE j.public_id=ANY($1::bigint[]) OR
+       (j.public_id=ANY($4::bigint[]) AND j.workspace_id=$2 AND j.kind='audio' AND j.deleted_at IS NULL AND EXISTS (
+         SELECT 1 FROM unnest($3::text[], $4::bigint[]) AS t(node,job)
+         JOIN canvas_job_links l ON l.node=t.node AND l.project_id=$5
+         WHERE t.job=j.public_id AND l.job_id=j.id))
+       ORDER BY j.id FOR SHARE OF j`,
+      [jobs, row.workspace_id, takes.map((take) => take.node), takes.map((take) => take.id), row.id],
+    )).rows.map(({ id }) => id) : [];
     const keys = [
       ...new Set(
         document.nodes
@@ -515,8 +538,8 @@ export class OriginalCanvases {
       ),
     ];
     await sql.query(
-      `SELECT id FROM assets WHERE public_id=ANY($1::text[]) OR id IN (SELECT r.asset_id FROM job_assets r JOIN jobs j ON j.id=r.job_id WHERE j.public_id=ANY($2::bigint[]) AND r.role='output') ORDER BY id FOR SHARE`,
-      [keys, jobs],
+      `SELECT id FROM assets WHERE public_id=ANY($1::text[]) OR id IN (SELECT r.asset_id FROM job_assets r WHERE r.job_id=ANY($2::uuid[]) AND r.role='output') ORDER BY id FOR SHARE`,
+      [keys, locked],
     );
     const packs = [
       ...new Set(document.nodes.flatMap((n) => n.asset_packs.map((p) => p.id))),
@@ -560,14 +583,17 @@ export class OriginalCanvases {
         const voice = await one(
           sql,
           `SELECT j.* FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
-        WHERE l.project_id=$1 AND l.node=$2 AND j.public_id=$3 AND j.kind='audio' AND j.deleted_at IS NULL`,
-          [row.id, node, key],
+        WHERE l.project_id=$1 AND l.node=$2 AND j.public_id=$3 AND j.kind='audio' AND j.deleted_at IS NULL AND j.workspace_id=$4`,
+          [row.id, node, key, row.workspace_id],
         );
         if (!voice) return undefined;
         const result = await this.library.result(sql, voice);
         return {
           result: result?.public_id ?? null,
-          authorize: () => authorize(voice),
+          authorize: async () => {
+            await authorize(voice);
+            if (result) await authorize(result);
+          },
         };
       },
       active: async (node, key, kind) =>
@@ -580,19 +606,65 @@ export class OriginalCanvases {
         )),
     };
   }
-  async references(sql: Sql, user: Actor, row: any, document: CanvasDocument) {
+  directorScript(sql: Sql, workspaceId: string, key: string, lock = true) {
+    return one(
+      sql,
+      `SELECT workspace_id, revision FROM workspace_script_documents
+       WHERE public_id=$1 AND workspace_id=$2 AND entry_type='file' AND NOT deleted ${lock ? "FOR SHARE" : ""}`,
+      [key, workspaceId],
+    );
+  }
+  async references(
+    sql: Sql,
+    user: Actor,
+    row: any,
+    document: CanvasDocument,
+    previousDirector: DirectorProduction | null = canvasDocumentJson(row.document).director ?? null,
+    expectedScriptRevision?: number,
+  ) {
     await validateCanvasDefinitions(
       sql,
       document.nodes.flatMap((n) =>
         n.extension ? [n.extension.definition] : [],
       ),
     );
-    await this.lockResources(sql, document);
+    await this.lockResources(sql, row, document);
     const refs = await validateCanvasDocument(
       document,
       await CanvasModels.read(sql, { allowIncomplete: true }),
       this.resources(sql, user, row),
+      previousDirector ?? undefined,
     );
+    const director = document.director;
+    if (expectedScriptRevision !== undefined) {
+      requireValue(director?.script_revision === expectedScriptRevision, 400, "本集剧本版本与同步预览不一致");
+    }
+    if (
+      director &&
+      (expectedScriptRevision !== undefined || director.script_id !== previousDirector?.script_id ||
+        director.script_revision !== previousDirector.script_revision)
+    ) {
+      const script = await this.directorScript(
+        sql,
+        row.workspace_id,
+        director.script_id,
+      );
+      requireValue(script, 404, "主剧本文档不存在或无权访问");
+      await this.library.access(
+        sql,
+        user,
+        { kind: "asset", row: script },
+        row.workspace_id,
+      );
+      if (expectedScriptRevision !== undefined) {
+        requireValue(director.script_revision === script.revision, 409, directorScriptConflict);
+      }
+      requireValue(
+        director.script_revision <= script.revision,
+        409,
+        "主剧本文档版本不存在",
+      );
+    }
     await sql.query("DELETE FROM canvas_media_refs WHERE project_id=$1", [
       row.id,
     ]);
@@ -629,7 +701,7 @@ export class OriginalCanvases {
         409,
         canvasConflict,
       );
-      return this.saveLocked(sql, user, row, title, body.document);
+      return this.saveLocked(sql, user, row, title, body.document, body.expected_script_revision);
     });
   }
   async saveLocked(
@@ -638,8 +710,9 @@ export class OriginalCanvases {
     row: Record<string, any>,
     title: string,
     document: CanvasDocument,
+    expectedScriptRevision?: number,
   ) {
-    await this.references(sql, user, row, document);
+    await this.references(sql, user, row, document, undefined, expectedScriptRevision);
     const stamp = Math.floor(this.clock());
     await sql.query(
       "UPDATE canvas_documents SET title=$2,document=$3,updated=$4,last_editor=$5 WHERE project_id=$1",
@@ -674,11 +747,34 @@ export class OriginalCanvases {
       const document = parseCanvasDocument(
         canvasDocumentJson(original.document),
       );
+      const director = document.director;
+      const episodeMembers = new Set(director?.shot_ids);
+      if (director) {
+        const script = await this.directorScript(
+          sql,
+          original.workspace_id,
+          director.script_id,
+        );
+        if (!script || director.script_revision > script.revision) {
+          delete document.director;
+        } else {
+          delete director.order_basis;
+          if (director.shots) {
+            director.shots = director.shots.map(({ node_id, source }) => ({
+              node_id,
+              ...(source ? { source } : {}),
+            }));
+          }
+        }
+      }
       for (const node of document.nodes)
         if (node.type === "image" || node.type === "video") {
-          node.media_id = await this.mediaForNode(sql, original.id, node);
+          const inEpisode = episodeMembers.has(node.id);
+          node.media_id = inEpisode
+            ? ((await this.videoForShot(sql, original.id, node, true))?.public_id ?? null)
+            : await this.mediaForNode(sql, original.id, node);
           node.active_job = null;
-          node.use_media = true;
+          node.use_media = !inEpisode || Boolean(node.media_id);
         }
       const row = await this.insert(
         sql,
@@ -689,22 +785,23 @@ export class OriginalCanvases {
         document,
       );
       for (const node of document.nodes)
-        for (const id of canvasVoiceIds(
-          node.narration_job,
-          node.narration_pending,
-        )) {
+        for (const take of [
+          ...canvasVoiceIds(node.narration_job, node.narration_pending).map((id) => ({ node: "voice:" + node.id, id })),
+          ...canvasDialogueTakes(node),
+        ]) {
           const link = await one(
             sql,
             `SELECT l.* FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
-          WHERE l.project_id=$1 AND l.node=$2 AND j.public_id=$3 AND j.deleted_at IS NULL ORDER BY l.id LIMIT 1`,
-            [original.id, "voice:" + node.id, id],
+             WHERE l.project_id=$1 AND l.node=$2 AND j.public_id=$3 AND j.deleted_at IS NULL
+               AND j.workspace_id=$4 AND j.kind='audio' ORDER BY l.id LIMIT 1`,
+            [original.id, take.node, take.id, original.workspace_id],
           );
           if (link)
             await sql.query(
               "INSERT INTO canvas_job_links(project_id,node,job_id,owner_id,uid,inputs,created) VALUES($1,$2,$3,$4,$5,$6,$7)",
               [
                 row.id,
-                "voice:" + node.id,
+                take.node,
                 link.job_id,
                 user.id,
                 randomUUID(),
@@ -713,7 +810,7 @@ export class OriginalCanvases {
               ],
             );
         }
-      await this.references(sql, user, row, document);
+      await this.references(sql, user, row, document, null);
       await this.nodes(sql, row.id, document);
       return this.publicProject(row, user);
     });

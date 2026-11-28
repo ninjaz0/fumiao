@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Film, Music, Package, Sparkles } from "lucide-react";
 import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename";
+import { directorExportAssetBusy, directorLocalScriptDraft, directorScriptConflict } from "@fumiao/web-compat/director.js";
 import { api, ApiError } from "./api";
 import type { CanvasBgm } from "./types";
 
@@ -21,7 +22,25 @@ type Result = {
   output_kind?: "composition" | "project";
   output_mime?: string;
   output_filename?: string | null;
+  scope?: "canvas" | "episode";
 };
+
+type EpisodeSubmission = {
+  uid: string;
+  scope: "episode";
+  expected_revision: number;
+  script_revision: number;
+  use_confirmed_script: boolean;
+};
+
+function readEpisodeSubmission(key: string): EpisodeSubmission | null {
+  try {
+    const stored = JSON.parse(localStorage.getItem(key) ?? "null");
+    return stored?.scope === "episode" && typeof stored.uid === "string" ? stored : null;
+  } catch {
+    return null;
+  }
+}
 
 function exportDownloadLabel(r: Partial<Result>): string {
   if (r.output_kind !== "project") return "MP4";
@@ -79,6 +98,9 @@ export function CompositionDownloadLink({
 
 export function Composition({
   project,
+  scope = "canvas",
+  episode,
+  active = true,
   getRevision,
   ready,
   waitingReason,
@@ -92,6 +114,9 @@ export function Composition({
   onMixChange,
 }: {
   project: string;
+  scope?: "canvas" | "episode";
+  episode?: { account: string; scriptRevision: number; hasLocalScriptEdits: () => boolean; readScriptRevision: () => Promise<number> };
+  active?: boolean;
   getRevision: () => Promise<number>;
   ready: boolean;
   waitingReason: string;
@@ -122,29 +147,43 @@ export function Composition({
   const [exporters, setExporters] = useState<Exporter[] | undefined>(),
     [selected, select] = useState("");
   const reload = useRef<(() => Promise<void>) | null>(null);
+  const submitting = useRef(false);
+  const [recoverEpisode, setRecoverEpisode] = useState(false);
+  const [staleScript, setStaleScript] = useState<number>();
+  const episodeKey = `fm-compose-episode:${episode?.account}:${project}`;
+  useEffect(() => {
+    if (scope !== "episode" || !active) return;
+    const inspect = () => setRecoverEpisode(Boolean(readEpisodeSubmission(episodeKey)));
+    inspect();
+    window.addEventListener("storage", inspect);
+    return () => window.removeEventListener("storage", inspect);
+  }, [scope, active, episodeKey]);
   const chosen =
     exporters?.find((x) => x.key === selected) ??
     exporters?.find((x) => x.key === "storyboard/mp4") ??
     exporters?.[0];
   const isProjectExporter = chosen?.output_kind === "project";
+  const showConfirmedScript = Boolean(episode && staleScript === episode.scriptRevision);
+  const path = `/api/canvases/${project}/exports`;
   useEffect(() => {
-    let active = true,
+    if (!active) return;
+    let alive = true,
       requested = 0,
       applied = 0;
     const load = async () => {
-      if (!active) return;
+      if (!alive) return;
       const request = ++requested;
       try {
         const data = await api<{ exports: Result[]; exporters?: Exporter[] }>(
-          `/api/canvases/${project}/exports`,
+          `${path}?scope=${scope}`,
         );
-        if (!active || request < applied) return;
+        if (!alive || request < applied) return;
         applied = request;
-        setResults(data.exports);
+        setResults(data.exports.filter((result) => (result.scope ?? "canvas") === scope));
         setExporters(data.exporters);
         setPollError("");
       } catch (e) {
-        if (!active || request < applied) return;
+        if (!alive || request < applied) return;
         applied = request;
         setPollError((e as Error).message);
       }
@@ -153,13 +192,63 @@ export function Composition({
     void load();
     const timer = setInterval(() => void load(), 5000);
     return () => {
-      active = false;
+      alive = false;
       reload.current = null;
       clearInterval(timer);
     };
-  }, [project]);
+  }, [path, scope, active]);
   const pending = results.some((r) => ["queued", "running"].includes(r.state));
-  const submit = async () => {
+  const submitEpisode = async (useConfirmedScript: boolean, recover: boolean) => {
+    if (!episode || submitting.current) return;
+    submitting.current = true;
+    setBusy(true);
+    setError("");
+    const send = async () => {
+      let body = readEpisodeSubmission(episodeKey);
+      if (!body) {
+        if (recover) return;
+        const expected_revision = await getRevision();
+        const script_revision = episode.scriptRevision;
+        const current = await episode.readScriptRevision();
+        const localEdits = episode.hasLocalScriptEdits();
+        if ((current > script_revision || localEdits) && !useConfirmedScript) {
+          setStaleScript(script_revision);
+          throw new Error(localEdits ? directorLocalScriptDraft : directorScriptConflict);
+        }
+        body = { uid: crypto.randomUUID(), scope: "episode", expected_revision, script_revision, use_confirmed_script: useConfirmedScript };
+        localStorage.setItem(episodeKey, JSON.stringify(body));
+        setRecoverEpisode(true);
+      }
+      const clear = () => {
+        if (readEpisodeSubmission(episodeKey)?.uid === body.uid) localStorage.removeItem(episodeKey);
+        setRecoverEpisode(Boolean(readEpisodeSubmission(episodeKey)));
+      };
+      try {
+        const receipt = await api<Result>(path, body);
+        if (!receipt.id || receipt.scope !== "episode") throw new Error("未收到完整合成回执，请恢复本集合成提交。");
+        clear();
+        setStaleScript(undefined);
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status < 500 && cause.status !== 408 &&
+          !(cause.status === 409 && cause.message === directorExportAssetBusy)) {
+          clear();
+          if (cause.message === directorScriptConflict) setStaleScript(body.script_revision);
+        }
+        throw cause;
+      }
+    };
+    try {
+      if (navigator.locks) await navigator.locks.request(episodeKey, send);
+      else await send();
+      await reload.current?.();
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  };
+  const submitCanvas = async () => {
     const refresh = reload.current;
     setBusy(true);
     setError("");
@@ -188,7 +277,7 @@ export function Composition({
         localStorage.setItem(key, JSON.stringify(body));
       }
       try {
-        await api(`/api/canvases/${project}/exports`, body);
+        await api(path, body);
         localStorage.removeItem(key);
       } catch (e) {
         if (e instanceof ApiError && e.status < 500)
@@ -202,8 +291,9 @@ export function Composition({
       setBusy(false);
     }
   };
+  const episodeTitle = scope === "episode";
   return (
-    <section className="shot-composition" aria-label="成片预览与导出">
+    <section className="shot-composition" aria-label={episodeTitle ? "本集成片预览与导出" : "全画布成片预览与导出"}>
       {exporters && exporters.length > 1 && (
         <label className="composition-exporter-select">
           导出格式{" "}
@@ -347,26 +437,25 @@ export function Composition({
         </div>
       )}
       <div className="composition-heading">
-        <h3>成片</h3>
+        <h3>{episodeTitle ? "本集成片" : "全画布成片"}</h3>
         <button
+          type="button"
           className="primary"
-          disabled={busy || pending || !ready || exporters?.length === 0}
-          onClick={() => void submit()}
+          disabled={busy || (!recoverEpisode && (pending || !ready || exporters?.length === 0))}
+          onClick={() => episodeTitle ? void submitEpisode(showConfirmedScript, recoverEpisode) : void submitCanvas()}
         >
           {isProjectExporter ? <Package size={16} /> : <Film size={16} />}
-          {pending
+          {busy ? "提交中…" : recoverEpisode ? "恢复本集合成提交" : pending
             ? isProjectExporter
               ? "打包中…"
               : "合成中…"
-            : busy
-              ? "提交中…"
-              : isProjectExporter
+            : isProjectExporter
                 ? "打包导出"
-                : "合成预览"}
+                : episodeTitle ? (showConfirmedScript ? `合成已确认剧本版本 ${episode?.scriptRevision}` : "合成本集") : "合成预览"}
         </button>
       </div>
       <p>
-        {isProjectExporter
+        {episodeTitle ? "按本集片单使用已采用视频合成 MP4，最多 30 镜、5 分钟。" : isProjectExporter
           ? "按精准素材时长打包 NLE 工程文件与相对路径媒体，解压后可直接拖入剪映专业版、Final Cut Pro 或达芬奇继续精剪。"
           : "旁白替换对应镜头的原音轨，较长的旁白会延长尾帧停留。字幕按句分配时间，可下载调整。"}
       </p>

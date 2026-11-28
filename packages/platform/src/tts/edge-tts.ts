@@ -108,15 +108,18 @@ export class EdgeTtsError extends Error {
   }
 }
 
-export function buildEdgeSsml(req: EdgeTtsRequest): string {
-  const text = req.text.trim();
-  requireValue(text.length > 0 && text.length <= 2000, 400, "合成文本需为 1–2000 字");
+export function edgeRenderingSettings(req: Pick<EdgeTtsRequest, "voice" | "rate" | "pitch">) {
   const voice =
     req.voice && /^[A-Za-z]{2,3}-[A-Za-z]{2,4}(?:-[A-Za-z]+)*Neural$/.test(req.voice)
       ? req.voice
       : "zh-CN-XiaoxiaoNeural";
-  const rate = sanitizeRate(req.rate);
-  const pitch = sanitizePitch(req.pitch);
+  return { voice, rate: sanitizeRate(req.rate), pitch: sanitizePitch(req.pitch) };
+}
+
+export function buildEdgeSsml(req: EdgeTtsRequest): string {
+  const text = req.text.trim();
+  requireValue(text.length > 0 && text.length <= 2000, 400, "合成文本需为 1–2000 字");
+  const { voice, rate, pitch } = edgeRenderingSettings(req);
   const volume = sanitizeVolume(req.volume);
   return (
     `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>` +

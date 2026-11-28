@@ -17,6 +17,7 @@ import {
   Patch,
   Put,
   Post,
+  Query,
   Req,
   RequestMethod,
   Res,
@@ -230,8 +231,8 @@ class OriginalApi {
     return this.canvasRuns.list(req.actor, key);
   }
   @Get("api/canvases/:key/exports")
-  listStoryboardExports(@Req() req: AuthRequest, @Param("key") key: string) {
-    return this.storyboardExports.list(req.actor, key);
+  listStoryboardExports(@Req() req: AuthRequest, @Param("key") key: string, @Query("scope") scope?: string) {
+    return this.storyboardExports.list(req.actor, key, scope);
   }
   @Post("api/canvases/:key/exports")
   @HttpCode(200)
@@ -360,6 +361,14 @@ class OriginalApi {
     @Body() body: unknown,
   ) {
     return this.batchPrecheck.precheckCanvas(req.actor, key, body);
+  }
+  @Get("api/canvases/:key/nodes/:node/director-inputs")
+  directorShotInputs(
+    @Req() req: AuthRequest,
+    @Param("key") key: string,
+    @Param("node") node: string,
+  ) {
+    return this.batchPrecheck.directorInputs(req.actor, key, node);
   }
   @Post("api/canvases/:key/batch-runs")
   @HttpCode(200)

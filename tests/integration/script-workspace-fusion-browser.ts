@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { chromium, expect, type Browser } from "@playwright/test";
-import { newNode, type Project } from "../../apps/web/canvas-editor/types.js";
+import { chromium, expect, type Browser, type Locator, type Page, type Response, type Route } from "@playwright/test";
+import sharp from "sharp";
+import { directorBasis, directorScriptConflict, directorShotIds } from "../../packages/web-compat/src/director.js";
+import type { DirectorSubmission } from "../../apps/web/canvas-editor/director-batch.js";
+import { newNode, type Project, type Studio } from "../../apps/web/canvas-editor/types.js";
 
 const externalOrigin = process.env.STUDIO_TEST_ORIGIN;
 const externalUser = process.env.STUDIO_TEST_USER ?? "admin";
@@ -176,6 +179,7 @@ try {
           `△${heroBefore}推门走进钟表铺环顾四周。`,
           `△${heroBefore}低头凝视柜台上的黄铜怀表。`,
           `${heroBefore}：怀表停在了午夜十二点。`,
+          `${heroBefore}：听，齿轮还在转。`,
         ].join("\n"),
       },
     });
@@ -736,6 +740,373 @@ try {
     );
     await expect(highlightedBeat).toBeVisible();
 
+    await page.getByRole("button", { name: "用于本集制作" }).click();
+    const directorSync = page.getByRole("dialog", { name: "确认本集分镜" });
+    await expect(directorSync).toBeVisible();
+    await directorSync.getByRole("button", { name: "保存并进入导演台" }).click();
+    const directorTab = page.getByRole("tab", { name: "导演台" });
+    await expect(directorTab).toHaveAttribute("aria-selected", "true");
+    const director = page.getByRole("region", { name: "导演台" });
+    await director.getByRole("button", { name: /^S01-02/ }).click();
+    await expect(director.getByRole("heading", { name: "确认分镜" })).toBeVisible();
+    await director.getByRole("button", { name: "保存并确认顺序" }).click();
+    await expect(director.getByRole("button", { name: "顺序已确认" })).toBeDisabled();
+    await director.getByRole("button", { name: "定位画布", exact: true }).click();
+    await expect(secondShotNode).toHaveClass(/selected/);
+    const savedProduction: Project = await (
+      await context.request.get(`/api/canvases/${canvasA.id}`, { headers })
+    ).json();
+    const episode = savedProduction.document.director;
+    assert.ok(episode);
+    assert.equal(episode.script_id, docA.id);
+    assert.equal(episode.order_basis, await directorBasis(directorShotIds(savedProduction.document.shots ?? [], episode)));
+    const secondId = await secondShotNode.getAttribute("data-id");
+    assert.ok(secondId && savedProduction.document.director?.shot_ids.includes(secondId));
+    assert.ok(savedProduction.document.edges.some((edge) => edge.source === s02Grid.id && edge.target === secondId));
+    const assetImage = page.locator(`.react-flow__node[data-id="${s02Grid.id}"]`);
+    await assetImage.click();
+    await expect(assetImage).toHaveClass(/selected/);
+    await directorTab.click();
+    await expect(director.getByRole("button", { name: /^S01-02/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(director.getByRole("heading", { name: "确认分镜" })).toBeVisible();
+    if (await director.getByRole("button", { name: "关闭自动尾帧" }).isVisible()) {
+      await expect(director.getByText(/自动尾帧来源：S01-01/)).toBeVisible();
+      await director.getByRole("button", { name: "关闭自动尾帧" }).click();
+    }
+    await director.getByRole("button", { name: "确认分镜", exact: true }).click();
+    await expect(director.getByRole("button", { name: "分镜已确认" })).toBeDisabled();
+    const material = director.locator(".fm-director-materials li").filter({ hasText: s02Grid.title });
+    await expect(material).toContainText("缺图");
+    await material.getByRole("button", { name: "预检参考图" }).click();
+    const quote = page.getByRole("dialog", { name: /参考图预检/ });
+    await expect(quote).toBeVisible();
+    await expect(quote.getByRole("group", { name: "选择执行阶段" })).toHaveCount(0);
+    await quote.getByRole("button", { name: "关闭" }).click();
+
+    const uploadReference = async (slot: Locator, button: string, background: string) => {
+      await slot.getByRole("button", { name: button }).click();
+      const library = page.getByRole("dialog", { name: "资产库" });
+      const [chooser] = await Promise.all([
+        page.waitForEvent("filechooser"),
+        library.getByRole("button", { name: "上传图片", exact: true }).click(),
+      ]);
+      const buffer = await sharp({ create: { width: 320, height: 240, channels: 3, background } }).png().toBuffer();
+      await chooser.setFiles({ name: "director-reference.png", mimeType: "image/png", buffer });
+    };
+    await uploadReference(material, "选择或上传图片", "#214566");
+    await expect(material).toContainText("已固定");
+    const missing = director.locator(".fm-director-materials li").filter({ hasText: "缺图" });
+    const missingCount = await missing.count();
+    assert.ok(missingCount > 0, "the shot has shared material slots in addition to the grid reference");
+    await expect(director.getByRole("button", { name: "确认素材", exact: true })).toBeDisabled();
+    for (let i = missingCount; i > 0; i--) {
+      await uploadReference(missing.first(), "选择或上传图片", "#568956");
+      await expect(missing).toHaveCount(i - 1);
+    }
+    await director.getByRole("button", { name: "确认素材", exact: true }).click();
+    await expect(director.getByRole("button", { name: "素材已确认" })).toBeDisabled();
+    // Transport loss after confirmation leaves the original request recoverable across a reload.
+    const batchQuoteUrl = `**/api/canvases/${canvasA.id}/batch-precheck`;
+    const batchRunUrl = `**/api/canvases/${canvasA.id}/batch-runs`;
+    const batchRequests: unknown[] = [];
+    const quoteRequests: { expected_revision: number; director: { script_revision: number; use_confirmed_script: boolean; targets: unknown[] } }[] = [];
+    const quoteBatch = async (route: Route) => {
+      const payload = route.request().postDataJSON() as typeof quoteRequests[number];
+      quoteRequests.push(payload);
+      if (quoteRequests.length === 1) {
+        await route.fulfill({ status: 409, json: { detail: directorScriptConflict } });
+        return;
+      }
+      await route.fulfill({ status: 200, json: {
+        revision: payload.expected_revision, stale_revision: false, price_revision: 4, precheck_token: "browser-recovery-quote",
+        executable_keys: [`${secondId}:video`],
+        items: [{ node_id: secondId, title: "选中镜头", node_type: "video", stage: "video", model: "fixture", credits: 2, status: "ready", issues: [] }],
+        summary: { total: 1, ready: 1, warning: 0, blocked: 0, runnable: 1, total_credits: 2, available_credits: 10, sufficient: true },
+      } });
+    };
+    const runBatch = async (route: Route) => {
+      batchRequests.push(route.request().postDataJSON());
+      if (batchRequests.length === 1) {
+        await route.abort("failed");
+        return;
+      }
+      await route.fulfill({ status: 200, json: {
+        submitted: [{ node: secondId, stage: "video", job_id: 20001 }], skipped: [], total_credits: 2,
+      } });
+    };
+    await page.route(batchQuoteUrl, quoteBatch);
+    await page.route(batchRunUrl, runBatch);
+    try {
+      await director.getByRole("checkbox", { name: /^选择S01-02.*参与批量生成/ }).check();
+      await director.getByRole("button", { name: /^预检视频/ }).click();
+      const videoQuote = page.getByRole("dialog", { name: "视频生成预检" });
+      await videoQuote.getByRole("button", { name: /使用已确认的剧本版本 .* 预检/ }).click();
+      await videoQuote.getByRole("button", { name: /确认冻结 2 积分并提交/ }).click();
+      await expect(videoQuote.getByRole("button", { name: "恢复上次提交" })).toBeEnabled();
+      assert.deepEqual(quoteRequests.map(({ director }) => director.targets), [
+        [{ node_id: secondId, stage: "video" }], [{ node_id: secondId, stage: "video" }],
+      ]);
+      assert.deepEqual(quoteRequests.map(({ director }) => director.use_confirmed_script), [false, true]);
+      await page.evaluate((uid) => {
+        const key = Object.keys(localStorage).find((name) => name.startsWith("fm-director-batch:") && name.endsWith(":" + uid));
+        if (!key) throw new Error("Missing durable director submission");
+        const legacyKey = key.slice(0, -(uid.length + 1));
+        localStorage.setItem(legacyKey, localStorage.getItem(key)!);
+        localStorage.removeItem(key);
+        sessionStorage.removeItem(legacyKey + ":selected");
+      }, (batchRequests[0] as DirectorSubmission).uid);
+      await page.reload();
+      await directorTab.click();
+      await director.getByRole("button", { name: "恢复上次提交" }).click();
+      const receipt = page.getByRole("dialog", { name: "导演台提交回执" });
+      await receipt.getByRole("button", { name: "恢复上次提交" }).click();
+      await expect(receipt.getByRole("heading", { name: "已接单 1 项 · 冻结 2 积分" })).toBeVisible();
+      await expect(receipt.getByRole("heading", { name: "跳过 0 项" })).toBeVisible();
+      assert.deepEqual(batchRequests[0], batchRequests[1]);
+      assert.equal(quoteRequests.length, 2, "recovery must not ask for a new quote");
+      console.log("PASS director batch browser: explicit confirmed-script version, original request replay after reload, and separate receipt summary");
+      await receipt.getByRole("button", { name: "重新预检并补跑" }).click();
+      await expect(receipt).toBeHidden();
+      await director.getByRole("button", { name: /^S01-02/ }).click();
+    } finally {
+      await page.unroute(batchQuoteUrl, quoteBatch);
+      await page.unroute(batchRunUrl, runBatch);
+    }
+    const secondTab = await context.newPage();
+    const tabRequests = new Map<Page, DirectorSubmission[]>();
+    const multiRun = async (route: Route) => {
+      const tab = route.request().frame().page();
+      const requests = tabRequests.get(tab) ?? [];
+      requests.push(route.request().postDataJSON() as DirectorSubmission);
+      tabRequests.set(tab, requests);
+      if (requests.length === 1) return route.abort("failed");
+      await route.fulfill({ status: 200, json: {
+        submitted: [{ node: secondId, stage: "video", job_id: 20002 }], skipped: [], total_credits: 2,
+      } });
+    };
+    await context.route(batchQuoteUrl, quoteBatch);
+    await context.route(batchRunUrl, multiRun);
+    const receiptDialog = (tab: Page) => tab.getByRole("dialog", { name: "导演台提交回执" });
+    const openReceipt = async (tab: Page) => {
+      await tab.reload();
+      await tab.getByRole("tab", { name: "导演台" }).click();
+      await tab.getByRole("region", { name: "导演台" }).getByRole("button", { name: "恢复上次提交" }).click();
+      return receiptDialog(tab);
+    };
+    try {
+      await secondTab.goto(editPath);
+      await secondTab.getByRole("tab", { name: "导演台" }).click();
+      for (const tab of [page, secondTab]) {
+        const desk = tab.getByRole("region", { name: "导演台" });
+        await desk.getByRole("button", { name: /^S01-02/ }).click();
+        await desk.getByRole("button", { name: /^预检视频/ }).click();
+        await expect(tab.getByRole("dialog", { name: "视频生成预检" })
+          .getByRole("button", { name: /确认冻结 2 积分并提交/ })).toBeEnabled();
+      }
+      for (const tab of [page, secondTab]) {
+        const quote = tab.getByRole("dialog", { name: "视频生成预检" });
+        await quote.getByRole("button", { name: /确认冻结 2 积分并提交/ }).click();
+        await expect(quote.getByRole("button", { name: "恢复上次提交" })).toBeEnabled();
+      }
+      const first = tabRequests.get(page)![0];
+      const second = tabRequests.get(secondTab)![0];
+      assert.notEqual(first.uid, second.uid);
+      const later = await openReceipt(secondTab);
+      const choices = later.getByRole("combobox", { name: "选择要恢复的提交" });
+      await expect(choices).toHaveValue(second.uid);
+      await expect(choices.locator("option")).toHaveCount(2);
+      await later.getByRole("button", { name: "恢复上次提交" }).click();
+      await later.getByRole("button", { name: "确认回执并关闭" }).click();
+      assert.deepEqual(tabRequests.get(secondTab)![1], second);
+      await expect(secondTab.getByRole("region", { name: "导演台" })
+        .getByRole("button", { name: "恢复上次提交" })).toBeVisible();
+
+      const earlier = await openReceipt(page);
+      await expect(earlier.getByRole("combobox", { name: "选择要恢复的提交" })).toHaveCount(0);
+      await earlier.getByRole("button", { name: "恢复上次提交" }).click();
+      await earlier.getByRole("button", { name: "确认回执并关闭" }).click();
+      assert.deepEqual(tabRequests.get(page)![1], first);
+      await expect(director.getByRole("button", { name: "恢复上次提交" })).toHaveCount(0);
+      await director.getByRole("button", { name: /^S01-02/ }).click();
+      console.log("PASS director batch two-tab browser: both original paid requests survive reload and independent acknowledgement");
+    } finally {
+      await context.unroute(batchQuoteUrl, quoteBatch);
+      await context.unroute(batchRunUrl, multiRun);
+      await secondTab.close();
+    }
+
+    const savedForAudio = await (await context.request.get(`/api/canvases/${canvasA.id}`, { headers })).json() as Project;
+    const dialogueLines = savedForAudio.document.nodes.find(({ id }) => id === secondId)?.dialogue_lines ?? [];
+    assert.equal(dialogueLines.length, 2);
+    const audioQuotes: DirectorSubmission["director"]["targets"][] = [];
+    const quoteAudio = async (route: Route) => {
+      const body = route.request().postDataJSON() as DirectorSubmission;
+      const { targets } = body.director;
+      audioQuotes.push(targets);
+      await route.fulfill({ status: 200, json: {
+        revision: body.expected_revision, stale_revision: false, price_revision: 4, precheck_token: "audio-test-quote",
+        items: targets.map((target) => ({ ...target, title: dialogueLines.find((line) => line.id === target.line_id)?.text,
+          node_type: "video", model: "test-tts", credits: 2, status: "ready", issues: [] })),
+        summary: { total: targets.length, ready: targets.length, warning: 0, blocked: 0, runnable: targets.length,
+          total_credits: targets.length * 2, available_credits: 10, sufficient: true },
+      } });
+    };
+    const skipAudio = async (route: Route) => {
+      const body = route.request().postDataJSON() as DirectorSubmission;
+      await route.fulfill({ status: 200, json: {
+        submitted: [], skipped: body.director.targets.map(({ node_id: node, ...target }) => ({ node, ...target, reason: "请检查声线" })),
+        total_credits: 0,
+      } });
+    };
+    await page.route(batchQuoteUrl, quoteAudio);
+    await page.route(batchRunUrl, skipAudio);
+    try {
+      await page.setViewportSize({ width: 375, height: 812 });
+      await director.getByRole("button", { name: /预检对白 .*听，齿轮还在转/ }).click();
+      const lineQuote = page.getByRole("dialog", { name: "对白单句预检" });
+      await expect(lineQuote.getByRole("button", { name: /确认冻结 2 积分并提交/ })).toBeEnabled();
+      const target = { node_id: secondId, stage: "dialogue", line_id: dialogueLines[1].id };
+      assert.deepEqual(audioQuotes.at(-1), [target]);
+      await lineQuote.getByRole("button", { name: "关闭", exact: true }).click();
+      await page.setViewportSize({ width: 1360, height: 860 });
+      await director.getByRole("button", { name: /^预检待生成音频/ }).click();
+      const fullQuote = page.getByRole("dialog", { name: "音频生成预检" });
+      await fullQuote.getByRole("button", { name: /确认冻结 4 积分并提交/ }).click();
+      await fullQuote.getByRole("button", { name: /仅补跑 .*听，齿轮还在转/ }).click();
+      const retryQuote = page.getByRole("dialog", { name: "导演台补跑预检" });
+      await expect(retryQuote.getByRole("button", { name: /确认冻结 2 积分并提交/ })).toBeEnabled();
+      assert.deepEqual(audioQuotes.at(-1), [target]);
+      await retryQuote.getByRole("button", { name: "关闭", exact: true }).click();
+      console.log("PASS director dialogue browser: mobile precheck and receipt retry each quote the selected exact line");
+    } finally {
+      await page.unroute(batchQuoteUrl, quoteAudio);
+      await page.unroute(batchRunUrl, skipAudio);
+    }
+    const ordinaryAudioPage = await context.newPage();
+    try {
+      const narrationId = 20301;
+      const dialogueId = 20302;
+      const original = savedForAudio.document.nodes.find(({ id }) => id === secondId)!;
+      const line = { ...dialogueLines[0], audio_pending: dialogueId };
+      const document = {
+        ...savedForAudio.document,
+        nodes: savedForAudio.document.nodes.map((node) => node.id === original.id ? {
+          ...node,
+          audio_strategy: "keep_original" as const,
+          narration_text: "只作剪辑参考。",
+          narration_instruction: "轻声",
+          narration_pending: narrationId,
+          dialogue_lines: [line],
+        } : node),
+      };
+      const path = `**/api/canvases/${canvasA.id}`;
+      let update: Project["document"] | undefined;
+      await ordinaryAudioPage.route(path, (route) => route.fulfill({
+        status: 200, json: { ...savedForAudio, document },
+      }));
+      await ordinaryAudioPage.route(path + "/runs", (route) => route.fulfill({
+        status: 200, json: {
+          runs: [
+            { id: narrationId, kind: "audio", status: "done", result: "ordinary-voice", canvas_node: `voice:${original.id}`,
+              model: "edge-tts", prompt: "只作剪辑参考。", inputs: { instruction: "轻声" } },
+            { id: dialogueId, kind: "audio", status: "done", result: "ordinary-line", canvas_node: `dialogue:${original.id}:${line.id}`,
+              model: "edge-tts", prompt: line.text, inputs: { model: "edge-tts" } },
+          ],
+        },
+      }));
+      await ordinaryAudioPage.route(path + "/document", async (route) => {
+        if (route.request().method() !== "PUT") return route.continue();
+        const body = route.request().postDataJSON() as { document: Project["document"] };
+        update = body.document;
+        await route.fulfill({ status: 200, json: { ...savedForAudio, revision: savedForAudio.revision + 1, document: update } });
+      });
+      await ordinaryAudioPage.goto(editPath);
+      await expect.poll(() => update?.nodes.find(({ id }) => id === original.id), { timeout: 12000 }).toMatchObject({
+        audio_strategy: "keep_original", narration_job: narrationId, narration_pending: null,
+        dialogue_lines: [{ id: line.id, audio_job: dialogueId, audio_pending: null }],
+      });
+      console.log("PASS ordinary audio promotion browser: keep-original episode shot preserves legacy narration and dialogue promotion");
+    } finally {
+      await ordinaryAudioPage.close();
+    }
+    const firstImage = await material.locator("img").getAttribute("src");
+    await material.getByRole("button", { name: "定位素材节点" }).click();
+    const candidateUrl = `**/api/canvases/${canvasA.id}/nodes/${s02Grid.id}/candidates`;
+    const pinnedMaterial = await (await context.request.get(`/api/canvases/${canvasA.id}`, { headers })).json() as Project;
+    const pinnedImage = pinnedMaterial.document.nodes.find(({ id }) => id === s02Grid.id);
+    assert.ok(pinnedImage?.use_media && pinnedImage.media_id && !pinnedImage.active_job);
+    const generate = page.getByRole("button", { name: "生成", exact: true });
+    // Candidate responses are simulated below; quote a local fixture tier so the real composer opens that path.
+    const quoteImage = async (route: Route) => {
+      const response = await route.fetch();
+      const state = await response.json() as Studio;
+      for (const model of Object.keys(state.images.models)) {
+        const form = state.model_forms[model];
+        if (!form?.canvas) continue;
+        form.tiers = [{ tier: "director-test", when: {} }];
+        state.pricing.items.push({ key: `${model}|director-test`, amount: 1 });
+      }
+      await route.fulfill({ response, json: state });
+    };
+    await page.route("**/api/state", quoteImage);
+    try {
+      await expect(generate).toHaveAttribute("title", "生成", { timeout: 12000 });
+      for (const status of [409, 200]) {
+        await page.route(candidateUrl, (route) => route.fulfill({ status, json: status === 200 ? { candidates: [] } : { detail: "合成测试候选未接收" } }), { times: 1 });
+        const received: Promise<Response> = page.waitForResponse((event: Response): boolean =>
+          event.url().endsWith(`/nodes/${s02Grid.id}/candidates`),
+        );
+        await Promise.all([received, generate.click()]);
+        assert.equal((await received).status(), status);
+        const afterSubmit = await (await context.request.get(`/api/canvases/${canvasA.id}`, { headers })).json() as Project;
+        const image: Project["document"]["nodes"][number] | undefined = afterSubmit.document.nodes.find(({ id }) => id === s02Grid.id);
+        assert.ok(image?.use_media, "normal canvas image generation must keep the selected reference pinned");
+        assert.equal(image.media_id, pinnedImage.media_id);
+      }
+    } finally {
+      await page.unroute("**/api/state", quoteImage);
+    }
+    await directorTab.click();
+    await expect(director.getByRole("button", { name: "素材已确认" })).toBeDisabled();
+    await uploadReference(material, "替换图片", "#ae4a55");
+    await expect(material.locator("img")).not.toHaveAttribute("src", firstImage!);
+    await expect(director.getByRole("button", { name: "素材已变更，重新确认" })).toBeEnabled();
+    await expect(director.getByRole("button", { name: "分镜已确认" })).toBeDisabled();
+    await page.setViewportSize({ width: 375, height: 812 });
+    await expect(director.getByRole("heading", { name: "确认分镜" })).toBeVisible();
+    await expect.poll(async () => {
+      const switcher = await page.locator(".fm-surface-switcher").boundingBox();
+      const desk = await director.boundingBox();
+      return Boolean(switcher && desk && desk.y >= switcher.y + switcher.height - 2);
+    }).toBe(true);
+    await page.setViewportSize({ width: 1360, height: 860 });
+
+    const freshEdit = await (await context.request.get(`/api/workspace/scripts/${docA.id}`, { headers })).json();
+    const remoteShot = "远端补写尾声";
+    const reloadPreview = await context.request.put(`/api/workspace/scripts/${docA.id}`, {
+      headers,
+      data: { expected_revision: freshEdit.revision, body_md: `${freshEdit.body_md}\n\n△${remoteShot}。` },
+    });
+    assert.equal(reloadPreview.status(), 200, await reloadPreview.text());
+    await director.getByRole("button", { name: "更新本集分镜" }).click();
+    const freshRow = directorSync.getByRole("article").filter({ hasText: remoteShot });
+    await expect(freshRow).toBeVisible();
+    await expect(freshRow.getByRole("checkbox", { name: "纳入本集" })).not.toBeChecked();
+    const afterPreview = await reloadPreview.json();
+    const raceEdit = await context.request.put(`/api/workspace/scripts/${docA.id}`, {
+      headers,
+      data: { expected_revision: afterPreview.revision, body_md: `${afterPreview.body_md}\n\n> 预览之后协作者又更新了剧本。` },
+    });
+    assert.equal(raceEdit.status(), 200, await raceEdit.text());
+    await directorSync.getByRole("button", { name: "保存并进入导演台" }).click();
+    await expect(directorSync.getByRole("alert")).toContainText(/剧本.*更新/);
+    const freshCanvas: Project = await (await context.request.get(`/api/canvases/${canvasA.id}`, { headers })).json();
+    assert.equal(freshCanvas.document.director?.script_revision, episode.script_revision);
+    await directorSync.getByRole("button", { name: "关闭同步窗口" }).click();
+    await directorTab.click();
+    await director.getByRole("button", { name: "在文档中编辑" }).click();
+    await expect(highlightedBeat).toBeVisible();
+
     // Switch to Source mode, open S01-02 video node in right split, jump again, and ensure typing does NOT reset cursor
     await page.getByRole("button", { name: "原文", exact: true }).click();
     const videoNodeTreeRow = page
@@ -970,6 +1341,107 @@ try {
     ).json();
     assert.match(serverDocAfter2Reopens.body_md, /> 协作者远端备注/);
     assert.doesNotMatch(serverDocAfter2Reopens.body_md, new RegExp(conflictMarker));
+
+    // A second session advances the canvas revision before a new episode is synced.
+    // The script must already be committed when the canvas PUT conflicts, and the local episode must stay recoverable.
+    await page.getByRole("treeitem").filter({ hasText: fileBName }).dblclick();
+    await expect(page.getByRole("tab", { selected: true }).filter({ hasText: fileBName })).toBeVisible();
+    const cachedDocB = await (await context.request.get(`/api/workspace/scripts/${docB.id}`, { headers })).json();
+    const documentPane = page.locator(".fm-md-editor");
+    await documentPane.getByRole("button", { name: "原文", exact: true }).click();
+    const unsavedDirectorNote = "这条本地导演草稿必须保留";
+    failDocBSave = true;
+    await sourceEditor.fill(`${cachedDocB.body_md}\n> ${unsavedDirectorNote}`);
+    const updatedDocB = await context.request.put(`/api/workspace/scripts/${docB.id}`, {
+      headers,
+      data: {
+        expected_revision: cachedDocB.revision,
+        body_md: `${cachedDocB.body_md}\n\n### S02 雨巷 夜 外\n| 镜号 | 场次 | 运镜 | 时长 | 画面 | 台词 |\n| --- | --- | --- | --- | --- | --- |\n| 01 | S02 | 固定 | 5s | 路灯倒映在水洼中 | |\n\n### S03 天台 夜 外\n陌生人：雨终于停了。`,
+      },
+    });
+    assert.equal(updatedDocB.status(), 200, await updatedDocB.text());
+    await page.getByRole("button", { name: "用于本集制作" }).click();
+    await expect(documentPane.getByRole("alert")).toContainText("服务器新版本冲突");
+    await expect(sourceEditor).toHaveValue(new RegExp(unsavedDirectorNote));
+    await expect(directorSync).toHaveCount(0);
+    failDocBSave = false;
+    await documentPane.getByRole("button", { name: "读取服务器最新版" }).click();
+    await expect(sourceEditor).toHaveValue(/路灯倒映在水洼中/);
+    await documentPane.getByRole("button", { name: "富文本", exact: true }).click();
+    const beforeDirectorConflict: Project = await (
+      await context.request.get(`/api/canvases/${canvasA.id}`, { headers })
+    ).json();
+    const competingSave = await context.request.put(`/api/canvases/${canvasA.id}/document`, {
+      headers,
+      data: { title: `${beforeDirectorConflict.title}·协作者`, document: beforeDirectorConflict.document, expected_revision: beforeDirectorConflict.revision },
+    });
+    assert.equal(competingSave.status(), 200, await competingSave.text());
+    await page.getByRole("button", { name: "用于本集制作" }).click();
+    await expect(directorSync).toBeVisible();
+    const directorCanvasConflict = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().includes(`/api/canvases/${canvasA.id}/document`));
+    await directorSync.getByRole("button", { name: "保存并进入导演台" }).click();
+    assert.equal((await directorCanvasConflict).status(), 409);
+    await expect(directorSync.getByRole("alert")).toContainText("剧本已保存，画布保存失败");
+    await expect(page.getByRole("tab", { name: "文档", exact: true })).toHaveAttribute("aria-selected", "true");
+    const stampedDocB = await (await context.request.get(`/api/workspace/scripts/${docB.id}`, { headers })).json();
+    assert.match(stampedDocB.body_md, /<!-- fm-shot:sh_[a-f0-9]+ -->/);
+    const recoveredEpisode = await page.evaluate(({ id }) => {
+      const editor = sessionStorage.getItem("fm-canvas-editor");
+      const key = Object.keys(localStorage).find((item) => item.startsWith("fm-canvas-") && item.endsWith(`-${id}-${editor}`));
+      return key ? JSON.parse(localStorage.getItem(key) ?? "null")?.draft?.document?.director : null;
+    }, { id: canvasA.id });
+    assert.equal(recoveredEpisode?.script_id, docB.id);
+    assert.equal(recoveredEpisode?.script_revision, stampedDocB.revision);
+    await directorSync.getByRole("button", { name: "关闭同步窗口" }).click();
+    await expect(documentPane.getByRole("button", { name: "在导演台查看 S02-01", exact: true })).toBeVisible();
+    await documentPane.getByRole("button", { name: "在导演台查看 S03-01", exact: true }).click();
+    await expect(director.getByRole("button", { name: /^S03-01/ })).toHaveAttribute("aria-pressed", "true");
+    await directorTab.click();
+    await director.getByRole("button", { name: "保存并确认顺序" }).click();
+    await expect(director.getByRole("alert")).toContainText("保存冲突");
+    await page.goto(editPath);
+    await expect(page.locator(".canvas-header")).toContainText("保存冲突");
+    await directorTab.click();
+    await expect(director.getByRole("button", { name: "保存并确认顺序" })).toBeVisible();
+    await expect(director.getByRole("button", { name: "顺序已确认" })).toHaveCount(0);
+
+    const recoveryResponse = await context.request.post("/api/canvases", {
+      headers,
+      data: { title: `重试本集_${runTag}` },
+    });
+    assert.equal(recoveryResponse.status(), 200);
+    const recoveryCanvas: Project = await recoveryResponse.json();
+    const recoverySave = `/api/canvases/${recoveryCanvas.id}/document`;
+    const scriptPath = `/api/workspace/scripts/${docB.id}`;
+    let reviewedRevision: number | undefined;
+    await page.route(`**${recoverySave}`, async (route) => {
+      if (route.request().method() === "PUT" && reviewedRevision === undefined) {
+        const previous = await (await context.request.get(scriptPath, { headers })).json();
+        const changed = await context.request.put(scriptPath, {
+          headers,
+          data: { expected_revision: previous.revision, body_md: `${previous.body_md}\n> 保存期间更新的备注` },
+        });
+        assert.equal(changed.status(), 200, await changed.text());
+        reviewedRevision = (await changed.json()).revision;
+      }
+      await route.continue();
+    });
+    await page.goto(`/canvas/${recoveryCanvas.id}?workspace=${workspace}`);
+    await page.getByRole("tab", { name: "文档", exact: true }).click();
+    await page.getByRole("treeitem").filter({ hasText: fileBName }).dblclick();
+    await page.getByRole("button", { name: "用于本集制作" }).click();
+    await directorSync.getByRole("button", { name: "保存并进入导演台" }).click();
+    await expect(directorSync.getByRole("alert")).toContainText("主剧本已更新，请重新预览后同步");
+    await directorSync.getByRole("button", { name: "关闭同步窗口" }).click();
+    await page.getByRole("button", { name: "更新本集分镜" }).click();
+    await directorSync.getByRole("button", { name: "保存并进入导演台" }).click();
+    await expect(directorTab).toHaveAttribute("aria-selected", "true");
+    const recovered: Project = await (
+      await context.request.get(`/api/canvases/${recoveryCanvas.id}`, { headers })
+    ).json();
+    assert.equal(recovered.document.director?.script_revision, reviewedRevision);
+    assert.equal(recovered.revision, recoveryCanvas.revision + 1);
+    await page.unroute(`**${recoverySave}`);
 
     // 7. PR #223 Round 4 Items 5 & 6:
     //    - Item 5: 375x812 with single generatable node selected (data-composer-open="true"):

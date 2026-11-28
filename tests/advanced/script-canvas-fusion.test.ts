@@ -6,6 +6,9 @@ import {
   buildPersistedScriptDraftForSession,
   createCanvasRunsTracker,
   detectAmbiguousShotMatches,
+  directorMemberForScriptShot,
+  directorSourceChanges,
+  directorSyncPreview,
   extractScriptAnchorsMap,
   nodeHasOutputOrActiveRun,
   parseScriptBreakdown,
@@ -16,9 +19,13 @@ import {
   resolvePreferredShotIdLines,
   searchCanvasTextNodes,
   stampScriptShotIds,
+  stampDirectorScriptShotIds,
   syncScriptBreakdownToCanvas,
+  syncDirectorBreakdownToCanvas,
+  scriptSourceJump,
 } from "../../apps/web/canvas-editor/script-fusion.js";
 import { newNode, type Doc, type Job } from "../../apps/web/canvas-editor/types.js";
+import { draftEquals } from "../../apps/web/canvas-editor/performance.js";
 import { canvasesFixture } from "../helpers/canvases.js";
 
 const SAMPLE_SCRIPT = `# 《说谎者》· 分集剧本 EP01
@@ -39,6 +46,157 @@ const SAMPLE_SCRIPT = `# 《说谎者》· 分集剧本 EP01
 △全景俯拍圆桌，齐夏坐在离人羊最远的位置，抬手按了一下口袋，空的。
 齐夏：手机和证件都被收走了，这到底是什么地方？
 `;
+
+test("director source changes distinguish script edits, canvas edits, and missing baselines", () => {
+  assert.deepEqual(directorSourceChanges({ prompt: "a" }, { prompt: "b" }, { prompt: "c" }).conflicts, ["prompt"]);
+  assert.deepEqual(directorSourceChanges({ prompt: "a" }, { prompt: "a" }, { prompt: "b" }).takeScript, ["prompt"]);
+  assert.deepEqual(directorSourceChanges({ prompt: "a" }, { prompt: "b" }, { prompt: "a" }).preserve, ["prompt"]);
+  assert.deepEqual(directorSourceChanges({}, { prompt: "a" }, { prompt: "b" }).conflicts, ["prompt"]);
+  assert.deepEqual(directorSourceChanges({}, { prompt: "a" }, { prompt: "a" }), { takeScript: [], preserve: [], conflicts: [] });
+});
+
+test("director-only changes make a canvas draft eligible for saving", () => {
+  const common: Doc = { schemaVersion: 1, nodes: [], edges: [], shots: [] };
+  const director = { script_id: "doc_ep01", script_revision: 1, shot_ids: [] };
+  const draft = { title: "本集", document: { ...common, director } };
+  assert.ok(draftEquals(draft, structuredClone(draft)));
+  assert.ok(!draftEquals(draft, { ...draft, document: common }));
+  assert.ok(!draftEquals(draft, { ...draft, document: { ...common, director: { ...director, order_basis: "a".repeat(64) } } }));
+});
+
+test("director stamps stable IDs on table rows and dialogue-only beats", () => {
+  const markdown = `### S01 钟表铺 夜 内\n| 01 | S01 | 缓推 | 5s | 镜头推近怀表。 | |\n\n### S02 街道 夜 外\n韩青：有人吗？\n`;
+  const original = parseScriptBreakdown(markdown, { docId: "doc_ep01" });
+  const first = stampDirectorScriptShotIds(markdown, original);
+  const saved = parseScriptBreakdown(first.markdown, { docId: "doc_ep01" });
+  assert.ok(saved.shots[0].shotId);
+  assert.ok(saved.shots[1].shotId);
+  assert.notEqual(saved.shots[0].shotId, saved.shots[1].shotId);
+  assert.equal(saved.shots[1].dialogues[0].text, "有人吗？");
+  assert.equal(stampDirectorScriptShotIds(first.markdown, saved).changed, false);
+  const replacement = parseScriptBreakdown(first.markdown.replace("镜头推近怀表", "镜头推近收据"), { docId: "doc_ep01" });
+  assert.equal(replacement.shots[0].shotId, saved.shots[0].shotId);
+});
+
+test("director takes over selected outputs from ordinary sync when stamping unmarked dialogue and table shots", () => {
+  const markdown = `### S01 钟表铺 夜 内\n| 01 | S01 | 缓推 | 5s | 镜头推近怀表。 | |\n\n### S02 街道 夜 外\n韩青：有人吗？\n`;
+  const breakdown = parseScriptBreakdown(markdown, { docId: "doc_ep01" });
+  const legacy = syncScriptBreakdownToCanvas({ schemaVersion: 1, nodes: [], edges: [], shots: [] }, breakdown);
+  const videos = legacy.document.nodes.filter((node) => node.type === "video");
+  videos.forEach((video, index) => { video.media_id = String(index).repeat(32); video.use_media = true; });
+  const preferred = resolvePreferredShotIdLines(legacy.document, breakdown);
+  const stamped = stampDirectorScriptShotIds(markdown, breakdown, preferred);
+  const ready = parseScriptBreakdown(stamped.markdown, { docId: "doc_ep01" });
+  assert.deepEqual(ready.shots.map((shot) => shot.shotId), videos.map((video) => video.extra_params?.script_shot_id));
+  const synced = syncDirectorBreakdownToCanvas(legacy.document, ready, { scriptRevision: 1 });
+  assert.deepEqual(synced.shotNodeIds, videos.map((node) => node.id));
+  assert.deepEqual(synced.document.nodes.filter((node) => node.use_media).map((node) => node.media_id), videos.map((node) => node.media_id));
+  const inserted = parseScriptBreakdown("### S01 钟表铺 夜 内\n△补镜。\n" + stamped.markdown, { docId: breakdown.docId });
+  assert.equal(inserted.shots[0].anchor, "S01-01");
+  assert.equal(inserted.shots[1].anchor, "S01-02");
+  assert.equal(directorMemberForScriptShot(synced.document, breakdown.docId, inserted.shots[0].shotId), undefined);
+  assert.equal(directorMemberForScriptShot(synced.document, breakdown.docId, inserted.shots[1].shotId), videos[0].id);
+  assert.equal(directorMemberForScriptShot(synced.document, breakdown.docId, inserted.shots[2].shotId), videos[1].id);
+});
+
+test("director requires a choice for edited audio and preserves a matching line's configuration and jobs", () => {
+  const empty: Doc = { schemaVersion: 1, nodes: [], edges: [], shots: [] };
+  const script = "### S01 钟表铺 夜 内\n△推门。\n韩青：你好。\n林秋：进来吧。";
+  const body = stampScriptShotIds(script).markdown;
+  const parse = (text: string) => parseScriptBreakdown(text, { docId: "doc_ep01" });
+  const saved = syncDirectorBreakdownToCanvas(empty, parse(body), { scriptRevision: 1 }).document;
+  const video = saved.nodes.find((node) => node.type === "video")!;
+  const previous = video.dialogue_lines![0];
+  Object.assign(previous, { voice_id: "voice-q", model: "voice-model", instruction: "耳语", pack_id: "a".repeat(32), audio_job: 12, audio_pending: 14 });
+  const revised = parse(body.replace("你好。", "晚上好。"));
+  assert.ok(directorSyncPreview(saved, revised)[0].changes.conflicts.includes("dialogues"));
+  assert.throws(() => syncDirectorBreakdownToCanvas(saved, revised, { scriptRevision: 2 }), /对白/);
+  const synced = syncDirectorBreakdownToCanvas(saved, revised, { scriptRevision: 2, choices: { "S01-01": { dialogues: "script" } } }).document;
+  const actual = synced.nodes.find((node) => node.id === video.id)!.dialogue_lines!;
+  assert.deepEqual(actual[0], { ...previous, text: "晚上好。", audio_stale: [12, 14] });
+  assert.deepEqual(actual[1], video.dialogue_lines![1]);
+});
+
+test("director can keep a superseded media node independently without reopening the same ambiguity", () => {
+  const base = parseScriptBreakdown("### S01 夜 内\n△旧镜头。 <!-- fm-shot:old_shot -->", { docId: "doc_ep01" });
+  const legacy = syncScriptBreakdownToCanvas({ schemaVersion: 1, nodes: [], edges: [], shots: [] }, base);
+  const old = legacy.document.nodes.find((node) => node.type === "video")!;
+  old.media_id = "c".repeat(32);
+  old.use_media = true;
+  const incoming = parseScriptBreakdown("### S01 夜 内\n△另一镜。 <!-- fm-shot:new_shot -->", { docId: "doc_ep01" });
+  assert.equal(directorSyncPreview(legacy.document, incoming)[0].unresolved, true);
+  const resolved = syncDirectorBreakdownToCanvas(legacy.document, incoming, { scriptRevision: 2, bindings: { "S01-01": null } });
+  const retained = resolved.document.nodes.find((node) => node.id === old.id)!;
+  assert.equal(retained.extra_params?.script_doc_id, undefined);
+  assert.equal(scriptSourceJump(retained)?.docId, base.docId);
+  assert.equal(retained.media_id, old.media_id);
+  assert.equal(directorSyncPreview(resolved.document, incoming)[0].unresolved, false);
+  const repeated = syncDirectorBreakdownToCanvas(resolved.document, incoming, { scriptRevision: 2 });
+  assert.deepEqual(repeated.shotNodeIds, resolved.shotNodeIds);
+});
+
+test("director resolves duplicate legacy claims and keeps source jumps, media, and hand-wired edges on resync", () => {
+  const docId = "doc_ep01";
+  const breakdown = parseScriptBreakdown(stampScriptShotIds(SAMPLE_SCRIPT).markdown, { docId });
+  const empty: Doc = { schemaVersion: 1, nodes: [], edges: [], shots: [] };
+  const legacy = syncScriptBreakdownToCanvas(empty, breakdown, { includeAssets: false });
+  const mainId = legacy.anchorToNodeId["S01-01"];
+  const main = legacy.document.nodes.find((node) => node.id === mainId)!;
+  main.media_id = "a".repeat(32);
+  main.active_job = 42;
+  const copy = { ...structuredClone(main), id: "trial-shot", title: "试拍" };
+  const reference = newNode("image", 960, 400, 1);
+  const manualEdge = { id: "manual-edge", source: reference.id, target: main.id };
+  const original: Doc = {
+    ...legacy.document,
+    nodes: [...legacy.document.nodes, copy, reference],
+    edges: [...legacy.document.edges, manualEdge],
+    shots: [main.id, copy.id, legacy.anchorToNodeId["S01-02"]],
+  };
+  const affected = directorSyncPreview(original, breakdown).find((entry) => entry.anchor === "S01-01")!;
+  assert.equal(affected.nodeId, undefined);
+  assert.deepEqual(affected.candidates.map(({ id }) => id), [main.id, copy.id]);
+  const chosen = { bindings: { "S01-01": main.id }, scriptRevision: 1 };
+  assert.throws(() => syncDirectorBreakdownToCanvas(original, breakdown, { scriptRevision: 1 }), /归属/);
+  const first = syncDirectorBreakdownToCanvas(original, breakdown, chosen).document;
+  assert.deepEqual(first.shots, original.shots);
+  assert.deepEqual(first.director?.shot_ids, [main.id, legacy.anchorToNodeId["S01-02"]]);
+  const unclaimed = first.nodes.find((node) => node.id === copy.id)!;
+  assert.equal(unclaimed.extra_params?.script_doc_id, undefined);
+  assert.deepEqual(scriptSourceJump(unclaimed), scriptSourceJump(main));
+
+  const promptNode = first.nodes.find((node) => node.type === "text" && node.extra_params?.script_anchor === "S01-01")!;
+  promptNode.text = "导演改过这镜的说明";
+  const incoming = {
+    ...breakdown,
+    shots: breakdown.shots.map((shot, index) => index ? shot : {
+      ...shot,
+      prompt: "剧本中新的镜头说明",
+      narration: "剧本中新增的旁白",
+    }),
+  };
+  const diff = directorSyncPreview(first, incoming)[0];
+  assert.deepEqual(diff.changes.conflicts, ["prompt"]);
+  assert.ok(diff.changes.takeScript.includes("narration"));
+  const updated = syncDirectorBreakdownToCanvas(first, incoming, {
+    scriptRevision: 2,
+    choices: { "S01-01": { prompt: "preserve" } },
+  }).document;
+  const updatedMain = updated.nodes.find((node) => node.id === main.id)!;
+  assert.equal(updatedMain.media_id, main.media_id);
+  assert.equal(updatedMain.active_job, main.active_job);
+  assert.equal(updatedMain.narration_text, "剧本中新增的旁白");
+  assert.equal(updated.nodes.find((node) => node.id === promptNode.id)?.text, promptNode.text);
+  assert.deepEqual(updated.edges.find((edge) => edge.id === manualEdge.id), manualEdge);
+  assert.equal(updated.nodes.find((node) => node.id === copy.id)?.media_id, copy.media_id);
+  const reordered = syncDirectorBreakdownToCanvas(updated, incoming, {
+    scriptRevision: 2,
+    order: ["S01-02", "S01-01"],
+  }).document;
+  assert.deepEqual(reordered.shots, [legacy.anchorToNodeId["S01-02"], copy.id, main.id]);
+  const fresh = syncDirectorBreakdownToCanvas(empty, breakdown, { scriptRevision: 1 }).document;
+  assert.ok(fresh.nodes.filter((node) => node.type === "video").every((node) => !node.tail_inherited));
+});
 
 test("parseScriptBreakdown extracts assets, scenes, shots, dialogue lines, and cinematography hints", () => {
   const breakdown = parseScriptBreakdown(SAMPLE_SCRIPT, {

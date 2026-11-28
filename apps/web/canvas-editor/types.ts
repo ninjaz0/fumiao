@@ -4,6 +4,7 @@ import {
   mediaDownloadFilename,
   normalizeMediaMime,
 } from "@fumiao/plugin-sdk/media-filename";
+import type { DirectorProduction } from "@fumiao/web-compat/director.js";
 import {
   isBgmMusicModel,
   pickSpeechAudioModel,
@@ -28,6 +29,7 @@ export type CinematographySpec = {
 export type PrecheckStage = "image" | "video" | "narration" | "dialogue";
 export type PrecheckItem = {
   node_id: string;
+  line_id?: string;
   title: string;
   node_type: Kind;
   stage: PrecheckStage;
@@ -85,6 +87,7 @@ export type DialogueLine = {
   instruction?: string;
   audio_job?: number | null;
   audio_pending?: number | null;
+  audio_stale?: number[];
 };
 export type CanvasBgm = {
   asset_id: string | null;
@@ -130,6 +133,7 @@ export type Doc = {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
   shots?: string[];
+  director?: DirectorProduction;
   bgm?: CanvasBgm | null;
   bgm_applied_job?: number | null;
   loudnorm?: boolean;
@@ -149,9 +153,10 @@ export type Project = Draft & {
   covers?: { id: string; type: string }[];
 };
 export type Job = {
+  audio_settings?: import("@fumiao/web-compat/director.js").DirectorVoiceSettings;
   model_label?: string;
   batch?:{uid:string;index:number;count:number}|null;
-  inputs?: {instruction?:string;prompt?:string;refs?:string[];params?:Params;asset_packs?:{id:string;revision:number}[]};
+  inputs?: {director_basis?:string;instruction?:string;model?:string;voice_id?:string|null;pack_id?:string|null;prompt?:string;refs?:string[];params?:Params;asset_packs?:{id:string;revision:number}[]};
   actual?: {width:number;height:number;duration?:number;flow_media_id?:string;flow_source_job?:number};
   id: number;
   canvas_node?: string;

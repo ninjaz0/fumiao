@@ -53,7 +53,7 @@ try {
   let releaseRefresh!: () => void;
   const refreshHeld = new Promise<void>((resolve) => { releaseRefresh = resolve; });
   let refreshPending = false;
-  await page.route(`**${path}/exports`, async (route) => {
+  await page.route((url) => url.pathname === `${path}/exports`, async (route) => {
     if (route.request().method() === "POST") {
       submitted = true;
       return route.fulfill({ json: {} });
@@ -72,9 +72,9 @@ try {
   });
 
   await page.goto(`/canvas/${id}?workspace=${workspace}`);
-  const firstPoll = page.waitForRequest((request) => request.url().endsWith(`${path}/exports`) && request.method() === "GET");
+  const firstPoll = page.waitForRequest((request) => request.url().endsWith(`${path}/exports?scope=canvas`) && request.method() === "GET");
   await page.getByRole("button", { name: "镜头列表", exact: true }).click();
-  const composition = page.getByRole("region", { name: "成片预览与导出" });
+  const composition = page.getByRole("region", { name: "全画布成片预览与导出" });
   const queuedStatus = composition.getByText("等待合成", { exact: true });
   const firstRequest = await firstPoll;
   await expect(queuedStatus).toBeVisible({ timeout: 10_000 });
@@ -98,7 +98,7 @@ try {
   await expect.poll(() => refreshPending, { timeout: 5_000 }).toBe(true);
   await expect(queuedStatus).toBeVisible({ timeout: 10_000 });
   const failedRefresh = page.waitForResponse(
-    (response) => response.url().endsWith(`${path}/exports`) && response.status() === 503,
+    (response) => response.url().endsWith(`${path}/exports?scope=canvas`) && response.status() === 503,
   );
   releaseRefresh();
   await (await failedRefresh).finished();

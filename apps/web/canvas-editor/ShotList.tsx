@@ -191,7 +191,7 @@ export function ShotList({
               }}
             >
               <Download size={15} />
-              {exporting ? "准备中…" : "导出镜头包"}
+              {exporting ? "准备中…" : "导出全画布镜头包"}
             </button>
           )}
         </div>

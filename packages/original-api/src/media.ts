@@ -14,6 +14,8 @@ import {
   type DerivativeVariant,
 } from "@fumiao/platform/derivatives.js";
 import { mediaDownloadFilename } from "@fumiao/plugin-sdk/media-filename.js";
+import { canvasDialogueTakes, canvasDocumentJson } from "./canvas-values.js";
+import type { CanvasNode } from "./canvas-draft.js";
 import { sendFile } from "./files.js";
 function safeDownloadFilename(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
@@ -235,7 +237,32 @@ export class OriginalMedia {
       409,
       "素材正在画布中使用，请先从相关画布移除",
     );
+    await this.protectDialogueTakes(sql, { assetId: id });
     requireValue(!kinds.length, 409, "素材仍被文档引用");
+  }
+  async protectDialogueTakes(sql: Sql, target: { assetId: string } | { jobIds: string[] }) {
+    const byAsset = "assetId" in target;
+    if (!byAsset && !target.jobIds.length) return;
+    // A pending take can complete after the last save, or fail without an asset.
+    // Its exact saved canvas line is authoritative in both cases.
+    const dialogue = await sql.query<{ document: Buffer; node: string; job: string }>(
+      `SELECT c.document,l.node,j.public_id AS job FROM jobs j
+       JOIN canvas_job_links l ON l.job_id=j.id AND l.node LIKE 'dialogue:%'
+       JOIN documents d ON d.id=l.project_id AND d.workspace_id=j.workspace_id AND NOT d.deleted
+       JOIN canvas_documents c ON c.project_id=d.id
+       WHERE j.kind='audio' AND j.deleted_at IS NULL AND ${
+         byAsset
+           ? "EXISTS (SELECT 1 FROM job_assets r WHERE r.job_id=j.id AND r.asset_id=$1 AND r.role='output')"
+           : "j.id=ANY($1::uuid[])"
+       }`,
+      [byAsset ? target.assetId : target.jobIds],
+    );
+    for (const link of dialogue.rows) {
+      const nodes: CanvasNode[] = canvasDocumentJson(link.document).nodes ?? [];
+      requireValue(!nodes.some((node) => canvasDialogueTakes(node)
+        .some((take) => take.node === link.node && take.id === Number(link.job))),
+        409, byAsset ? "素材正在画布中使用，请先从相关画布移除" : "对白任务正在画布中使用，请先从相关画布移除");
+    }
   }
   async remove(user: Actor, key: string, selected?: string) {
     const object = await this.p.db.transaction(async (sql) => {

@@ -1,18 +1,28 @@
 import { OriginalState } from "@fumiao/original-api/state.js";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { canvasesFixture } from "../helpers/canvases.js";
+import { activateCanvasRunPlugins } from "../helpers/canvas-runs.js";
 import { databaseFixture } from "../helpers/database.js";
 import { migrate, one } from "@fumiao/platform/db.js";
 import { S3Storage } from "@fumiao/platform/storage.js";
 import { OriginalStoryboardExports } from "@fumiao/original-api/storyboard-exports.js";
 import { originalStoryboard } from "@fumiao/platform/composition/renderer.js";
 import { OriginalMedia } from "@fumiao/original-api/media.js";
+import { OriginalLibrary } from "@fumiao/original-api/library.js";
+import { OriginalJobs } from "@fumiao/original-api/jobs.js";
+import { OriginalCanvases } from "@fumiao/original-api/canvases.js";
+import { OriginalCanvasRuns } from "@fumiao/original-api/canvas-runs.js";
+import { OriginalBatchPrecheck } from "@fumiao/original-api/batch-precheck.js";
+import { OriginalPacks } from "@fumiao/original-api/packs.js";
+import { ensureBuiltinEdgeTts } from "@fumiao/platform/tts/edge-plugin.js";
+import { directorAdoptionBasis, type DirectorProduction } from "@fumiao/web-compat/director.js";
+import { OriginalIdentity, type OriginalActor } from "@fumiao/original-api/identity.js";
 const exec = promisify(execFile);
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -107,6 +117,427 @@ async function fixture() {
     ),
   };
 }
+async function setCanvas(f: Awaited<ReturnType<typeof fixture>>, doc: unknown) {
+  await f.db.query(
+    "UPDATE canvas_documents SET document=$2 WHERE project_id=$1",
+    [f.projectId, Buffer.from(JSON.stringify(doc))],
+  );
+}
+function episode(shotIds: string[], globalOrder = shotIds) {
+  const order = globalOrder.filter((id) => shotIds.includes(id));
+  return {
+    script_id: "c".repeat(32),
+    script_revision: 1,
+    shot_ids: shotIds,
+    order_basis: createHash("sha256").update(JSON.stringify(order)).digest("hex"),
+  };
+}
+async function deployStoryboardExporter(
+  f: Awaited<ReturnType<typeof fixture>>,
+  version: string,
+  declaration: { outputKind: string; mime: string; program: string },
+) {
+  await f.db.query(
+    `INSERT INTO studio_package_releases(id,version,package)
+     SELECT id,$1,jsonb_set(
+       jsonb_set(package,'{version}',to_jsonb($1::text)),
+       '{contributes,exporters}',$2::jsonb
+     )
+     FROM studio_package_releases WHERE id='storyboard' AND version='1.0.0'`,
+    [version, JSON.stringify([{ id: "mp4", title: "MP4", ...declaration }])],
+  );
+  await f.db.query("UPDATE studio_packages SET version=$1 WHERE id='storyboard'", [version]);
+}
+test("episode export freezes adopted shots in canvas order", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    const imported = f.video;
+    const adopted = await f.asset("a".repeat(32), "video");
+    const trial = await f.asset("b".repeat(32), "video");
+    await f.job(800, "audio", "running");
+    await f.job(901, "video", "completed", adopted.id);
+    await f.job(902, "video", "completed", trial.id);
+    await f.link(f.project.id, "s1", 901);
+    await f.link(f.project.id, "s1", 902);
+    await f.link(f.project.id, "dialogue:s1:line", 900);
+
+    const s1 = {
+      id: "s1",
+      type: "video",
+      title: "对白",
+      x: 0,
+      y: 0,
+      active_job: 901,
+      media_id: trial.public_id,
+      narration_text: "不用旁白",
+      tail_inherited: true,
+      dialogue_lines: [
+        { id: "line", speaker: "林默", text: "你好。😀!", audio_job: 900 },
+      ],
+    };
+    const s2 = {
+      id: "s2",
+      type: "video",
+      title: "原声",
+      x: 0,
+      y: 0,
+      use_media: true,
+      media_id: imported.public_id,
+      audio_strategy: "keep_original",
+      narration_text: "文字可保留",
+      dialogue_lines: [{ id: "line", text: "保留原声", audio_pending: 800 }],
+    };
+    const trialNode = {
+      id: "trial",
+      type: "video",
+      x: 0,
+      y: 0,
+      use_media: true,
+      media_id: trial.public_id,
+    };
+    const shots = ["s2", "trial", "s1"];
+    const director = episode(["s1", "s2"], shots);
+    const doc = await confirmEpisodeAdoptions(f, { nodes: [s1, s2, trialNode], shots, director });
+    const request = {
+      uid: randomUUID(),
+      expected_revision: 1,
+      scope: "episode" as const,
+    };
+    const create = () => f.service.create(f.admin, f.project.id, request);
+    await setCanvas(f, {
+      ...doc,
+      nodes: [{ ...s1, active_job: null }, s2, trialNode],
+    });
+    await assert.rejects(create(), { status: 409, message: /采用/ });
+    await setCanvas(f, {
+      ...doc,
+      nodes: [{ ...s1, active_job: 999 }, s2, trialNode],
+    });
+    await assert.rejects(create(), { status: 409, message: /尚未就绪/ });
+    await setCanvas(f, { ...doc, shots: ["s1", "trial", "s2"] });
+    await assert.rejects(create(), { status: 409, message: /顺序/ });
+    await setCanvas(f, {
+      ...doc,
+      nodes: [
+        { ...s1, dialogue_lines: [{ id: "line", text: "待配音" }] },
+        s2,
+        trialNode,
+      ],
+    });
+    await assert.rejects(create(), { status: 409, message: /对白尚未生成/ });
+    await setCanvas(f, {
+      ...doc,
+      nodes: [{ ...s1, dialogue_lines: [{ ...s1.dialogue_lines[0], speaker: "换成其他角色", audio_stale: [900] }] }, s2, trialNode],
+    });
+    await assert.rejects(create(), { status: 409, message: /对白台词已修改.*重新生成/ });
+    await setCanvas(f, doc);
+    await assert.rejects(f.service.create(f.member, f.project.id, request), {
+      status: 404,
+    });
+    await assert.rejects(
+      f.service.create(f.admin, f.project.id, { ...request, exporter: "storyboard/fcp" }),
+      { status: 400, message: /MP4/ },
+    );
+    await deployStoryboardExporter(f, "2.0.0", {
+      outputKind: "composition",
+      mime: "video/mp4",
+      program: "({plan:()=>[{index:1,narration:false,subtitles:false}]})",
+    });
+    const accepted = await create();
+    assert.equal(accepted.scope, "episode");
+    assert.deepEqual(await create(), accepted);
+    await assert.rejects(
+      f.service.create(f.admin, f.project.id, {
+        uid: request.uid,
+        expected_revision: 1,
+      }),
+      { status: 409, message: /提交编号/ },
+    );
+    const row = await one(
+      f.db,
+      "SELECT snapshot,exporter_version FROM storyboard_exports WHERE public_id=$1",
+      [accepted.id],
+    );
+    assert.equal(row.exporter_version, "2.0.0");
+    assert.deepEqual(JSON.parse(Buffer.from(row.snapshot).toString("utf8")), [
+      {
+        node: "s2",
+        title: "原声",
+        video: imported.public_id,
+        voice: null,
+        text: "",
+        audioStrategy: "keep_original",
+      },
+      {
+        node: "s1",
+        title: "对白",
+        video: adopted.public_id,
+        voice: null,
+        text: "",
+        dialogue: [{ voice: f.voice.public_id, speaker: "林默", text: "你好。😀!" }],
+      },
+    ]);
+    await setCanvas(f, { ...doc, director: { ...director, shot_ids: ["s2"] } });
+    assert.deepEqual(await create(), accepted);
+    assert.deepEqual((await f.service.list(f.admin, f.project.id)).exports, [accepted]);
+  } finally {
+    await f.cleanup();
+  }
+});
+test("episode keeps the head of adjacent legacy clips after adopting a different predecessor", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    const original = await f.job(901, "video", "completed", f.video.id);
+    const replacementClip = await f.asset(randomUUID().replaceAll("-", ""), "video");
+    await f.job(902, "video", "completed", replacementClip.id);
+    const child = await f.job(903, "video", "completed", f.video.id);
+    await f.link(f.project.id, "prior", 901);
+    await f.link(f.project.id, "prior", 902);
+    await f.link(f.project.id, "next", 903);
+    await f.db.query("INSERT INTO job_tail_chains(child_job_id,parent_job_id) VALUES($1,$2)", [child.id, original.id]);
+    const shots = ["prior", "next"];
+    for (const inherited of [true, false]) {
+      await confirmEpisodeAdoptions(f, {
+        nodes: [
+          { id: "prior", type: "video", x: 0, y: 0, active_job: 902 },
+          { id: "next", type: "video", x: 300, y: 0, active_job: 903, tail_inherited: inherited },
+        ],
+        shots,
+        director: episode(shots),
+      });
+      const accepted = await f.service.create(f.admin, f.project.id, {
+        uid: randomUUID(), expected_revision: 1, scope: "episode",
+      });
+      const row = await one(f.db, "SELECT snapshot FROM storyboard_exports WHERE public_id=$1", [accepted.id]);
+      const frozen = JSON.parse(Buffer.from(row.snapshot).toString("utf8"));
+      assert.deepEqual(frozen.map((shot: { video: string }) => shot.video), [replacementClip.public_id, f.video.public_id]);
+      assert.ok(frozen.every((shot: { tailInherited?: boolean }) => !shot.tailInherited));
+      await f.db.query("UPDATE storyboard_exports SET state='failed' WHERE public_id=$1", [accepted.id]);
+    }
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("episode receipt remains available when the renderer is down", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    await confirmEpisodeAdoptions(f, { ...f.doc, director: episode(f.doc.shots) });
+    const request = {
+      uid: randomUUID(),
+      expected_revision: f.project.revision,
+      scope: "episode" as const,
+    };
+    const accepted = await f.service.create(f.admin, f.project.id, request);
+    let healthChecks = 0;
+    const unavailable = new OriginalStoryboardExports(f.p, [{
+      ...originalStoryboard,
+      health: async () => {
+        healthChecks++;
+        return false;
+      },
+    }]);
+    assert.deepEqual(await unavailable.create(f.admin, f.project.id, request), accepted);
+    await assert.rejects(
+      unavailable.create(f.admin, f.project.id, { ...request, scope: "canvas" }),
+      { status: 409, message: /提交编号/ },
+    );
+    await assert.rejects(
+      unavailable.create(f.member, f.project.id, request),
+      { status: 404 },
+    );
+    assert.equal(healthChecks, 0);
+    await assert.rejects(
+      unavailable.create(f.admin, f.project.id, { ...request, uid: randomUUID() }),
+      { status: 503 },
+    );
+    assert.equal(healthChecks, 1);
+  } finally {
+    await f.cleanup();
+  }
+});
+test("a stalled renderer probe does not lock an existing export receipt", async () => {
+  const f = await fixture();
+  const enteredProbe = deferred();
+  const releaseProbe = deferred();
+  let probe: Promise<unknown> | undefined;
+  let replay: Promise<unknown> | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const request = { uid: randomUUID(), expected_revision: f.project.revision };
+    const accepted = await f.service.create(f.admin, f.project.id, request);
+    const slow = new OriginalStoryboardExports(f.p, [
+      {
+        ...originalStoryboard,
+        health: async () => {
+          enteredProbe.resolve();
+          await releaseProbe.promise;
+          return false;
+        },
+      },
+    ]);
+    probe = slow
+      .create(f.admin, f.project.id, { ...request, uid: randomUUID() })
+      .catch((error: unknown) => error);
+    await enteredProbe.promise;
+    replay = f.service.create(f.admin, f.project.id, request);
+    const timedOut = new Promise((_, reject) => {
+      deadline = setTimeout(
+        () => reject(new Error("renderer probe locked receipt lookup")),
+        5000,
+      );
+    });
+    assert.deepEqual(await Promise.race([replay, timedOut]), accepted);
+  } finally {
+    clearTimeout(deadline);
+    releaseProbe.resolve();
+    await Promise.allSettled([probe, replay]);
+    await f.cleanup();
+  }
+});
+test("episode exporter requires MP4 composition output", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    await setCanvas(f, { ...f.doc, director: episode(f.doc.shots) });
+    const request = {
+      uid: randomUUID(),
+      expected_revision: f.project.revision,
+      scope: "episode" as const,
+    };
+    await deployStoryboardExporter(f, "2.0.0", {
+      outputKind: "project",
+      mime: "application/zip",
+      program: "({export:()=>({})})",
+    });
+    await assert.rejects(
+      f.service.create(f.admin, f.project.id, request),
+      { status: 503, message: /MP4/ },
+    );
+    await deployStoryboardExporter(f, "3.0.0", {
+      outputKind: "composition",
+      mime: "application/zip",
+      program: "({plan:()=>[{index:0,narration:true,subtitles:true}]})",
+    });
+    await assert.rejects(
+      f.service.create(f.admin, f.project.id, request),
+      { status: 503, message: /MP4/ },
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+test("episode export rejects 31 shots at admission and 10 minutes at rendering", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    const nodes = Array.from({ length: 31 }, (_, index) => ({
+      id: `s${index}`,
+      type: "video",
+      x: 0,
+      y: 0,
+      use_media: true,
+      media_id: f.video.public_id,
+    }));
+    const request = {
+      uid: randomUUID(),
+      expected_revision: 1,
+      scope: "episode" as const,
+    };
+    const setShots = async (nodes: unknown[], shots: string[]) => {
+      await setCanvas(f, { nodes, shots, director: episode(shots) });
+    };
+    await setShots(nodes, nodes.map((n) => n.id));
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), {
+      status: 400,
+      message: /30/,
+    });
+    const narrated = {
+      ...nodes[0],
+      narration_text: "你好。😀!",
+      dialogue_lines: [{ id: "blank", text: " " }],
+    };
+    await setShots([narrated], [narrated.id]);
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), {
+      status: 409,
+      message: /填写旁白/,
+    });
+    await exec("ffmpeg", [
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=blue:s=16x16:r=24:d=100",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-f",
+      "mp4",
+      join(f.directory, f.video.id),
+    ]);
+    const episodeNodes = [{ ...narrated, narration_job: 900 }, ...nodes.slice(1, 6)];
+    const episodeIds = episodeNodes.map(({ id }) => id);
+    await confirmEpisodeAdoptions(f, { nodes: episodeNodes, shots: episodeIds, director: episode(episodeIds) });
+    const accepted = await f.service.create(f.admin, f.project.id, request);
+    const row = await one(
+      f.db,
+      "SELECT id,snapshot FROM storyboard_exports WHERE public_id=$1",
+      [accepted.id],
+    );
+    assert.equal(JSON.parse(Buffer.from(row.snapshot).toString("utf8"))[0].voice, f.voice.public_id);
+    await f.service.execute(row.id);
+    const failed = (await f.service.list(f.admin, f.project.id)).exports[0];
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.scope, "episode");
+    assert.match(failed.error, /成片总时长最多 5 分钟/);
+  } finally {
+    await f.cleanup();
+  }
+});
+test("scope migration retains queued canvas snapshots and their submission receipts", async () => {
+  const f = await databaseFixture("055_workspace_script_documents.sql");
+  try {
+    await new OriginalIdentity(f.p).bootstrap({
+      name: "admin",
+      nickname: "管理员",
+      password: "scope-migration-fixture",
+    });
+    const admin = (await one(f.db, "SELECT * FROM users WHERE name='admin'")) as OriginalActor;
+    const project = await new OriginalCanvases(f.p).create(admin, {});
+    const request = { uid: randomUUID(), expected_revision: project.revision };
+    const id = randomUUID();
+    const publicId = id.replaceAll("-", "");
+    const snapshot = Buffer.from(JSON.stringify([{ node: "saved", video: "pinned" }]));
+    await f.db.query(
+      `INSERT INTO storyboard_exports
+        (id,public_id,uid,owner_id,workspace_id,project_id,revision,snapshot,state,subtitles,error,created,updated)
+       SELECT $1,$2,$3,owner_id,workspace_id,id,revision,$4,'queued',$5,$5,1,1
+       FROM documents WHERE public_id=$6`,
+      [id, publicId, request.uid, snapshot, Buffer.alloc(0), project.id],
+    );
+    await migrate(f.db);
+    const row = await one(f.db, "SELECT scope,snapshot FROM storyboard_exports WHERE id=$1", [id]);
+    assert.equal(row.scope, "canvas");
+    assert.deepEqual(Buffer.from(row.snapshot), snapshot);
+    const service = new OriginalStoryboardExports(f.p);
+    const replay = await service.create(admin, project.id, request);
+    assert.equal(replay.id, publicId);
+    assert.equal(replay.scope, "canvas");
+    assert.equal(replay.state, "queued");
+    await assert.rejects(
+      service.create(admin, project.id, { ...request, scope: "episode" }),
+      { status: 409, message: /提交编号/ },
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 test("real local composition: acceptance, UID replay, refs, audio padding, embedded subtitles and one save", async () => {
   const f = await fixture();
   const bucket = process.env.TEST_STORYBOARD_S3_BUCKET;
@@ -129,6 +560,7 @@ test("real local composition: acceptance, UID replay, refs, audio padding, embed
       request = { uid, expected_revision: 1 };
     const created = await f.service.create(f.admin, f.project.id, request);
     assert.equal(created.state, "queued");
+    assert.equal(created.scope, "canvas");
     assert.deepEqual(
       await f.service.create(f.admin, f.project.id, {
         uid,
@@ -865,6 +1297,10 @@ test("acceptance retains permission, revision, readiness, narration, UID, global
     ]);
     await assert.rejects(
       unavailable.create(f.member, f.project.id, request()),
+      { status: 404 },
+    );
+    await assert.rejects(
+      unavailable.create(f.admin, f.project.id, request()),
       /成片合成服务尚未配置/,
     );
     await f.db.query("UPDATE jobs SET state='queued' WHERE public_id=900");
@@ -1175,6 +1611,548 @@ test("fractional ffprobe duration retains 124 frames without an extra silent fra
     );
     assert.equal((await f.service.subtitles(f.admin, done.id)).body, "");
   } finally {
+    await f.cleanup();
+  }
+});
+
+test("episode admission requires matching adoption evidence for an explicit media pin", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    const node = { ...f.doc.nodes[0], prompt: "同一镜头", audio_strategy: "keep_original" };
+    await setCanvas(f, { ...f.doc, nodes: [node], director: episode(f.doc.shots) });
+    const request = { uid: randomUUID(), expected_revision: 1, scope: "episode" };
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /采用/ });
+    const approved = await confirmEpisodeAdoptions(f, { ...f.doc, nodes: [node], director: episode(f.doc.shots) });
+    const another = await f.asset(randomUUID().replaceAll("-", ""), "video");
+    await setCanvas(f, { ...approved, nodes: [{ ...node, media_id: another.public_id }] });
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /采用/ });
+    await setCanvas(f, { ...approved, nodes: [{ ...node, prompt: "分镜已改写" }] });
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /采用/ });
+    await setCanvas(f, { ...approved, nodes: [{ ...node, x: 100 }] });
+    assert.equal((await f.service.create(f.admin, f.project.id, request)).scope, "episode");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("episode admission refuses a drifted script unless its exact confirmed revision was chosen", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f, 2);
+    await confirmEpisodeAdoptions(f, { ...f.doc, director: episode(f.doc.shots) });
+    const request = { uid: randomUUID(), expected_revision: 1, scope: "episode" };
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /主剧本已更新/ });
+    await assert.rejects(f.service.create(f.admin, f.project.id, {
+      ...request, script_revision: 2, use_confirmed_script: true,
+    }), { status: 409, message: /剧本版本/ });
+    await confirmEpisodeAdoptions(f, { ...f.doc, director: episode(f.doc.shots) });
+    const exact = { ...request, script_revision: 1, use_confirmed_script: true };
+    const accepted = await f.service.create(f.admin, f.project.id, exact);
+    await f.db.query("UPDATE workspace_script_documents SET deleted=true WHERE public_id=$1", ["c".repeat(32)]);
+    assert.deepEqual(await f.service.create(f.admin, f.project.id, exact), accepted);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+async function confirmEpisodeAdoptions<T extends { director: DirectorProduction; nodes: { id: string; media_id?: string | null; use_media?: boolean; active_job?: number | null }[] }>(
+  f: Awaited<ReturnType<typeof fixture>>,
+  document: T,
+) {
+  await setCanvas(f, document);
+  const director = new OriginalBatchPrecheck(f.p);
+  const shots: NonNullable<DirectorProduction["shots"]> = [];
+  for (const nodeId of document.director.shot_ids) {
+    const node = document.nodes.find(({ id }) => id === nodeId)!;
+    const inputs = await director.directorInputs(f.admin, f.project.id, nodeId);
+    assert.ok(inputs.adoption_input_basis);
+    const selection = node.use_media ? { media_id: node.media_id! } : { job_id: node.active_job! };
+    shots.push({
+      node_id: nodeId,
+      ...(inputs.story_basis ? { story_basis: inputs.story_basis } : {}),
+      ...(inputs.material_basis ? { material_basis: inputs.material_basis } : {}),
+      adoption_basis: await directorAdoptionBasis(inputs.adoption_input_basis, selection),
+    });
+  }
+  const approved = { ...document, director: { ...document.director, shots } };
+  await setCanvas(f, approved);
+  return approved;
+}
+
+async function seedEpisodeScript(f: Awaited<ReturnType<typeof fixture>>, revision = 1) {
+  await f.db.query(
+    `INSERT INTO workspace_script_documents(id, public_id, workspace_id, owner_id, path, revision)
+     SELECT $1,$2,workspace_id,owner_id,'主剧本.md',$3 FROM documents WHERE id=$4`,
+    [randomUUID(), "c".repeat(32), revision, f.projectId],
+  );
+}
+
+test("episode admission rechecks selected tracked audio against the current effective voice", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    await ensureBuiltinEdgeTts(f.p);
+    const packs = new OriginalPacks(f.p);
+    const workspace = String(f.workspace.public_id);
+    const reference = await f.asset(randomUUID().replaceAll("-", ""), "ref");
+    const packDraft = (voice_id: string) => ({
+      name: "林默",
+      purpose: "subject",
+      media: [reference.public_id],
+      voice_profile: { model: "edge-tts", voice_id },
+    });
+    const oldVoice = "zh-CN-XiaoxiaoNeural";
+    const pack = await packs.save(f.admin, packDraft(oldVoice), workspace);
+    const node = { ...f.doc.nodes[0], prompt: "对白镜头", narration_job: null, narration_text: "", dialogue_lines: [
+      { id: "line", speaker: "林默", text: "你好。😀!", audio_job: 900, pack_id: pack.id },
+    ] };
+    const approved = await confirmEpisodeAdoptions(f, { ...f.doc, nodes: [node], director: episode(f.doc.shots) });
+    const checked = await new OriginalBatchPrecheck(f.p).directorInputs(f.admin, f.project.id, node.id);
+    const expected = checked.audio_inputs["shot:dialogue:line"];
+    assert.equal(expected.voice_id, oldVoice);
+    const link = await f.link(f.project.id, "dialogue:shot:line", 900, JSON.stringify({ director_basis: expected.basis }));
+    const request = { uid: randomUUID(), expected_revision: 1, scope: "episode" };
+    const accepted = await f.service.create(f.admin, f.project.id, request);
+    const row = await one(f.db, "SELECT id FROM storyboard_exports WHERE public_id=$1", [accepted.id]);
+    await f.service.execute(row.id);
+    assert.equal((await f.service.list(f.admin, f.project.id, "episode")).exports[0].state, "done");
+
+    await packs.save(f.admin, { ...packDraft("zh-CN-YunxiNeural"), expected_revision: pack.revision }, workspace, pack.id);
+    const retry = () => f.service.create(f.admin, f.project.id, { ...request, uid: randomUUID() });
+    await assert.rejects(retry(), { status: 409, message: /声线.*重新生成/ });
+    // Updating the video approval still leaves the selected voice take stale.
+    await confirmEpisodeAdoptions(f, approved);
+    await assert.rejects(retry(), { status: 409, message: /声线.*重新生成/ });
+    // An ordinary take carries individual voice fields instead of a Director digest.
+    const ordinary = { model: "edge-tts", pack_id: pack.id, voice_id: oldVoice };
+    await f.db.query("UPDATE canvas_job_links SET inputs=$2 WHERE id=$1", [link.id, Buffer.from(JSON.stringify(ordinary))]);
+    await assert.rejects(retry(), { status: 409, message: /声线.*重新生成/ });
+    const receipt = await f.service.create(f.admin, f.project.id, request);
+    assert.equal(receipt.id, accepted.id);
+    assert.equal(receipt.state, "done");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("selected and pending dialogue takes survive library cleanup and canvas duplication", async (t) => {
+  const f = await fixture();
+  t.after(() => f.cleanup());
+  await seedEpisodeScript(f);
+  await activateCanvasRunPlugins(f);
+  await ensureBuiltinEdgeTts(f.p);
+  await f.db.query("UPDATE jobs SET deleted_at=now() WHERE public_id=900");
+  const node = { ...f.doc.nodes[0], prompt: "对白镜头", narration_job: null, narration_text: "",
+    dialogue_lines: [{ id: "line", speaker: "甲", text: "你好", model: "edge-tts" }] };
+  const graph = { ...f.doc, nodes: [node], director: episode(f.doc.shots) };
+  await setCanvas(f, graph);
+  const runs = new OriginalCanvasRuns(f.p);
+  const take = async () => {
+    const accepted = await runs.narrateDialogue(f.admin, f.project.id, node.id, { uid: randomUUID(), expected_revision: 1, line_id: "line" });
+    return one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [accepted.items[0].id]);
+  };
+  const finish = async (job: any) => {
+    const output = await f.asset(randomUUID().replaceAll("-", ""), "audio");
+    await f.db.query("UPDATE assets SET object_key=id::text WHERE id=$1", [output.id]);
+    await f.db.transaction(async (sql) => {
+      await f.p.settle(sql, job, "completed", { assets: [output.id] });
+      await sql.query("INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')", [job.id, output.id]);
+    });
+  };
+  const current = await take();
+  await finish(current);
+  const pending = await take();
+  const line = { ...node.dialogue_lines[0], audio_job: Number(current.public_id), audio_pending: Number(pending.public_id) };
+  const save = (id: string, expected_revision: number, lines: typeof node.dialogue_lines) =>
+    f.canvases.save(f.admin, id, { expected_revision, title: "对白", document: { ...graph, nodes: [{ ...node, dialogue_lines: lines }] } });
+  const saved = await save(f.project.id, 1, [line]);
+  const remove = (id: number) => f.canvases.library.remove(f.admin, { keys: ["job:" + id] });
+  await assert.rejects(remove(line.audio_job), /素材正在画布中使用/);
+  const copy = await f.canvases.duplicate(f.admin, f.project.id);
+  const expected = (await runs.list(f.admin, f.project.id)).runs as Record<string, unknown>[];
+  const listed = (await runs.list(f.admin, copy.id)).runs as Record<string, unknown>[];
+  assert.equal(listed.length, 2);
+  for (const take of expected) {
+    const copied = listed.find(({ id }) => id === take.id);
+    assert.ok(copied);
+    assert.deepEqual([copied.canvas_node, copied.inputs, copied.audio_settings], [take.canvas_node, take.inputs, take.audio_settings]);
+  }
+  await save(f.project.id, saved.revision, []);
+  await finish(pending);
+  await assert.rejects(remove(line.audio_pending), /素材正在画布中使用/);
+  await assert.rejects(remove(line.audio_job), /素材正在画布中使用/);
+  const selected = { ...line, audio_pending: null, audio_stale: [line.audio_job] };
+  await save(copy.id, copy.revision, [selected]);
+  assert.equal((await remove(line.audio_pending)).deleted, 1);
+  assert.equal((await remove(line.audio_job)).deleted, 1);
+});
+
+test("failed dialogue takes without output retain their retry history until detached", async (t) => {
+  const f = await fixture();
+  t.after(() => f.cleanup());
+  await seedEpisodeScript(f);
+  const jobs = new OriginalJobs(f.p);
+  await f.job(970, "audio", "failed");
+  await f.job(971, "audio", "cancelled");
+  await f.link(f.project.id, "dialogue:shot:first", 970);
+  await f.link(f.project.id, "dialogue:shot:second", 971);
+  const node = {
+    ...f.doc.nodes[0], narration_job: null, narration_text: "",
+    dialogue_lines: [
+      { id: "first", speaker: "甲", text: "你好", audio_pending: 970 },
+      { id: "second", speaker: "乙", text: "再见", audio_pending: 971 },
+    ],
+  };
+  const graph = { ...f.doc, nodes: [node], director: episode(f.doc.shots) };
+  const saved = await f.canvases.save(f.admin, f.project.id, {
+    title: "对白", expected_revision: 1, document: graph,
+  });
+  const removeBulk = () => f.canvases.library.remove(f.admin, { keys: ["job:970"] });
+  const removeSingle = () => jobs.remove(f.admin, 971);
+  await assert.rejects(removeBulk(), { status: 409, message: /对白.*画布/ });
+  await assert.rejects(removeSingle(), { status: 409, message: /对白.*画布/ });
+
+  await f.canvases.save(f.admin, f.project.id, {
+    title: "对白", expected_revision: saved.revision,
+    document: { ...graph, nodes: [{ ...node, dialogue_lines: [] }] },
+  });
+  assert.equal((await removeBulk()).deleted, 1);
+  assert.deepEqual(await removeSingle(), { ok: true });
+});
+
+test("episode reused media must confirm every available basis even when its adoption digest matches", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    const node = { ...f.doc.nodes[0], prompt: "镜头继续", params: { model: "muse-video" }, audio_strategy: "keep_original" };
+    const graph = { ...f.doc, nodes: [node], director: episode(f.doc.shots) };
+    const approved = await confirmEpisodeAdoptions(f, graph);
+    const [basis] = approved.director.shots;
+    assert.ok(basis.story_basis && basis.material_basis);
+    const request = { uid: randomUUID(), expected_revision: 1, scope: "episode" };
+    await setCanvas(f, { ...approved, director: { ...approved.director, shots: [{ ...basis, story_basis: undefined }] } });
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /确认分镜/ });
+    await setCanvas(f, { ...approved, director: { ...approved.director, shots: [{ ...basis, material_basis: undefined }] } });
+    await assert.rejects(f.service.create(f.admin, f.project.id, request), { status: 409, message: /确认素材/ });
+    const unavailable = await confirmEpisodeAdoptions(f, { ...graph, nodes: [{ ...node, prompt: "" }] });
+    assert.ok(!unavailable.director.shots[0].story_basis && !unavailable.director.shots[0].material_basis);
+    assert.equal((await f.service.create(f.admin, f.project.id, request)).scope, "episode");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("episode compares the accepted ordinary Edge rendering with pack rate, pitch and default drift", async () => {
+  const f = await fixture();
+  try {
+    await seedEpisodeScript(f);
+    await activateCanvasRunPlugins(f);
+    await ensureBuiltinEdgeTts(f.p);
+    await f.db.query("UPDATE jobs SET deleted_at=now() WHERE public_id=900");
+    const packs = new OriginalPacks(f.p);
+    const workspace = String(f.workspace.public_id);
+    const reference = await f.asset(randomUUID().replaceAll("-", ""), "ref");
+    const packDraft = (settings: { voice_id?: string; rate?: string; pitch?: string }) => ({
+      name: "林默",
+      purpose: "subject",
+      media: [reference.public_id],
+      voice_profile: { model: "edge-tts", ...settings },
+    });
+    const pack = await packs.save(f.admin, packDraft({}), workspace);
+    let packRevision = pack.revision;
+    const editPack = async (settings: Parameters<typeof packDraft>[0]) => {
+      const updated = await packs.save(
+        f.admin,
+        { ...packDraft(settings), expected_revision: packRevision },
+        workspace,
+        pack.id,
+      );
+      packRevision = updated.revision;
+    };
+    const line = { id: "line", speaker: "林默", text: "你好。😀!", pack_id: pack.id };
+    const node = { ...f.doc.nodes[0], prompt: "对白镜头", narration_job: null, narration_text: "", dialogue_lines: [line] };
+    const graph = { ...f.doc, nodes: [node], director: episode(f.doc.shots) };
+    await setCanvas(f, graph);
+    const ordinary = new OriginalCanvasRuns(f.p);
+    const prepareTake = async () => {
+      const accepted = await ordinary.narrateDialogue(f.admin, f.project.id, node.id, {
+        uid: randomUUID(), expected_revision: 1, line_id: line.id,
+      });
+      const id = accepted.items[0].id;
+      const job = await one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [id]);
+      await f.db.transaction(async (sql) => {
+        await f.p.settle(sql, job, "completed", { assets: [f.voice.id] });
+        await sql.query("INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')", [job.id, f.voice.id]);
+      });
+      return { job, graph: { ...graph, nodes: [{ ...node, dialogue_lines: [{ ...line, audio_job: id }] }] } };
+    };
+    const attempt = () => f.service.create(f.admin, f.project.id, { uid: randomUUID(), expected_revision: 1, scope: "episode" });
+    const acceptAndRelease = async () => {
+      const receipt = await attempt();
+      await f.db.query("UPDATE storyboard_exports SET state='failed' WHERE public_id=$1", [receipt.id]);
+    };
+    const defaults = await prepareTake();
+    assert.deepEqual(defaults.job.original_view.audio_settings, { voice: "zh-CN-XiaoxiaoNeural", rate: "+0%", pitch: "+0Hz" });
+    await confirmEpisodeAdoptions(f, defaults.graph);
+    await acceptAndRelease();
+    await editPack({ voice_id: "zh-CN-XiaoxiaoNeural", rate: "0%", pitch: "-0Hz" });
+    await confirmEpisodeAdoptions(f, defaults.graph);
+    await acceptAndRelease();
+    await editPack({ rate: "+15%" });
+    await confirmEpisodeAdoptions(f, defaults.graph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+    await editPack({ pitch: "+20Hz" });
+    await confirmEpisodeAdoptions(f, defaults.graph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+    const pitched = await prepareTake();
+    assert.equal(pitched.job.input.params.pitch, "+20Hz");
+    // An older job can retain the prepared provider input even if its view lacks pitches.
+    await f.db.query("UPDATE jobs SET original_view=jsonb_set(original_view::jsonb,'{audio_settings}','{}') WHERE id=$1", [pitched.job.id]);
+    await confirmEpisodeAdoptions(f, pitched.graph);
+    await acceptAndRelease();
+    await editPack({});
+    await confirmEpisodeAdoptions(f, pitched.graph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+    // Validate the same effective snapshot reaches browser readiness.
+    const runs = await ordinary.list(f.admin, f.project.id);
+    const view = (runs.runs as Record<string, unknown>[]).find((run) => run.id === Number(pitched.job.public_id));
+    assert.deepEqual(view?.audio_settings, pitched.job.original_view.audio_settings);
+    await f.db.query("UPDATE jobs SET input=$2 WHERE id=$1", [pitched.job.id, JSON.stringify({ prompt: line.text })]);
+    await acceptAndRelease();
+
+    await editPack({ rate: "+120%", pitch: "+75Hz" });
+    const clamped = await prepareTake();
+    assert.equal(clamped.job.input.params.rate, "+120%");
+    assert.equal(clamped.job.input.params.pitch, "+75Hz");
+    const clampedRuns = await ordinary.list(f.admin, f.project.id);
+    const clampedView = (clampedRuns.runs as Record<string, unknown>[])
+      .find((run) => run.id === Number(clamped.job.public_id));
+    assert.deepEqual(clampedView?.audio_settings, { voice: "zh-CN-XiaoxiaoNeural", rate: "+100%", pitch: "+50Hz" });
+    await editPack({ rate: "+100%", pitch: "+50Hz" });
+    await confirmEpisodeAdoptions(f, clamped.graph);
+    await acceptAndRelease();
+    await editPack({ rate: "+99%", pitch: "+50Hz" });
+    await confirmEpisodeAdoptions(f, clamped.graph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+    await editPack({ rate: "+100%", pitch: "+49Hz" });
+    await confirmEpisodeAdoptions(f, clamped.graph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+
+    // A paid Director receipt freezes the raw +120% request. The completed take
+    // remains usable after the pack changes to its equivalent renderer limit.
+    await editPack({ rate: "+120%", pitch: "+75Hz" });
+    await confirmEpisodeAdoptions(f, clamped.graph);
+    const director = { script_revision: 1, targets: [{ node_id: node.id, stage: "dialogue", line_id: line.id }] };
+    const quote = await new OriginalBatchPrecheck(f.p).precheckCanvas(f.admin, f.project.id, { expected_revision: 1, director });
+    const paid = { uid: randomUUID(), expected_revision: 1, director, precheck_token: quote.precheck_token,
+      price_revision: quote.price_revision, expected_total_credits: quote.summary.total_credits };
+    const receipt = await ordinary.batchRun(f.admin, f.project.id, paid);
+    assert.equal(receipt.submitted.length, 1, JSON.stringify(quote.items));
+    const voiceId = receipt.submitted[0].job_id;
+    const signedJob = await one(f.db, "SELECT * FROM jobs WHERE public_id=$1", [voiceId]);
+    assert.equal(signedJob.input.params.rate, "+120%");
+    await f.db.transaction(async (sql) => {
+      await f.p.settle(sql, signedJob, "completed", { assets: [f.voice.id] });
+      await sql.query("INSERT INTO job_assets(job_id,asset_id,role) VALUES($1,$2,'output')", [signedJob.id, f.voice.id]);
+    });
+    const signedGraph = { ...graph, nodes: [{ ...node, dialogue_lines: [{ ...line, audio_job: voiceId }] }] };
+    await editPack({ rate: "+100%", pitch: "+50Hz" });
+    await confirmEpisodeAdoptions(f, signedGraph);
+    await acceptAndRelease();
+    await editPack({ rate: "+99%", pitch: "+50Hz" });
+    await confirmEpisodeAdoptions(f, signedGraph);
+    await assert.rejects(attempt(), { status: 409, message: /声线.*重新生成/ });
+    assert.deepEqual(await ordinary.batchRun(f.admin, f.project.id, paid), receipt);
+
+    const invalid = { rate: "invalid-rate", pitch: "invalid-pitch" };
+    await f.db.query("UPDATE jobs SET original_view=$2,input=$3 WHERE id=$1", [
+      clamped.job.id,
+      JSON.stringify({ ...clamped.job.original_view, audio_settings: {} }),
+      JSON.stringify({ ...clamped.job.input, params: invalid }),
+    ]);
+    await editPack({});
+    await confirmEpisodeAdoptions(f, clamped.graph);
+    await acceptAndRelease();
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("episode takes later Flow job locks before earlier adopted assets", async () => {
+  const f = await fixture();
+  const release = deferred();
+  const waiting = deferred<number>();
+  let exportRequest: Promise<unknown> | undefined;
+  let deleting: Promise<unknown> | undefined;
+  try {
+    await seedEpisodeScript(f);
+    const job = await f.job(901, "video", "completed", f.video.id);
+    await f.db.query(`UPDATE jobs SET provider_model='flow:veo-3.1-fast-extend-8s-landscape',plugin_id='flow',
+      original_view='{"ratio":"16:9","actual":{"flow_media_id":"private-output"}}' WHERE id=$1`, [job.id]);
+    const prior = { ...f.doc.nodes[0], prompt: "前镜", audio_strategy: "keep_original" };
+    const next = { ...prior, id: "next", prompt: "沿用尾段", params: {
+      model: "flow:veo-3.1-fast-extend-8s-landscape", flow_source_job: 901,
+    } };
+    const shots = [prior.id, next.id];
+    await confirmEpisodeAdoptions(f, { nodes: [prior, next], shots, director: episode(shots) });
+    deleting = f.db.transaction(async (sql) => {
+      await sql.query("SELECT id FROM jobs WHERE id=$1 FOR UPDATE", [job.id]);
+      const { pid } = await one(sql, "SELECT pg_backend_pid() AS pid");
+      waiting.resolve(pid);
+      await release.promise;
+      // This is the same job-before-asset lock sequence used when deleting a job.
+      await sql.query("SELECT id FROM assets WHERE id=$1 FOR UPDATE NOWAIT", [f.video.id]);
+    });
+    const blocker = await waiting.promise;
+    exportRequest = f.service.create(f.admin, f.project.id, {
+      uid: randomUUID(), expected_revision: 1, scope: "episode",
+    });
+    void exportRequest.catch(() => {});
+    const deadline = Date.now() + 8000;
+    for (;;) {
+      const { blocked } = await one(f.db, `SELECT EXISTS(
+        SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))
+      ) AS blocked`, [blocker]);
+      if (blocked) break;
+      assert.ok(Date.now() < deadline, "episode request did not reach the held job");
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+    release.resolve();
+    await deleting;
+    assert.equal((await exportRequest as { scope: string }).scope, "episode");
+  } finally {
+    release.resolve();
+    await Promise.allSettled([exportRequest, deleting]);
+    await f.cleanup();
+  }
+});
+
+test("episode holds legacy fallback reference state until it freezes the export", async () => {
+  const f = await fixture();
+  const observed = deferred();
+  const release = deferred();
+  let exportRequest: Promise<unknown> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await seedEpisodeScript(f);
+    const reference = await f.asset(randomUUID().replaceAll("-", ""), "ref");
+    const node = { ...f.doc.nodes[0], audio_strategy: "keep_original" };
+    const refNode = { id: "ref", type: "image", x: 0, y: 0, media_id: reference.public_id, use_media: true };
+    await confirmEpisodeAdoptions(f, {
+      ...f.doc,
+      nodes: [node, refNode],
+      edges: [{ id: "link", source: refNode.id, target: node.id }],
+      director: episode(f.doc.shots),
+    });
+
+    const stage = f.service.availableStageBytes.bind(f.service);
+    f.service.availableStageBytes = async () => {
+      observed.resolve();
+      await release.promise;
+      return stage();
+    };
+    exportRequest = f.service.create(f.admin, f.project.id, {
+      uid: randomUUID(), expected_revision: 1, scope: "episode",
+    });
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("episode export did not reach staging")), 8000);
+    });
+    await Promise.race([observed.promise, exportRequest, timedOut]);
+    await assert.rejects(
+      f.db.query("SELECT id FROM assets WHERE id=$1 FOR UPDATE NOWAIT", [reference.id]),
+      { code: "55P03" },
+    );
+    release.resolve();
+    assert.equal((await exportRequest as { scope: string }).scope, "episode");
+  } finally {
+    clearTimeout(timer);
+    release.resolve();
+    await Promise.allSettled([exportRequest]);
+    await f.cleanup();
+  }
+});
+
+test("episode and original library deletion avoid opposite-order asset deadlock", async () => {
+  const f = await fixture();
+  const release = deferred();
+  const clipHeld = deferred<number>();
+  const originalTransaction = f.db.transaction.bind(f.db);
+  let exportRequest: Promise<unknown> | undefined;
+  let deleting: Promise<unknown> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await seedEpisodeScript(f);
+    const reference = { id: "00000000-0000-4000-8000-000000000001", publicId: randomUUID().replaceAll("-", "") };
+    await f.db.query(
+      `INSERT INTO assets(id, public_id, workspace_id, owner_id, object_key, mime, size, state, original_kind)
+       VALUES($1::uuid,$2,$3,$4,$1::uuid::text,'image/png',0,'ready','ref')`,
+      [reference.id, reference.publicId, f.workspace.id, f.admin.id],
+    );
+    assert.ok(reference.id < f.video.id);
+    await f.job(901, "video", "completed", f.video.id);
+    const refNode = { id: "ref", type: "image", x: 0, y: 0, media_id: reference.publicId, use_media: true };
+    const shot = { ...f.doc.nodes[0], audio_strategy: "keep_original", narration_job: null, narration_text: "" };
+    const document = {
+      ...f.doc,
+      nodes: [shot, refNode],
+      edges: [{ id: "ref-in", source: refNode.id, target: shot.id }],
+      director: episode(f.doc.shots),
+    };
+    const saved = await f.canvases.save(f.admin, f.project.id, { expected_revision: 1, title: f.project.title, document });
+    await confirmEpisodeAdoptions(f, document);
+
+    let paused = false;
+    f.db.transaction = (fn) => originalTransaction((sql) => fn({
+      async query<T extends Record<string, unknown>>(statement: string, params?: unknown[]) {
+        const result = await sql.query<T>(statement, params);
+        if (!paused && statement.includes("original_kind='video'") && statement.includes("FOR SHARE") &&
+          params?.[0] === f.video.public_id) {
+          paused = true;
+          const { pid } = await one(sql, "SELECT pg_backend_pid() AS pid");
+          clipHeld.resolve(pid);
+          await release.promise;
+        }
+        return result;
+      },
+    }));
+    const request = { uid: randomUUID(), expected_revision: saved.revision, scope: "episode" };
+    exportRequest = f.service.create(f.admin, f.project.id, request);
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("episode did not lock the adopted clip")), 8000);
+    });
+    const exporterPid = await Promise.race([clipHeld.promise, exportRequest, timeout]);
+    assert.equal(typeof exporterPid, "number");
+    deleting = new OriginalLibrary(f.p).remove(f.admin, {
+      keys: ["asset:" + reference.publicId, "job:901"],
+    });
+    void deleting.catch(() => {});
+    const deadline = Date.now() + 8000;
+    for (;;) {
+      const { blocked } = await one(f.db, `SELECT EXISTS(
+        SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))
+      ) AS blocked`, [exporterPid]);
+      if (blocked) break;
+      assert.ok(Date.now() < deadline, "library did not reach the held adopted clip");
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+    await assert.rejects(
+      f.db.query("SELECT id FROM assets WHERE id=$1 FOR UPDATE NOWAIT", [reference.id]),
+      { code: "55P03" },
+    );
+
+    release.resolve();
+    await assert.rejects(exportRequest, { status: 409, message: /素材.*重试合成/ });
+    await assert.rejects(deleting, { status: 409, message: /素材正在画布中使用/ });
+    assert.equal((await one(f.db, "SELECT count(*)::int AS n FROM storyboard_exports WHERE uid=$1", [request.uid])).n, 0);
+    const receipt = await f.service.create(f.admin, f.project.id, request);
+    assert.equal(receipt.scope, "episode");
+    assert.deepEqual(await f.service.create(f.admin, f.project.id, request), receipt);
+  } finally {
+    clearTimeout(timer);
+    release.resolve();
+    await Promise.allSettled([exportRequest, deleting]);
+    f.db.transaction = originalTransaction;
     await f.cleanup();
   }
 });

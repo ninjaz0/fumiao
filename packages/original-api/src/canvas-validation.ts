@@ -4,8 +4,9 @@ import {
 } from "@fumiao/plugin-sdk/canvas-ports.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import type { CanvasModels } from "@fumiao/platform/canvas-models.js";
+import type { DirectorProduction } from "@fumiao/web-compat/director.js";
 import type { CanvasDocument } from "./canvas-draft.js";
-import { canvasVoiceIds } from "./canvas-values.js";
+import { canvasDialogueTakes, canvasVoiceIds } from "./canvas-values.js";
 
 /** The caller must bind all lookups and authorization to the same save transaction. */
 export interface CanvasValidationResources {
@@ -23,11 +24,50 @@ export interface CanvasValidationResources {
 }
 export type CanvasReference = { node: string; media: string };
 
+function reconcileDirector(
+  document: CanvasDocument,
+  globalShots: readonly string[],
+  previous: DirectorProduction | undefined,
+) {
+  const director = document.director ?? previous;
+  if (!director) return;
+
+  const available = new Set(globalShots);
+  const removed = new Set(previous?.shot_ids.filter((id) => !available.has(id)));
+  const members = new Set(director.shot_ids);
+  requireValue(
+    members.size === director.shot_ids.length &&
+      director.shot_ids.every((id) => available.has(id) || removed.has(id)),
+    400,
+    "本集片单只能包含全画布镜序中的不同视频节点",
+  );
+  const states = director.shots ?? [];
+  requireValue(
+    new Set(states.map((state) => state.node_id)).size === states.length &&
+      states.every(
+        (state) => members.has(state.node_id) || removed.has(state.node_id),
+      ),
+    400,
+    "本集分镜状态只能关联片单中的不同镜头",
+  );
+  if (removed.size) {
+    const { order_basis: _order, shot_ids, shots, ...binding } = director;
+    document.director = {
+      ...binding,
+      shot_ids: shot_ids.filter((id) => !removed.has(id)),
+      ...(shots
+        ? { shots: shots.filter((state) => !removed.has(state.node_id)) }
+        : {}),
+    };
+  } else document.director = director;
+}
+
 /** Preserve source check ordering and per-node references, including cross-role duplicates. */
 export async function validateCanvasDocument(
   document: CanvasDocument,
   models: CanvasModels,
   resources: CanvasValidationResources,
+  previousDirector?: DirectorProduction,
 ): Promise<CanvasReference[]> {
   const nodes = new Map(document.nodes.map((n) => [n.id, n]));
   requireValue(
@@ -43,6 +83,7 @@ export async function validateCanvasDocument(
     400,
     "镜头列表只能包含不同的视频节点",
   );
+  reconcileDirector(document, shots, previousDirector);
   const refs: CanvasReference[] = [];
   for (const node of document.nodes) {
     if (node.parent_id) {
@@ -97,6 +138,17 @@ export async function validateCanvasDocument(
       requireValue(node.type === "video" && voice, 400, "镜头旁白任务不存在");
       await voice.authorize();
       if (voice.result) refs.push({ node: node.id, media: voice.result });
+    }
+    const dialogueOutputs = new Set<string>();
+    for (const take of canvasDialogueTakes(node)) {
+      const voice = await resources.voice(take.node, take.id);
+      // Older drafts can retain IDs without the original per-line link.
+      if (!voice) continue;
+      await voice.authorize();
+      if (voice.result) dialogueOutputs.add(voice.result);
+    }
+    for (const media of dialogueOutputs) {
+      if (!refs.some((ref) => ref.node === node.id && ref.media === media)) refs.push({ node: node.id, media });
     }
     if (node.media_id) {
       const media = await resources.media(node.media_id);

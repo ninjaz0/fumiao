@@ -462,14 +462,15 @@ export class StudioCatalog {
     workspace: string,
     params: Record<string, unknown>,
     expected?: number | bigint,
+    lock = true,
   ) {
     const global = await one(
       sql,
-      "SELECT price_revision FROM studio_policy FOR SHARE",
+      `SELECT price_revision FROM studio_policy ${lock ? "FOR SHARE" : ""}`,
     );
     const catalog = await one(
       sql,
-      "SELECT * FROM studio_catalog WHERE id=$1 FOR SHARE",
+      `SELECT * FROM studio_catalog WHERE id=$1 ${lock ? "FOR SHARE" : ""}`,
       [model.catalog_id],
     );
     requireValue(
@@ -489,9 +490,7 @@ export class StudioCatalog {
         409,
         "插件已停用",
       );
-    await sql.query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE", [
-      workspace,
-    ]);
+    if (lock) await sql.query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE", [workspace]);
     requireValue(
       (
         await one(sql, "SELECT studio_model_allowed($1,$2) AS allowed", [
