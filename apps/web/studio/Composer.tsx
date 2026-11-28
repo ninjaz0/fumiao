@@ -163,7 +163,12 @@ export function Composer({
   submit: () => void;
   upload: (files: FileList, frame?: FrameSlot) => void;
   menu: ComposerMenu | null;
-  open: (kind: ComposerMenu, button: HTMLButtonElement, focus?: boolean) => void;
+  open: (
+    kind: ComposerMenu,
+    button: HTMLButtonElement,
+    focus?: boolean,
+    pointer?: boolean,
+  ) => void;
   close: () => void;
   preview: (id: string, button: HTMLButtonElement) => void;
   editor: Ref<ComposerEditor>;
@@ -446,7 +451,7 @@ export function Composer({
   const opener =
     (kind: ComposerMenu) => (event: React.MouseEvent<HTMLButtonElement>) => {
       remember();
-      open(kind, event.currentTarget);
+      open(kind, event.currentTarget, true, event.detail > 0);
     };
   const referenceControls = frameMode ? (
     <div className="h3-frame-pair">
@@ -670,7 +675,7 @@ export function Composer({
       <div className="composer-toolbar">
         <div className="composer-parameters">
           <button
-            className="creation-type parameter-button"
+            className="creation-type parameter-button fm-choice-trigger fm-choice-trigger-wide"
             data-menu="creation"
             aria-label="创作类型"
             aria-expanded={menu === "creation"}
@@ -708,7 +713,7 @@ export function Composer({
             />
           )}
           <button
-            className="parameter-button h3-mode-control"
+            className="parameter-button h3-mode-control fm-choice-trigger fm-choice-trigger-wide"
             data-menu="h3-mode"
             aria-label="选择参考模式"
             aria-expanded={menu === "h3-mode"}
@@ -735,7 +740,7 @@ export function Composer({
             <span className="quality-label">{quality}</span>
           </button>
           <button
-            className={`parameter-button${fixed ? " fixed-parameter" : ""}`}
+            className={`parameter-button${fixed ? " fixed-parameter" : ""}${audio ? "" : " fm-choice-trigger"}`}
             data-menu="duration"
             aria-expanded={menu === "duration"}
             aria-label={durationName}
@@ -755,7 +760,7 @@ export function Composer({
                     ]
                   : draft.seconds + "s"}
             </span>
-            {(audio || image) && <Chevron />}
+            {(audio || image || !fixed) && <Chevron />}
           </button>
         </div>
         <div className="composer-actions">

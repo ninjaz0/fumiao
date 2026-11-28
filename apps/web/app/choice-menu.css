@@ -1,0 +1,107 @@
+html .fm-choice-trigger {
+  min-width: 80px;
+}
+
+html .fm-choice-trigger.fm-choice-trigger-wide {
+  min-width: 132px;
+}
+
+html .fm-choice-trigger.fm-choice-trigger-chip {
+  min-width: 136px;
+}
+
+html .fm-choice-trigger.fm-choice-trigger-count {
+  min-width: 104px;
+}
+
+html .fm-choice-trigger > :is(.chevron, .fm-choice-chevron) {
+  flex: none;
+  margin-inline-start: auto;
+}
+
+html button[aria-expanded="true"][data-choice-direction="up"] > :is(.chevron, .fm-choice-chevron) {
+  transform: rotate(180deg);
+}
+
+html :is(.fm-choice-trigger, .fm-cine-trigger)[aria-expanded="true"]:not(:disabled) {
+  background: var(--cv-selected, var(--selected, var(--pack-hover)));
+}
+
+html .fm-choice-menu[role] {
+  display: grid;
+  grid-auto-rows: max-content;
+  gap: 2px;
+}
+
+html .cv-menu.fm-choice-menu {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100vw;
+  padding: 4px;
+  border: 0.5px solid var(--pack-line, var(--cv-line, var(--line)));
+  border-radius: 16px;
+}
+
+html .cv-menu.duration-menu.fm-choice-menu {
+  left: var(--choice-menu-shift, 0px);
+  right: auto;
+  width: var(--choice-menu-width, 100%);
+}
+
+html .fm-choice-menu[role] > button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 9px 8px;
+  border-radius: 9px;
+  color: inherit;
+  font-size: 14px;
+  text-align: start;
+  white-space: normal;
+}
+
+html .fm-choice-menu[role] > button > span {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+
+html .fm-choice-menu[role] > button > svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+html .fm-choice-menu[role] > button:not([aria-selected="true"], [aria-pressed="true"])::after {
+  content: "";
+  flex: 0 0 16px;
+}
+
+html .fm-choice-menu[role] > button:is([aria-selected="true"], [aria-pressed="true"]) > svg:last-child {
+  width: 16px;
+  height: 16px;
+}
+
+html .fm-choice-menu[role] > button:not(:disabled, [aria-selected="true"], [aria-pressed="true"]):hover {
+  background: var(--pack-hover, var(--cv-hover, var(--hover)));
+}
+
+html .fm-choice-menu[role] > button:is([aria-selected="true"], [aria-pressed="true"]) {
+  background: var(--cv-selected, var(--selected));
+}
+
+html .fm-choice-menu[role]:focus {
+  outline: none;
+}
+
+html .fm-choice-menu[role] > button:focus-visible {
+  outline: 2px solid var(--focus, var(--cv-focus, var(--chat-focus, currentColor)));
+  outline-offset: -2px;
+}
