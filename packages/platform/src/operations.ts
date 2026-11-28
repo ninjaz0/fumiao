@@ -1,3 +1,6 @@
+import { resolveConnectionRevision } from "./model-access/connections.js";
+import { bindVideoRemote } from "./model-access/videos.js";
+import { adoptedModels } from "./studio-plugin-profile.js";
 import {
   addressPause,
   connectionBase,
@@ -43,20 +46,48 @@ export class Operations {
         );
       else {
         requireValue(job.executable, 409, "退役任务只能人工核对退款");
-        const plugin = await this.p.registry.resolve(
-          sql,
-          job.plugin_id,
-          job.plugin_version,
-        );
-        requireValue(
-          plugin.inspect && input.remoteId,
-          400,
-          "需要支持查询的插件及上游任务编号",
-        );
-        await sql.query(
-          "UPDATE jobs SET state='running',remote_id=$2,error=NULL,lease_token=NULL,lease_until=NULL WHERE id=$1",
-          [id, input.remoteId],
-        );
+        if (job.source_kind === "builtin") {
+          requireValue(
+            job.kind === "video" &&
+              job.native_snapshot.executorVersion === 1 &&
+              ["new-api-videos", "openrouter-videos"].includes(
+                job.native_snapshot.protocol,
+              ),
+            400,
+            "同步图片请求没有可恢复的上游任务编号",
+          );
+          requireValue(
+            !job.remote_id || job.remote_id === input.remoteId,
+            409,
+            "只能恢复原上游任务",
+          );
+          const client = await resolveConnectionRevision(
+            sql,
+            this.p,
+            job.native_snapshot.connectionRevisionId,
+          );
+          await bindVideoRemote(sql, this.p, job, client, input.remoteId);
+          await sql.query(
+            `UPDATE jobs SET state='running',request_uncertain=false,
+             request_note=NULL,request_retry_at=NULL,error=NULL,lease_token=NULL,lease_until=NULL WHERE id=$1`,
+            [id],
+          );
+        } else {
+          const plugin = await this.p.registry.resolve(
+            sql,
+            job.plugin_id,
+            job.plugin_version,
+          );
+          requireValue(
+            plugin.inspect && input.remoteId,
+            400,
+            "需要支持查询的插件及上游任务编号",
+          );
+          await sql.query(
+            "UPDATE jobs SET state='running',remote_id=$2,error=NULL,lease_token=NULL,lease_until=NULL WHERE id=$1",
+            [id, input.remoteId],
+          );
+        }
       }
       await sql.query(
         "INSERT INTO job_events(job_id,state,detail) VALUES($1,'reconciled',$2)",
@@ -134,7 +165,10 @@ export class Operations {
         );
       if (input.activateCatalog)
         await new StudioCatalog(this.p.db).activate(sql, plugin.manifest);
-      for (const model of plugin.manifest.models.filter((m) => m.studio)) {
+      const adopted = await adoptedModels(sql, plugin.manifest.id);
+      for (const model of plugin.manifest.models.filter(
+        (m) => m.studio && !adopted.has(m.id),
+      )) {
         const active = await one(
           sql,
           "SELECT plugin_version FROM studio_catalog WHERE id=$1 AND plugin_id=$2",
@@ -167,7 +201,7 @@ export class Operations {
         "UPDATE models SET enabled=false,catalog_id=NULL WHERE connection_id=$1",
         [id],
       );
-      for (const model of connectionModels(plugin, input.config))
+      for (const model of connectionModels(plugin, input.config).filter(m => !adopted.has(m.id)))
         await sql.query(
           `INSERT INTO models(id,connection_id,provider_model,label,kind,schema,catalog_id) VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6)
         ON CONFLICT(connection_id,provider_model) DO UPDATE SET label=EXCLUDED.label,kind=EXCLUDED.kind,schema=EXCLUDED.schema,catalog_id=EXCLUDED.catalog_id`,

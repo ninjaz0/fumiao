@@ -1,3 +1,4 @@
+import { mediaModelForm } from "@fumiao/platform/model-access/media-form.js";
 import { canvasNodeEntries } from "@fumiao/platform/canvas-node-plugins.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { statfs } from "node:fs/promises";
@@ -6,6 +7,7 @@ import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import {
+  hasModelAccess,
   hasStudioPackages,
   studioPluginProfile,
   pairedPluginAvailable,
@@ -124,6 +126,11 @@ export class OriginalState {
             vault: this.p.vault,
             registry: this.p.registry,
           });
+          const nativeForms = (await hasModelAccess(sql)) ? (await sql.query(
+            `SELECT p.catalog_id, r.purpose, r.protocol, r.capabilities FROM model_access_publications p
+             JOIN model_access_route_revisions r ON r.id=p.route_revision_id WHERE r.purpose IN ('image','video')`,
+          )).rows.filter(r => Object.hasOwn(models, r.catalog_id)).map(r =>
+            [r.catalog_id, mediaModelForm({ purpose: r.purpose, protocol: r.protocol, capabilities: r.capabilities })]) : [];
           const out: Record<string, any> = {
             ...(plugins.profile ? { studio_plugins: true } : {}),
             server_time: stamp,
@@ -191,14 +198,15 @@ export class OriginalState {
                 .map(([id, s]) => [id, s.label]),
             ),
             model_catalog: models,
-            model_forms: Object.fromEntries(
-              (
+            model_forms: Object.fromEntries([
+              ...(
                 await sql.query(
                   `SELECT c.id, f.forms->c.id AS form FROM ${await listedStudioCatalog(sql)} c
                JOIN plugin_model_forms f ON f.plugin_id=c.plugin_id AND f.plugin_version=c.plugin_version`,
                 )
               ).rows.map((r) => [r.id, r.form]),
-            ),
+              ...nativeForms,
+            ]),
             model_groups: await catalog.groups(sql),
             model_policy: listedPolicy(await catalog.policy(sql)),
             model_access: await catalog.effective(sql, workspace.id),
@@ -416,25 +424,29 @@ export class OriginalState {
     admissionNote = true,
   ) {
     const visible = (
-      await sql.query(`SELECT j.*,u.public_id AS owner_public_id,w.public_id AS workspace_public_id,
+      await sql.query(
+        `SELECT j.id,j.public_id,j.kind,j.input,j.owner_id,j.workspace_id,j.catalog_id,j.provider_model,j.plugin_id,j.plugin_version,
+      j.plugin_id IS NULL AS builtin,j.original_view,j.original_parent,j.attempts,j.result,j.state,j.error,j.created_at,j.updated_at,j.remote_id,j.request_note,u.public_id AS owner_public_id,w.public_id AS workspace_public_id,
       COALESCE(NULLIF(u.nickname,''),u.name) AS author,n.public_id AS node_public_id,
-      studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id) AS allowed,
-      (v.manifest->'originalSubmission'->>'version' IN ('2','3') OR (v.manifest->'originalSubmission'->>'version'='5' AND v.manifest->'originalState' IS NULL)) AS remote_studio
+      (j.plugin_id IS NULL OR studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id)) AS allowed,
+      (j.plugin_id IS NULL OR v.manifest->'originalSubmission'->>'version' IN ('2','3') OR (v.manifest->'originalSubmission'->>'version'='5' AND v.manifest->'originalState' IS NULL)) AS remote_studio
       FROM jobs j JOIN users u ON u.id=j.owner_id JOIN workspaces w ON w.id=j.workspace_id JOIN models m ON m.id=j.model_id
-      JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
+      LEFT JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
       LEFT JOIN gpu_nodes n ON n.id::text=j.remote_id
-      WHERE j.workspace_id=$1 AND j.plugin_id!='legacy-archive' AND j.deleted_at IS NULL
+      WHERE j.workspace_id=$1 AND j.plugin_id IS DISTINCT FROM 'legacy-archive' AND j.deleted_at IS NULL
         AND j.kind IN ('image','video','audio')
         AND (v.endpoint IS NULL OR j.original_uid IS NOT NULL)
-      ORDER BY j.public_id`, [workspace])
+      ORDER BY j.public_id`,
+        [workspace],
+      )
     ).rows;
     const queued = (
       await sql.query(`SELECT j.id,j.provider_model,j.connection_id,j.kind,
-      studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id) AS allowed,
-      (v.manifest->'originalSubmission'->>'version' IN ('2','3') OR (v.manifest->'originalSubmission'->>'version'='5' AND v.manifest->'originalState' IS NULL)) AS remote_studio
+      (j.plugin_id IS NULL OR studio_model_allowed(COALESCE(j.catalog_id,m.catalog_id),j.workspace_id)) AS allowed,
+      (j.plugin_id IS NULL OR v.manifest->'originalSubmission'->>'version' IN ('2','3') OR (v.manifest->'originalSubmission'->>'version'='5' AND v.manifest->'originalState' IS NULL)) AS remote_studio
       FROM jobs j JOIN models m ON m.id=j.model_id
-      JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
-      WHERE j.state='queued' AND j.plugin_id!='legacy-archive' AND j.deleted_at IS NULL
+      LEFT JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
+      WHERE j.state='queued' AND j.plugin_id IS DISTINCT FROM 'legacy-archive' AND j.deleted_at IS NULL
         AND j.kind IN ('image','video','audio')
         AND (v.endpoint IS NULL OR j.original_uid IS NOT NULL)
       ORDER BY j.public_id`)
@@ -540,6 +552,7 @@ export class OriginalState {
               : j.state,
         created: epoch(j.created_at),
         result: j.result_public_id ?? null,
+        ...(j.builtin ? { results: j.result_public_ids } : {}),
         ...(j.result_mime ? { result_mime: j.result_mime } : {}),
         note:
           admissionNote && j.state === "queued" && !j.allowed
@@ -547,7 +560,7 @@ export class OriginalState {
             : (j.request_note ?? (j.error || projection.note || "")),
         node: j.node_public_id === null ? null : Number(j.node_public_id),
         kind: j.kind,
-        model: j.provider_model,
+        model: j.builtin ? j.catalog_id : j.provider_model,
         updated: epoch(j.updated_at),
         attempts: j.attempts,
         timing:

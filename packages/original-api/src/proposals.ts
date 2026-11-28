@@ -1,3 +1,5 @@
+import { canvasMediaQuotes } from "./canvas-media-quote.js";
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { randomUUID } from "node:crypto";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
@@ -450,6 +452,9 @@ export class OriginalCanvasProposals {
       base_revision: Number(row.base_revision),
       operations: row.operations as CanvasProposalOp[],
       estimated_credits: Number(row.estimated_credits),
+      exact_estimated_credits: formatCredits(
+        creditUnits(String(row.estimated_credits)),
+      ),
       status: row.status as "pending" | "applied" | "rejected" | "expired",
       applied_revision:
         row.applied_revision !== null ? Number(row.applied_revision) : null,
@@ -513,7 +518,12 @@ export class OriginalCanvasProposals {
    * F018: Validates and records an atomic Canvas Proposal + estimated credits WITHOUT
    * modifying the live canvas or charging credits. User must approve via `apply()`.
    */
-  async create(user: OriginalActor, projectKey: string, value: unknown) {
+  async create(
+    user: OriginalActor,
+    projectKey: string,
+    value: unknown,
+    validateOutput?: (value: unknown) => void,
+  ) {
     const body = parseBody(value, proposalCreateFields, true) as {
       title: string;
       summary: string;
@@ -536,40 +546,40 @@ export class OriginalCanvasProposals {
       const bindings = await CanvasSubmissionModels.read(sql, {
         strict: false,
       });
-      const affectedSet = new Set(preview.affectedGenNodeIds);
-      let estimatedCredits = 0;
-      for (const node of preview.document.nodes) {
-        if (!affectedSet.has(node.id)) continue;
+      const affected = new Set(preview.affectedGenNodeIds);
+      const targets = preview.document.nodes.filter((n) => affected.has(n.id));
+      const { executionOrder, quote } = await canvasMediaQuotes(
+        sql,
+        preview.document,
+        targets,
+        {
+          projectId: project.id,
+          workspaceId: project.workspace_id,
+          bindings,
+          canvases: this.canvases,
+          catalog: this.catalog,
+          includesImages: true,
+          requireConnection: false,
+        },
+      );
+      let estimatedUnits = 0n;
+      for (const node of executionOrder) {
         if (node.type !== "image" && node.type !== "video") continue;
-        let model = node.params?.model || "";
-        if (!model) {
-          try {
-            model = bindings.default(node.type);
-          } catch {
-            model = "";
-          }
-        }
-        if (!model) continue;
-        const q = await this.catalog.quoteReadOnly(
-          sql,
-          model,
-          project.workspace_id,
-          node.type === "image"
-            ? {
-                resolution: node.params?.resolution || "1K",
-                image_quality: node.params?.image_quality || "medium",
-                ratio: node.params?.ratio || "16:9",
-              }
-            : {
-                seconds: node.params?.seconds ?? 5,
-                quality: node.params?.quality ?? 480,
-                ratio: node.params?.ratio || "16:9",
-              },
-          { requireConnection: false },
-        );
-        if (q.allowed && q.priced) estimatedCredits += q.amount;
+        const item = await quote(node, node.type);
+        // Legacy proposals may estimate a priced plugin before its service is configured.
+        if (!item.routeQuote || item.status !== "blocked")
+          estimatedUnits += item.units;
       }
 
+      const title = pythonStrip(body.title) || "画布变更提案";
+      const summary = pythonStrip(body.summary || "");
+      validateOutput?.({
+        project_id: projectKey,
+        base_revision: baseRevision,
+        title,
+        summary,
+        operations: preview.ops,
+      });
       const id = randomUUID();
       const publicId = randomUUID().replaceAll("-", "");
       await sql.query(
@@ -582,10 +592,10 @@ export class OriginalCanvasProposals {
           project.workspace_id,
           user.id,
           baseRevision,
-          pythonStrip(body.title) || "画布变更提案",
-          pythonStrip(body.summary || ""),
+          title,
+          summary,
           JSON.stringify(preview.ops),
-          estimatedCredits,
+          formatCredits(estimatedUnits),
         ],
       );
       const row = await one(
@@ -637,7 +647,7 @@ export class OriginalCanvasProposals {
       return {
         proposalId: proposal.id as string,
         projectId: String(project.id),
-        estimatedCredits: Number(proposal.estimated_credits ?? 0),
+        estimatedCredits: String(proposal.estimated_credits ?? 0),
         title: canvasText(project.original_title),
         document: patched.document,
         tempMap: patched.tempMap,

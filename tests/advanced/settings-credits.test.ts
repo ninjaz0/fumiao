@@ -268,6 +268,7 @@ test("createCreditAdjustmentSession settles at most once when A's response is lo
     assert.equal(retryA.payload.uid, dialogSession.uid);
     const replayedWallet = await credits.adjust(admin, retryA.payload);
     assert.deepEqual(replayedWallet, {
+      exact: { balance: "50", reserved: "0", available: "50" },
       workspace: publicWorkspace,
       balance: 50,
       reserved: 0,
@@ -312,6 +313,7 @@ test("createCreditAdjustmentSession settles at most once when A's response is lo
     assert.equal(adjustedDown.payload.uid, secondDialog.uid);
     const afterDeduct = await credits.adjust(admin, adjustedDown.payload);
     assert.deepEqual(afterDeduct, {
+      exact: { balance: "40", reserved: "40", available: "0" },
       workspace: publicWorkspace,
       balance: 40,
       reserved: 40,

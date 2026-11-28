@@ -19,20 +19,18 @@ const number = (v: unknown) => {
  * unrelated strings, so a NUL in provider text/usage must not break state reads.
  * Keep the first result's ordering and the caller's transaction snapshot. */
 export async function attachJobResults(sql: Sql, jobs: Record<string, any>[]) {
-  const first = (job: Record<string, any>): string | undefined => {
-    const value = Array.isArray(job.result?.assets)
-      ? job.result.assets[0]
-      : undefined;
-    return typeof value === "string" &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
-        value,
-      )
-      ? value
-      : undefined;
+  const idsOf = (job: Record<string, any>): string[] => {
+    const raw = job.result?.assets;
+    if (!Array.isArray(raw)) return [];
+    return (job.builtin ? raw : raw.slice(0, 1)).filter(
+      (id): id is string =>
+        typeof id === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+          id,
+        ),
+    );
   };
-  const ids = [
-    ...new Set(jobs.map(first).filter((id): id is string => id !== undefined)),
-  ];
+  const ids = [...new Set(jobs.flatMap(idsOf))];
   const assets = ids.length
     ? (
         await sql.query(
@@ -43,7 +41,15 @@ export async function attachJobResults(sql: Sql, jobs: Record<string, any>[]) {
     : [];
   const byId = new Map(assets.map((asset) => [asset.id, asset]));
   for (const job of jobs) {
-    const asset = byId.get(first(job));
+    const jobIds = idsOf(job);
+    const asset = byId.get(jobIds[0]);
+    if (job.builtin)
+      job.result_public_ids = jobIds.flatMap((id) => {
+        const output = byId.get(id);
+        return output && output.workspace_id === job.workspace_id
+          ? [output.public_id]
+          : [];
+      });
     job.result_public_id = asset?.public_id ?? null;
     job.result_mime =
       asset && job.workspace_id && asset.workspace_id === job.workspace_id

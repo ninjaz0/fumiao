@@ -67,6 +67,10 @@ function parameters(state: StudioState, job: Job) {
       `Muse · ${width ? `${job.width} × ${job.height}` : "原生"}` +
       (job.kind === "image" ? "" : ` · ${seconds ?? job.seconds}s`)
     );
+  if (job.kind === "image" && job.results)
+    return [name, job.width && job.height && `${job.width} × ${job.height}`]
+      .filter(Boolean)
+      .join(" · ");
   if (job.kind === "image")
     return `${name} · ${job.quality === 2048 ? "2K" : "1K"} · ${job.image_quality && qualityLabels[job.image_quality]}`;
   return [name, job.seconds > 0 && `${job.seconds}s`, job.quality > 0 && `${job.quality}P`]
@@ -351,6 +355,19 @@ export function JobDetail({
             </>
           ) : (
             <>
+              {image && job.results && job.results.length > 1 && (
+                <div className="detail-references" aria-label="交付图片">
+                  {job.results.map((key, i) => (
+                    <button
+                      key={key}
+                      aria-label={`预览生成图片 ${i + 1}`}
+                      onClick={(event) => preview(key, event.currentTarget)}
+                    >
+                      <ReferenceMedia id={key} kind="ref" />
+                    </button>
+                  ))}
+                </div>
+              )}
               {job.refs.length > 0 && (
                 <div className="detail-references">
                   {job.refs.map((key, i) => (

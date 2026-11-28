@@ -1,4 +1,10 @@
 import {
+  mediaCharge,
+  type DeliveredMedia,
+} from "./model-access/media-billing.js";
+import { adoptedModels } from "./studio-plugin-profile.js";
+import { creditUnits, formatCredits } from "./credit-amount.js";
+import {
   addressPause,
   connectionBase,
   usesPublicConnection,
@@ -349,7 +355,7 @@ export class Platform {
   async credit(
     sql: Sql,
     wid: string,
-    amount: number,
+    amount: number | string,
     key: string,
     action: string,
     context: {
@@ -359,6 +365,8 @@ export class Platform {
       uid?: string;
     } = {},
   ) {
+    const units = creditUnits(String(amount));
+    const decimal = formatCredits(units);
     await sql.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
       "credit:" + (context.uid ? "uid:" + context.uid : key),
     ]);
@@ -373,7 +381,7 @@ export class Platform {
     if (prior) {
       requireValue(
         prior.workspace_id === wid &&
-          Number(prior.amount) === amount &&
+          creditUnits(String(prior.amount)) === units &&
           prior.action === action &&
           // Earlier Advanced rows have no actor/note snapshots. Keep their existing
           // retry contract; do not invent historical metadata during a retry.
@@ -390,7 +398,7 @@ export class Platform {
     const wallet = await one(
       sql,
       "UPDATE wallets SET balance=balance+$2 WHERE workspace_id=$1 AND balance+$2>=held RETURNING balance,held",
-      [wid, amount],
+      [wid, decimal],
     );
     requireValue(wallet, 409, "可用积分不足");
     await sql.query(
@@ -401,7 +409,7 @@ export class Platform {
         wid,
         key,
         action,
-        amount,
+        decimal,
         context.actorId ?? null,
         context.note ?? "",
         context.uid ?? null,
@@ -601,7 +609,9 @@ export class Platform {
         concurrency,
       ],
     );
+    const adopted = await adoptedModels(sql, input.pluginId);
     for (const model of connectionModels(plugin, input.config)) {
+      if (adopted.has(model.id)) continue;
       if (model.studio) {
         const active = await one(
           sql,
@@ -975,7 +985,7 @@ export class Platform {
     result?: unknown,
     error?: string,
     timing?: TimingReport["timing"],
-    options: { preserveTiming?: boolean } = {},
+    options: { preserveTiming?: boolean; delivered?: DeliveredMedia } = {},
   ) {
     if (["completed", "failed", "cancelled"].includes(job.state)) return;
     if (!options.preserveTiming)
@@ -986,10 +996,34 @@ export class Platform {
         Date.now() / 1000,
         timing,
       );
+    let charged = state === "completed" ? job.price : "0";
+    if (job.source_kind === "builtin" && state === "completed") {
+      requireValue(
+        options.delivered && job.meter in options.delivered,
+        500,
+        "缺少实际交付计量",
+      );
+      const bill = mediaCharge(
+        job.native_snapshot.price.unit,
+        options.delivered,
+        String(job.price),
+      );
+      charged = bill.charged;
+      if ("milliseconds" in options.delivered)
+        result = {
+          ...(result as object),
+          media_bill: {
+            ...options.delivered,
+            unit: job.native_snapshot.price.unit,
+            reserved: formatCredits(creditUnits(String(job.price))),
+            ...bill,
+          },
+        };
+    }
     const settledWallet = await one(
       sql,
       "UPDATE wallets SET held=held-$2,balance=balance-$3 WHERE workspace_id=$1 RETURNING balance,held",
-      [job.workspace_id, job.price, state === "completed" ? job.price : 0],
+      [job.workspace_id, job.price, charged],
     );
     await sql.query(
       "INSERT INTO ledger(id,workspace_id,job_id,key,action,amount,actor_id,balance_snapshot,held_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
@@ -999,7 +1033,7 @@ export class Platform {
         job.id,
         "settle:" + job.id,
         state === "completed" ? "spend" : "refund",
-        job.price,
+        state === "completed" ? charged : job.price,
         job.owner_id,
         settledWallet.balance,
         settledWallet.held,

@@ -393,3 +393,147 @@ test("Chat import rolls back the complete identity/history/wallet unit after a l
     await f.cleanup();
   }
 });
+
+test("SQLite imports before and after 059 attribute the same settled chat charges without repeating spend", async () => {
+  const project = "c".repeat(32);
+  const other = "1".repeat(32);
+  type Draft = ReturnType<typeof chatImportDraft>;
+  const context = (d: Draft, value: string) => {
+    d.tables.chat_messages[0].context = value;
+  };
+  const link = (d: Draft, target: string, created: number) =>
+    d.tables.canvas_chat_links.push({
+      ...d.tables.canvas_chat_links[0],
+      project: target,
+      node: "linked-" + created,
+      created,
+    });
+  const cases: [string, (d: Draft) => void, string | null][] = [
+    [
+      "explicit project takes priority over a prior link",
+      (d) => {
+        context(d, JSON.stringify({ project, text: "\0" }));
+        link(d, other, 8);
+      },
+      project,
+    ],
+    [
+      "an empty message inherits the earlier original user context",
+      (d) => {
+        context(d, "{}");
+        d.tables.chat_messages.push({
+          ...d.tables.chat_messages[0],
+          id: 40,
+          context: JSON.stringify({ project: other }),
+        });
+      },
+      other,
+    ],
+    [
+      "a single causally earlier canvas",
+      (d) => {
+        link(d, project, 8);
+      },
+      project,
+    ],
+    ["only a later canvas", () => {}, null],
+    [
+      "only a canvas tied with admission",
+      (d) => {
+        link(d, project, 10.25);
+      },
+      null,
+    ],
+    [
+      "different projects before and at admission",
+      (d) => {
+        link(d, project, 8);
+        link(d, other, 10.25);
+      },
+      null,
+    ],
+    [
+      "duplicate explicit key cannot fall back to a linked canvas",
+      (d) => {
+        context(d, `{"project":"${other}","project":"${project}"}`);
+        link(d, project, 8);
+      },
+      null,
+    ],
+    [
+      "escaped duplicate explicit key cannot claim a receipt",
+      (d) => context(d, `{"\\u0070roject":"${project}","project":"${project}"}`),
+      null,
+    ],
+    [
+      "cross-workspace project cannot fall back to a linked canvas",
+      (d) => {
+        Object.assign(d.tables.canvas_projects[1], {
+          workspace: 85,
+          owner: 42,
+          last_editor: 42,
+        });
+        context(d, JSON.stringify({ project: other }));
+        link(d, project, 8);
+      },
+      null,
+    ],
+  ];
+  const backfill = "059_model_access_chat_project_backfill.sql";
+  const { migrate } = await import("@fumiao/platform/db.js");
+  for (const [name, change, expected] of cases) {
+    for (const version of ["055_workspace_script_documents.sql", backfill]) {
+      const f = await databaseFixture(version);
+      try {
+        const d = chatImportDraft();
+        d.tables.canvas_projects.push({
+          ...d.tables.canvas_projects[0],
+          id: other,
+        });
+        change(d);
+        await importLegacy(f.p, d, f.directory);
+        if (version !== backfill) await migrate(f.db);
+        assert.equal(
+          (await importLegacy(f.p, d, f.directory)).alreadyImported,
+          true,
+        );
+        const row = await one(
+          f.db,
+          `SELECT d.public_id, c.amount::numeric = 1 AS original_amount,
+          (SELECT count(*)::integer FROM ledger l WHERE l.chat_turn_id=c.turn_id AND l.action='spend') AS spends
+          FROM chat_charges c LEFT JOIN documents d ON d.id=c.project_id WHERE c.state='spent'`,
+        );
+        assert.deepEqual(
+          row,
+          { public_id: expected, original_amount: true, spends: 1 },
+          name + " at " + version,
+        );
+        const admin = (await one(
+          f.db,
+          "SELECT * FROM users WHERE public_id=7",
+        )) as OriginalActor;
+        const chats = new OriginalChats(f.p);
+        const message = String(d.tables.chat_turns[0].assistant_message);
+        for (const target of [project, other]) {
+          if (expected === target) {
+            const source = await chats.replySource(
+              admin,
+              message,
+              undefined,
+              target,
+            );
+            assert.equal(source.bill?.charged, "1", name);
+          } else {
+            await assert.rejects(
+              chats.replySource(admin, message, undefined, target),
+              { status: 404 },
+              name,
+            );
+          }
+        }
+      } finally {
+        await f.cleanup();
+      }
+    }
+  }
+});

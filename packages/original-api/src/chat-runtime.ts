@@ -1,14 +1,24 @@
 import { chatContext } from "@fumiao/platform/chat-context.js";
 import { chatText } from "@fumiao/platform/chat-values.js";
-import {
-  pythonStrip,
-  pythonTruthy,
-} from "@fumiao/plugin-sdk/python-values.js";
+import { pythonStrip, pythonTruthy } from "@fumiao/plugin-sdk/python-values.js";
 import {
   ChatReplyError,
   type ProviderPlugin,
   type ChatChunk,
 } from "@fumiao/plugin-sdk/index.js";
+import { creditUnits } from "@fumiao/platform/credit-amount.js";
+import {
+  chatLimit,
+  chatBill,
+  type ChatCallUsage,
+} from "@fumiao/platform/model-access/chat.js";
+import { chatCompletion } from "@fumiao/platform/model-access/chat-completions.js";
+import { resolveConnectionRevision } from "@fumiao/platform/model-access/connections.js";
+import {
+  generationTransport,
+  type HttpTransport,
+} from "@fumiao/platform/plugin-host.js";
+import type { NativeChatSnapshot } from "./chat-billing.js";
 import { chatToolStream } from "./chat-tool-stream.js";
 import { turnTools } from "./chat-tools.js";
 import type { ChatExecution } from "./chat-execution.js";
@@ -41,6 +51,7 @@ export class ChatRuntime {
   constructor(
     readonly store: ChatExecution,
     readonly options: {
+      nativeHttp?: HttpTransport<string | Uint8Array>;
       pollMs?: number;
       timeoutMs?: number;
       titleTimeoutMs?: number;
@@ -67,6 +78,7 @@ export class ChatRuntime {
       { signal } = controller;
     const monotonic =
       this.options.monotonic ?? (() => Number(process.hrtime.bigint()) / 1e9);
+    const calls: ChatCallUsage[] = [];
     let text = "",
       usage: Record<string, number | bigint> = {},
       reason: unknown = "",
@@ -96,29 +108,125 @@ export class ChatRuntime {
     heartbeat.unref();
     try {
       signal.throwIfAborted();
-      const messages = chatContext(claim.rows, claim.skills);
+      const snapshot: NativeChatSnapshot | null = turn.native_snapshot
+        ? JSON.parse(turn.native_snapshot)
+        : null;
+      const messages =
+        snapshot?.messages ?? chatContext(claim.rows, claim.skills);
       if (!(await this.store.start(id, lease))) return;
-      const plugin = await this.store.p.registry.resolve(
-        this.store.p.db,
-        turn.plugin_id,
-        turn.plugin_version,
-      );
-      const config = this.store.p.vault.open(turn.config_snapshot);
-      if (!plugin.chatStream) throw new Error("Missing frozen chat adapter");
-      signal.throwIfAborted();
       timer = setTimeout(
         () => controller.abort("timeout"),
         this.options.timeoutMs ?? 600000,
       );
       timer.unref();
+      let adapter: Pick<ProviderPlugin, "chatStream" | "chatTitle">;
+      let useTools: boolean, config: Record<string, unknown>;
+      let validateToolOutput: ((value: unknown) => void) | undefined;
+      if (snapshot) {
+        const route = snapshot.route;
+        const client = await resolveConnectionRevision(
+          this.store.p.db,
+          this.store.p,
+          route.connectionRevisionId,
+          this.options.nativeHttp ?? generationTransport,
+        );
+        const output = client.createOutputGuard();
+        validateToolOutput = (value) => {
+          if (client.containsCredential(JSON.stringify(value)))
+            throw new ChatReplyError("对话工具返回了受保护的内容");
+        };
+        config = {};
+        useTools =
+          route.capabilities.tools ??
+          route.capabilities.names?.includes("tools") ??
+          false;
+        adapter = {
+          chatStream(request) {
+            const spent = chatBill(
+              route.price,
+              calls,
+              snapshot.max_charge,
+              "complete",
+            ).charged;
+            const { max_output_tokens } = chatLimit(
+              route.price,
+              route.capabilities,
+              request.messages,
+              request.tools ?? [],
+              creditUnits(snapshot.max_charge) - creditUnits(spent),
+              snapshot.max_output_tokens,
+            );
+            if (!max_output_tokens)
+              throw new ChatReplyError(
+                "本轮授权额度不足以继续生成，积分已退回",
+              );
+            return chatCompletion(
+              client,
+              route,
+              request.messages,
+              request.tools ?? [],
+              max_output_tokens,
+              route.capabilities.chat_response !== "json",
+              request.signal,
+              (usage) => calls.push(usage),
+              output,
+            );
+          },
+          async chatTitle(request) {
+            let title = "";
+            const messages = [
+              {
+                role: "system" as const,
+                content: "为以下对话拟定简短标题，只输出标题。",
+              },
+              {
+                role: "user" as const,
+                content:
+                  request.question.slice(0, 1000) +
+                  "\n" +
+                  request.answer.slice(0, 1000),
+              },
+            ];
+            for await (const chunk of chatCompletion(
+              client,
+              route,
+              messages,
+              [],
+              Math.min(64, route.capabilities.max_completion_tokens ?? 64),
+              false,
+              request.signal,
+            ))
+              if (typeof chunk.text === "string") title += chunk.text;
+            return [...title.trim()].slice(0, 80).join("");
+          },
+        };
+      } else {
+        const plugin = await this.store.p.registry.resolve(
+          this.store.p.db,
+          turn.plugin_id,
+          turn.plugin_version,
+        );
+        config = this.store.p.vault.open(turn.config_snapshot);
+        adapter = plugin;
+        useTools =
+          Boolean(plugin.manifest.chat?.sandbox?.tools) ||
+          (Boolean(plugin.manifest.chat) &&
+            (await turnTools(this.store.p.db, id)).size > 0);
+      }
+      if (!adapter.chatStream) throw new Error("Missing frozen chat adapter");
+      signal.throwIfAborted();
       const request = { model: turn.model, messages, config, signal };
-      const useTools =
-        Boolean(plugin.manifest.chat?.sandbox?.tools) ||
-        (Boolean(plugin.manifest.chat) &&
-          (await turnTools(this.store.p.db, id)).size > 0);
       const stream = useTools
-        ? chatToolStream(this.store, id, lease, plugin, request)
-        : plugin.chatStream(request);
+        ? chatToolStream(
+            this.store,
+            id,
+            lease,
+            adapter,
+            request,
+            snapshot?.project,
+            validateToolOutput,
+          )
+        : adapter.chatStream(request);
       iterator = stream[Symbol.asyncIterator]();
       while (true) {
         signal.throwIfAborted();
@@ -164,13 +272,14 @@ export class ChatRuntime {
           state: success ? "complete" : "failed",
           text,
           usage,
+          calls,
           error,
           reason: reasonText(reason),
         },
         lease,
       );
       if (completed && success)
-        await this.summarize(id, turn.model, plugin, config, text, signal);
+        await this.summarize(id, turn.model, adapter, config, text, signal);
     } catch (error) {
       streaming = false;
       if (signal.aborted && signal.reason === "lost") return;
@@ -181,6 +290,7 @@ export class ChatRuntime {
           state: stopped ? "stopped" : "failed",
           text,
           usage,
+          calls,
           reason: reasonText(reason),
           error: stopped
             ? ""
@@ -201,7 +311,7 @@ export class ChatRuntime {
   private async summarize(
     id: string,
     model: string,
-    plugin: ProviderPlugin,
+    plugin: Pick<ProviderPlugin, "chatTitle">,
     config: Record<string, unknown>,
     answer: string,
     signal: AbortSignal,

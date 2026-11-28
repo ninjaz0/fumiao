@@ -16,6 +16,7 @@ import {
   chooseModel,
   composerFeedback,
   generationRequest,
+  estimateBody,
   H3,
   hasDraftPacks,
   imageToVideoDraft,
@@ -1610,4 +1611,337 @@ test("#53 composerFeedback surfaces visible status and button reason for insuffi
     submitReason: "暂无可用模型",
     priceReason: "当前模型尚未定价",
   });
+});
+
+test("有效线路报价失败时沿用网关原因，保留已保存的创作参数", (t) => {
+  t.after(installFakeEnv().restore);
+  const model = "native-video";
+  const state = makeState({ studio_plugins: true, video_models: { [model]: model },
+    model_access: { [model]: true }, pricing: {revision: 2, items: [], published: [{model, price: { kind: "video", unit: "4" }}]},
+    model_forms: { [model]: { canvas: true, parameterObject: true, fields: {seconds: {type: "integer", default: 4, enum: [4]}}, tiers: [], references: {min:0, max:0} } },
+  });
+  const session = readDraft(state);
+  session.draft.videoModel = model;
+  session.draft.kind = "video";
+  session.draft.params = { seconds: 8 };
+  session.draft.prompt = "历史镜头";
+  writeDraft(state, session);
+  const restored = readDraft(state);
+  assert.equal(restored.draft.params?.seconds, 8);
+  assert.equal(restored.draft.prompt, "历史镜头");
+  assert.match(composerFeedback(state, restored, { quoteError: "当前线路可选 4 秒" }).submitReason, /4 秒/);
+});
+
+test("原生图片草稿恢复和历史重发以字符串质量报价", (t) => {
+  t.after(installFakeEnv().restore);
+  const base = makeState(), model = "native-image";
+  const state = makeState({ studio_plugins: true, model_access: { [model]: true },
+    images: { ...base.images, models: { [model]: model }, default_model: model },
+    pricing: { revision: 8, items: [], published: [{model, price:{kind:"image", unit:"0.25"}}] },
+    model_forms: { [model]: { parameterObject:true, fields:{ quality:{ type:"string", enum:["high"]} }, tiers:[], references:{min:0,max:1} } },
+  });
+  const session = readDraft(state);
+  session.draft = { ...session.draft, kind:"image", model, prompt:"保留画质", params:{quality:"high"} };
+  writeDraft(state, session);
+  const restored = readDraft(state);
+  const history = loadJob(state, restored, { id:8, kind:"image", model, params:{quality:"high"}, prompt:"保留画质", refs:[] } as unknown as Job);
+  for (const source of [restored, history]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(estimateBody(state, source))), {kind:"image", model, params:{quality:"high"}, refs:[]});
+  }
+});
+
+test("图片历史和旧草稿只恢复当前原生表单仍支持的等价格式", (t) => {
+  t.after(installFakeEnv().restore);
+  const base = makeState(),
+    model = "custom-image";
+  const form = {
+    parameterObject: true,
+    fields: {
+      output_format: {
+        title: "输出格式",
+        type: "string" as const,
+        enum: ["webp", "jpeg"],
+        default: "webp",
+      },
+    },
+    tiers: [],
+    references: { min: 0, max: 0 },
+  };
+  const state = makeState({
+    studio_plugins: true,
+    model_access: { [model]: true },
+    images: {
+      ...base.images,
+      models: { [model]: model },
+      default_model: model,
+    },
+    pricing: {
+      revision: 8,
+      items: [],
+      published: [{ model, price: { kind: "image", unit: "0.25" } }],
+    },
+    model_forms: { [model]: form },
+  });
+  const session = readDraft(state);
+  for (const output_format of [
+    "JPG",
+    "image/jpeg",
+    "IMAGE/JPG",
+    "gif",
+    "svg",
+    "image/png",
+  ]) {
+    const job = {
+      id: 8,
+      kind: "image",
+      model,
+      prompt: "旧作品",
+      refs: [],
+      params: { output_format },
+    } as unknown as Job;
+    session.draft = {
+      ...session.draft,
+      kind: "image",
+      model,
+      params: { output_format },
+    };
+    writeDraft(state, session);
+    const expected = ["JPG", "image/jpeg", "IMAGE/JPG"].includes(output_format)
+      ? "jpeg"
+      : output_format;
+    for (const source of [readDraft(state), loadJob(state, session, job)]) {
+      assert.equal(source.draft.params?.output_format, expected);
+      assert.equal(estimateBody(state, source).params?.output_format, expected);
+      assert.equal(
+        referenceIssue(state, source),
+        expected === "jpeg" ? "" : "输出格式的值无效",
+      );
+    }
+    assert.equal(
+      referenceIssue(state, session, job),
+      expected === "jpeg" ? "" : "输出格式的值无效",
+    );
+    const body = generationRequest(state, session, job).body;
+    assert.ok("params" in body);
+    assert.deepEqual(body.params, { output_format: expected });
+    assert.deepEqual(job.params, { output_format });
+  }
+  const plugin = {
+    ...state,
+    pricing: { ...state.pricing, published: [] },
+    model_forms: {
+      [model]: {
+        ...form,
+        fields: {
+          output_format: {
+            ...form.fields.output_format,
+            enum: ["JPG", "jpeg"],
+          },
+        },
+      },
+    },
+  };
+  const job = {
+    id: 9,
+    kind: "image",
+    model,
+    prompt: "插件历史",
+    refs: [],
+    params: { output_format: "JPG" },
+  } as unknown as Job;
+  assert.equal(
+    loadJob(plugin, session, job).draft.params?.output_format,
+    "JPG",
+  );
+  const body = generationRequest(plugin, session, job).body;
+  assert.ok("params" in body);
+  assert.deepEqual(body.params, job.params);
+});
+
+test("从语音和视频恢复挂起的原生图片时保留原格式、模型和作品", (t) => {
+  t.after(installFakeEnv().restore);
+  const base = makeState(),
+    model = "custom-image";
+  const state = makeState({
+    studio_plugins: true,
+    images: {
+      ...base.images,
+      models: { ...base.images.models, [model]: model },
+    },
+    model_access: { ...base.model_policy.enabled, [model]: true },
+    pricing: {
+      ...base.pricing,
+      published: [{ model, price: { kind: "image", unit: "0.25" } }],
+    },
+    model_forms: {
+      ...base.model_forms,
+      [model]: {
+        parameterObject: true,
+        fields: {
+          output_format: {
+            type: "string",
+            title: "输出格式",
+            default: "webp",
+            enum: ["webp", "jpeg"],
+          },
+        },
+        tiers: [],
+        references: { min: 0, max: 1 },
+      },
+    },
+  });
+  const job = {
+    ...base.jobs[0],
+    kind: "image" as const,
+    model,
+    prompt: "<Picture 1> 旧作品",
+    params: { output_format: "image/jpeg" },
+  };
+  state.jobs = [job];
+  const edited = loadJob(state, readDraft(state), job);
+  // An already-suspended draft written by the original client still has the wire spelling.
+  const historical = {
+    ...edited,
+    draft: { ...edited.draft, params: job.params },
+    submitId: crypto.randomUUID(),
+  };
+  const snapshot = {
+    draft: historical.draft,
+    refs: historical.refs,
+    parent: historical.parent,
+    retainedSeed: historical.retainedSeed,
+    submitId: historical.submitId,
+  };
+  const audio = {
+    ...changeCreation(state, historical, "audio"),
+    submitId: crypto.randomUUID(),
+  };
+  const video = {
+    ...changeCreation(state, audio, "video"),
+    submitId: crypto.randomUUID(),
+  };
+  for (const [suspended, slot] of [
+    [audio, "suspendedMediaDraft"],
+    [
+      { ...audio, suspendedMediaDraft: null, suspendedImageDraft: snapshot },
+      "suspendedImageDraft",
+    ],
+    [{ ...video, suspendedImageDraft: snapshot }, "suspendedImageDraft"],
+  ] as const) {
+    for (const mode of [
+      "supported",
+      "narrowed",
+      "offline",
+      "unlisted",
+    ] as const) {
+      const current = structuredClone(state);
+      if (mode === "narrowed")
+        current.model_forms[model].fields.output_format.enum = ["webp"];
+      if (mode === "offline" || mode === "unlisted") {
+        current.model_access![model] = false;
+        delete current.model_forms[model];
+      }
+      if (mode === "unlisted") {
+        delete current.studio_plugins;
+        delete current.images.models[model];
+      }
+      writeDraft(state, suspended);
+      const stored = readDraft(current);
+      const expected = mode === "supported" ? "jpeg" : "image/jpeg";
+      const restored = changeCreation(current, stored, "image");
+      assert.equal(
+        restored.draft.params?.output_format,
+        expected,
+        slot + "/" + mode,
+      );
+      assert.equal(stored[slot]?.draft.params?.output_format, expected);
+      assert.equal(restored.draft.model, model);
+      assert.equal(restored.draft.prompt, job.prompt);
+      assert.deepEqual(restored.refs, ["img1"]);
+      assert.equal(restored.parent, job.id);
+      assert.equal(restored.submitId, historical.submitId);
+      assert.equal(
+        estimateBody(current, restored).params?.output_format,
+        expected,
+      );
+      if (mode === "narrowed")
+        assert.equal(referenceIssue(current, restored), "输出格式的值无效");
+      if (mode === "offline" || mode === "unlisted") {
+        assert.equal(
+          composerFeedback(current, restored).submitReason,
+          "当前模型暂不可用",
+        );
+        writeDraft(current, restored);
+        assert.equal(readDraft(current).draft.model, model);
+      }
+    }
+    for (const lost of ["parent", "reference"]) {
+      const current = structuredClone(state);
+      if (lost === "parent") current.jobs = [];
+      else
+        current.assets = current.assets.filter((asset) => asset.id !== "img1");
+      writeDraft(state, suspended);
+      const stored = readDraft(current);
+      const restored = changeCreation(current, stored, "image");
+      assert.equal(restored.parent, lost === "parent" ? null : job.id);
+      assert.deepEqual(restored.refs, lost === "reference" ? [] : ["img1"]);
+      assert.equal(
+        restored.draft.prompt,
+        lost === "reference" ? " 旧作品" : job.prompt,
+      );
+      assert.equal(restored.submitId, stored[slot]!.submitId);
+      assert.notEqual(restored.submitId, historical.submitId);
+    }
+  }
+  const freshState = {
+    ...state,
+    images: { ...state.images, models: { [model]: model } },
+  };
+  const fresh = changeCreation(
+    freshState,
+    { ...audio, suspendedMediaDraft: null, suspendedImageDraft: null },
+    "image",
+  );
+  assert.equal(fresh.draft.params?.output_format, "webp");
+  assert.equal(fresh.parent, null);
+  assert.notEqual(fresh.submitId, audio.submitId);
+  const pack = { id: "pack", revision: 1, media: ["img2"] };
+  const packed = {
+    ...audio,
+    suspendedMediaDraft: {
+      ...snapshot,
+      draft: { ...snapshot.draft, packs: [pack] },
+    },
+  };
+  const renamed = pruneDraftPacks(
+    state,
+    state,
+    packed,
+    new Map([[pack.id, { ...pack, name: "素材包" }]]),
+  );
+  assert.equal(
+    changeCreation(state, renamed, "image").submitId,
+    historical.submitId,
+  );
+  const removed = pruneDraftPacks(state, state, packed, new Map());
+  assert.notEqual(
+    changeCreation(state, removed, "image").submitId,
+    historical.submitId,
+  );
+  const old = {
+    ...snapshot,
+    draft: { ...snapshot.draft, prompt: "更早的图片草稿" },
+    parent: null,
+    submitId: crypto.randomUUID(),
+  };
+  const newest = changeCreation(
+    state,
+    { ...historical, suspendedImageDraft: old },
+    "audio",
+  );
+  writeDraft(state, newest);
+  const latest = changeCreation(state, readDraft(state), "image");
+  assert.equal(latest.draft.prompt, job.prompt);
+  assert.equal(latest.parent, job.id);
+  assert.equal(latest.submitId, historical.submitId);
 });

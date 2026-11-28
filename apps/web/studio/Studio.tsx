@@ -36,6 +36,7 @@ import { api } from "./api";
 import {
   Composer,
   useEstimate,
+  quoteFromEstimate,
   type ComposerEditor,
   type FlowSourceDisplay,
   type ReferenceDisplay,
@@ -66,6 +67,7 @@ import {
   assignFrame,
   checkImages,
   composerFeedback,
+  estimateBody,
   ensureModel,
   flowIssue,
   frames,
@@ -73,6 +75,7 @@ import {
   h3Options,
   hasDraftPacks,
   isH3,
+  keepUnavailableDraft,
   imageToVideoDraft,
   loadJob,
   modelAvailable,
@@ -403,14 +406,13 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           previous &&
           JSON.stringify(previous.model_forms?.[model]) !==
             JSON.stringify(next.model_forms?.[model]);
-        const keepUnavailable =
-          next.studio_plugins && model && !modelAvailable(next, model);
+        const keepUnavailable = model && keepUnavailableDraft(next, priorDraft.draft);
         const normalizedDraft = keepUnavailable
           ? priorDraft.draft
           : ensureModel(
               next,
               changedForm
-                ? normalizeParams(next, priorDraft.draft)
+                ? normalizeParams(next, priorDraft.draft, true)
                 : priorDraft.draft,
             );
         const afterPacks = livePacks
@@ -1483,10 +1485,18 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
     return () => document.removeEventListener("keydown", onKeyDown);
   });
 
-  function updateDraft(next: DraftSession) {
+  function updateDraft(
+    next: DraftSession,
+    options?: { keepSubmitId: boolean },
+  ) {
     const space = active.current;
     if (space && !leaving.current)
-      persist(space, { ...next, submitId: crypto.randomUUID() });
+      persist(
+        space,
+        options?.keepSubmitId
+          ? next
+          : { ...next, submitId: crypto.randomUUID() },
+      );
   }
 
   function change(prompt: string) {
@@ -1525,7 +1535,7 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
       return;
     }
     if (!job) {
-      const { priceReason } = composerFeedback(space, session);
+      const { priceReason } = composerFeedback(space, session, { offered: quoteFromEstimate(estimate), quoteError: estimate?.quoteError });
       if (priceReason) {
         notify(priceReason);
         return;
@@ -1541,7 +1551,16 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           retryId = retryIds.current.get(job.id) || crypto.randomUUID();
           retryIds.current.set(job.id, retryId);
         }
-        const request = generationRequest(space, session, job, retryId);
+        let offered = quoteFromEstimate(estimate);
+        if (job) {
+          offered = undefined;
+          if (space.pricing.published?.some(p => p.model === job.model)) {
+            offered = quoteFromEstimate(await requestEstimate(estimateBody(space, loadJob(space, session, job))));
+            if (!offered) throw new Error("未取得当前报价，请重试");
+            if (!window.confirm(`重新生成最高使用 ${offered.max_charge} 积分？`)) return;
+          }
+        }
+        const request = generationRequest(space, session, job, retryId, offered);
         writeDraft(space, session);
         const { id } = await api<{ id: number }>(
           String(space.workspace_id),
@@ -1573,6 +1592,9 @@ export default function Studio({ loadingLogo }: { loadingLogo: string }) {
           !leaving.current
         )
           showResult(id, resultTab(request.kind));
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) await refresh();
+        throw error;
       } finally {
         setSubmitting(false);
       }

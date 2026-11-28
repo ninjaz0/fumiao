@@ -58,6 +58,11 @@ type UncertainJob = {
   price: number;
   error: string | null;
   remote_id: string | null;
+  video_route?: {
+    connection_name: string;
+    connection_revision_id: string;
+    upstream_id: string;
+  };
   created_at: string;
 };
 
@@ -103,19 +108,18 @@ export function SettingsObservability({
     void load(days);
   }, [days, load]);
 
-  async function reconcile(jobId: string) {
+  async function reconcile(jobId: string, remoteId?: string) {
     setReconciling(jobId);
     try {
       await api(
         null,
         `/api/admin/observability/jobs/${encodeURIComponent(jobId)}/reconcile`,
-        {
-          action: "refund",
-          reason: "运营大盘人工核对确认未出片并退回冻结积分",
-        },
+        remoteId
+          ? { action: "resume", remoteId, reason: "运营已在受理线路上核实上游任务编号" }
+          : { action: "refund", reason: "运营大盘人工核对确认未出片并退回冻结积分" },
         "POST",
       );
-      notify("已完成核对并退回积分");
+      notify(remoteId ? "已恢复原线路任务查询" : "已完成核对并退回积分");
       await load(days);
     } catch (err) {
       notify((err as Error).message || "核对操作失败");
@@ -315,6 +319,40 @@ export function SettingsObservability({
                     {j.error || "连接中断，等待核对"}
                   </div>
                 </div>
+                {j.video_route && (
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      const remoteId = String(
+                        new FormData(event.currentTarget).get("remoteId") ?? "",
+                      ).trim();
+                      if (remoteId) void reconcile(j.id, remoteId);
+                    }}
+                  >
+                    <small>
+                      {j.video_route.connection_name} ·{" "}
+                      {j.video_route.upstream_id} · 凭据修订{" "}
+                      {j.video_route.connection_revision_id}
+                    </small>
+                    <label>
+                      已核实的上游任务号{" "}
+                      <input
+                        name="remoteId"
+                        required
+                        maxLength={500}
+                        defaultValue={j.remote_id ?? ""}
+                        readOnly={Boolean(j.remote_id)}
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      className="secondary"
+                      disabled={reconciling === j.id}
+                    >
+                      恢复查询
+                    </button>
+                  </form>
+                )}
                 <button
                   type="button"
                   className="secondary"

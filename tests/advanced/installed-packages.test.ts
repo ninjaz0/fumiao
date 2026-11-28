@@ -7,7 +7,7 @@ import { randomUUID, createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
 import sharp from "sharp";
-import { databaseFixture } from "../helpers/database.js";
+import { databaseFixture, financialRows } from "../helpers/database.js";
 import { OriginalIdentity } from "@fumiao/original-api/identity.js";
 import { OriginalGeneration } from "@fumiao/original-api/generation.js";
 import { OriginalState } from "@fumiao/original-api/state.js";
@@ -661,10 +661,19 @@ test("GPU package installs its administrator panel while disabled and removes th
       Promise.all(
         ["jobs", "ledger", "wallets", "gpu_pairings", "gpu_nodes"].map(
           async (table) =>
-            (await f.db.query("SELECT * FROM " + table + " ORDER BY 1")).rows,
+            financialRows(table, (await f.db.query("SELECT * FROM " + table + " ORDER BY 1")).rows),
         ),
       );
     const prior = await snapshot();
+    prior[0] = prior[0].map((row) => ({
+      ...row,
+      source_kind: "plugin",
+      route_revision_id: null,
+      price_revision_id: null,
+      native_snapshot: null,
+      native_polling_url: null,
+      meter: null,
+    }));
     await migrate(f.db);
     assert.deepEqual(await snapshot(), prior);
     assert.equal(

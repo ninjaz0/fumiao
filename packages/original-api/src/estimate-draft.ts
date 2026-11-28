@@ -1,6 +1,7 @@
 import type { Fields } from "./validation.js";
 import { h3Field } from "./drafts.js";
 export const estimateFields: Fields = {
+  params: { kind: "dictionary", optional: true },
   model: { kind: "string", default: "" },
   kind: { kind: "string", default: "video" },
   ratio: { kind: "string", default: "16:9" },

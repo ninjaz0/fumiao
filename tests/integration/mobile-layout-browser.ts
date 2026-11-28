@@ -673,7 +673,7 @@ async function checkNoOverflowAndNoCover(page: Page) {
     await toggle.tap();
     const sections = [
       "profile", "credits", "budgets", "apiTokens",
-      "plugins", "models", "prices", "creditAdmin", "redeemAdmin",
+      "modelAccess", "plugins", "models", "prices", "creditAdmin", "redeemAdmin",
       "workspaces", "team", "invites", "storage", "observability",
     ];
     for (const section of sections) {
@@ -702,7 +702,7 @@ async function checkNoOverflowAndNoCover(page: Page) {
         await page.getByRole("button", { name: "取消", exact: true }).tap();
       }
       if (section === "prices") {
-        const priceWidths = await page.locator(".price-row input").evaluateAll((inputs) =>
+        const priceWidths = await page.locator(".price-row:not(.published-price-row) input").evaluateAll((inputs) =>
           inputs.map((input) => getComputedStyle(input).width),
         );
         assert.ok(priceWidths.length > 0, "生成定价分类至少渲染一个价格输入框");

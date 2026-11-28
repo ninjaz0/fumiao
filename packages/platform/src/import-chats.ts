@@ -1,6 +1,7 @@
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { requireValue } from "./security.js";
-import type { Sql } from "./db.js";
+import { one, type Sql } from "./db.js";
 import { chatBytes } from "./chat-values.js";
 import { pythonJsonText } from "@fumiao/plugin-sdk/json.js";
 
@@ -441,6 +442,22 @@ export async function importChats(
       "INSERT INTO canvas_chat_links(project_id,node,conversation_id,created) VALUES($1,$2,$3,$4)",
       [id("canvas", l.project), l.node, id("chat", l.conversation), l.created],
     );
+  // Import runs on an empty database. An older schema will apply this same
+  // attribution when it upgrades, after these archived messages and links exist.
+  const backfill = "059_model_access_chat_project_backfill.sql";
+  if (
+    data.credit_chat_charges.length &&
+    (await one(sql, "SELECT 1 FROM schema_migrations WHERE version=$1", [
+      backfill,
+    ]))
+  ) {
+    await sql.query(
+      await readFile(
+        new URL(`../../../migrations/${backfill}`, import.meta.url),
+        "utf8",
+      ),
+    );
+  }
   const canvasIds = new Set(canvases.map((c) => c.id));
   for (const a of data.chat_applications)
     await sql.query(

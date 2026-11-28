@@ -1,3 +1,7 @@
+import { canvasShotOrder, tailParentNode } from "@fumiao/plugin-sdk/canvas-ports";
+import { creditUnits } from "@fumiao/plugin-sdk/credit-amount.js";
+import { ParameterFields } from "../studio/ParameterFields";
+import { useMediaQuote } from "./useMediaQuote";
 import type { CanvasNodeEntry } from "@fumiao/plugin-sdk/canvas-nodes";
 import { PluginNodeForm, PluginNodePorts, PluginNodeOutputs } from "./PluginNode";
 import {
@@ -1237,11 +1241,13 @@ export function CanvasWorkspace({
   useEffect(() => {
     setShowCinePanel(false);
   }, [single?.id]);
-  const selectedModel = rawModelChoices.some(([id])=>id===requestedModel) ? requestedModel : FlowPicker.resolve(studio.model_catalog,requestedModel,availableModel,single?.params) || rawModelChoices[0]?.[0] || '';
+  const published = (model: string) => Boolean(studio.pricing?.published?.some(entry => entry.model === model && entry.price.kind !== "chat"));
+  const selectedModel = published(requestedModel) || rawModelChoices.some(([id])=>id===requestedModel) ? requestedModel : FlowPicker.resolve(studio.model_catalog,requestedModel,availableModel,single?.params) || rawModelChoices[0]?.[0] || '';
   const modelChoices = FlowPicker.grouped(Object.fromEntries(rawModelChoices),studio.model_catalog,availableModel,selectedModel,single?.params);
   const flowModel=studio.model_catalog?.[selectedModel]?.provider==='flow'?studio.model_catalog[selectedModel]:null;
   const flowParameters=flowModel?.family?FlowPicker.options(studio.model_catalog,selectedModel,availableModel):null;
   const form = studio.model_forms?.[selectedModel];
+  const nativeMedia = published(selectedModel);
   const fields = form?.fields;
   const BUILTIN_CANVAS_PARAM_KEYS = useMemo(
     () =>
@@ -1305,7 +1311,7 @@ export function CanvasWorkspace({
   const stepsOptions = (fields?.sampling_steps?.enum ?? []).map(Number).filter(v=>v!==form?.fastSteps) as Params["sampling_steps"][];
   useEffect(()=>{
     if (!single || !['image','video'].includes(single.type) || !selectedModel) return;
-    if (!form) return;
+    if (!form || nativeMedia) return;
     const values = normalizeForm(form,{ratio:single.params.ratio,resolution:single.params.resolution,seconds:single.params.seconds,quality:single.params.quality,image_quality:single.params.image_quality});
     const desired:Partial<Params>=flowModel?{model:selectedModel,ratio:flowModel.ratio!,seconds:flowModel.seconds!,resolution:(flowModel.resolution==='原生'?'1K':flowModel.resolution) as Params['resolution'],fast_mode:false,sampling_steps:20,seed:null,flow_source_job:flowModel.mode==='extend'?single.params.flow_source_job||null:null}:
       {model:selectedModel,flow_source_job:null, ratio:String(values.ratio ?? single.params.ratio),seconds:Number(values.seconds ?? single.params.seconds), resolution:(values.resolution ?? single.params.resolution) as Params["resolution"], quality:(values.quality ?? single.params.quality) as Params["quality"],image_quality:(values.image_quality ?? single.params.image_quality) as Params["image_quality"]};
@@ -1984,7 +1990,12 @@ export function CanvasWorkspace({
     }
     if (type === 'image' || type === 'video') {
       node.params.model=Object.keys(type==='image'?studio.images.models||{}:studio.video_models||{}).find(availableModel) || '';
-      node.params.seconds = Number(studio.model_forms[node.params.model]?.fields.seconds?.default ?? node.params.seconds);
+      const selectedForm = studio.model_forms[node.params.model];
+      node.params.seconds = Number(selectedForm?.fields.seconds?.default ?? node.params.seconds);
+      if (published(node.params.model) && selectedForm) {
+        const { seconds: _duration, ...defaults } = normalizeForm(selectedForm, {});
+        node.extra_params = defaults;
+      }
     }
     doc.change((d) => ({
       ...d,
@@ -2575,7 +2586,8 @@ export function CanvasWorkspace({
         pending = JSON.parse(localStorage.getItem(storageKey) || "null");
       } catch {}
       if (!pending) {
-        pending = { uid: crypto.randomUUID(), expected_revision: rev, price_revision:studio.pricing.revision, count: candidateCount };
+        if (nativeMedia && !nativeQuote?.authorization) throw new Error("请确认当前线路报价");
+        pending = { uid: crypto.randomUUID(), expected_revision: rev, price_revision:studio.pricing.revision, count: candidateCount, ...nativeQuote?.authorization };
         localStorage.setItem(storageKey, JSON.stringify(pending));
       }
       try {
@@ -2584,6 +2596,7 @@ export function CanvasWorkspace({
       } catch (e) {
         if (e instanceof ApiError && e.status < 500)
           localStorage.removeItem(storageKey);
+        if (e instanceof ApiError && e.status === 409) await fetchRuns();
         throw e;
       }
       await fetchRuns();
@@ -2709,9 +2722,29 @@ export function CanvasWorkspace({
   const visibleCandidates = latestBatch?.count === 2 ? (current?.list.filter(job=>job.batch?.uid===latestBatch.uid)||[]) : pendingRuns;
   const creditTiers=single && form?.tiers.filter(t => matches(t.when,{seconds:single.params.seconds,ratio:single.params.ratio,resolution:single.params.resolution,quality:single.params.quality,image_quality:single.params.image_quality}));
   const creditTier=creditTiers?.length===1 ? creditTiers[0].tier : undefined;
-  const creditPrice=studio.pricing?.items.find(p=>p.key===selectedModel+'|'+creditTier)?.amount;
-  const candidateCost = creditPrice == null ? null : creditPrice * candidateCount;
-  const creditAvailable=candidateCost!=null && studio.credits.available>=candidateCost;
+  const nativeValues: FormValues = Object.fromEntries(Object.entries(single?.extra_params ?? {}).filter(
+    (entry): entry is [string, string | number | boolean] => !entry[0].startsWith("script_") && ["number", "string", "boolean"].includes(typeof entry[1]),
+  ));
+  if (single?.type === "video") nativeValues.seconds = Number(nativeValues.seconds ?? single.params.seconds);
+  const parentShot = single?.type === "video" && single.tail_inherited && tailParentNode(doc.value.document, single.id);
+  const quoteRefs = new Set(referenceMedia.filter((id): id is string => Boolean(id)));
+  if (single?.generation_mode === "first_last_frame") {
+    for (const frame of [single.params.h3?.first_frame, single.params.h3?.last_frame]) if (frame) quoteRefs.add(frame);
+  } else if (single?.generation_mode === "omni_ref") {
+    for (const ref of single.params.h3_refs ?? []) quoteRefs.add(ref);
+  }
+  const parentRun = parentShot ? runsByNode.get(parentShot)?.find(run => run.kind === "video") : undefined;
+  const nativeQuote = useMediaQuote(nativeMedia && single ? {
+    kind: single.type, model: selectedModel, params: nativeValues, count: candidateCount,
+    refs: [...quoteRefs],
+    ...(parentShot && { canvas_tail: { project: project.id, parent: parentShot } }),
+  } : null, studio.workspace_id, studio.pricing.revision, parentRun);
+  const creditPrice = nativeMedia ? nativeQuote?.authorization?.max_charge : studio.pricing?.items.find(p=>p.key===selectedModel+'|'+creditTier)?.amount;
+  const candidateCost = creditPrice == null ? null : nativeMedia ? String(creditPrice) : Number(creditPrice) * candidateCount;
+  const availableCredits = studio.credits.exact?.available ?? String(studio.credits.available);
+  const creditAvailable = candidateCost !== null && (nativeMedia
+    ? creditUnits(availableCredits) >= creditUnits(String(candidateCost))
+    : studio.credits.available >= Number(candidateCost));
   const flowInputError=flowModel ? referenceMedia.length<(flowModel.min_refs||0)?`请添加至少 ${flowModel.min_refs} 张参考图片`:
     referenceMedia.length>(flowModel.max_refs||0)?flowModel.max_refs?`这个模型最多接收 ${flowModel.max_refs} 张参考图片`:'这个模型不接收参考图片':
     flowModel.mode==='extend'&&!single?.params.flow_source_job?'请选择来源视频':'' : '';
@@ -2732,7 +2765,8 @@ export function CanvasWorkspace({
     : h3Busy ? "正在处理参考素材…"
     : single?.type === "image" && !currentImageEnabled ? "当前空间未开放图片生成"
     : !availableModel(selectedModel) ? "当前模型暂不可用"
-    : creditPrice == null ? "当前规格尚未定价"
+    : nativeMedia && nativeQuote?.error ? `节点「${single?.title || single?.id}」：${nativeQuote.error}`
+    : creditPrice == null ? (nativeMedia ? "正在估价" : "当前规格尚未定价")
     : !creditAvailable ? "当前空间积分不足"
     : "";
   const generate = () => {
@@ -3229,18 +3263,24 @@ export function CanvasWorkspace({
           }
         : null,
     };
-    doc.change((d) => ({
-      ...d,
-      document: {
-        ...d.document,
-        nodes: [...d.document.nodes, imgNode, vidNode],
-        edges: [
-          ...d.document.edges,
-          { id: crypto.randomUUID(), source: imgNode.id, target: vidNode.id },
-        ],
-        shots: [...(d.document.shots ?? []), vidNode.id],
-      },
-    }));
+    doc.change((d) => {
+      const shots = [...canvasShotOrder(d.document)];
+      const sourceIndex = shots.indexOf(source.id);
+      if (sourceIndex < 0) shots.push(source.id, vidNode.id);
+      else shots.splice(sourceIndex + 1, 0, vidNode.id);
+      return {
+        ...d,
+        document: {
+          ...d.document,
+          nodes: [...d.document.nodes, imgNode, vidNode],
+          edges: [
+            ...d.document.edges,
+            { id: crypto.randomUUID(), source: imgNode.id, target: vidNode.id },
+          ],
+          shots,
+        },
+      };
+    });
     notify(
       continuation.switched
         ? `已抽取尾帧并用 ${continuation.label} 创建续接镜头`
@@ -4334,7 +4374,14 @@ export function CanvasWorkspace({
           />}
           {flowModel?.mode==='extend'&&<label className="cv-flow-source">来源视频<select aria-label="画布续写来源视频" value={single.params.flow_source_job||''} onChange={e=>patchParams({flow_source_job:Number(e.target.value)||null})}><option value="">请选择已完成的 Flow 视频</option>{flowSources.map(j=><option key={j.id} value={j.id}>#{j.id} · {j.prompt.slice(0,42)}</option>)}</select></label>}
           {flowInputError&&<p className="cv-flow-hint" role="status">{flowInputError}</p>}
-          {(customFormFields.length > 0 || formConstraints?.references.reason) && (
+          {nativeMedia && form && <div className="fm-dynamic-form-fields" role="group" aria-label="模型专属参数">
+            <ParameterFields form={form} keepHistorical values={nativeValues} change={values => {
+              const { seconds, ...options } = values;
+              const metadata = Object.fromEntries(Object.entries(single.extra_params ?? {}).filter(([k]) => k.startsWith("script_")));
+              edit(single.id, { extra_params: { ...metadata, ...options }, ...(typeof seconds === "number" && { params: { ...single.params, seconds } }) });
+            }} />
+          </div>}
+          {!nativeMedia && (customFormFields.length > 0 || formConstraints?.references.reason) && (
             <div className="fm-dynamic-form-fields" role="group" aria-label="模型专属参数">
               {customFormFields.map(([key, field]) => {
                 const state = formConstraints?.fields[key];
@@ -4441,12 +4488,20 @@ export function CanvasWorkspace({
               </button>
               {menu === "model" && <div ref={modelMenuRef} id="canvas-model-options" className="cv-menu duration-menu model-menu" role="listbox" aria-label="选择模型">{modelChoices.length>12&&<input className="cv-model-search" aria-label="搜索画布模型" placeholder="搜索模型" value={modelSearch} onChange={e=>setModelSearch(e.target.value)} onKeyDown={e=>{e.stopPropagation();if(e.key==='Escape')closeModelMenu();}}/>} {modelChoices.filter(([,label])=>label.toLowerCase().includes(modelSearch.toLowerCase())).map(([value,label]) => <button key={value} role="option" aria-selected={FlowPicker.sameFamily(studio.model_catalog,selectedModel,value)} tabIndex={FlowPicker.sameFamily(studio.model_catalog,selectedModel,value) ? 0 : -1} onClick={() => {
                 const nextForm = studio.model_forms[value];
+                if (value === single.params.model && nativeMedia) { closeModelMenu(); return; }
+                if (published(value)) {
+                  const defaults = normalizeForm(nextForm, {});
+                  const { seconds, ...options } = defaults;
+                  const metadata = Object.fromEntries(Object.entries(single.extra_params ?? {}).filter(([k]) => k.startsWith("script_")));
+                  edit(single.id, { params: { ...single.params, model: value, seconds: Number(seconds ?? single.params.seconds), h3: null, h3_refs: [], flow_source_job: null }, extra_params: { ...metadata, ...options } });
+                  setModelSearch(""); closeModelMenu(); return;
+                }
                 const spec = studio.model_catalog[value];
                 const values = normalizeForm(nextForm, {ratio:single.params.ratio,seconds:single.params.seconds});
                 patchParams(spec?.provider==='flow'?{model:value,ratio:spec.ratio!,seconds:spec.seconds!,resolution:(spec.resolution==='原生'?'1K':spec.resolution) as Params['resolution'],flow_source_job:null}:{model:value,ratio:String(values.ratio ?? single.params.ratio),seconds:Number(values.seconds ?? single.params.seconds),flow_source_job:null});setModelSearch('');closeModelMenu();
               }}>{label}{FlowPicker.sameFamily(studio.model_catalog,selectedModel,value) && <Check size={14}/>}</button>)}</div>}
             </div>
-            <div className="parameter-wrap menu-trigger">
+            {!nativeMedia && <div className="parameter-wrap menu-trigger">
               <button
                 className={"parameter " + (flowModel&&!flowParameters ? "fixed-parameter " : "") + (menu === "format" ? "active" : "")}
                 disabled={Boolean(flowModel&&!flowParameters)}
@@ -4520,8 +4575,8 @@ export function CanvasWorkspace({
                   </div></>}
                 </div>
               )}
-            </div>
-            {!((muse || flowModel) && single.type === 'image') && <div className="parameter-wrap menu-trigger">
+            </div>}
+            {!nativeMedia && !((muse || flowModel) && single.type === 'image') && <div className="parameter-wrap menu-trigger">
               <button
                 className="parameter fm-choice-trigger"
                 disabled={Boolean(flowModel&&!flowParameters)}
@@ -4658,8 +4713,8 @@ export function CanvasWorkspace({
                   onClick={(event) => {setCandidateCount(count); restoreChoiceMenuTriggerFocus(event.currentTarget); setMenu(null);}}><span>{count} 个候选</span>{candidateCount === count && <Check size={16} aria-hidden="true" />}</button>)}
               </div>}
             </div>
-            <span className="canvas-credit" aria-label={!selectedModel?'':creditPrice==null?'未定价':`${candidateCost} 积分${creditAvailable?'':'，余额不足'}`} title={`当前空间可用 ${studio.credits.available} 积分${creditPrice!=null && !creditAvailable?'，余额不足':''}`}>
-              {!selectedModel?'':creditPrice==null?'未定价':<><svg className="credit-spark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C13.4 8.7 15.3 10.6 22 12C15.3 13.4 13.4 15.3 12 22C10.6 15.3 8.7 13.4 2 12C8.7 10.6 10.6 8.7 12 2Z"/></svg><span>{candidateCost}</span></>}
+            <span className="canvas-credit" aria-label={!selectedModel?'':creditPrice==null?(nativeMedia?'待估价':'未定价'):`${candidateCost} 积分${creditAvailable?'':'，余额不足'}`} title={`当前空间可用 ${availableCredits} 积分${creditPrice!=null && !creditAvailable?'，余额不足':''}`}>
+              {!selectedModel?'':creditPrice==null?(nativeMedia?'待估价':'未定价'):<><svg className="credit-spark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C13.4 8.7 15.3 10.6 22 12C15.3 13.4 13.4 15.3 12 22C10.6 15.3 8.7 13.4 2 12C8.7 10.6 10.6 8.7 12 2Z"/></svg><span>{nativeMedia && "最高 "}{candidateCost}</span></>}
             </span>
             <button
               className="generate-button"
@@ -4678,6 +4733,7 @@ export function CanvasWorkspace({
           {generationBlock && (
             <div className="composer-message">
               <span role="status">{generationBlock}</span>
+              {nativeMedia && nativeQuote.retryable && <button type="button" onClick={nativeQuote.refresh}>重新报价</button>}
               {generationBlock === "当前空间积分不足" && <button onClick={openCredits}>去充值</button>}
             </div>
           )}
@@ -4936,7 +4992,7 @@ export function CanvasWorkspace({
                 const revision=await doc.flush();
                 if(doc.ref.current.document.nodes.find(n=>n.id===id)?.text!==expectedText)throw new Error('节点文字已被修改，未覆盖。请基于当前文字重新生成。');
                 const snapshot=JSON.stringify(doc.ref.current);
-                const result=await chatRequest<Project & {applied_node:string}>(project.workspace,'/api/chats/'+cid+'/apply',{uid:options?.uid||crypto.randomUUID(),message:message.id,project:project.id,expected_revision:revision,mode:'replace',node:id,expected_text:expectedText});
+                const result=await chatRequest<Project & {applied_node:string}>(project.workspace,'/api/chats/'+cid+'/apply',{uid:options?.uid||crypto.randomUUID(),message:message.id,project:project.id,expected_revision:options?.expectedRevision??revision,mode:'replace',node:id,expected_text:expectedText});
                 doc.acceptRemote(result,snapshot);
               };
               const queued=textApplyQueue.current.then(apply);
@@ -5213,7 +5269,7 @@ export function CanvasWorkspace({
         </Modal>
       )}
       {aiStoryboard && <Modal title="AI 分镜" wide onClose={() => setAiStoryboard(false)}>
-        <AiStoryboard workspace={project.workspace} userId={studio.me.id} project={project.id}
+        <AiStoryboard key={`${studio.me.id}-${project.workspace}-${project.id}`} workspace={project.workspace} userId={studio.me.id} project={project.id}
           onRecharge={openCredits}
           onConfigureModels={studio.me.role === "admin" ? () => void closeAndLeave(chatSettingsPath(studio)) : undefined}
           onApply={async (shots, options)=>{
@@ -5552,7 +5608,7 @@ export function CanvasWorkspace({
               }
               await fetchRuns();
               notify(
-                `已提交 ${res.submitted.length} 项任务（跳过 ${res.skipped.length} 项），合计冻结 ${res.total_credits} 积分`,
+                `已提交 ${res.submitted.length} 项任务（跳过 ${res.skipped.length} 项），合计冻结 ${res.exact_total_credits ?? res.total_credits} 积分`,
               );
             }}
             onClose={() => setPrecheckTarget(null)}
@@ -5776,7 +5832,7 @@ export function CanvasWorkspace({
                 uid: options?.uid || crypto.randomUUID(),
                 message: message.id,
                 project: project.id,
-                expected_revision: revision,
+                expected_revision: options?.expectedRevision ?? revision,
                 mode: "replace",
                 node: postFlush.nodeId,
                 expected_text: postFlush.expectedText,

@@ -1,9 +1,10 @@
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { randomUUID } from "node:crypto";
-import { canvasSourceKind } from "@fumiao/plugin-sdk/canvas-ports.js";
+import { canvasShotOrder, canvasSourceKind, tailParentNode } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { Platform } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { enforceAgentPolicyInTx } from "@fumiao/platform/agent-policy.js";
-import { hash, requireValue } from "@fumiao/platform/security.js";
+import { DomainError, hash, requireValue } from "@fumiao/platform/security.js";
 import { CanvasSubmissionModels } from "@fumiao/platform/canvas-submission.js";
 import { StudioCatalog } from "@fumiao/platform/catalog.js";
 import { uuid5 } from "@fumiao/platform/uuid.js";
@@ -32,16 +33,18 @@ import {
 import { resolveSpeakerVoice } from "./dialogue.js";
 import {
   canvasBytes,
+  canvasMediaParameters,
   canvasDocumentJson,
   canvasText,
   parseCanvasRunJson,
 } from "./canvas-values.js";
 import { OriginalCanvases, canvasConflict } from "./canvases.js";
 import { OriginalGeneration } from "./generation.js";
+import { activeCanvasJobStates, readCanvasTail } from "./canvas-tail.js";
 import { OriginalState } from "./state.js";
 
 const namespaceUrl = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
-const active = ["queued", "dispatching", "running", "finalizing", "uncertain"];
+
 import { isBgmMusicModel } from "@fumiao/plugin-sdk/speech-routing.js";
 
 /** F030: Compiles structured 6-dimension director cinematography spec into clean prompt text. */
@@ -79,6 +82,9 @@ export function compileCinematographyPrompt(
   return parts.filter(Boolean).join("\n\n").slice(0, 12000);
 }
 type Run = {
+  route_revision?: string;
+  price_revision_id?: string;
+  max_charge?: string;
   uid: string;
   expected_revision: number | bigint;
   price_revision: number | bigint | null;
@@ -204,7 +210,7 @@ export class OriginalCanvasRuns {
       sql,
       `SELECT 1 FROM canvas_job_links l JOIN jobs j ON j.id=l.job_id
       WHERE l.project_id=$1 AND l.node=$2 AND j.state=ANY($3::text[]) AND j.deleted_at IS NULL LIMIT 1`,
-      [project, node, active],
+      [project, node, activeCanvasJobStates],
     ));
   }
   private async link(
@@ -332,10 +338,19 @@ export class OriginalCanvasRuns {
       node.generation_mode,
       node.grid_layout,
     );
-    const bindings = await CanvasSubmissionModels.read(sql),
-      params = node.params,
-      model = params.model || bindings.default(node.type),
-      rule = bindings.rules.get(model);
+    const params = node.params;
+    const builtin =
+      params.model &&
+      (await one(
+        sql,
+        "SELECT id FROM studio_catalog WHERE id=$1 AND plugin_id IS NULL",
+        [params.model],
+      ));
+    const bindings = builtin
+      ? undefined
+      : await CanvasSubmissionModels.read(sql);
+    const model = params.model || bindings!.default(node.type);
+    const rule = bindings?.rules.get(model);
 
     // F011: Honor explicit node.generation_mode instead of letting stale params.h3.mode override it.
     let native =
@@ -383,95 +398,28 @@ export class OriginalCanvasRuns {
     // Never touches shots where `tail_inherited` is falsy (preserves explicit first frames).
     let pendingTailParentJobId: string | null = null;
     if (node.type === "video" && node.tail_inherited) {
-      const fallbackVideoOrder = doc.nodes
-        .filter((n) => n.type === "video")
-        .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
-        .map((n) => n.id);
-      const shotOrder = doc.shots?.length ? doc.shots : fallbackVideoOrder;
-      const shotIdx = shotOrder.indexOf(nid);
-      const prevNodeId =
-        shotIdx > 0
-          ? shotOrder[shotIdx - 1]
-          : (doc.edges.find(
-              (e) =>
-                e.target === nid &&
-                nodes.get(e.source)?.type === "video",
-            )?.source ?? null);
+      const prevNodeId = tailParentNode(doc, nid);
       if (prevNodeId) {
-        const prevJob = await one(
-          sql,
-          `SELECT j.id, j.state,
-                  (SELECT a.id FROM job_assets ja JOIN assets a ON a.id=ja.asset_id
-                    WHERE ja.job_id=j.id AND ja.role='output' AND a.state='ready'
-                    ORDER BY a.created_at ASC LIMIT 1) AS output_asset_id
-             FROM canvas_job_links l
-             JOIN jobs j ON j.id = l.job_id
-            WHERE l.project_id = $1 AND l.node = $2 AND j.kind = 'video' AND j.deleted_at IS NULL
-            ORDER BY l.id DESC
-            LIMIT 1`,
-          [p.id, prevNodeId],
-        );
-        if (prevJob && active.includes(String(prevJob.state))) {
-          pendingTailParentJobId = String(prevJob.id);
-        } else if (
-          prevJob &&
-          prevJob.state === "completed" &&
-          prevJob.output_asset_id &&
-          !native?.first_frame
-        ) {
-          const srcAsset = await one(
-            sql,
-            "SELECT id, public_id, object_key FROM assets WHERE id=$1 AND state='ready'",
-            [prevJob.output_asset_id],
-          );
-          if (srcAsset) {
-            const existingTail = await one(
-              sql,
-              `SELECT public_id FROM assets
-                WHERE workspace_id=$1 AND state='ready'
-                  AND metadata->>'derivation'='tail_frame'
-                  AND metadata->>'derived_from'=$2
-                ORDER BY created_at DESC LIMIT 1`,
-              [p.workspace_id, String(srcAsset.public_id)],
-            );
-            let tailPublicId = existingTail
-              ? String(existingTail.public_id)
-              : "";
-            if (!tailPublicId) {
-              try {
-                const extracted = await createTailFrameAsset(
-                  this.p,
-                  sql,
-                  user.id,
-                  String(p.workspace_id),
-                  {
-                    id: String(srcAsset.id),
-                    public_id: String(srcAsset.public_id),
-                    object_key: String(srcAsset.object_key),
-                  },
-                  AbortSignal.timeout(30_000),
-                );
-                tailPublicId = extracted.public_id;
-              } catch {
-                // Keep submission resilient if source asset bytes are unavailable in a mock fixture.
-              }
+        const frameRefs = node.generation_mode === "first_last_frame"
+          ? [params.h3?.first_frame, params.h3?.last_frame].filter((id): id is string => Boolean(id))
+          : node.generation_mode === "omni_ref" ? params.h3_refs : [];
+        const tail = await readCanvasTail(sql, p.id, p.workspace_id, prevNodeId, [...refs, ...frameRefs], node.asset_packs.map(pack => pack.id));
+        if (tail?.state === "pending") {
+          pendingTailParentJobId = tail.job;
+        } else if (tail?.state === "completed" && !native?.first_frame) {
+          let frame = tail.frame;
+          if (!frame) {
+            try {
+              frame = (await createTailFrameAsset(this.p, sql, user.id, p.workspace_id, tail.source, AbortSignal.timeout(30_000))).public_id;
+            } catch {
+              requireValue(!builtin, 409, "未能提取上游镜头的尾帧");
+              // Legacy plugins can generate without an optional inherited frame.
             }
-            if (tailPublicId) {
-              if (rule?.nativeH3) {
-                native = {
-                  ...(native ?? {
-                    mode: "frames" as const,
-                    first_frame: null,
-                    last_frame: null,
-                    video_audio: [],
-                  }),
-                  mode: "frames",
-                  first_frame: tailPublicId,
-                };
-              } else if (!refs.includes(tailPublicId)) {
-                refs = [tailPublicId, ...refs];
-              }
-            }
+          }
+          if (frame && rule?.nativeH3) {
+            native = { ...(native ?? {last_frame:null, video_audio:[]}), mode:"frames", first_frame:frame };
+          } else if (frame && !refs.includes(frame)) {
+            refs = [frame, ...refs];
           }
         }
       }
@@ -516,11 +464,14 @@ export class OriginalCanvasRuns {
       prompt,
       refs,
       ratio: params.ratio,
+      ...(body.route_revision !== undefined && { route_revision: body.route_revision }),
+      ...(body.price_revision_id !== undefined && { price_revision_id: body.price_revision_id }),
+      ...(body.max_charge !== undefined && { max_charge: body.max_charge }),
       price_revision:
         typeof body.price_revision === "number" ? body.price_revision : null,
       asset_packs: node.asset_packs,
       model,
-      ...(extraParams ? { params: extraParams } : {}),
+      ...(extraParams ? { params: builtin ? canvasMediaParameters(extraParams) : extraParams } : {}),
     };
     const draft = parseDraft(
       node.type,
@@ -556,8 +507,13 @@ export class OriginalCanvasRuns {
         projectId: String(p.id),
         nodeId: nid,
         executionKey: `canvas-run:${p.id}:${nid}:${body.uid}`,
+        tailParentJobId: pendingTailParentJobId,
       },
-    );
+    ).catch((error: unknown) => {
+      if (builtin && error instanceof DomainError && error.status === 400)
+        throw new DomainError(400, `节点「${node.title || nid}」：${error.message}`);
+      throw error;
+    });
     await this.link(sql, p, user, nid, body.uid, result.id, {
       revision: p.revision,
       prompt,
@@ -649,7 +605,9 @@ export class OriginalCanvasRuns {
         "SELECT sum(price) AS total FROM jobs WHERE public_id=ANY($1::bigint[])",
         [ids],
       );
-      const result = { ids, count: body.count, credits: Number(fees.total) };
+      const total = creditUnits(String(fees.total));
+      requireValue(body.max_charge === undefined || total <= creditUnits(body.max_charge), 409, "候选合计超过已确认的最高积分，请重新确认");
+      const result = { ids, count: body.count, credits: Number(fees.total), exact_credits: formatCredits(total) };
       await sql.query(
         "INSERT INTO canvas_run_batches(owner_id,uid,project_id,node,count,result) VALUES($1,$2,$3,$4,$5,$6)",
         [
@@ -999,13 +957,14 @@ export class OriginalCanvasRuns {
       }[];
       skipped: { node: string; stage: PrecheckStage; reason: string }[];
       total_credits: number;
+      exact_total_credits?: string;
     };
 
     const body = parseBody(value, canvasBatchRunFields, true) as Run & {
       node_ids: string[];
       stages: PrecheckStage[];
       precheck_token?: string;
-      expected_total_credits?: number;
+      expected_total_credits?: number | string;
       executable_keys?: string[];
     };
     const requestHash = hash(
@@ -1042,6 +1001,8 @@ export class OriginalCanvasRuns {
       return response;
     };
 
+    type NodeQuote = { price_revision: number; price_revision_id: string; route_revision: string; max_charge: string };
+    let nativeQuotes: Partial<Record<string, NodeQuote>> = {};
     const waitOrReclaim = async (
       projectUuid: string,
     ): Promise<
@@ -1082,10 +1043,11 @@ export class OriginalCanvasRuns {
               WHERE owner_id=$1 AND project_id=$2 AND uid=$3
                 AND status = 'in_progress'
                 AND updated_at < now() - interval '60 seconds'
-             RETURNING expected_revision, allowed_keys`,
+             RETURNING expected_revision, allowed_keys, response`,
             [user.id, projectUuid, body.uid, claimId],
           );
           if (reclaimed) {
+            nativeQuotes = reclaimed.response?.native_quotes ?? {};
             return {
               mode: "reclaimed",
               expectedRevision:
@@ -1119,13 +1081,7 @@ export class OriginalCanvasRuns {
       const doc = parseCanvasDocument(canvasDocumentJson(p.document));
       const targets = expandGroupNodeIds(doc.nodes, body.node_ids);
       requireValue(targets.length > 0, 400, "未找到可执行的节点");
-      const fallbackVideoOrder = doc.nodes
-        .filter((n) => n.type === "video")
-        .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y))
-        .map((n) => n.id);
-      const effectiveShots = doc.shots?.length
-        ? doc.shots
-        : fallbackVideoOrder;
+      const effectiveShots = canvasShotOrder(doc);
       return {
         plan: targets,
         shotIndexMap: new Map<string, number>(
@@ -1176,7 +1132,7 @@ export class OriginalCanvasRuns {
         [projectUuid, user.id, [...targetsByUid.keys()], dialogueNodes],
       );
       const accepted = new Set<string>();
-      let totalCredits = 0;
+      let totalUnits = 0n;
       for (const row of rows) {
         const target = targetsByUid.get(row.uid);
         if (target) {
@@ -1197,7 +1153,7 @@ export class OriginalCanvasRuns {
           });
           accepted.add(`${node}:dialogue`);
         }
-        totalCredits += Number(row.price);
+        totalUnits += creditUnits(String(row.price));
       }
       for (const key of allowed) {
         if (accepted.has(key)) continue;
@@ -1211,7 +1167,8 @@ export class OriginalCanvasRuns {
       return complete(sql, projectUuid, {
         submitted,
         skipped,
-        total_credits: totalCredits,
+        total_credits: Number(formatCredits(totalUnits)),
+        exact_total_credits: formatCredits(totalUnits),
       });
     };
 
@@ -1248,7 +1205,7 @@ export class OriginalCanvasRuns {
               plan: [] as ReturnType<typeof expandGroupNodeIds>,
               shotIndexMap: new Map<string, number>(),
               serverAllowedKeys: null as Set<string> | null,
-              serverTotalCredits: null as number | null,
+              serverTotalCredits: null as string | null,
             };
           }
           return {
@@ -1259,7 +1216,7 @@ export class OriginalCanvasRuns {
             plan: [] as ReturnType<typeof expandGroupNodeIds>,
             shotIndexMap: new Map<string, number>(),
             serverAllowedKeys: null as Set<string> | null,
-            serverTotalCredits: null as number | null,
+            serverTotalCredits: null as string | null,
           };
         }
       }
@@ -1275,7 +1232,7 @@ export class OriginalCanvasRuns {
       );
 
       let serverAllowedKeys: Set<string> | null = null;
-      let serverTotalCredits: number | null = null;
+      let serverTotalCredits: string | null = null;
       if (hasTables?.has_tickets) {
         const ticket = await one(
           sql,
@@ -1305,7 +1262,7 @@ export class OriginalCanvasRuns {
             ? ticket.executable_keys.map(String)
             : [],
         );
-        serverTotalCredits = Number(ticket.total_credits ?? 0);
+        serverTotalCredits = formatCredits(creditUnits(String(ticket.total_credits ?? 0)));
       }
 
       return {
@@ -1360,12 +1317,25 @@ export class OriginalCanvasRuns {
             "画布节点状态、模型报价或可执行集合已发生变化，请重新预检后再确认提交",
           );
         }
+        for (const item of freshPrecheck.items) {
+          if (item.status === "blocked" || !item.route_revision || !item.price_revision_id) continue;
+          nativeQuotes[item.node_id + ":" + item.stage] = {
+            price_revision: freshPrecheck.price_revision,
+            route_revision: item.route_revision,
+            price_revision_id: item.price_revision_id,
+            max_charge: item.exact_credits,
+          };
+        }
+        requireValue(
+          !Object.keys(nativeQuotes).length || Number(body.price_revision) === freshPrecheck.price_revision,
+          409, "积分价格已更新，请重新预检",
+        );
         const expectedCredits =
           body.expected_total_credits ?? init.serverTotalCredits;
         if (
           expectedCredits !== null &&
           expectedCredits !== undefined &&
-          freshPrecheck.summary.total_credits !== expectedCredits
+          freshPrecheck.summary.exact_total_credits !== String(expectedCredits)
         ) {
           requireValue(
             false,
@@ -1395,7 +1365,7 @@ export class OriginalCanvasRuns {
                owner_id, project_id, uid, request_hash, status,
                expected_revision, allowed_keys, response, updated_at, claim_id
              )
-             VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], '{}'::jsonb, now(), $7)
+             VALUES ($1, $2, $3, $4, 'in_progress', $5, $6::text[], $8::jsonb, now(), $7)
              ON CONFLICT (owner_id, project_id, uid) DO NOTHING
              RETURNING uid`,
           [
@@ -1406,6 +1376,7 @@ export class OriginalCanvasRuns {
             Number(body.expected_revision),
             [...allowedKeys].sort(),
             claimId,
+            JSON.stringify({ native_quotes: nativeQuotes }),
           ],
         );
         resume = !claimed;
@@ -1493,6 +1464,7 @@ export class OriginalCanvasRuns {
             const res = await this.generate(user, projectKey, node.id, {
               expected_revision: effectiveExpectedRevision,
               price_revision: body.price_revision,
+              ...nativeQuotes[node.id + ":" + stage],
               uid,
             });
             submitted.push({ node: node.id, stage, job_id: res.id });
@@ -1547,20 +1519,21 @@ export class OriginalCanvasRuns {
       }
     }
 
-    let totalCredits = 0;
+    let totalCredits = "0";
     if (submitted.length) {
       const feeRow = await one(
         this.p.db,
         "SELECT COALESCE(SUM(price),0) AS total FROM jobs WHERE public_id=ANY($1::bigint[])",
         [submitted.map((s) => s.job_id)],
       );
-      totalCredits = Number(feeRow?.total ?? 0);
+      totalCredits = formatCredits(creditUnits(String(feeRow?.total ?? 0)));
     }
 
     const response: BatchRunResponse = {
       submitted,
       skipped,
-      total_credits: totalCredits,
+      total_credits: Number(totalCredits),
+      exact_total_credits: totalCredits,
     };
     if (resume) {
       return this.p.db.transaction(async (sql) => {

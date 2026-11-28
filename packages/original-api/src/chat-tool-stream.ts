@@ -33,10 +33,12 @@ export async function* chatToolStream(
   store: ChatExecution,
   id: string,
   lease: string,
-  plugin: ProviderPlugin,
+  adapter: Pick<ProviderPlugin, "chatStream">,
   request: ChatRequest,
+  project?: string | null,
+  validateToolOutput?: (value: unknown) => void,
 ): AsyncGenerator<ChatChunk> {
-  const tools = await turnTools(store.p.db, id);
+  const tools = await turnTools(store.p.db, id, project);
   const messages = [...request.messages];
   const specs = [...tools.values()].map((t) => t.model);
   const used = new Set<string>();
@@ -47,7 +49,7 @@ export async function* chatToolStream(
     let text = "",
       reason: unknown = "",
       usage = previous;
-    for await (const item of plugin.chatStream!({
+    for await (const item of adapter.chatStream!({
       ...request,
       messages,
       ...(specs.length ? { tools: specs } : {}),
@@ -84,6 +86,7 @@ export async function* chatToolStream(
         call,
         args,
         request.signal,
+        validateToolOutput,
       );
       messages.push({ role: "tool", tool_call_id: call.id, content });
     }

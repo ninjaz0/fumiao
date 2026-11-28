@@ -1,3 +1,4 @@
+export { tailParentNode } from "@fumiao/plugin-sdk/canvas-ports.js";
 import type { CanvasDocument } from "./canvas-draft.js";
 import { pythonJsonText } from "@fumiao/plugin-sdk/json.js";
 
@@ -65,4 +66,9 @@ export function canvasVoiceIds(
   }
   // Difference builds a new small set by iterating the initial set.
   return tableOrder(tableOrder(values));
+}
+
+/** Script import stores document linkage alongside the user-selected model parameters. */
+export function canvasMediaParameters(extra?: Record<string, unknown> | null) {
+  return Object.fromEntries(Object.entries(extra ?? {}).filter(([name]) => !name.startsWith("script_")));
 }

@@ -32,3 +32,31 @@ export function acceptsCanvasEdge(
     (kind === "text" || kind === "image")
   );
 }
+
+type ShotDocument = {
+  shots?: string[] | null;
+  nodes: { id: string; type: string; x: number; y: number }[];
+  edges: { source: string; target: string }[];
+};
+
+export function canvasShotOrder(doc: ShotDocument) {
+  return doc.shots?.length
+    ? doc.shots
+    : doc.nodes
+        .filter((node) => node.type === "video")
+        .sort((a, b) => a.x - b.x || a.y - b.y)
+        .map((node) => node.id);
+}
+
+export function tailParentNode(doc: ShotDocument, nodeId: string) {
+  const order = canvasShotOrder(doc);
+  const index = order.indexOf(nodeId);
+  if (index > 0) return order[index - 1];
+  return doc.edges.find(
+    (edge) =>
+      edge.target === nodeId &&
+      doc.nodes.some(
+        (node) => node.id === edge.source && node.type === "video",
+      ),
+  )?.source;
+}

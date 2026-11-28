@@ -1,3 +1,4 @@
+import type { FrozenModelRoute } from "./model-access/publication.js";
 import { hasStudioPackages } from "./studio-plugin-profile.js";
 import { randomUUID } from "node:crypto";
 import type { Platform, Actor } from "./platform.js";
@@ -14,27 +15,10 @@ export type AcceptTaskMeta = {
   projectId?: string | null;
   nodeId?: string | null;
   executionKey?: string | null;
+  tailParentJobId?: string | null;
 };
 
-/** Caller authorizes and validates the complete frozen input in this transaction. */
-export async function acceptTask(
-  p: Platform,
-  sql: Sql,
-  user: Actor,
-  wid: string,
-  model: any,
-  input: {
-    key: string;
-    prompt: string;
-    params: Record<string, any>;
-    references: string[];
-    [key: string]: any;
-  },
-  fingerprint: string,
-  quote: { amount: number; key: string | null; revision: number | null },
-  snapshots: unknown[] = [],
-  meta?: AcceptTaskMeta,
-) {
+async function checkPlugin(sql: Sql, model: any) {
   const installation =
     (await hasStudioPackages(sql)) &&
     (await one(
@@ -80,6 +64,34 @@ export async function acceptTask(
     409,
     "模型服务已切换",
   );
+  return installation;
+}
+
+/** Caller authorizes and validates the complete frozen input in this transaction. */
+export async function acceptTask(
+  p: Platform,
+  sql: Sql,
+  user: Actor,
+  wid: string,
+  model: any,
+  input: {
+    key: string;
+    prompt: string;
+    params: Record<string, any>;
+    references: string[];
+    [key: string]: any;
+  },
+  fingerprint: string,
+  quote: {
+    amount: number | string;
+    key: string | null;
+    revision: number | null;
+  },
+  snapshots: unknown[] = [],
+  meta?: AcceptTaskMeta,
+  nativeRoute?: FrozenModelRoute,
+) {
+  const installation = nativeRoute ? null : await checkPlugin(sql, model);
   const projectId =
     meta?.projectId ??
     (typeof input.project_id === "string"
@@ -121,8 +133,8 @@ export async function acceptTask(
   const id = randomUUID();
   if (model.kind !== "chat") await capacity(sql, p.storage, JOB_RESERVE);
   await sql.query(
-    `INSERT INTO jobs(id,workspace_id,owner_id,model_id,connection_id,plugin_id,plugin_version,config_snapshot,provider_model,kind,input,idempotency_key,request_hash,price,catalog_id,price_key,price_revision,state,reference_packs)
-  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'queued',$18)`,
+    `INSERT INTO jobs(id,workspace_id,owner_id,model_id,connection_id,plugin_id,plugin_version,config_snapshot,provider_model,kind,input,idempotency_key,request_hash,price,catalog_id,price_key,price_revision,state,reference_packs${nativeRoute ? ",source_kind,route_revision_id,price_revision_id,native_snapshot,meter" : ""})
+  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'queued',$18${nativeRoute ? ",'builtin',$19,$20,$21,$22" : ""})`,
     [
       id,
       wid,
@@ -142,6 +154,14 @@ export async function acceptTask(
       quote.key,
       quote.revision,
       JSON.stringify(snapshots),
+      ...(nativeRoute
+        ? [
+            nativeRoute.routeRevisionId,
+            nativeRoute.priceRevisionId,
+            JSON.stringify(nativeRoute),
+            nativeRoute.purpose === "image" ? "images" : "milliseconds",
+          ]
+        : []),
     ],
   );
   if (installation)

@@ -21,6 +21,7 @@ export async function inspectProviderOutput(
   kind: string,
   recovering: boolean,
   signal: AbortSignal,
+  measureVideo = false,
 ): Promise<Record<string, unknown> & { mime: string }> {
   signal.throwIfAborted();
   const errors = policy.errors;
@@ -133,6 +134,7 @@ export async function inspectProviderOutput(
       "file,pipe",
       "-f",
       demuxer,
+      ...(measureVideo ? ["-threads", "2", "-max_pixels", String(8192 * 8192)] : []),
     ];
     const info = JSON.parse(
       await mediaCommand(
@@ -172,6 +174,71 @@ export async function inspectProviderOutput(
           ? "video/webm"
           : undefined;
     if (!mime) throw failure(errors.video);
+    if (measureVideo) {
+      if (video.disposition?.attached_pic) throw failure(errors.video);
+      // ffprobe decodes every frame. A fast-start MP4 can keep the original
+      // duration and still exit successfully after a cleanly truncated transfer.
+      const timeline = await mediaCommand(
+        "ffprobe",
+        [
+          ...flags,
+          "-err_detect",
+          "explode",
+          "-select_streams",
+          "v:0",
+          "-show_frames",
+          "-show_entries",
+          "frame=best_effort_timestamp_time,duration_time,pkt_duration_time:frame_side_data=",
+          "-of",
+          "compact=p=0:nk=0",
+          path,
+        ],
+        60_000,
+        signal,
+        true,
+      );
+      let start = NaN,
+        previous = NaN,
+        end = NaN,
+        count = 0;
+      for (const line of timeline.trim().split("\n")) {
+        if (!line.trim()) continue;
+        const stamp =
+          /(?:^|\|)best_effort_timestamp_time=(-?[\d.]+)(?:\||$)/.exec(line);
+        const span = /(?:^|\|)(?:pkt_)?duration_time=([\d.]+)(?:\||$)/.exec(
+          line,
+        );
+        const time = stamp ? Number(stamp[1]) : NaN;
+        if (!Number.isFinite(time) || time <= previous)
+          throw failure(errors.video);
+        if (!count) start = time;
+        previous = time;
+        end = span ? time + Number(span[1]) : NaN;
+        count++;
+      }
+      const milliseconds = Math.round((end - start) * 1000);
+      const claimedFrames = Number(video.nb_frames);
+      const declaredDuration = Number(
+        video.duration || (info.streams.length === 1 ? duration : NaN),
+      );
+      if (
+        !Number.isSafeInteger(milliseconds) ||
+        milliseconds <= 0 ||
+        milliseconds > 120000 ||
+        (claimedFrames > 0 && claimedFrames !== count) ||
+        (Number.isFinite(declaredDuration) &&
+          Math.abs(declaredDuration * 1000 - milliseconds) > 1)
+      )
+        throw failure(errors.video);
+      return {
+        mime,
+        width: video.width,
+        height: video.height,
+        fps: video.avg_frame_rate ?? null,
+        duration: milliseconds / 1000,
+        milliseconds,
+      };
+    }
     await mediaCommand(
       "ffmpeg",
       [
@@ -199,6 +266,11 @@ export async function inspectProviderOutput(
   } catch (error) {
     signal.throwIfAborted();
     if (error instanceof ArtifactValidationError) throw error;
+    if (
+      measureVideo &&
+      ["ENOENT", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")
+    )
+      throw new ArtifactValidationError("媒体校验暂不可用", 503);
     throw failure(
       kind === "video"
         ? errors.video

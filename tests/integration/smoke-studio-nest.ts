@@ -37,6 +37,8 @@ import { gpuText } from "@fumiao/plugin-gpu/text.js";
 import { imagesText } from "@fumiao/plugin-images/text.js";
 import { museText } from "@fumiao/plugin-muse/text.js";
 import { chatProviderFixture } from "../helpers/chat-provider.js";
+import { prepareModelAccess } from "./studio-model-access.js";
+import { modelProviderFixture, type ModelProvider } from "./studio-model-access-provider.js";
 import { studioBrowser } from "./studio-nest-browser.js";
 import { verifyStudioHTTPS } from "./studio-nest-https.js";
 import { studioPayment } from "./studio-nest-payment.js";
@@ -77,6 +79,7 @@ const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, TMPDIR: directory };
 const shutdown = new AbortController();
 for (const signal of ["SIGINT", "SIGTERM"])
   process.once(signal, () => shutdown.abort());
+let modelProvider: ModelProvider | undefined;
 let logs = "";
 let p: Platform | undefined;
 let provider: Awaited<ReturnType<typeof chatProviderFixture>> | undefined;
@@ -857,9 +860,15 @@ async function start() {
     FUMIAO_NEXT_DIST: nextDist,
   };
   const production = ["scripts/dev-studio.ts", "--production"];
+  if (!https && !remoteProvider && !replicas && !process.argv.includes("--serve"))
+    modelProvider = await modelProviderFixture();
   const nestEnv = {
     ...previewEnv,
     STUDIO_ENV_FILE: profile,
+    ...(modelProvider ? {
+      STUDIO_MODEL_FIXTURE: modelProvider.url,
+      NODE_OPTIONS: "--import=" + new URL("./studio-model-access-transport.ts", import.meta.url).href,
+    } : {}),
     ...(payment ? { NODE_EXTRA_CA_CERTS: payment.certificate } : {}),
     ...(replicas ? { WORKER_CONCURRENCY: "1" } : {}),
   };
@@ -995,7 +1004,7 @@ async function start() {
   }
 
   if (restoring) {
-    assert.ok(s3 && payment && provider);
+    assert.ok(s3 && payment && provider && modelProvider);
     mediaProvider = await mediaProviderFixture();
     const processes = JSON.parse(
       await readFile(join(previewRuntime, "studio-processes.json"), "utf8"),
@@ -1009,6 +1018,7 @@ async function start() {
       payment,
       provider,
       mediaProvider,
+      () => prepareModelAccess(p!, webOrigin, user, modelProvider!),
       () => {
         process.kill(processes.worker, "SIGSTOP");
         workerPaused = true;
@@ -1099,6 +1109,7 @@ async function start() {
 
     const restoredWeb = `http://${host}:${targetWeb}`;
     mediaProvider.recover();
+    modelProvider.release();
     preview = await startPreview({
       ...nestEnv,
       STUDIO_PORT: String(targetWeb),
@@ -1112,6 +1123,19 @@ async function start() {
     return;
   }
 
+  // The focused invocation uses the same gateway, browser and worker as the default suite.
+  const nativeRestart = async () => {
+    assert.ok(p && modelProvider);
+    const verify = await prepareModelAccess(p, webOrigin, user, modelProvider);
+    await stop(preview);
+    modelProvider.release();
+    preview = await startPreview();
+    await verify(p, webOrigin);
+  };
+  if (process.argv.includes("--model-access")) {
+    await nativeRestart();
+    return;
+  }
   const verifyOutage = await auditRoutes(
     p,
     webOrigin,
@@ -1186,6 +1210,7 @@ async function start() {
     assert.equal(await firstQueueEvent(), eventBeforeRestart);
     await browser.verifyRestarted(p);
     await checks.verifyRestarted(p, before);
+    await nativeRestart();
     await stop(preview);
     console.log(
       "Verified restart persistence of PostgreSQL, Redis, provider version, private media and settlement, and logout",
@@ -1233,6 +1258,7 @@ try {
       for (const child of children.reverse()) await stop(child);
       await provider?.cleanup();
       await mediaProvider?.close();
+      await modelProvider?.close();
       await payment?.close();
     } finally {
       await rm(directory, { recursive: true, force: true });

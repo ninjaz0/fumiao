@@ -229,6 +229,7 @@ export async function verifyStudioReplicas(
       balance: credit,
       available: credit,
       reserved: 0,
+      exact: { balance: String(credit), available: String(credit), reserved: "0" },
     });
     const imagePath = "/api/image-jobs";
     const model = manifest.models[0].id;
@@ -292,6 +293,7 @@ export async function verifyStudioReplicas(
       balance: credit,
       available: credit - amount * ids.size,
       reserved: amount * ids.size,
+      exact: { balance: String(credit), available: String(credit - amount * ids.size), reserved: String(amount * ids.size) },
     });
     for (const id of ids)
       assert.deepEqual(
@@ -377,6 +379,7 @@ export async function verifyStudioReplicas(
       balance: credit - amount * ids.size,
       available: credit - amount * ids.size,
       reserved: 0,
+      exact: { balance: String(credit - amount * ids.size), available: String(credit - amount * ids.size), reserved: "0" },
     });
     for (const id of ids)
       assert.deepEqual(

@@ -28,7 +28,7 @@ import {
   type OriginalAuthRequest,
 } from "./original-request.js";
 
-@Controller("api/chats")
+@Controller("api")
 export class OriginalChatController implements OnModuleDestroy {
   private readonly chats: OriginalChats;
   private readonly applications: OriginalChatApplications;
@@ -41,7 +41,7 @@ export class OriginalChatController implements OnModuleDestroy {
     this.applications = new OriginalChatApplications(identity.p);
   }
 
-  @Get()
+  @Get("chats")
   list(@Req() req: OriginalAuthRequest) {
     const query = requestQuery(req);
     return this.chats.list(
@@ -52,18 +52,42 @@ export class OriginalChatController implements OnModuleDestroy {
     );
   }
 
-  @Post()
+  @Post("chats")
   @HttpCode(200)
   create(@Req() req: OriginalAuthRequest, @Body() body: unknown) {
     return this.chats.create(req.actor, body, originalWorkspace(req));
   }
 
-  @Get(":cid")
+  @Post("chat/quote")
+  @HttpCode(200)
+  quote(@Req() req: OriginalAuthRequest, @Body() body: unknown) {
+    return this.chats.quote(req.actor, body, originalWorkspace(req));
+  }
+
+  @Get("chat/messages/:message/source")
+  replySource(
+    @Req() req: OriginalAuthRequest,
+    @Param("message") message: string,
+  ) {
+    return this.chats.replySource(
+      req.actor,
+      message,
+      originalWorkspace(req),
+      requestQuery(req).getAll("project").at(-1),
+    );
+  }
+
+  @Get("chats/:cid/bills")
+  bills(@Req() req: OriginalAuthRequest, @Param("cid") cid: string) {
+    return this.chats.bills(req.actor, cid, originalWorkspace(req));
+  }
+
+  @Get("chats/:cid")
   get(@Req() req: OriginalAuthRequest, @Param("cid") cid: string) {
     return this.chats.get(req.actor, cid, originalWorkspace(req));
   }
 
-  @Patch(":cid")
+  @Patch("chats/:cid")
   rename(
     @Req() req: OriginalAuthRequest,
     @Param("cid") cid: string,
@@ -72,18 +96,18 @@ export class OriginalChatController implements OnModuleDestroy {
     return this.chats.rename(req.actor, cid, body, originalWorkspace(req));
   }
 
-  @Delete(":cid")
+  @Delete("chats/:cid")
   remove(@Req() req: OriginalAuthRequest, @Param("cid") cid: string) {
     return this.chats.remove(req.actor, cid, originalWorkspace(req));
   }
 
-  @Post(":cid/restore")
+  @Post("chats/:cid/restore")
   @HttpCode(200)
   restore(@Req() req: OriginalAuthRequest, @Param("cid") cid: string) {
     return this.chats.restore(req.actor, cid, originalWorkspace(req));
   }
 
-  @Post(":cid/messages")
+  @Post("chats/:cid/messages")
   @HttpCode(200)
   send(
     @Req() req: OriginalAuthRequest,
@@ -93,13 +117,13 @@ export class OriginalChatController implements OnModuleDestroy {
     return this.chats.send(req.actor, cid, body, originalWorkspace(req));
   }
 
-  @Post(":cid/stop")
+  @Post("chats/:cid/stop")
   @HttpCode(200)
   stop(@Req() req: OriginalAuthRequest, @Param("cid") cid: string) {
     return this.chats.stop(req.actor, cid, originalWorkspace(req));
   }
 
-  @Post(":cid/apply")
+  @Post("chats/:cid/apply")
   @HttpCode(200)
   apply(
     @Req() req: OriginalAuthRequest,
@@ -114,7 +138,7 @@ export class OriginalChatController implements OnModuleDestroy {
     );
   }
 
-  @Get(":cid/events")
+  @Get("chats/:cid/events")
   async events(
     @Req() req: OriginalAuthRequest,
     @Param("cid") cid: string,

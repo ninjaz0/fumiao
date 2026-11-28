@@ -1,9 +1,26 @@
+import { creditUnits, formatCredits } from "@fumiao/platform/credit-amount.js";
 import { Platform, type Actor } from "@fumiao/platform/platform.js";
 import { one, type Sql } from "@fumiao/platform/db.js";
 import { requireValue } from "@fumiao/platform/security.js";
 import { OriginalIdentity } from "./identity.js";
 import { identityBodies } from "./contracts.js";
 import { parseBody } from "./validation.js";
+function walletAmounts(row: { balance: string; held: string }) {
+  const balance = creditUnits(String(row.balance));
+  const reserved = creditUnits(String(row.held));
+  const exact = {
+    balance: formatCredits(balance),
+    reserved: formatCredits(reserved),
+    available: formatCredits(balance - reserved),
+  };
+  return {
+    balance: Number(exact.balance),
+    reserved: Number(exact.reserved),
+    available: Number(exact.available),
+    exact,
+  };
+}
+
 /** Original wallet/history contracts over the platform's only financial authority. */
 export class OriginalCredits {
   constructor(
@@ -19,15 +36,14 @@ export class OriginalCredits {
     requireValue(row, 404, "积分账户不存在");
     return {
       workspace: Number(row.public_id),
-      balance: Number(row.balance),
-      reserved: Number(row.held),
-      available: Number(row.balance) - Number(row.held),
+      ...walletAmounts({ balance: row.balance, held: row.held }),
     };
   }
   async history(sql: Sql, publicWorkspace: number, before?: number) {
     const rows = (
       await sql.query(
         `SELECT l.*,w.public_id AS workspace_number,u.public_id AS actor_number,COALESCE(NULLIF(u.nickname,''),u.name) AS actor_name,
+      CASE WHEN l.action='spend' AND j.plugin_id IS NULL AND j.kind='video' THEN j.result->'media_bill' END AS media_bill,
       COALESCE(l.original_job_id,j.public_id) AS job_number FROM ledger l JOIN workspaces w ON w.id=l.workspace_id
       LEFT JOIN users u ON u.id=l.actor_id LEFT JOIN jobs j ON j.id=l.job_id
       WHERE w.public_id=$1 AND l.public_id IS NOT NULL AND l.public_id<$2 ORDER BY l.public_id DESC LIMIT 50`,
@@ -52,6 +68,12 @@ export class OriginalCredits {
           : r.action === "grant"
             ? "adjust"
             : r.action,
+      exact: {
+        amount: formatCredits(creditUnits(String(r.amount))),
+        balance: formatCredits(creditUnits(String(r.balance_snapshot))),
+        reserved: formatCredits(creditUnits(String(r.held_snapshot))),
+      },
+      ...(r.media_bill ? { media_bill: r.media_bill } : {}),
       amount: Number(r.amount),
       balance: Number(r.balance_snapshot),
       reserved: Number(r.held_snapshot),
@@ -97,9 +119,7 @@ export class OriginalCredits {
     ).rows;
     return rows.map((r) => ({
       workspace: Number(r.public_id),
-      balance: Number(r.balance),
-      reserved: Number(r.held),
-      available: Number(r.balance) - Number(r.held),
+      ...walletAmounts({ balance: r.balance, held: r.held }),
       kind: r.kind,
       name: r.name,
       username: r.username,
@@ -134,7 +154,7 @@ export class OriginalCredits {
       if (prior) {
         requireValue(
           Number(prior.workspace_number) === input.workspace &&
-            Number(prior.amount) === input.amount &&
+            creditUnits(String(prior.amount)) === creditUnits(String(input.amount)) &&
             prior.note === note &&
             prior.actor_id === user.id,
           409,
@@ -148,13 +168,14 @@ export class OriginalCredits {
         [input.workspace],
       );
       requireValue(wallet, 404, "积分账户不存在");
+      const nextBalance = creditUnits(String(wallet.balance)) + creditUnits(String(input.amount));
       requireValue(
-        Number(wallet.balance) - Number(wallet.held) + input.amount >= 0,
+        nextBalance >= creditUnits(String(wallet.held)),
         409,
         "不能扣减已冻结的积分或使可用积分小于零",
       );
       requireValue(
-        Number(wallet.balance) + input.amount <= 1000000000000,
+        nextBalance <= creditUnits("1000000000000"),
         400,
         "积分余额超出上限",
       );

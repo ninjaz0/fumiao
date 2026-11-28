@@ -13,8 +13,6 @@ export function runtime() {
     new PluginRegistry(),
     process.env.S3_BUCKET
       ? new S3Storage(process.env.S3_BUCKET)
-      : new DiskStorage(
-          process.env.MEDIA_DIRECTORY || ".runtime-advanced/objects",
-        ),
+      : new DiskStorage(process.env.MEDIA_DIRECTORY),
   );
 }

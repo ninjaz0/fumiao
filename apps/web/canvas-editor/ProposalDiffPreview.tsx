@@ -19,6 +19,7 @@ type CanvasProposal = {
   base_revision: number;
   operations: ProposalOp[];
   estimated_credits: number;
+  exact_estimated_credits?: string;
   status: "pending" | "applied" | "rejected" | "expired";
   applied_revision: number | null;
   created: number;
@@ -251,7 +252,7 @@ export function ProposalDiffPreview({
                 )}
               </ul>
               <footer>
-                <span>后续渲染预估：{p.estimated_credits} 积分（落图本身 0 积分）</span>
+                <span>后续渲染预估：{p.exact_estimated_credits ?? p.estimated_credits} 积分（落图本身 0 积分）</span>
                 {p.status === "pending" && (
                   <div className="fm-proposal-btns">
                     <button

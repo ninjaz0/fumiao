@@ -1,3 +1,11 @@
+import { executeNativeImages } from "./model-access/images.js";
+import { executeNativeVideos } from "./model-access/videos.js";
+import {
+  interruptedMediaSubmission,
+  cleanupNativeStaging,
+} from "./model-access/media-delivery.js";
+import type { HttpTransport } from "./plugin-host.js";
+import { creditUnits } from "./credit-amount.js";
 import {
   hasStudioPackages,
   queuedModelPolicy,
@@ -42,7 +50,10 @@ class ReferenceUnavailable extends Error {}
 
 export class Executor {
   private readonly frozenHealth = new FrozenQueueHealth();
-  constructor(private platform: Platform) {}
+  constructor(
+    private platform: Platform,
+    private readonly nativeHttp?: HttpTransport<string | Uint8Array>,
+  ) {}
   async queueReady() {
     const tailGuard = (await hasTailChainTable(this.platform.db))
       ? "AND NOT EXISTS (SELECT 1 FROM job_tail_chains tc WHERE tc.child_job_id=j.id)"
@@ -51,11 +62,11 @@ export class Executor {
       await this.platform.db
         .query(`SELECT j.id FROM jobs j LEFT JOIN outbox o ON o.job_id=j.id
       JOIN connections c ON c.id=j.connection_id JOIN models m ON m.id=j.model_id JOIN users u ON u.id=j.owner_id
-      JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
+      LEFT JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
       LEFT JOIN model_permissions mp ON mp.model_id=m.id AND mp.workspace_id=j.workspace_id
-      WHERE (j.state IN ('running','finalizing') OR (j.state='queued' AND c.enabled=true AND u.active=true
-        AND COALESCE(mp.enabled,true) AND ${await queuedModelPolicy(this.platform.db)} AND v.manifest->>'mode'='request'))
-      AND NOT c.fmworker_resource_driver AND NOT (v.manifest ? 'fmworkerResources')
+      WHERE (j.state IN ('running','finalizing') OR (j.state='queued' AND u.active=true AND (j.plugin_id IS NULL OR (c.enabled=true
+        AND COALESCE(mp.enabled,true) AND ${await queuedModelPolicy(this.platform.db)} AND v.manifest->>'mode'='request'))))
+      AND NOT c.fmworker_resource_driver AND NOT COALESCE(v.manifest ? 'fmworkerResources',false)
       AND ${executableJob}
       AND j.lease_token IS NULL AND (o.available_at IS NULL OR o.available_at<=now())
       ${tailGuard}
@@ -65,11 +76,55 @@ export class Executor {
     ).rows;
   }
   async recover() {
-    return this.platform.db.transaction((sql) => this.recoverOn(sql));
+    const p = this.platform;
+    await p.db.transaction((sql) => this.recoverOn(sql));
+    // A parent can settle before its child's admission commits, or the worker
+    // can restart between settlement and extraction. The chain row survives both.
+    if (!(await hasTailChainTable(p.db))) return;
+    const parents = await p.db.query(`SELECT j.id,j.state,j.kind,j.owner_id,j.workspace_id,j.result
+      FROM job_tail_chains link
+      JOIN jobs j ON j.id=link.parent_job_id JOIN jobs child ON child.id=link.child_job_id
+      WHERE j.state IN ('completed','failed','cancelled') AND child.state='queued' AND child.deleted_at IS NULL
+        AND (j.plugin_id IS NULL OR child.plugin_id IS NULL)
+        AND (child.request_retry_at IS NULL OR child.request_retry_at<=now())
+      GROUP BY j.id ORDER BY min(COALESCE(child.request_retry_at,'-infinity')),j.id LIMIT 16`);
+    for (const parent of parents.rows) {
+      try {
+        await wakeTailFrameChildren(
+          p,
+          { id: parent.id, workspace_id: parent.workspace_id, owner_id: parent.owner_id, kind: parent.kind },
+          parent.state,
+          parent.result?.assets?.[0],
+          AbortSignal.timeout(30_000),
+        );
+      } catch {
+        // The dependency remains durable. Let untouched parents run first when
+        // a store or decoder stays unavailable across many worker sweeps.
+        await p.db.query(`WITH waiting AS (
+          SELECT j.id FROM job_tail_chains c JOIN jobs j ON j.id=c.child_job_id
+          WHERE c.parent_job_id=$1 AND j.state='queued' ORDER BY j.id FOR UPDATE OF c,j
+        ) UPDATE jobs SET request_retry_at=now()+interval '30 seconds',request_note='等待重试前置镜头尾帧'
+          FROM waiting WHERE jobs.id=waiting.id`, [parent.id]);
+      }
+    }
   }
   async recoverOn(sql: Sql, originalOnly = false) {
     const p = this.platform;
     if (!originalOnly) {
+      if (
+        (
+          await one(
+            sql,
+            "SELECT to_regclass('model_access_staging') IS NOT NULL AS ok",
+          )
+        ).ok
+      ) {
+        await cleanupNativeStaging(p, sql);
+        const disabled =
+          await sql.query(`SELECT j.* FROM jobs j JOIN users u ON u.id=j.owner_id WHERE j.source_kind='builtin'
+          AND j.state='queued' AND NOT u.active ORDER BY j.workspace_id,j.id FOR UPDATE OF j SKIP LOCKED`);
+        for (const job of disabled.rows) await p.settle(sql, job, "cancelled");
+      }
       const disabled = (
         await sql.query(`SELECT j.*,v.manifest
         FROM jobs j JOIN users u ON u.id=j.owner_id
@@ -134,18 +189,27 @@ export class Executor {
     const stale = (
       await sql.query(
         `SELECT j.*,v.manifest
-            FROM jobs j JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
+            FROM jobs j LEFT JOIN plugin_versions v ON v.id=j.plugin_id AND v.version=j.plugin_version
             JOIN connections c ON c.id=j.connection_id
             WHERE j.lease_until < CASE WHEN j.original_gpu_ticket IS NOT NULL THEN date_trunc('second',now()) ELSE now() END
             AND j.state IN ('dispatching','running','finalizing')
-            AND NOT c.fmworker_resource_driver AND NOT (v.manifest ? 'fmworkerResources')
+            AND NOT c.fmworker_resource_driver AND NOT COALESCE(v.manifest ? 'fmworkerResources',false)
             AND ${executableJob}
-            AND ($1=false OR v.manifest->'originalState'->'recovery' IS NOT NULL OR (v.manifest->>'mode'='pull' AND v.manifest->'originalSubmission'->>'version'='3'))
+            AND ($1=false OR j.plugin_id IS NULL OR v.manifest->'originalState'->'recovery' IS NOT NULL OR (v.manifest->>'mode'='pull' AND v.manifest->'originalSubmission'->>'version'='3'))
             ORDER BY j.workspace_id,j.id FOR UPDATE OF j SKIP LOCKED`,
         [originalOnly],
       )
     ).rows;
     for (const job of stale) {
+      if (job.source_kind === "builtin") {
+        if (job.receipt || job.remote_id)
+          await sql.query(
+            "UPDATE jobs SET state=$2,lease_token=NULL,lease_until=NULL WHERE id=$1",
+            [job.id, job.receipt ? "finalizing" : "running"],
+          );
+        else await interruptedMediaSubmission(p, sql, job);
+        continue;
+      }
       const { manifest } = job;
       const recovery =
         manifest.originalState?.recovery ??
@@ -253,6 +317,38 @@ export class Executor {
         [job.connection_id],
       );
       if (connection.fmworker_resource_driver) return;
+      if (job.source_kind === "builtin") {
+        if (job.state === "queued") {
+          if (
+            !(await one(sql, "SELECT 1 FROM users WHERE id=$1 AND active", [
+              job.owner_id,
+            ]))
+          )
+            return;
+          if (
+            (await hasTailChainTable(sql)) &&
+            (await one(
+              sql,
+              "SELECT 1 FROM job_tail_chains WHERE child_job_id=$1",
+              [id],
+            ))
+          )
+            return;
+          const count = await one(
+            sql,
+            "SELECT count(*) AS n FROM jobs WHERE connection_id=$1 AND state IN ('dispatching','running','finalizing','uncertain')",
+            [connection.id],
+          );
+          if (Number(count.n) >= connection.concurrency) return;
+        }
+        return one(
+          sql,
+          `UPDATE jobs SET lease_token=gen_random_uuid(),lease_until=now()+interval '60 seconds',
+          attempts=attempts+CASE WHEN state='queued' THEN 1 ELSE 0 END,state=CASE WHEN state='queued' THEN 'dispatching' ELSE state END,
+          request_retry_at=NULL,updated_at=now() WHERE id=$1 RETURNING *`,
+          [id],
+        );
+      }
       const plugin = await p.registry.resolve(
         sql,
         job.plugin_id,
@@ -599,6 +695,11 @@ export class Executor {
         .catch(() => controller.abort());
     }, 15000);
     try {
+      if (job.source_kind === "builtin") {
+        const execute = job.kind === "video" ? executeNativeVideos : executeNativeImages;
+        await execute(p, job, controller.signal, this.nativeHttp);
+        return;
+      }
       const plugin = await p.registry.resolve(
         p.db,
         job.plugin_id,
@@ -877,8 +978,8 @@ export class Executor {
     if (!edgeModel) return false;
 
     // Release commercial credit hold atomically before switching to 0-credit Edge TTS
-    const originalPrice = Number(job.price ?? 0);
-    if (originalPrice > 0) {
+    const originalPrice = String(job.price ?? 0);
+    if (creditUnits(originalPrice) > 0n) {
       const released = await one(
         sql,
         "UPDATE wallets SET held = held - $2 WHERE workspace_id = $1 AND held >= $2 RETURNING balance, held",

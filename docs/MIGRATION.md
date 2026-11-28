@@ -53,3 +53,12 @@ docker compose run --rm --no-deps -v /绝对路径/pure-backup:/backup:ro \
 - 完成预期负载下的排队、连接额度、数据库连接数、存储吞吐测试，再将反向代理切到新站。
 
 已有贡献设备或收益数据的实例还需核对历史账本。[贡献数据退役和对账](FMWORKER_RETIREMENT_UPGRADE.md)
+
+## 已有 PostgreSQL 实例启用内置模型
+
+1. 在切换前停写，记录宿主和插件版本，备份 PostgreSQL、私有媒体及对应的 `ENCRYPTION_KEY`。保存各工作区的余额、冻结额，在途任务和对话回合的编号、来源、原价及已收回执。
+2. 先执行全部迁移。从 `055_workspace_script_documents.sql` 升级时，原整数积分按相同数值进入十二位小数的钱包和账本。用 `TEST_DATABASE_URL` 指向隔离的 PostgreSQL，运行 `pnpm exec tsx --test --test-name-pattern="055 integer wallet" tests/advanced/original-integrated-migrations.test.ts`，核对旧冻结、原固定价和结算后的余额快照。
+3. 更新所有接单 Worker，确认每个实例都能按快照执行旧插件和内置协议，再开放管理员的「设置 → 模型接入」上架操作。旧连接可逐个模型接管。用原公开模型 ID 核对团队权限、历史账单和正在执行的旧订单。
+4. 用普通成员验收原画布和工作区的私有成片。换线前保存的参数应能原样打开，超出新线路范围的节点必须先调整才能重新生成。按同一任务编号核对原线路、预留与最终实扣。恢复旧程序时使用切换前同一恢复点的数据库、素材、密钥和宿主版本，并在恢复派发前核对备份点之后的真实上游订单与付款。
+
+在隔离环境运行 `pnpm build`、`pnpm exec playwright install chromium`、`pnpm test:studio:nest` 和 `pnpm test:studio:restore`。正式入口演练使用合成凭据、图像和视频。真实网关的调用权限、首帧传递和取片需用已授权的测试额度分别验收。

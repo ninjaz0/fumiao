@@ -31,12 +31,14 @@ export type ModelSettingsPreferences = { scope: string; search: string };
 export function ModelSettings({
   state,
   preferences,
+  editModel,
   request,
   refresh,
   notify,
 }: AdminSave & {
   state: StudioState;
   preferences: ModelSettingsPreferences;
+  editModel: (id: string) => void;
 }) {
   const teams = state.workspaces.filter(({ kind }) => kind === "team");
   const [selected, setSelected] = useState(preferences.scope);
@@ -216,6 +218,13 @@ export function ModelSettings({
                   <div className="model-setting-name">
                     <span>{label}</span>
                     {notes && <small>{notes}</small>}
+                    {state.model_groups[id].models.filter(model =>
+                      state.pricing.published?.some(price => price.model === model)
+                    ).map(model => (
+                      <button key={model} className="ledger-button" onClick={() => editModel(model)}>
+                        {state.model_groups[id].models.length > 1 && model + " · "}管理线路与售价
+                      </button>
+                    ))}
                   </div>
                   <label className="model-switch">
                     <input
